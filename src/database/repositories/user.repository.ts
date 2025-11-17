@@ -1,6 +1,5 @@
 import type { Database } from 'bun:sqlite';
 import type { User, CreateUserData, UpdateUserData } from '../types';
-import type { CurrencyCode } from '../../config/constants';
 
 export class UserRepository {
   constructor(private db: Database) {}
@@ -13,15 +12,7 @@ export class UserRepository {
       SELECT * FROM users WHERE telegram_id = ?
     `);
 
-    const result = query.get(telegramId);
-
-    if (!result) return null;
-
-    // Parse JSON fields
-    return {
-      ...result,
-      enabled_currencies: JSON.parse(result.enabled_currencies as unknown as string) as CurrencyCode[],
-    };
+    return query.get(telegramId) || null;
   }
 
   /**
@@ -32,27 +23,20 @@ export class UserRepository {
       SELECT * FROM users WHERE id = ?
     `);
 
-    const result = query.get(id);
-
-    if (!result) return null;
-
-    return {
-      ...result,
-      enabled_currencies: JSON.parse(result.enabled_currencies as unknown as string) as CurrencyCode[],
-    };
+    return query.get(id) || null;
   }
 
   /**
    * Create new user
    */
   create(data: CreateUserData): User {
-    const query = this.db.query<{ id: number }, [number, string]>(`
-      INSERT INTO users (telegram_id, default_currency)
+    const query = this.db.query<{ id: number }, [number, number | null]>(`
+      INSERT INTO users (telegram_id, group_id)
       VALUES (?, ?)
       RETURNING id
     `);
 
-    const result = query.get(data.telegram_id, data.default_currency || 'USD');
+    const result = query.get(data.telegram_id, data.group_id || null);
 
     if (!result) {
       throw new Error('Failed to create user');
@@ -76,26 +60,11 @@ export class UserRepository {
     if (!user) return null;
 
     const updates: string[] = [];
-    const values: (string | number | null)[] = [];
+    const values: (number | null)[] = [];
 
-    if (data.google_refresh_token !== undefined) {
-      updates.push('google_refresh_token = ?');
-      values.push(data.google_refresh_token);
-    }
-
-    if (data.spreadsheet_id !== undefined) {
-      updates.push('spreadsheet_id = ?');
-      values.push(data.spreadsheet_id);
-    }
-
-    if (data.default_currency !== undefined) {
-      updates.push('default_currency = ?');
-      values.push(data.default_currency);
-    }
-
-    if (data.enabled_currencies !== undefined) {
-      updates.push('enabled_currencies = ?');
-      values.push(JSON.stringify(data.enabled_currencies));
+    if (data.group_id !== undefined) {
+      updates.push('group_id = ?');
+      values.push(data.group_id);
     }
 
     updates.push('updated_at = CURRENT_TIMESTAMP');
@@ -126,17 +95,13 @@ export class UserRepository {
   }
 
   /**
-   * Check if user has completed setup
+   * Find users by group ID
    */
-  hasCompletedSetup(telegramId: number): boolean {
-    const user = this.findByTelegramId(telegramId);
+  findByGroupId(groupId: number): User[] {
+    const query = this.db.query<User, [number]>(`
+      SELECT * FROM users WHERE group_id = ?
+    `);
 
-    if (!user) return false;
-
-    return !!(
-      user.google_refresh_token &&
-      user.spreadsheet_id &&
-      user.enabled_currencies.length > 0
-    );
+    return query.all(groupId);
   }
 }

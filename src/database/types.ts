@@ -1,11 +1,11 @@
 import type { CurrencyCode } from '../config/constants';
 
 /**
- * User model
+ * Group model (Telegram group/supergroup)
  */
-export interface User {
+export interface Group {
   id: number;
-  telegram_id: number;
+  telegram_group_id: number;
   google_refresh_token: string | null;
   spreadsheet_id: string | null;
   default_currency: CurrencyCode;
@@ -14,12 +14,12 @@ export interface User {
   updated_at: string;
 }
 
-export interface CreateUserData {
-  telegram_id: number;
+export interface CreateGroupData {
+  telegram_group_id: number;
   default_currency?: CurrencyCode;
 }
 
-export interface UpdateUserData {
+export interface UpdateGroupData {
   google_refresh_token?: string;
   spreadsheet_id?: string;
   default_currency?: CurrencyCode;
@@ -27,17 +27,37 @@ export interface UpdateUserData {
 }
 
 /**
+ * User model
+ */
+export interface User {
+  id: number;
+  telegram_id: number;
+  group_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateUserData {
+  telegram_id: number;
+  group_id?: number;
+}
+
+export interface UpdateUserData {
+  group_id?: number;
+}
+
+/**
  * Category model
  */
 export interface Category {
   id: number;
-  user_id: number;
+  group_id: number;
   name: string;
   created_at: string;
 }
 
 export interface CreateCategoryData {
-  user_id: number;
+  group_id: number;
   name: string;
 }
 
@@ -76,7 +96,8 @@ export interface UpdatePendingExpenseData {
  */
 export interface Expense {
   id: number;
-  user_id: number;
+  group_id: number;
+  user_id: number; // Who added the expense
   date: string;
   category: string;
   comment: string;
@@ -87,6 +108,7 @@ export interface Expense {
 }
 
 export interface CreateExpenseData {
+  group_id: number;
   user_id: number;
   date: string;
   category: string;

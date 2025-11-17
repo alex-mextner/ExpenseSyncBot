@@ -3,7 +3,7 @@ import { getTokensFromCode } from '../services/google/oauth';
 import { database } from '../database';
 
 /**
- * Pending OAuth states (userId -> resolve/reject functions)
+ * Pending OAuth states (groupId -> resolve/reject functions)
  */
 const pendingOAuthStates = new Map<
   string,
@@ -17,11 +17,11 @@ const pendingOAuthStates = new Map<
  * Register pending OAuth state
  */
 export function registerOAuthState(
-  userId: number,
+  groupId: number,
   resolve: (refreshToken: string) => void,
   reject: (error: Error) => void
 ): void {
-  pendingOAuthStates.set(userId.toString(), { resolve, reject });
+  pendingOAuthStates.set(groupId.toString(), { resolve, reject });
 }
 
 /**
@@ -53,7 +53,7 @@ export function startOAuthServer(): void {
  */
 async function handleOAuthCallback(url: URL): Promise<Response> {
   const code = url.searchParams.get('code');
-  const state = url.searchParams.get('state'); // userId
+  const state = url.searchParams.get('state'); // groupId
   const error = url.searchParams.get('error');
 
   // Handle OAuth error
@@ -122,15 +122,15 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
     // Exchange code for tokens
     const tokens = await getTokensFromCode(code);
 
-    // Update user in database
-    const userId = parseInt(state, 10);
-    const user = database.users.findById(userId);
+    // Update group in database
+    const groupId = parseInt(state, 10);
+    const group = database.groups.findById(groupId);
 
-    if (!user) {
-      throw new Error('User not found');
+    if (!group) {
+      throw new Error('Group not found');
     }
 
-    database.users.update(user.telegram_id, {
+    database.groups.update(group.telegram_group_id, {
       google_refresh_token: tokens.refresh_token,
     });
 
@@ -141,7 +141,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       pendingOAuthStates.delete(state);
     }
 
-    console.log(`✓ OAuth successful for user ${userId}`);
+    console.log(`✓ OAuth successful for group ${groupId}`);
 
     return new Response(
       `

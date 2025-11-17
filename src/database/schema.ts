@@ -124,6 +124,102 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '005_create_groups_and_refactor',
+      up: () => {
+        // Create groups table
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_group_id INTEGER NOT NULL UNIQUE,
+            google_refresh_token TEXT,
+            spreadsheet_id TEXT,
+            default_currency TEXT NOT NULL DEFAULT 'USD',
+            enabled_currencies TEXT NOT NULL DEFAULT '["USD"]',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+
+        // Create new users table with group_id
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS users_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL UNIQUE,
+            group_id INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
+          );
+        `);
+
+        // Migrate existing users (drop google data, they need to reconnect)
+        db.exec(`
+          INSERT INTO users_new (id, telegram_id, created_at, updated_at)
+          SELECT id, telegram_id, created_at, updated_at FROM users;
+        `);
+
+        // Drop old users table
+        db.exec(`DROP TABLE IF EXISTS users;`);
+
+        // Rename new table
+        db.exec(`ALTER TABLE users_new RENAME TO users;`);
+
+        // Update categories table to use group_id
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS categories_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            UNIQUE(group_id, name)
+          );
+        `);
+
+        // Drop old categories (will be recreated by users)
+        db.exec(`DROP TABLE IF EXISTS categories;`);
+        db.exec(`ALTER TABLE categories_new RENAME TO categories;`);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_categories_group_id
+          ON categories(group_id);
+        `);
+
+        // Update expenses table to include group_id
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS expenses_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            usd_amount REAL NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+
+        // Drop old expenses (will be recreated)
+        db.exec(`DROP TABLE IF EXISTS expenses;`);
+        db.exec(`ALTER TABLE expenses_new RENAME TO expenses;`);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expenses_group_id
+          ON expenses(group_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expenses_user_id
+          ON expenses(user_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expenses_date
+          ON expenses(date);
+        `);
+      },
+    },
   ];
 
   // Check and run migrations

@@ -6,65 +6,50 @@ import { CURRENCY_SYMBOLS } from '../../config/constants';
  * /stats command handler
  */
 export async function handleStatsCommand(ctx: Ctx["Command"]): Promise<void> {
-  const telegramId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  const chatType = ctx.chat?.type;
 
-  if (!telegramId) {
-    await ctx.send('Error: Unable to identify user');
+  if (!chatId) {
+    await ctx.send('Error: Unable to identify chat');
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  // Only allow in groups
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
-  if (!user) {
-    await ctx.send('Пожалуйста, начни с команды /start');
+  if (!isGroup) {
+    await ctx.send('❌ Эта команда работает только в группах.');
     return;
   }
 
-  if (!database.users.hasCompletedSetup(telegramId)) {
-    await ctx.send('Пожалуйста, завершите настройку: /connect');
+  const group = database.groups.findByTelegramGroupId(chatId);
+
+  if (!group) {
+    await ctx.send('❌ Группа не настроена. Используй /connect');
     return;
   }
 
-  // Get expenses
-  const expenses = database.expenses.findByUserId(user.id, 100);
+  // Get expenses stats
+  const recentExpenses = database.expenses.findByGroupId(group.id, 10);
+  const totalsByCurrency = database.expenses.getTotalsByCurrency(group.id);
+  const totalUSD = database.expenses.getTotalInUSD(group.id);
 
-  if (expenses.length === 0) {
-    await ctx.send('📊 У тебя пока нет расходов');
-    return;
-  }
+  let message = '📊 Статистика расходов группы:\n\n';
 
-  // Calculate totals
-  const totalsByCurrency = database.expenses.getTotalsByCurrency(user.id);
-  const totalUSD = database.expenses.getTotalInUSD(user.id);
-
-  // Format message
-  let message = '📊 **Статистика расходов**\n\n';
-
+  // Total by currency
   message += '**По валютам:**\n';
   for (const [currency, total] of Object.entries(totalsByCurrency)) {
     const symbol = CURRENCY_SYMBOLS[currency as keyof typeof CURRENCY_SYMBOLS] || currency;
     message += `• ${symbol} ${total.toFixed(2)}\n`;
   }
 
-  message += `\n**Всего в USD:** $${totalUSD.toFixed(2)}\n`;
-  message += `\n**Всего записей:** ${expenses.length}`;
+  message += `\n**Всего (USD):** $${totalUSD.toFixed(2)}\n`;
 
-  // Get top categories
-  const categoryCounts: Record<string, number> = {};
-  for (const expense of expenses) {
-    categoryCounts[expense.category] = (categoryCounts[expense.category] || 0) + 1;
+  message += `\n**Последние ${recentExpenses.length} расходов:**\n`;
+  for (const expense of recentExpenses) {
+    const symbol = CURRENCY_SYMBOLS[expense.currency as keyof typeof CURRENCY_SYMBOLS] || expense.currency;
+    message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;
   }
 
-  const topCategories = Object.entries(categoryCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-
-  if (topCategories.length > 0) {
-    message += '\n\n**Топ категорий:**\n';
-    for (const [category, count] of topCategories) {
-      message += `• ${category}: ${count} ${count === 1 ? 'расход' : 'расходов'}\n`;
-    }
-  }
-
-  await ctx.send(message, { parse_mode: 'Markdown' });
+  await ctx.send(message);
 }

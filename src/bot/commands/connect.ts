@@ -8,53 +8,81 @@ import { MESSAGES, type CurrencyCode } from '../../config/constants';
 import { InlineKeyboard } from 'gramio';
 
 /**
- * /connect command handler
+ * /connect command handler - only works in groups
  */
 export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
   const telegramId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  const chatType = ctx.chat?.type;
 
-  if (!telegramId) {
-    await ctx.send('Error: Unable to identify user');
+  console.log(`[CMD] /connect from user ${telegramId} in chat ${chatId} (${chatType})`);
+
+  if (!telegramId || !chatId) {
+    console.log(`[CMD] Error: missing telegramId or chatId`);
+    await ctx.send('Error: Unable to identify user or chat');
     return;
   }
 
-  // Get or create user
-  let user = database.users.findByTelegramId(telegramId);
+  // Only allow in groups
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
-  if (!user) {
-    user = database.users.create({ telegram_id: telegramId });
+  if (!isGroup) {
+    console.log(`[CMD] Rejected: /connect only works in groups`);
+    await ctx.send(
+      '❌ Эта команда работает только в группах.\n\n' +
+      'Добавь бота в группу и используй /connect там.'
+    );
+    return;
   }
 
-  // Generate OAuth URL
-  const authUrl = generateAuthUrl(user.id);
+  console.log(`[CMD] Starting group setup for chat ${chatId}`);
+
+  // Get or create group
+  let group = database.groups.findByTelegramGroupId(chatId);
+
+  if (!group) {
+    console.log(`[CMD] Creating new group ${chatId}`);
+    group = database.groups.create({ telegram_group_id: chatId });
+  } else {
+    console.log(`[CMD] Group ${group.id} found, reconfiguring...`);
+  }
+
+  // Generate OAuth URL - use group ID as state
+  console.log(`[CMD] Generating OAuth URL for group ${group.id}`);
+  const authUrl = generateAuthUrl(group.id);
 
   const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
 
   await ctx.send(
-    `🔐 Подключение Google аккаунта\n\n` +
-    `Нажми на кнопку ниже и разреши доступ к Google Sheets.\n\n` +
+    `🔐 Подключение Google аккаунта для группы\n\n` +
+    `Один из участников группы должен:\n` +
+    `1. Нажать на кнопку ниже\n` +
+    `2. Разрешить доступ к Google Sheets\n\n` +
     `После авторизации вернись сюда, я продолжу настройку.`,
     { reply_markup: authKeyboard }
   );
 
   // Wait for OAuth callback
+  console.log(`[CMD] Waiting for OAuth callback for group ${group.id}...`);
   const refreshToken = await new Promise<string>((resolve, reject) => {
-    registerOAuthState(user!.id, resolve, reject);
+    registerOAuthState(group!.id, resolve, reject);
 
     // Timeout after 5 minutes
     setTimeout(() => {
       reject(new Error('OAuth timeout'));
     }, 5 * 60 * 1000);
   }).catch(err => {
-    console.error('OAuth error:', err);
+    console.error('[CMD] ❌ OAuth error:', err);
     return null;
   });
 
   if (!refreshToken) {
+    console.log(`[CMD] ❌ OAuth failed for group ${group.id}`);
     await ctx.send('❌ Не удалось подключить Google аккаунт. Попробуй еще раз: /connect');
     return;
   }
 
+  console.log(`[CMD] ✅ OAuth successful for group ${group.id}`);
   await ctx.send(MESSAGES.authSuccess);
 
   // Show currency set selection keyboard (Step 1)
@@ -74,30 +102,30 @@ export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
 export async function handleCurrencyCallback(
   ctx: Ctx["CallbackQuery"],
   action: string,
-  telegramId: number
+  chatId: number
 ): Promise<void> {
-  const user = database.users.findByTelegramId(telegramId);
+  const group = database.groups.findByTelegramGroupId(chatId);
 
-  if (!user) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
     return;
   }
 
   // Step 1: Currency set selection - user clicked "Далее"
   if (action === 'next') {
-    if (user.enabled_currencies.length === 0) {
+    if (group.enabled_currencies.length === 0) {
       await ctx.answerCallbackQuery({ text: 'Выбери хотя бы одну валюту' });
       return;
     }
 
     // Move to Step 2: Default currency selection
-    const keyboard = createDefaultCurrencyKeyboard(user.enabled_currencies);
+    const keyboard = createDefaultCurrencyKeyboard(group.enabled_currencies);
 
     await ctx.editText(
       '💱 Шаг 2/2: Выбери валюту по умолчанию:\n\n' +
       '• Эта валюта будет использоваться, если не указать явно\n' +
       '• Например, если выбрать EUR, то "100 еда обед" = 100 евро\n\n' +
-      `📊 Набор валют: ${user.enabled_currencies.join(', ')}`,
+      `📊 Набор валют: ${group.enabled_currencies.join(', ')}`,
       { reply_markup: keyboard }
     );
 
@@ -107,23 +135,23 @@ export async function handleCurrencyCallback(
 
   // Step 1: Toggle currency in the set
   const currency = action as CurrencyCode;
-  let enabledCurrencies = [...user.enabled_currencies];
+  let enabledCurrencies = [...group.enabled_currencies];
 
   if (enabledCurrencies.includes(currency)) {
     // Deselect
     enabledCurrencies = enabledCurrencies.filter(c => c !== currency);
-    database.users.update(telegramId, { enabled_currencies: enabledCurrencies });
+    database.groups.update(chatId, { enabled_currencies: enabledCurrencies });
   } else {
     // Select
     enabledCurrencies.push(currency);
-    database.users.update(telegramId, { enabled_currencies: enabledCurrencies });
+    database.groups.update(chatId, { enabled_currencies: enabledCurrencies });
   }
 
   // Update keyboard
-  const updatedUser = database.users.findByTelegramId(telegramId);
-  if (!updatedUser) return;
+  const updatedGroup = database.groups.findByTelegramGroupId(chatId);
+  if (!updatedGroup) return;
 
-  const keyboard = createCurrencyKeyboard(updatedUser.enabled_currencies);
+  const keyboard = createCurrencyKeyboard(updatedGroup.enabled_currencies);
 
   // Update message with current status
   const statusText =
@@ -131,7 +159,7 @@ export async function handleCurrencyCallback(
     '• Можно выбрать несколько\n' +
     '• Эти валюты будут столбцами в таблице\n' +
     '• Нажми ✅ Далее когда закончишь\n\n' +
-    `📊 Выбрано: ${updatedUser.enabled_currencies.join(', ') || 'нет'}`;
+    `📊 Выбрано: ${updatedGroup.enabled_currencies.join(', ') || 'нет'}`;
 
   await ctx.editText(statusText, {
     reply_markup: keyboard,
@@ -147,50 +175,54 @@ export async function handleCurrencyCallback(
 export async function handleDefaultCurrencyCallback(
   ctx: Ctx["CallbackQuery"],
   action: string,
-  telegramId: number
+  chatId: number
 ): Promise<void> {
-  const user = database.users.findByTelegramId(telegramId);
+  const group = database.groups.findByTelegramGroupId(chatId);
 
-  if (!user) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
     return;
   }
 
   const currency = action as CurrencyCode;
 
   // Verify the currency is in enabled set
-  if (!user.enabled_currencies.includes(currency)) {
+  if (!group.enabled_currencies.includes(currency)) {
     await ctx.answerCallbackQuery({ text: 'Ошибка: валюта не в наборе' });
     return;
   }
 
   // Set as default currency
-  database.users.update(telegramId, { default_currency: currency });
+  database.groups.update(chatId, { default_currency: currency });
 
   // Verify refresh token exists
-  if (!user.google_refresh_token) {
+  if (!group.google_refresh_token) {
     await ctx.answerCallbackQuery({ text: 'Ошибка: Google не подключен' });
     await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
     return;
   }
 
   // Create spreadsheet
+  console.log(`[CMD] Creating spreadsheet for group ${chatId}...`);
   try {
     const { spreadsheetId, spreadsheetUrl } = await createExpenseSpreadsheet(
-      user.google_refresh_token,
+      group.google_refresh_token,
       currency,
-      user.enabled_currencies
+      group.enabled_currencies
     );
 
-    database.users.update(telegramId, { spreadsheet_id: spreadsheetId });
+    console.log(`[CMD] ✅ Spreadsheet created: ${spreadsheetId}`);
+
+    database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
     await ctx.editText(
       MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl)
     );
 
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    console.log(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
-    console.error('Error creating spreadsheet:', err);
+    console.error('[CMD] ❌ Error creating spreadsheet:', err);
     await ctx.answerCallbackQuery({ text: '❌ Ошибка при создании таблицы' });
     await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
   }

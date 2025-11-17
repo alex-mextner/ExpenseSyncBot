@@ -1,76 +1,45 @@
 import type { Ctx } from '../types';
 import { database } from '../../database';
-import { getSpreadsheetUrl } from '../../services/google/sheets';
-import { CURRENCY_SYMBOLS } from '../../config/constants';
+import { handleConnectCommand } from './connect';
 
 /**
  * /settings command handler
  */
 export async function handleSettingsCommand(ctx: Ctx["Command"]): Promise<void> {
-  const telegramId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  const chatType = ctx.chat?.type;
 
-  if (!telegramId) {
-    await ctx.send('Error: Unable to identify user');
+  if (!chatId) {
+    await ctx.send('Error: Unable to identify chat');
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  // Only allow in groups
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
-  if (!user) {
-    await ctx.send('Пожалуйста, начни с команды /start');
+  if (!isGroup) {
+    await ctx.send('❌ Эта команда работает только в группах.');
     return;
   }
 
-  if (!database.users.hasCompletedSetup(telegramId)) {
-    await ctx.send('Пожалуйста, завершите настройку: /connect');
+  const group = database.groups.findByTelegramGroupId(chatId);
+
+  if (!group) {
+    await ctx.send('❌ Группа не настроена. Используй /connect');
     return;
   }
 
-  let message = '⚙️ **Настройки**\n\n';
+  let message = '⚙️ Настройки группы:\n\n';
+  message += `💱 Валюта по умолчанию: ${group.default_currency}\n`;
+  message += `💵 Включенные валюты: ${group.enabled_currencies.join(', ')}\n`;
+  message += `📊 Таблица: ${group.spreadsheet_id ? 'настроена' : 'не настроена'}\n`;
 
-  // Default currency
-  const defaultSymbol = CURRENCY_SYMBOLS[user.default_currency];
-  message += `**Валюта по умолчанию:** ${user.default_currency} ${defaultSymbol}\n\n`;
-
-  // Enabled currencies
-  message += '**Активные валюты:**\n';
-  for (const currency of user.enabled_currencies) {
-    const symbol = CURRENCY_SYMBOLS[currency];
-    message += `• ${currency} ${symbol}\n`;
-  }
-
-  // Spreadsheet
-  if (user.spreadsheet_id) {
-    const url = getSpreadsheetUrl(user.spreadsheet_id);
-    message += `\n**Google Таблица:** [Открыть](${url})`;
-  }
-
-  message += '\n\n_Чтобы изменить настройки, используй /reconnect_';
-
-  await ctx.send(message, { parse_mode: 'Markdown' });
+  await ctx.send(message);
 }
 
 /**
- * /reconnect command handler
+ * /reconnect command handler - reconnect Google account
  */
 export async function handleReconnectCommand(ctx: Ctx["Command"]): Promise<void> {
-  const telegramId = ctx.from?.id;
-
-  if (!telegramId) {
-    await ctx.send('Error: Unable to identify user');
-    return;
-  }
-
-  const user = database.users.findByTelegramId(telegramId);
-
-  if (!user) {
-    await ctx.send('Пожалуйста, начни с команды /start');
-    return;
-  }
-
-  await ctx.send(
-    '🔄 Переподключение к Google\n\n' +
-    'Это создаст новую таблицу и сбросит текущие настройки.\n\n' +
-    'Используй /connect чтобы начать.'
-  );
+  await handleConnectCommand(ctx);
 }

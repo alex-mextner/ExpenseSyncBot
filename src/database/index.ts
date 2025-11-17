@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { setupDatabase } from './schema';
+import { GroupRepository } from './repositories/group.repository';
 import { UserRepository } from './repositories/user.repository';
 import { CategoryRepository } from './repositories/category.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
@@ -10,6 +11,7 @@ import { ExpenseRepository } from './repositories/expense.repository';
  */
 export class DatabaseService {
   public db: Database;
+  public groups: GroupRepository;
   public users: UserRepository;
   public categories: CategoryRepository;
   public pendingExpenses: PendingExpenseRepository;
@@ -17,6 +19,7 @@ export class DatabaseService {
 
   constructor() {
     this.db = setupDatabase();
+    this.groups = new GroupRepository(this.db);
     this.users = new UserRepository(this.db);
     this.categories = new CategoryRepository(this.db);
     this.pendingExpenses = new PendingExpenseRepository(this.db);

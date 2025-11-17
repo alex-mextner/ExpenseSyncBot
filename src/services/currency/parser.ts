@@ -1,5 +1,5 @@
-import currency from 'currency.js';
-import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import currency from "currency.js";
+import { CURRENCY_ALIASES, type CurrencyCode } from "../../config/constants";
 
 export interface ParsedExpense {
   amount: number;
@@ -33,7 +33,10 @@ function normalizeCurrency(currencyStr: string): CurrencyCode | null {
  * - 190 EUR Алекс кулёма
  * - 1 900 RSD   Алекс
  */
-export function parseExpenseMessage(text: string, defaultCurrency: CurrencyCode): ParsedExpense | null {
+export function parseExpenseMessage(
+  text: string,
+  defaultCurrency: CurrencyCode
+): ParsedExpense | null {
   const trimmed = text.trim();
 
   if (!trimmed) {
@@ -52,7 +55,7 @@ export function parseExpenseMessage(text: string, defaultCurrency: CurrencyCode)
     if (normalizedCurrency) {
       const amount = parseAmount(amountStr);
       if (amount !== null) {
-        const { category, comment } = parseRest(rest || '');
+        const { category, comment } = parseRest(rest || "");
         return {
           amount,
           currency: normalizedCurrency,
@@ -139,22 +142,22 @@ export function parseExpenseMessage(text: string, defaultCurrency: CurrencyCode)
 function parseAmount(amountStr: string): number | null {
   try {
     // Remove spaces
-    let cleaned = amountStr.replace(/\s+/g, '');
+    let cleaned = amountStr.replace(/\s+/g, "");
 
     // Handle European format (1.234,56 -> 1234.56)
     if (cleaned.match(/\d+\.\d{3},\d{2}$/)) {
-      cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
     }
     // Handle US format with comma thousands separator (1,234.56)
     else if (cleaned.match(/\d+,\d{3}(\.\d+)?$/)) {
-      cleaned = cleaned.replace(/,/g, '');
+      cleaned = cleaned.replace(/,/g, "");
     }
     // Handle just comma as decimal separator (1234,56 -> 1234.56)
     else if (cleaned.match(/^\d+,\d{1,2}$/)) {
-      cleaned = cleaned.replace(',', '.');
+      cleaned = cleaned.replace(",", ".");
     }
 
-    const parsed = currency(cleaned, { separator: '', decimal: '.' });
+    const parsed = currency(cleaned, { separator: "", decimal: "." });
 
     if (parsed.value <= 0) {
       return null;
@@ -167,17 +170,29 @@ function parseAmount(amountStr: string): number | null {
 }
 
 /**
+ * Normalize category name - capitalize first letter
+ */
+function normalizeCategory(category: string): string {
+  const trimmed = category.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+}
+
+/**
  * Parse rest of message (category and comment)
  * First word is category, rest is comment
  */
-function parseRest(rest: string | undefined): { category: string | null; comment: string } {
-  const trimmedRest = (rest || '').trim();
+function parseRest(rest: string | undefined): {
+  category: string | null;
+  comment: string;
+} {
+  const trimmedRest = (rest || "").trim();
 
   if (!trimmedRest) {
-    return { category: null, comment: '' };
+    return { category: null, comment: "" };
   }
 
-  const words = trimmedRest.split(/\s+/).filter(w => w);
+  const words = trimmedRest.split(/\s+/).filter((w) => w);
 
   if (words.length === 0) {
     return { category: null, comment: trimmedRest };
@@ -185,19 +200,43 @@ function parseRest(rest: string | undefined): { category: string | null; comment
 
   if (words.length === 1) {
     // Only category, no comment
-    return { category: words[0]!, comment: words[0]! };
+    return { category: normalizeCategory(words[0]!), comment: "" };
   }
 
-  const category = words[0]!;
-  const comment = trimmedRest;
+  // Category is first word, comment is the rest (also capitalized)
+  const category = normalizeCategory(words[0]!);
+  const commentWords = words.slice(1);
+
+  if (commentWords.length === 0) {
+    return { category, comment: "" };
+  }
+
+  // Capitalize first word of comment, keep rest as-is
+  const firstCommentWord = commentWords[0];
+  if (!firstCommentWord) {
+    return { category, comment: "" };
+  }
+
+  const normalizedFirst = normalizeCategory(firstCommentWord);
+  const comment = commentWords.length > 1
+    ? `${normalizedFirst} ${commentWords.slice(1).join(" ")}`
+    : normalizedFirst;
 
   return { category, comment };
 }
 
 /**
  * Validate parsed expense
+ *
+ * Rules:
+ * - Amount must be > 0
+ * - Currency must be present
+ * - Category is required
+ * - Comment is optional
  */
-export function validateParsedExpense(parsed: ParsedExpense | null): parsed is ParsedExpense {
+export function validateParsedExpense(
+  parsed: ParsedExpense | null
+): parsed is ParsedExpense {
   if (!parsed) {
     return false;
   }
@@ -210,7 +249,10 @@ export function validateParsedExpense(parsed: ParsedExpense | null): parsed is P
     return false;
   }
 
-  if (!parsed.comment.trim()) {
+  // Category is required
+  const hasCategory = parsed.category !== null && parsed.category.trim() !== "";
+
+  if (!hasCategory) {
     return false;
   }
 

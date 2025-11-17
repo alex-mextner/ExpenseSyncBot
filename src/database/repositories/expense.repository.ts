@@ -16,38 +16,39 @@ export class ExpenseRepository {
   }
 
   /**
-   * Find all expenses for a user
+   * Find all expenses for a group
    */
-  findByUserId(userId: number, limit?: number): Expense[] {
+  findByGroupId(groupId: number, limit?: number): Expense[] {
     const query = this.db.query<Expense, [number, number]>(`
       SELECT * FROM expenses
-      WHERE user_id = ?
+      WHERE group_id = ?
       ORDER BY date DESC, created_at DESC
       LIMIT ?
     `);
 
-    return query.all(userId, limit || 100);
+    return query.all(groupId, limit || 100);
   }
 
   /**
    * Find expenses by date range
    */
-  findByDateRange(userId: number, startDate: string, endDate: string): Expense[] {
+  findByDateRange(groupId: number, startDate: string, endDate: string): Expense[] {
     const query = this.db.query<Expense, [number, string, string]>(`
       SELECT * FROM expenses
-      WHERE user_id = ? AND date >= ? AND date <= ?
+      WHERE group_id = ? AND date >= ? AND date <= ?
       ORDER BY date DESC
     `);
 
-    return query.all(userId, startDate, endDate);
+    return query.all(groupId, startDate, endDate);
   }
 
   /**
    * Create new expense
    */
   create(data: CreateExpenseData): Expense {
-    const query = this.db.query<{ id: number }, [number, string, string, string, number, string, number]>(`
+    const query = this.db.query<{ id: number }, [number, number, string, string, string, number, string, number]>(`
       INSERT INTO expenses (
+        group_id,
         user_id,
         date,
         category,
@@ -56,11 +57,12 @@ export class ExpenseRepository {
         currency,
         usd_amount
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
 
     const result = query.get(
+      data.group_id,
       data.user_id,
       data.date,
       data.category,
@@ -98,15 +100,15 @@ export class ExpenseRepository {
   /**
    * Get total expenses by currency
    */
-  getTotalsByCurrency(userId: number): Record<string, number> {
+  getTotalsByCurrency(groupId: number): Record<string, number> {
     const query = this.db.query<{ currency: string; total: number }, [number]>(`
       SELECT currency, SUM(amount) as total
       FROM expenses
-      WHERE user_id = ?
+      WHERE group_id = ?
       GROUP BY currency
     `);
 
-    const results = query.all(userId);
+    const results = query.all(groupId);
     const totals: Record<string, number> = {};
 
     for (const result of results) {
@@ -119,27 +121,27 @@ export class ExpenseRepository {
   /**
    * Get total expenses in USD
    */
-  getTotalInUSD(userId: number): number {
+  getTotalInUSD(groupId: number): number {
     const query = this.db.query<{ total: number }, [number]>(`
       SELECT SUM(usd_amount) as total
       FROM expenses
-      WHERE user_id = ?
+      WHERE group_id = ?
     `);
 
-    const result = query.get(userId);
+    const result = query.get(groupId);
     return result?.total || 0;
   }
 
   /**
    * Get expenses by category
    */
-  findByCategory(userId: number, category: string): Expense[] {
+  findByCategory(groupId: number, category: string): Expense[] {
     const query = this.db.query<Expense, [number, string]>(`
       SELECT * FROM expenses
-      WHERE user_id = ? AND category = ?
+      WHERE group_id = ? AND category = ?
       ORDER BY date DESC
     `);
 
-    return query.all(userId, category);
+    return query.all(groupId, category);
   }
 }

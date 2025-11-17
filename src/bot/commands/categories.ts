@@ -5,39 +5,40 @@ import { database } from '../../database';
  * /categories command handler
  */
 export async function handleCategoriesCommand(ctx: Ctx["Command"]): Promise<void> {
-  const telegramId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  const chatType = ctx.chat?.type;
 
-  if (!telegramId) {
-    await ctx.send('Error: Unable to identify user');
+  if (!chatId) {
+    await ctx.send('Error: Unable to identify chat');
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  // Only allow in groups
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
-  if (!user) {
-    await ctx.send('Пожалуйста, начни с команды /start');
+  if (!isGroup) {
+    await ctx.send('❌ Эта команда работает только в группах.');
     return;
   }
 
-  // Get categories
-  const categories = database.categories.findByUserId(user.id);
+  const group = database.groups.findByTelegramGroupId(chatId);
+
+  if (!group) {
+    await ctx.send('❌ Группа не настроена. Используй /connect');
+    return;
+  }
+
+  const categories = database.categories.findByGroupId(group.id);
 
   if (categories.length === 0) {
-    await ctx.send(
-      '📋 У тебя пока нет категорий.\n\n' +
-      'Категории создаются автоматически при добавлении расходов.'
-    );
+    await ctx.send('📋 Категории пока не созданы.\n\nОни будут создаваться автоматически из ваших расходов.');
     return;
   }
 
-  let message = '📋 **Твои категории:**\n\n';
-
+  let message = '📋 Категории группы:\n\n';
   for (const category of categories) {
-    const expenseCount = database.expenses.findByCategory(user.id, category.name).length;
-    message += `• ${category.name} (${expenseCount} ${expenseCount === 1 ? 'расход' : 'расходов'})\n`;
+    message += `• ${category.name}\n`;
   }
 
-  message += '\n_Категории создаются автоматически из первого слова после суммы._';
-
-  await ctx.send(message, { parse_mode: 'Markdown' });
+  await ctx.send(message);
 }

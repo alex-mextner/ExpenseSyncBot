@@ -4,7 +4,8 @@
       "Bash(bun add:*)",
       "Bash(bunx tsc:*)",
       "Bash(find:*)",
-      "Bash(bun run:*)"
+      "Bash(bun run:*)",
+      "Bash(bun test:*)"
     ],
     "deny": [],
     "ask": []

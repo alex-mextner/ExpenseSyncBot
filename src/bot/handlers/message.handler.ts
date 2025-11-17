@@ -7,6 +7,7 @@ import {
   validateParsedExpense,
 } from "../../services/currency/parser";
 import { createCategoryConfirmKeyboard } from "../keyboards";
+import { setMessageReaction, deleteMessage } from "../telegram-api";
 
 /**
  * Handle expense message
@@ -15,93 +16,173 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
+  const username = ctx.from.username || ctx.from.firstName || 'Unknown';
+
+  console.log(`[MSG] Received message from user ${username} (${telegramId}): "${text}"`);
 
   if (!telegramId || !messageId || !text) {
+    console.log(`[MSG] Ignoring: missing telegramId, messageId or text`);
     return;
   }
 
   // Check if message is from group/supergroup
-  const isPrivateChat = ctx.chat?.type === 'private';
+  const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
 
-  // Get user
-  const user = database.users.findByTelegramId(telegramId);
-
-  if (!user) {
-    if (!isPrivateChat) {
-      const botInfo = await ctx.bot.api.getMe();
-      const botUsername = botInfo.username;
-      await ctx.send(
-        `Привет! Для использования бота нужно настроить его в личных сообщениях:\n\n` +
-        `👉 https://t.me/${botUsername}?start=setup`
-      );
-      return;
-    }
-    await ctx.send("Пожалуйста, начни с команды /start");
+  if (!isGroup) {
+    // Silently ignore messages from private chats
+    console.log(`[MSG] Ignoring: message from private chat (user ${telegramId})`);
     return;
   }
 
-  // Check if user has completed setup
-  if (!database.users.hasCompletedSetup(telegramId)) {
-    if (!isPrivateChat) {
-      const botInfo = await ctx.bot.api.getMe();
-      const botUsername = botInfo.username;
-      await ctx.send(
-        `Нужно завершить настройку в личных сообщениях:\n\n` +
-        `👉 https://t.me/${botUsername}?start=setup`
-      );
-      return;
-    }
-    await ctx.send("Пожалуйста, завершите настройку: /connect");
-    return;
-  }
+  const telegramGroupId = ctx.chat.id;
+  const groupTitle = ctx.chat.title || `Group ${telegramGroupId}`;
 
-  // Parse expense
-  const parsed = parseExpenseMessage(text, user.default_currency);
+  console.log(`[MSG] Message from group "${groupTitle}" (${telegramGroupId})`);
 
-  if (!validateParsedExpense(parsed)) {
-    await ctx.send(MESSAGES.invalidFormat);
-    return;
-  }
 
-  // Show parsed expense
-  await ctx.send(
-    MESSAGES.expenseParsed
-      .replace("{amount}", parsed.amount.toString())
-      .replace("{currency}", parsed.currency)
-      .replace("{category}", parsed.category || "не указана")
-      .replace("{comment}", parsed.comment)
-  );
+  // Get or create group
+  const group = database.groups.findByTelegramGroupId(telegramGroupId);
 
-  // Check if category exists
-  const categoryExists = parsed.category
-    ? database.categories.exists(user.id, parsed.category)
-    : false;
-
-  // Create pending expense
-  const pendingExpense = database.pendingExpenses.create({
-    user_id: user.id,
-    message_id: messageId,
-    parsed_amount: parsed.amount,
-    parsed_currency: parsed.currency,
-    detected_category: parsed.category,
-    comment: parsed.comment,
-    status:
-      categoryExists || !parsed.category ? "confirmed" : "pending_category",
-  });
-
-  // If category doesn't exist, ask for confirmation
-  if (!categoryExists && parsed.category) {
-    const keyboard = createCategoryConfirmKeyboard(parsed.category);
+  if (!group) {
+    // Group not set up yet
+    console.log(`[MSG] Ignoring: group ${telegramGroupId} not found in database`);
     await ctx.send(
-      MESSAGES.newCategoryDetected.replace("{category}", parsed.category),
-      { reply_markup: keyboard }
+      `Группа не настроена. Для настройки используй команду /connect`
     );
     return;
   }
 
-  // If category exists or no category, save directly
-  await saveExpenseToSheet(user.id, pendingExpense.id);
-  await ctx.send(MESSAGES.expenseSaved);
+  // Check if group has completed setup
+  if (!database.groups.hasCompletedSetup(telegramGroupId)) {
+    console.log(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
+    await ctx.send("Завершите настройку группы: /connect");
+    return;
+  }
+
+  console.log(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
+
+  // Get or create user
+  let user = database.users.findByTelegramId(telegramId);
+
+  if (!user) {
+    console.log(`[MSG] Creating new user ${telegramId} in group ${group.id}`);
+    user = database.users.create({
+      telegram_id: telegramId,
+      group_id: group.id,
+    });
+  } else if (user.group_id !== group.id) {
+    // Update user's group_id if changed
+    console.log(`[MSG] Updating user ${telegramId} group_id: ${user.group_id} → ${group.id}`);
+    database.users.update(telegramId, { group_id: group.id });
+    user = database.users.findByTelegramId(telegramId);
+    if (!user) return;
+  }
+
+  // Split message by lines and process each line
+  const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+
+  console.log(`[MSG] Processing ${lines.length} line(s)`);
+
+  let successCount = 0;
+  const newCategories: string[] = [];
+
+  for (const [index, line] of lines.entries()) {
+    console.log(`[MSG] Processing line ${index + 1}/${lines.length}: "${line}"`);
+
+    // Parse expense
+    const parsed = parseExpenseMessage(line, group.default_currency);
+
+    if (!parsed) {
+      console.log(`[MSG] ❌ Line ${index + 1}: failed to parse`);
+      continue;
+    }
+
+    console.log(`[MSG] Line ${index + 1} parsed:`, {
+      amount: parsed.amount,
+      currency: parsed.currency,
+      category: parsed.category,
+      comment: parsed.comment,
+    });
+
+    if (!validateParsedExpense(parsed)) {
+      console.log(`[MSG] ❌ Line ${index + 1}: validation failed`);
+      continue;
+    }
+
+    // Check if category exists
+    const categoryExists = parsed.category
+      ? database.categories.exists(group.id, parsed.category)
+      : false;
+
+    console.log(`[MSG] Line ${index + 1}: category "${parsed.category}" exists: ${categoryExists}`);
+
+    // Create pending expense
+    const pendingExpense = database.pendingExpenses.create({
+      user_id: user.id,
+      message_id: messageId,
+      parsed_amount: parsed.amount,
+      parsed_currency: parsed.currency,
+      detected_category: parsed.category,
+      comment: parsed.comment,
+      status:
+        categoryExists || !parsed.category ? "confirmed" : "pending_category",
+    });
+
+    console.log(`[MSG] Line ${index + 1}: created pending expense ${pendingExpense.id}`);
+
+    // If category doesn't exist, track it for confirmation
+    if (!categoryExists && parsed.category && !newCategories.includes(parsed.category)) {
+      newCategories.push(parsed.category);
+    }
+
+    // If category exists, save directly
+    if (categoryExists || !parsed.category) {
+      console.log(`[MSG] Line ${index + 1}: saving to sheet`);
+      await saveExpenseToSheet(user.id, group.id, pendingExpense.id);
+      successCount++;
+    }
+  }
+
+  // Set reaction on user message
+  try {
+    await setMessageReaction(telegramGroupId, messageId, "👍");
+  } catch (error) {
+    console.error(`[MSG] Failed to set reaction:`, error);
+  }
+
+  // If there are new categories, ask for confirmation
+  if (newCategories.length > 0) {
+    console.log(`[MSG] Asking for confirmation of ${newCategories.length} new categories`);
+    for (const category of newCategories) {
+      const keyboard = createCategoryConfirmKeyboard(category);
+      await ctx.send(
+        MESSAGES.newCategoryDetected.replace("{category}", category),
+        { reply_markup: keyboard }
+      );
+    }
+    return;
+  }
+
+  // Send success message
+  if (successCount > 0) {
+    const message = successCount === 1
+      ? MESSAGES.expenseSaved
+      : `${successCount} расходов сохранено`;
+
+    const sentMessage = await ctx.send(message);
+
+    // Delete message after 2 seconds
+    setTimeout(async () => {
+      try {
+        await deleteMessage(telegramGroupId, sentMessage.id);
+        console.log(`[MSG] Deleted success message`);
+      } catch (error) {
+        console.error(`[MSG] Failed to delete message:`, error);
+      }
+    }, 2000);
+  }
+
+  console.log(`[MSG] ✅ Processed ${successCount}/${lines.length} expenses successfully`);
 }
 
 /**
@@ -109,18 +190,30 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
  */
 async function saveExpenseToSheet(
   userId: number,
+  groupId: number,
   pendingExpenseId: number
 ): Promise<void> {
+  console.log(`[SAVE] Starting save to sheet...`);
+
   const user = database.users.findById(userId);
+  const group = database.groups.findById(groupId);
   const pendingExpense = database.pendingExpenses.findById(pendingExpenseId);
 
   if (
     !user ||
+    !group ||
     !pendingExpense ||
-    !user.spreadsheet_id ||
-    !user.google_refresh_token
+    !group.spreadsheet_id ||
+    !group.google_refresh_token
   ) {
-    throw new Error("Invalid user or pending expense");
+    console.error(`[SAVE] ❌ Validation failed:`, {
+      user: !!user,
+      group: !!group,
+      pendingExpense: !!pendingExpense,
+      spreadsheet_id: !!group?.spreadsheet_id,
+      refresh_token: !!group?.google_refresh_token,
+    });
+    throw new Error("Invalid user, group or pending expense");
   }
 
   const { convertToUSD } = await import("../../services/currency/converter");
@@ -132,9 +225,11 @@ async function saveExpenseToSheet(
     pendingExpense.parsed_currency
   );
 
+  console.log(`[SAVE] Converted ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${usdAmount} USD`);
+
   // Prepare amounts for each currency
   const amounts: Record<string, number | null> = {};
-  for (const currency of user.enabled_currencies) {
+  for (const currency of group.enabled_currencies) {
     amounts[currency] =
       currency === pendingExpense.parsed_currency
         ? pendingExpense.parsed_amount
@@ -142,25 +237,39 @@ async function saveExpenseToSheet(
   }
 
   // Append to sheet
-  if (!user.google_refresh_token || !user.spreadsheet_id) {
-    throw new Error("User not fully configured");
-  }
-
   const currentDate = format(new Date(), "yyyy-MM-dd");
+  const category = pendingExpense.detected_category || "Без категории";
 
-  await appendExpenseRow(user.google_refresh_token, user.spreadsheet_id, {
+  console.log(`[SAVE] Writing to Google Sheet:`, {
     date: currentDate,
-    category: pendingExpense.detected_category || "Без категории",
+    category,
     comment: pendingExpense.comment,
     amounts,
     usdAmount,
   });
 
+  try {
+    await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
+      date: currentDate,
+      category,
+      comment: pendingExpense.comment,
+      amounts,
+      usdAmount,
+    });
+
+    console.log(`[SAVE] ✅ Successfully wrote to Google Sheet`);
+  } catch (error) {
+    console.error(`[SAVE] ❌ Failed to write to Google Sheet:`, error);
+    throw error;
+  }
+
   // Save to expenses table
+  console.log(`[SAVE] Saving to local database...`);
   database.expenses.create({
+    group_id: groupId,
     user_id: userId,
     date: currentDate,
-    category: pendingExpense.detected_category || "Без категории",
+    category,
     comment: pendingExpense.comment,
     amount: pendingExpense.parsed_amount,
     currency: pendingExpense.parsed_currency,
@@ -169,6 +278,7 @@ async function saveExpenseToSheet(
 
   // Delete pending expense
   database.pendingExpenses.delete(pendingExpenseId);
+  console.log(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
 }
 
 /**

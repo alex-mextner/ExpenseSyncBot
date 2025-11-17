@@ -1,15 +1,16 @@
 import { Bot } from "gramio";
 import { env } from "../config/env";
-import { handleStartCommand } from "./commands/start";
-import { handleConnectCommand } from "./commands/connect";
-import { handleStatsCommand } from "./commands/stats";
 import { handleCategoriesCommand } from "./commands/categories";
+import { handleConnectCommand } from "./commands/connect";
 import {
-  handleSettingsCommand,
   handleReconnectCommand,
+  handleSettingsCommand,
 } from "./commands/settings";
-import { handleExpenseMessage } from "./handlers/message.handler";
+import { handleSpreadsheetCommand } from "./commands/spreadsheet";
+import { handleStartCommand } from "./commands/start";
+import { handleStatsCommand } from "./commands/stats";
 import { handleCallbackQuery } from "./handlers/callback.handler";
+import { handleExpenseMessage } from "./handlers/message.handler";
 
 /**
  * Initialize and configure bot
@@ -20,6 +21,10 @@ export function createBot(): Bot {
   // Commands
   bot.command("start", handleStartCommand);
   bot.command("connect", handleConnectCommand);
+  bot.command("spreadsheet", handleSpreadsheetCommand);
+  bot.command("table", handleSpreadsheetCommand);
+  bot.command("sheet", handleSpreadsheetCommand);
+  bot.command("t", handleSpreadsheetCommand);
   bot.command("stats", handleStatsCommand);
   bot.command("categories", handleCategoriesCommand);
   bot.command("settings", handleSettingsCommand);
