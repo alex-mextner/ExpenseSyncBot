@@ -1,0 +1,19 @@
+{
+  "name": "expensesyncbot",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^24.10.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "currency.js": "^2.0.4",
+    "date-fns": "^4.1.0",
+    "googleapis": "^166.0.0",
+    "gramio": "^0.4.11"
+  }
+}
