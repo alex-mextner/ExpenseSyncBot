@@ -3,7 +3,7 @@ import type { CurrencyCode } from '../config/constants';
 import { SUPPORTED_CURRENCIES, KEYBOARD_TEXTS } from '../config/constants';
 
 /**
- * Create currency selection keyboard
+ * Create currency set selection keyboard (Step 1)
  */
 export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []): InlineKeyboard {
   const keyboard = new InlineKeyboard();
@@ -21,9 +21,29 @@ export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []):
     keyboard.row();
   }
 
-  // Add done button
+  // Add next button (not done)
   if (selectedCurrencies.length > 0) {
-    keyboard.text(KEYBOARD_TEXTS.done, 'currency:done');
+    keyboard.text(KEYBOARD_TEXTS.next, 'currency:next');
+  }
+
+  return keyboard;
+}
+
+/**
+ * Create default currency selection keyboard (Step 2)
+ */
+export function createDefaultCurrencyKeyboard(enabledCurrencies: CurrencyCode[]): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  // Show only enabled currencies in rows of 3
+  for (let i = 0; i < enabledCurrencies.length; i += 3) {
+    const row = enabledCurrencies.slice(i, i + 3);
+
+    for (const currency of row) {
+      keyboard.text(currency, `default:${currency}`);
+    }
+
+    keyboard.row();
   }
 
   return keyboard;

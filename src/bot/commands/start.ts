@@ -13,6 +13,20 @@ export async function handleStartCommand(ctx: Ctx["Command"]): Promise<void> {
     return;
   }
 
+  // Check if this is private chat
+  const isPrivateChat = ctx.chat?.type === 'private';
+
+  if (!isPrivateChat) {
+    const botInfo = await ctx.bot.api.getMe();
+    const botUsername = botInfo.username;
+    await ctx.send(
+      `👋 Привет! Я помогу вести учет расходов.\n\n` +
+      `Для настройки напиши мне в личку:\n` +
+      `👉 https://t.me/${botUsername}?start=setup`
+    );
+    return;
+  }
+
   // Check if user exists
   let user = database.users.findByTelegramId(telegramId);
 

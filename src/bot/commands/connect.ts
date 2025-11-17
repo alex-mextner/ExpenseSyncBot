@@ -3,8 +3,9 @@ import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { registerOAuthState } from '../../web/oauth-callback';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
-import { createCurrencyKeyboard } from '../keyboards';
+import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import { MESSAGES, type CurrencyCode } from '../../config/constants';
+import { InlineKeyboard } from 'gramio';
 
 /**
  * /connect command handler
@@ -27,11 +28,13 @@ export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
   // Generate OAuth URL
   const authUrl = generateAuthUrl(user.id);
 
+  const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
+
   await ctx.send(
     `🔐 Подключение Google аккаунта\n\n` +
-    `Нажми на ссылку ниже и разреши доступ к Google Sheets:\n\n` +
-    `${authUrl}\n\n` +
-    `После авторизации вернись сюда, я продолжу настройку.`
+    `Нажми на кнопку ниже и разреши доступ к Google Sheets.\n\n` +
+    `После авторизации вернись сюда, я продолжу настройку.`,
+    { reply_markup: authKeyboard }
   );
 
   // Wait for OAuth callback
@@ -54,9 +57,15 @@ export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
 
   await ctx.send(MESSAGES.authSuccess);
 
-  // Show currency selection keyboard
+  // Show currency set selection keyboard (Step 1)
   const keyboard = createCurrencyKeyboard();
-  await ctx.send('Выбери валюту по умолчанию:', { reply_markup: keyboard });
+  await ctx.send(
+    '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
+    '• Можно выбрать несколько\n' +
+    '• Эти валюты будут столбцами в таблице\n' +
+    '• Нажми ✅ Далее когда закончишь',
+    { reply_markup: keyboard }
+  );
 }
 
 /**
@@ -74,63 +83,40 @@ export async function handleCurrencyCallback(
     return;
   }
 
-  if (action === 'done') {
-    // User finished selecting currencies
+  // Step 1: Currency set selection - user clicked "Далее"
+  if (action === 'next') {
     if (user.enabled_currencies.length === 0) {
       await ctx.answerCallbackQuery({ text: 'Выбери хотя бы одну валюту' });
       return;
     }
 
-    // Create spreadsheet
-    try {
-      const { spreadsheetId, spreadsheetUrl } = await createExpenseSpreadsheet(
-        user.google_refresh_token!,
-        user.default_currency,
-        user.enabled_currencies
-      );
+    // Move to Step 2: Default currency selection
+    const keyboard = createDefaultCurrencyKeyboard(user.enabled_currencies);
 
-      database.users.update(telegramId, { spreadsheet_id: spreadsheetId });
+    await ctx.editText(
+      '💱 Шаг 2/2: Выбери валюту по умолчанию:\n\n' +
+      '• Эта валюта будет использоваться, если не указать явно\n' +
+      '• Например, если выбрать EUR, то "100 еда обед" = 100 евро\n\n' +
+      `📊 Набор валют: ${user.enabled_currencies.join(', ')}`,
+      { reply_markup: keyboard }
+    );
 
-      await ctx.editText(
-        MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl)
-      );
-
-      await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
-    } catch (err) {
-      console.error('Error creating spreadsheet:', err);
-      await ctx.answerCallbackQuery({ text: '❌ Ошибка при создании таблицы' });
-      await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
-    }
-
+    await ctx.answerCallbackQuery({ text: 'Теперь выбери валюту по умолчанию' });
     return;
   }
 
-  // Toggle currency selection
+  // Step 1: Toggle currency in the set
   const currency = action as CurrencyCode;
   let enabledCurrencies = [...user.enabled_currencies];
 
   if (enabledCurrencies.includes(currency)) {
     // Deselect
     enabledCurrencies = enabledCurrencies.filter(c => c !== currency);
-
-    // If this was default currency, clear it
-    if (user.default_currency === currency) {
-      database.users.update(telegramId, {
-        enabled_currencies: enabledCurrencies,
-        default_currency: enabledCurrencies[0] || 'USD',
-      });
-    } else {
-      database.users.update(telegramId, { enabled_currencies: enabledCurrencies });
-    }
+    database.users.update(telegramId, { enabled_currencies: enabledCurrencies });
   } else {
     // Select
     enabledCurrencies.push(currency);
     database.users.update(telegramId, { enabled_currencies: enabledCurrencies });
-
-    // Set as default if it's the first one
-    if (enabledCurrencies.length === 1) {
-      database.users.update(telegramId, { default_currency: currency });
-    }
   }
 
   // Update keyboard
@@ -139,8 +125,73 @@ export async function handleCurrencyCallback(
 
   const keyboard = createCurrencyKeyboard(updatedUser.enabled_currencies);
 
-  await ctx.editReplyMarkup({
-    inline_keyboard: keyboard.build().inline_keyboard,
+  // Update message with current status
+  const statusText =
+    '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
+    '• Можно выбрать несколько\n' +
+    '• Эти валюты будут столбцами в таблице\n' +
+    '• Нажми ✅ Далее когда закончишь\n\n' +
+    `📊 Выбрано: ${updatedUser.enabled_currencies.join(', ') || 'нет'}`;
+
+  await ctx.editText(statusText, {
+    reply_markup: keyboard,
   });
-  await ctx.answerCallbackQuery({ text: `${currency} ${enabledCurrencies.includes(currency) ? 'добавлен' : 'удален'}` });
+
+  const action_text = enabledCurrencies.includes(currency) ? 'добавлена' : 'удалена';
+  await ctx.answerCallbackQuery({ text: `${currency} ${action_text}` });
+}
+
+/**
+ * Handle default currency selection callback (Step 2)
+ */
+export async function handleDefaultCurrencyCallback(
+  ctx: Ctx["CallbackQuery"],
+  action: string,
+  telegramId: number
+): Promise<void> {
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user) {
+    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+    return;
+  }
+
+  const currency = action as CurrencyCode;
+
+  // Verify the currency is in enabled set
+  if (!user.enabled_currencies.includes(currency)) {
+    await ctx.answerCallbackQuery({ text: 'Ошибка: валюта не в наборе' });
+    return;
+  }
+
+  // Set as default currency
+  database.users.update(telegramId, { default_currency: currency });
+
+  // Verify refresh token exists
+  if (!user.google_refresh_token) {
+    await ctx.answerCallbackQuery({ text: 'Ошибка: Google не подключен' });
+    await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
+    return;
+  }
+
+  // Create spreadsheet
+  try {
+    const { spreadsheetId, spreadsheetUrl } = await createExpenseSpreadsheet(
+      user.google_refresh_token,
+      currency,
+      user.enabled_currencies
+    );
+
+    database.users.update(telegramId, { spreadsheet_id: spreadsheetId });
+
+    await ctx.editText(
+      MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl)
+    );
+
+    await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+  } catch (err) {
+    console.error('Error creating spreadsheet:', err);
+    await ctx.answerCallbackQuery({ text: '❌ Ошибка при создании таблицы' });
+    await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
+  }
 }

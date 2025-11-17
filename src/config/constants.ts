@@ -135,4 +135,5 @@ export const KEYBOARD_TEXTS = {
   selectExistingCategory: '📋 Выбрать из существующих',
   cancel: '❌ Отмена',
   done: '✅ Готово',
+  next: '✅ Далее',
 };

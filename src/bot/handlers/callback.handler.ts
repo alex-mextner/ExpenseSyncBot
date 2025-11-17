@@ -1,6 +1,6 @@
 import { MESSAGES } from "../../config/constants";
 import { database } from "../../database";
-import { handleCurrencyCallback } from "../commands/connect";
+import { handleCurrencyCallback, handleDefaultCurrencyCallback } from "../commands/connect";
 import { createCategoriesListKeyboard } from "../keyboards";
 import type { Ctx } from "../types";
 import { saveExpenseToSheet } from "./message.handler";
@@ -28,6 +28,17 @@ export async function handleCallbackQuery(
         return;
       }
       await handleCurrencyCallback(ctx, action, telegramId);
+      break;
+    }
+
+    case "default": {
+      // Step 2: Default currency selection
+      const currency = params[0];
+      if (!currency) {
+        await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+        return;
+      }
+      await handleDefaultCurrencyCallback(ctx, currency, telegramId);
       break;
     }
 

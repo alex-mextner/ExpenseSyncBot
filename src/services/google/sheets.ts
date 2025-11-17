@@ -62,24 +62,29 @@ export async function createExpenseSpreadsheet(
   const spreadsheetId = response.data.spreadsheetId!;
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
 
-  // Auto-resize columns
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          autoResizeDimensions: {
-            dimensions: {
-              sheetId: 0,
-              dimension: 'COLUMNS',
-              startIndex: 0,
-              endIndex: headers.length,
+  // Get real sheetId from response
+  const sheetId = response.data.sheets?.[0]?.properties?.sheetId;
+
+  if (sheetId !== undefined) {
+    // Auto-resize columns
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            autoResizeDimensions: {
+              dimensions: {
+                sheetId: sheetId,
+                dimension: 'COLUMNS',
+                startIndex: 0,
+                endIndex: headers.length,
+              },
             },
           },
-        },
-      ],
-    },
-  });
+        ],
+      },
+    });
+  }
 
   return { spreadsheetId, spreadsheetUrl };
 }

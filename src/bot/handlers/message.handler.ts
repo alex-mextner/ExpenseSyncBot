@@ -20,16 +20,37 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     return;
   }
 
+  // Check if message is from group/supergroup
+  const isPrivateChat = ctx.chat?.type === 'private';
+
   // Get user
   const user = database.users.findByTelegramId(telegramId);
 
   if (!user) {
+    if (!isPrivateChat) {
+      const botInfo = await ctx.bot.api.getMe();
+      const botUsername = botInfo.username;
+      await ctx.send(
+        `Привет! Для использования бота нужно настроить его в личных сообщениях:\n\n` +
+        `👉 https://t.me/${botUsername}?start=setup`
+      );
+      return;
+    }
     await ctx.send("Пожалуйста, начни с команды /start");
     return;
   }
 
   // Check if user has completed setup
   if (!database.users.hasCompletedSetup(telegramId)) {
+    if (!isPrivateChat) {
+      const botInfo = await ctx.bot.api.getMe();
+      const botUsername = botInfo.username;
+      await ctx.send(
+        `Нужно завершить настройку в личных сообщениях:\n\n` +
+        `👉 https://t.me/${botUsername}?start=setup`
+      );
+      return;
+    }
     await ctx.send("Пожалуйста, завершите настройку: /connect");
     return;
   }
