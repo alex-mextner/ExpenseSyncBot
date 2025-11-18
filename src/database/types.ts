@@ -103,7 +103,7 @@ export interface Expense {
   comment: string;
   amount: number;
   currency: CurrencyCode;
-  usd_amount: number;
+  eur_amount: number;
   created_at: string;
 }
 
@@ -115,5 +115,5 @@ export interface CreateExpenseData {
   comment: string;
   amount: number;
   currency: CurrencyCode;
-  usd_amount: number;
+  eur_amount: number;
 }

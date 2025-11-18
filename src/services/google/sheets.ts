@@ -18,7 +18,7 @@ export async function createExpenseSpreadsheet(
   const headers = [
     SPREADSHEET_CONFIG.headers[0], // Дата
     ...enabledCurrencies.map(code => `${code} (${CURRENCY_SYMBOLS[code]})`),
-    SPREADSHEET_CONFIG.usdColumnHeader, // USD (calc)
+    SPREADSHEET_CONFIG.eurColumnHeader, // EUR (calc)
     SPREADSHEET_CONFIG.headers[1], // Категория
     SPREADSHEET_CONFIG.headers[2], // Комментарий
   ];
@@ -100,7 +100,7 @@ export async function appendExpenseRow(
     category: string;
     comment: string;
     amounts: Record<CurrencyCode, number | null>; // Currency -> amount
-    usdAmount: number;
+    eurAmount: number;
   }
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
@@ -113,6 +113,8 @@ export async function appendExpenseRow(
   });
 
   const headers = headersResponse.data.values?.[0] || [];
+  console.log(`[SHEETS] Headers from spreadsheet:`, headers);
+  console.log(`[SHEETS] Data to append:`, data);
 
   // Build row values based on header order
   const row: (string | number | null)[] = [];
@@ -120,22 +122,30 @@ export async function appendExpenseRow(
   for (const header of headers) {
     if (header === SPREADSHEET_CONFIG.headers[0]) {
       // Дата
+      console.log(`[SHEETS] Adding date: ${data.date}`);
       row.push(data.date);
     } else if (header === SPREADSHEET_CONFIG.headers[1]) {
       // Категория
+      console.log(`[SHEETS] Adding category: ${data.category}`);
       row.push(data.category);
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       // Комментарий
+      console.log(`[SHEETS] Adding comment: ${data.comment}`);
       row.push(data.comment);
-    } else if (header === SPREADSHEET_CONFIG.usdColumnHeader) {
-      // USD (calc)
-      row.push(data.usdAmount);
+    } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
+      // EUR (calc)
+      console.log(`[SHEETS] Adding EUR (calc): ${data.eurAmount}`);
+      row.push(data.eurAmount);
     } else {
       // Currency columns
       const currencyCode = header.split(' ')[0] as CurrencyCode;
-      row.push(data.amounts[currencyCode] || null);
+      const value = data.amounts[currencyCode] || null;
+      console.log(`[SHEETS] Header "${header}" -> currency "${currencyCode}" -> value ${value}`);
+      row.push(value);
     }
   }
+
+  console.log(`[SHEETS] Final row:`, row);
 
   // Append row
   await sheets.spreadsheets.values.append({

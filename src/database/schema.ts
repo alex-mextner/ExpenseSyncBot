@@ -220,6 +220,15 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '006_rename_usd_to_eur',
+      up: () => {
+        // Rename usd_amount to eur_amount in expenses table
+        db.exec(`
+          ALTER TABLE expenses RENAME COLUMN usd_amount TO eur_amount;
+        `);
+      },
+    },
   ];
 
   // Check and run migrations

@@ -143,11 +143,16 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     }
   }
 
-  // Set reaction on user message
-  try {
-    await setMessageReaction(telegramGroupId, messageId, "👍");
-  } catch (error) {
-    console.error(`[MSG] Failed to set reaction:`, error);
+  // Only react if at least one expense was processed
+  const hasProcessedExpenses = successCount > 0 || newCategories.length > 0;
+
+  if (hasProcessedExpenses) {
+    // Set reaction on user message
+    try {
+      await setMessageReaction(telegramGroupId, messageId, "👍");
+    } catch (error) {
+      console.error(`[MSG] Failed to set reaction:`, error);
+    }
   }
 
   // If there are new categories, ask for confirmation
@@ -163,24 +168,7 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     return;
   }
 
-  // Send success message
-  if (successCount > 0) {
-    const message = successCount === 1
-      ? MESSAGES.expenseSaved
-      : `${successCount} расходов сохранено`;
-
-    const sentMessage = await ctx.send(message);
-
-    // Delete message after 2 seconds
-    setTimeout(async () => {
-      try {
-        await deleteMessage(telegramGroupId, sentMessage.id);
-        console.log(`[MSG] Deleted success message`);
-      } catch (error) {
-        console.error(`[MSG] Failed to delete message:`, error);
-      }
-    }, 2000);
-  }
+  // Success - no need to send message, reaction is enough
 
   console.log(`[MSG] ✅ Processed ${successCount}/${lines.length} expenses successfully`);
 }
@@ -216,16 +204,16 @@ async function saveExpenseToSheet(
     throw new Error("Invalid user, group or pending expense");
   }
 
-  const { convertToUSD } = await import("../../services/currency/converter");
+  const { convertToEUR } = await import("../../services/currency/converter");
   const { appendExpenseRow } = await import("../../services/google/sheets");
 
-  // Calculate USD amount
-  const usdAmount = convertToUSD(
+  // Calculate EUR amount
+  const eurAmount = convertToEUR(
     pendingExpense.parsed_amount,
     pendingExpense.parsed_currency
   );
 
-  console.log(`[SAVE] Converted ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${usdAmount} USD`);
+  console.log(`[SAVE] Converted ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`);
 
   // Prepare amounts for each currency
   const amounts: Record<string, number | null> = {};
@@ -245,7 +233,7 @@ async function saveExpenseToSheet(
     category,
     comment: pendingExpense.comment,
     amounts,
-    usdAmount,
+    eurAmount,
   });
 
   try {
@@ -254,7 +242,7 @@ async function saveExpenseToSheet(
       category,
       comment: pendingExpense.comment,
       amounts,
-      usdAmount,
+      eurAmount,
     });
 
     console.log(`[SAVE] ✅ Successfully wrote to Google Sheet`);
@@ -273,7 +261,7 @@ async function saveExpenseToSheet(
     comment: pendingExpense.comment,
     amount: pendingExpense.parsed_amount,
     currency: pendingExpense.parsed_currency,
-    usd_amount: usdAmount,
+    eur_amount: eurAmount,
   });
 
   // Delete pending expense

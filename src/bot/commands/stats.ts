@@ -32,7 +32,7 @@ export async function handleStatsCommand(ctx: Ctx["Command"]): Promise<void> {
   // Get expenses stats
   const recentExpenses = database.expenses.findByGroupId(group.id, 10);
   const totalsByCurrency = database.expenses.getTotalsByCurrency(group.id);
-  const totalUSD = database.expenses.getTotalInUSD(group.id);
+  const totalEUR = database.expenses.getTotalInEUR(group.id);
 
   let message = '📊 Статистика расходов группы:\n\n';
 
@@ -43,7 +43,7 @@ export async function handleStatsCommand(ctx: Ctx["Command"]): Promise<void> {
     message += `• ${symbol} ${total.toFixed(2)}\n`;
   }
 
-  message += `\n**Всего (USD):** $${totalUSD.toFixed(2)}\n`;
+  message += `\n**Всего (EUR):** €${totalEUR.toFixed(2)}\n`;
 
   message += `\n**Последние ${recentExpenses.length} расходов:**\n`;
   for (const expense of recentExpenses) {

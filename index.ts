@@ -1,6 +1,7 @@
 import { startOAuthServer } from './src/web/oauth-callback';
 import { startBot } from './src/bot';
 import { database } from './src/database';
+import { updateExchangeRates } from './src/services/currency/converter';
 
 /**
  * Main application entry point
@@ -13,6 +14,11 @@ async function main() {
     console.log('📦 Initializing database...');
     // Database is initialized on import
     console.log('✓ Database ready\n');
+
+    // Update exchange rates
+    console.log('💱 Updating exchange rates...');
+    await updateExchangeRates();
+    console.log('✓ Exchange rates updated\n');
 
     // Start OAuth callback server
     console.log('🌐 Starting OAuth server...');

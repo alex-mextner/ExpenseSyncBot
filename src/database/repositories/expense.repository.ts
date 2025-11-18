@@ -55,7 +55,7 @@ export class ExpenseRepository {
         comment,
         amount,
         currency,
-        usd_amount
+        eur_amount
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
@@ -69,7 +69,7 @@ export class ExpenseRepository {
       data.comment,
       data.amount,
       data.currency,
-      data.usd_amount
+      data.eur_amount
     );
 
     if (!result) {
@@ -119,11 +119,11 @@ export class ExpenseRepository {
   }
 
   /**
-   * Get total expenses in USD
+   * Get total expenses in EUR
    */
-  getTotalInUSD(groupId: number): number {
+  getTotalInEUR(groupId: number): number {
     const query = this.db.query<{ total: number }, [number]>(`
-      SELECT SUM(usd_amount) as total
+      SELECT SUM(eur_amount) as total
       FROM expenses
       WHERE group_id = ?
     `);
@@ -143,5 +143,24 @@ export class ExpenseRepository {
     `);
 
     return query.all(groupId, category);
+  }
+
+  /**
+   * Delete all expenses for a group (for sync)
+   */
+  deleteAllByGroupId(groupId: number): number {
+    const countQuery = this.db.query<{ count: number }, [number]>(`
+      SELECT COUNT(*) as count FROM expenses WHERE group_id = ?
+    `);
+
+    const result = countQuery.get(groupId);
+    const count = result?.count || 0;
+
+    const deleteQuery = this.db.query<void, [number]>(`
+      DELETE FROM expenses WHERE group_id = ?
+    `);
+
+    deleteQuery.run(groupId);
+    return count;
   }
 }

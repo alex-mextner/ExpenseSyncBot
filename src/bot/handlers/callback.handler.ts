@@ -108,19 +108,6 @@ async function handleCategoryAction(
       if (pending) {
         database.pendingExpenses.update(pending.id, { status: "confirmed" });
         await saveExpenseToSheet(user.id, group.id, pending.id);
-
-        const sentMessage = await ctx.send(MESSAGES.expenseSaved);
-
-        // Delete success message after 2 seconds
-        if (chatId) {
-          setTimeout(async () => {
-            try {
-              await deleteMessage(chatId, sentMessage.id);
-            } catch (error) {
-              console.error(`[CALLBACK] Failed to delete message:`, error);
-            }
-          }, 2000);
-        }
       }
 
       break;
@@ -175,19 +162,6 @@ async function handleCategoryAction(
 
       // Save expense
       await saveExpenseToSheet(user.id, group.id, pending.id);
-
-      const sentMessage = await ctx.send(MESSAGES.expenseSaved);
-
-      // Delete success message after 2 seconds
-      if (chatId) {
-        setTimeout(async () => {
-          try {
-            await deleteMessage(chatId, sentMessage.id);
-          } catch (error) {
-            console.error(`[CALLBACK] Failed to delete message:`, error);
-          }
-        }, 2000);
-      }
       break;
     }
 

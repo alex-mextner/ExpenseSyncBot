@@ -98,7 +98,7 @@ export const GOOGLE_SCOPES = [
 export const SPREADSHEET_CONFIG = {
   sheetName: 'Expenses',
   headers: ['Дата', 'Категория', 'Комментарий'],
-  usdColumnHeader: 'USD (calc)',
+  eurColumnHeader: 'EUR (calc)',
 };
 
 /**
