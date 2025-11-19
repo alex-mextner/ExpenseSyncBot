@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'expensesyncbot',
-      script: '/var/www/.bun/bin/bun',
-      args: 'run index.ts',
+      script: 'index.ts',
+      interpreter: 'bun',
       cwd: '/var/www/ExpenseSyncBot',
       instances: 1,
       autorestart: true,
@@ -11,6 +11,7 @@ module.exports = {
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
+        PATH: `/var/www/.bun/bin:/var/www/.nvm/versions/node/v22.17.0/bin:${process.env.PATH}`,
       },
       error_file: '/var/www/ExpenseSyncBot/logs/error.log',
       out_file: '/var/www/ExpenseSyncBot/logs/out.log',
