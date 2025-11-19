@@ -25,6 +25,9 @@ jobs:
             set -e
             cd /var/www/ExpenseSyncBot
 
+            # Add node to PATH for PM2
+            export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
 

@@ -93,7 +93,16 @@ Press Ctrl+C to stop.
 
 **Note:** PM2 will be installed at `/var/www/.bun/bin/pm2`
 
-### 9. Start the bot with PM2
+### 9. Setup environment for PM2
+
+PM2 requires Node.js in PATH. Add to `~/.bashrc`:
+
+```bash
+echo 'export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 10. Start the bot with PM2
 
 ```bash
 /var/www/.bun/bin/pm2 start ecosystem.config.js
@@ -103,14 +112,14 @@ Press Ctrl+C to stop.
 
 **Note:** `pm2 startup` will show you a command to run with sudo. Copy and execute it to enable PM2 auto-start on server reboot.
 
-### 10. Check PM2 status
+### 11. Check PM2 status
 
 ```bash
 /var/www/.bun/bin/pm2 list
 /var/www/.bun/bin/pm2 status expensesyncbot
 ```
 
-### 11. View logs
+### 12. View logs
 
 ```bash
 # Follow logs in real-time
@@ -123,7 +132,7 @@ Press Ctrl+C to stop.
 /var/www/.bun/bin/pm2 flush
 ```
 
-### 12. Configure Caddy
+### 13. Configure Caddy
 
 ```bash
 # Copy Caddyfile to Caddy config directory
@@ -139,7 +148,7 @@ sudo systemctl reload caddy
 sudo systemctl status caddy
 ```
 
-### 13. Update Google Cloud Console
+### 14. Update Google Cloud Console
 
 Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and update the OAuth redirect URI to:
 
@@ -177,7 +186,7 @@ Copy the entire output (including `-----BEGIN OPENSSH PRIVATE KEY-----` and `---
 
 ### 4. Add to GitHub Secrets
 
-1. Go to your GitHub repository: https://github.com/alex-mextner/ExpenseSyncBot
+1. Go to your GitHub repository: <https://github.com/alex-mextner/ExpenseSyncBot>
 2. Click **Settings** → **Secrets and variables** → **Actions**
 3. Click **New repository secret**
 4. Name: `DIGITAL_OCEAN_SSH_KEY`
@@ -207,7 +216,7 @@ Once setup is complete, deployment happens automatically:
    - Restarts the systemd service
 4. The bot is now running with the latest code
 
-### What happens during deployment:
+### What happens during deployment
 
 - ✅ Code is updated (`git pull`)
 - ✅ Dependencies are installed
@@ -290,17 +299,20 @@ cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
 ### Bot is not starting
 
 1. Check PM2 status:
+
    ```bash
    /var/www/.bun/bin/pm2 status
    /var/www/.bun/bin/pm2 describe expensesyncbot
    ```
 
 2. Check the logs:
+
    ```bash
    /var/www/.bun/bin/pm2 logs expensesyncbot --lines 50
    ```
 
 3. Try to start manually:
+
    ```bash
    cd /var/www/ExpenseSyncBot
    /var/www/.bun/bin/bun run index.ts
@@ -319,10 +331,13 @@ cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
 2. Verify SSH key is correct in GitHub Secrets
 3. Verify `www-data` user has permissions on `/var/www/ExpenseSyncBot`
 4. Check if PM2 is installed:
+
    ```bash
    /var/www/.bun/bin/pm2 --version
    ```
+
 5. Check if the bot is running:
+
    ```bash
    /var/www/.bun/bin/pm2 list
    ```
@@ -330,21 +345,25 @@ cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
 ### OAuth callback not working
 
 1. Verify Caddy is running:
+
    ```bash
    sudo systemctl status caddy
    ```
 
 2. Check Caddy logs:
+
    ```bash
    sudo journalctl -u caddy -f
    ```
 
 3. Verify redirect URI in Google Cloud Console matches:
+
    ```
    https://expense-sync-bot.invntrm.ru/callback
    ```
 
 4. Test the OAuth endpoint:
+
    ```bash
    curl https://expense-sync-bot.invntrm.ru/health
    ```
@@ -352,11 +371,13 @@ cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
 ### Bot responds slowly or times out
 
 1. Check if bot process is running:
+
    ```bash
    ps aux | grep bun
    ```
 
 2. Check system resources:
+
    ```bash
    top
    df -h
@@ -364,6 +385,7 @@ cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
    ```
 
 3. Check database size:
+
    ```bash
    ls -lh /var/www/ExpenseSyncBot/data/
    ```
@@ -477,4 +499,5 @@ du -sh /var/www/ExpenseSyncBot/data/
 ## Contact
 
 For issues or questions:
-- GitHub Issues: https://github.com/alex-mextner/ExpenseSyncBot/issues
+
+- GitHub Issues: <https://github.com/alex-mextner/ExpenseSyncBot/issues>
