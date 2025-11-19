@@ -32,7 +32,7 @@ jobs:
             /var/www/.bun/bin/bun install
 
             echo "🔄 Reloading PM2 process..."
-            /var/www/.bun/bin/pm2 reload ecosystem.config.js --update-env
+            /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env
 
             echo "✅ Deployment completed successfully!"
 

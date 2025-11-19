@@ -105,7 +105,7 @@ source ~/.bashrc
 ### 10. Start the bot with PM2
 
 ```bash
-/var/www/.bun/bin/pm2 start ecosystem.config.js
+/var/www/.bun/bin/pm2 start ecosystem.config.cjs
 /var/www/.bun/bin/pm2 save
 /var/www/.bun/bin/pm2 startup
 ```
@@ -403,7 +403,7 @@ If deployment fails with PM2 errors:
 
 # If PM2 is broken, try resetting it
 /var/www/.bun/bin/pm2 kill
-/var/www/.bun/bin/pm2 start ecosystem.config.js
+/var/www/.bun/bin/pm2 start ecosystem.config.cjs
 /var/www/.bun/bin/pm2 save
 ```
 
