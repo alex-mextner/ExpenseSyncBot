@@ -31,6 +31,9 @@ jobs:
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
 
+            echo "🔧 Making start script executable..."
+            chmod +x start.sh
+
             echo "🔄 Reloading PM2 process..."
             /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env
 
