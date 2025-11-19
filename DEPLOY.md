@@ -78,10 +78,12 @@ mkdir -p logs
 ### 7. Test the bot manually (optional)
 
 ```bash
-bun run index.ts
+/var/www/.bun/bin/bun run index.ts
 ```
 
 Press Ctrl+C to stop.
+
+**Note:** Bun is installed at `/var/www/.bun/bin/bun` for www-data user.
 
 ### 8. Install PM2 globally (if not installed)
 

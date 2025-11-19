@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'expensesyncbot',
       script: 'index.ts',
-      interpreter: 'bun',
+      interpreter: '/var/www/.bun/bin/bun',
       cwd: '/var/www/ExpenseSyncBot',
       instances: 1,
       autorestart: true,

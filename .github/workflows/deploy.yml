@@ -26,7 +26,7 @@ jobs:
             cd /var/www/ExpenseSyncBot
 
             echo "📦 Installing dependencies..."
-            bun install
+            /var/www/.bun/bin/bun install
 
             echo "🔄 Reloading PM2 process..."
             pm2 reload ecosystem.config.js --update-env
