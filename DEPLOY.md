@@ -88,17 +88,17 @@ Press Ctrl+C to stop.
 ### 8. Install PM2 globally (if not installed)
 
 ```bash
-npm install -g pm2
-# or
-bun add -g pm2
+/var/www/.bun/bin/bun add -g pm2
 ```
+
+**Note:** PM2 will be installed at `/var/www/.bun/bin/pm2`
 
 ### 9. Start the bot with PM2
 
 ```bash
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup
+/var/www/.bun/bin/pm2 start ecosystem.config.js
+/var/www/.bun/bin/pm2 save
+/var/www/.bun/bin/pm2 startup
 ```
 
 **Note:** `pm2 startup` will show you a command to run with sudo. Copy and execute it to enable PM2 auto-start on server reboot.
@@ -106,21 +106,21 @@ pm2 startup
 ### 10. Check PM2 status
 
 ```bash
-pm2 list
-pm2 status expensesyncbot
+/var/www/.bun/bin/pm2 list
+/var/www/.bun/bin/pm2 status expensesyncbot
 ```
 
 ### 11. View logs
 
 ```bash
 # Follow logs in real-time
-pm2 logs expensesyncbot
+/var/www/.bun/bin/pm2 logs expensesyncbot
 
 # View recent logs
-pm2 logs expensesyncbot --lines 100
+/var/www/.bun/bin/pm2 logs expensesyncbot --lines 100
 
 # Clear logs
-pm2 flush
+/var/www/.bun/bin/pm2 flush
 ```
 
 ### 12. Configure Caddy
@@ -223,41 +223,41 @@ Once setup is complete, deployment happens automatically:
 ### Restart the bot
 
 ```bash
-pm2 restart expensesyncbot
+/var/www/.bun/bin/pm2 restart expensesyncbot
 ```
 
 ### Stop the bot
 
 ```bash
-pm2 stop expensesyncbot
+/var/www/.bun/bin/pm2 stop expensesyncbot
 ```
 
 ### Start the bot
 
 ```bash
-pm2 start expensesyncbot
+/var/www/.bun/bin/pm2 start expensesyncbot
 ```
 
 ### Reload the bot (zero-downtime)
 
 ```bash
-pm2 reload expensesyncbot
+/var/www/.bun/bin/pm2 reload expensesyncbot
 ```
 
 ### View logs
 
 ```bash
 # Real-time logs
-pm2 logs expensesyncbot
+/var/www/.bun/bin/pm2 logs expensesyncbot
 
 # Last 100 lines
-pm2 logs expensesyncbot --lines 100
+/var/www/.bun/bin/pm2 logs expensesyncbot --lines 100
 
 # View only error logs
-pm2 logs expensesyncbot --err
+/var/www/.bun/bin/pm2 logs expensesyncbot --err
 
 # Clear all logs
-pm2 flush
+/var/www/.bun/bin/pm2 flush
 ```
 
 ### Update environment variables
@@ -265,7 +265,7 @@ pm2 flush
 ```bash
 cd /var/www/ExpenseSyncBot
 nano .env
-pm2 reload expensesyncbot --update-env
+/var/www/.bun/bin/pm2 reload expensesyncbot --update-env
 ```
 
 ### Backup the database
@@ -280,7 +280,7 @@ cp expenses.db expenses.db.backup.$(date +%Y%m%d_%H%M%S)
 ```bash
 cd /var/www/ExpenseSyncBot/data
 cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
-pm2 restart expensesyncbot
+/var/www/.bun/bin/pm2 restart expensesyncbot
 ```
 
 ---
@@ -291,19 +291,19 @@ pm2 restart expensesyncbot
 
 1. Check PM2 status:
    ```bash
-   pm2 status
-   pm2 describe expensesyncbot
+   /var/www/.bun/bin/pm2 status
+   /var/www/.bun/bin/pm2 describe expensesyncbot
    ```
 
 2. Check the logs:
    ```bash
-   pm2 logs expensesyncbot --lines 50
+   /var/www/.bun/bin/pm2 logs expensesyncbot --lines 50
    ```
 
 3. Try to start manually:
    ```bash
    cd /var/www/ExpenseSyncBot
-   bun run index.ts
+   /var/www/.bun/bin/bun run index.ts
    ```
 
 4. Common issues:
@@ -320,11 +320,11 @@ pm2 restart expensesyncbot
 3. Verify `www-data` user has permissions on `/var/www/ExpenseSyncBot`
 4. Check if PM2 is installed:
    ```bash
-   pm2 --version
+   /var/www/.bun/bin/pm2 --version
    ```
 5. Check if the bot is running:
    ```bash
-   pm2 list
+   /var/www/.bun/bin/pm2 list
    ```
 
 ### OAuth callback not working
@@ -374,15 +374,15 @@ If deployment fails with PM2 errors:
 
 ```bash
 # Check if PM2 daemon is running
-pm2 ping
+/var/www/.bun/bin/pm2 ping
 
 # Check PM2 logs
-pm2 logs
+/var/www/.bun/bin/pm2 logs
 
 # If PM2 is broken, try resetting it
-pm2 kill
-pm2 start ecosystem.config.js
-pm2 save
+/var/www/.bun/bin/pm2 kill
+/var/www/.bun/bin/pm2 start ecosystem.config.js
+/var/www/.bun/bin/pm2 save
 ```
 
 ---

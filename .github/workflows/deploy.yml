@@ -29,9 +29,9 @@ jobs:
             /var/www/.bun/bin/bun install
 
             echo "🔄 Reloading PM2 process..."
-            pm2 reload ecosystem.config.js --update-env
+            /var/www/.bun/bin/pm2 reload ecosystem.config.js --update-env
 
             echo "✅ Deployment completed successfully!"
 
             echo "📊 PM2 status:"
-            pm2 list
+            /var/www/.bun/bin/pm2 list
