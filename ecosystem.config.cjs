@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'expensesyncbot',
-      script: 'index.ts',
-      interpreter: '/var/www/.bun/bin/bun',
+      script: '/var/www/.bun/bin/bun',
+      args: 'run index.ts',
       cwd: '/var/www/ExpenseSyncBot',
       instances: 1,
       autorestart: true,
