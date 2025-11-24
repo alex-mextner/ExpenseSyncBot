@@ -49,12 +49,13 @@ export async function handleBudgetCommand(ctx: Ctx["Command"]): Promise<void> {
 
   // Parse command arguments
   const fullText = ctx.text || ctx.message?.text || '';
+  const parts = fullText.trim().split(/\s+/).filter((arg: string) => arg.length > 0);
 
-  // In GramIO, ctx.text for commands contains text WITHOUT the command itself
-  // e.g. for "/budget set Food 100" it will be "set Food 100"
-  const args = fullText.trim().split(/\s+/).filter(arg => arg.length > 0);
+  // Remove command if it's present (e.g., "/budget" from "/budget sync")
+  const args = parts[0]?.startsWith('/') ? parts.slice(1) : parts;
 
   console.log('[BUDGET] Full text:', fullText);
+  console.log('[BUDGET] Parts:', parts);
   console.log('[BUDGET] Args:', args);
   console.log('[BUDGET] Args length:', args.length);
 
