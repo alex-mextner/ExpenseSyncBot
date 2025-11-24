@@ -6,6 +6,11 @@ expense-sync-bot.invntrm.ru {
 		reverse_proxy localhost:3000
 	}
 
+	# Temporary images for OCR processing
+	handle /temp-images/* {
+		reverse_proxy localhost:3000
+	}
+
 	# Health check endpoint
 	handle /health {
 		reverse_proxy localhost:3000
