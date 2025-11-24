@@ -64,3 +64,34 @@ export async function deleteMessage(
     throw new Error(`Failed to delete message: ${error}`);
   }
 }
+
+/**
+ * Send message to chat
+ */
+export async function sendMessage(
+  chatId: number,
+  text: string,
+  options?: {
+    reply_markup?: any;
+    parse_mode?: 'HTML' | 'Markdown' | 'MarkdownV2';
+  }
+): Promise<void> {
+  const url = `${BASE_URL}/sendMessage`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      ...options,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to send message: ${error}`);
+  }
+}
