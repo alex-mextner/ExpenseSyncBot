@@ -8,6 +8,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const photos = ctx.photo;
+  const threadId = (ctx as any).messageThreadId;
 
   if (!telegramId || !messageId || !photos || photos.length === 0) {
     console.log('[PHOTO] Ignoring: missing telegramId, messageId or photos');
@@ -57,6 +58,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
     group_id: group.id,
     user_id: user.id,
     message_id: messageId,
+    message_thread_id: threadId,
     file_id: largestPhoto.fileId,
     status: 'pending',
   });

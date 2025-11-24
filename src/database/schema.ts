@@ -310,6 +310,7 @@ export function runMigrations(db: Database): void {
             group_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             message_id INTEGER NOT NULL,
+            message_thread_id INTEGER,
             file_id TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'done', 'error')),
             error_message TEXT,

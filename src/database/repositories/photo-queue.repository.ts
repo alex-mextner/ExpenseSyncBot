@@ -45,15 +45,16 @@ export class PhotoQueueRepository {
    * Create new photo queue item
    */
   create(data: CreatePhotoQueueData): PhotoQueueItem {
-    const query = this.db.query<{ id: number }, [number, number, number, string, string]>(`
+    const query = this.db.query<{ id: number }, [number, number, number, number | null, string, string]>(`
       INSERT INTO photo_processing_queue (
         group_id,
         user_id,
         message_id,
+        message_thread_id,
         file_id,
         status
       )
-      VALUES (?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
 
@@ -61,6 +62,7 @@ export class PhotoQueueRepository {
       data.group_id,
       data.user_id,
       data.message_id,
+      data.message_thread_id ?? null,
       data.file_id,
       data.status
     );

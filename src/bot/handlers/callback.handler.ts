@@ -691,12 +691,16 @@ async function saveReceiptExpenses(
   // Delete confirmed receipt items
   database.receiptItems.deleteConfirmedByPhotoQueueId(photoQueueId);
 
+  // Get thread ID from queue item
+  const queueItem = database.photoQueue.findById(photoQueueId);
+
   // Notify user
   const totalItems = confirmedItems.length;
   const totalCategories = itemsByCategory.size;
 
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
+    message_thread_id: queueItem?.message_thread_id ?? undefined,
     text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
     parse_mode: 'HTML',
   });

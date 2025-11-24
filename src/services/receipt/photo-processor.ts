@@ -148,7 +148,8 @@ async function processPhotoQueueItem(
       await notifyUser(
         bot,
         queueItem.group_id,
-        `❌ Не удалось загрузить чек: ${errorMessage}`
+        `❌ Не удалось загрузить чек: ${errorMessage}`,
+        queueItem.message_thread_id
       );
       return;
     }
@@ -180,7 +181,8 @@ async function processPhotoQueueItem(
       await notifyUser(
         bot,
         queueItem.group_id,
-        `❌ AI не распознал чек: ${errorMessage}`
+        `❌ AI не распознал чек: ${errorMessage}`,
+        queueItem.message_thread_id
       );
       return;
     }
@@ -192,7 +194,12 @@ async function processPhotoQueueItem(
       });
 
       // Notify user
-      await notifyUser(bot, queueItem.group_id, "❌ В чеке не найдены расходы");
+      await notifyUser(
+        bot,
+        queueItem.group_id,
+        "❌ В чеке не найдены расходы",
+        queueItem.message_thread_id
+      );
       return;
     }
 
@@ -240,7 +247,8 @@ async function processPhotoQueueItem(
     await notifyUser(
       bot,
       queueItem.group_id,
-      `❌ Ошибка обработки: ${errorMessage}`
+      `❌ Ошибка обработки: ${errorMessage}`,
+      queueItem.message_thread_id
     );
   }
 }
@@ -334,9 +342,16 @@ export async function showNextItemForConfirmation(
     },
   ]);
 
+  // Get thread ID from any pending item for this group
+  const anyPendingItem = database.receiptItems.findNextPending();
+  const queueItem = anyPendingItem
+    ? database.photoQueue.findById(anyPendingItem.photo_queue_id)
+    : null;
+
   // Send message to group
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
+    message_thread_id: queueItem?.message_thread_id ?? undefined,
     text: message,
     parse_mode: "HTML",
     reply_markup: {
@@ -351,7 +366,8 @@ export async function showNextItemForConfirmation(
 async function notifyUser(
   bot: Bot,
   groupId: number,
-  message: string
+  message: string,
+  messageThreadId?: number | null
 ): Promise<void> {
   const group = database.groups.findById(groupId);
 
@@ -362,6 +378,7 @@ async function notifyUser(
 
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
+    message_thread_id: messageThreadId ?? undefined,
     text: message,
     parse_mode: "HTML",
   });

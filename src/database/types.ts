@@ -187,6 +187,7 @@ export interface PhotoQueueItem {
   group_id: number;
   user_id: number;
   message_id: number;
+  message_thread_id: number | null;
   file_id: string;
   status: 'pending' | 'processing' | 'done' | 'error';
   error_message: string | null;
@@ -197,6 +198,7 @@ export interface CreatePhotoQueueData {
   group_id: number;
   user_id: number;
   message_id: number;
+  message_thread_id?: number | null;
   file_id: string;
   status: 'pending' | 'processing' | 'done' | 'error';
 }
