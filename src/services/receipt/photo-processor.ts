@@ -1,9 +1,12 @@
-import type { Bot } from 'gramio';
-import { database } from '../../database';
-import { scanQRFromImage } from './qr-scanner';
-import { fetchReceiptData } from './receipt-fetcher';
-import { extractExpensesFromReceipt, type AIExtractionResult } from './ai-extractor';
-import { env } from '../../config/env';
+import type { Bot } from "gramio";
+import { database } from "../../database";
+import { scanQRFromImage } from "./qr-scanner";
+import { fetchReceiptData } from "./receipt-fetcher";
+import {
+  extractExpensesFromReceipt,
+  type AIExtractionResult,
+} from "./ai-extractor";
+import { env } from "../../config/env";
 
 let isProcessing = false;
 
@@ -12,7 +15,7 @@ let isProcessing = false;
  * Processes photos from the queue and extracts receipt data
  */
 export async function startPhotoProcessor(bot: Bot): Promise<void> {
-  console.log('[PHOTO_PROCESSOR] Starting background photo processor');
+  console.log("[PHOTO_PROCESSOR] Starting background photo processor");
 
   // Process queue every 5 seconds
   setInterval(async () => {
@@ -25,7 +28,7 @@ export async function startPhotoProcessor(bot: Bot): Promise<void> {
     try {
       await processQueue(bot);
     } catch (error) {
-      console.error('[PHOTO_PROCESSOR] Error in processor:', error);
+      console.error("[PHOTO_PROCESSOR] Error in processor:", error);
     } finally {
       isProcessing = false;
     }
@@ -42,13 +45,18 @@ async function processQueue(bot: Bot): Promise<void> {
     return;
   }
 
-  console.log(`[PHOTO_PROCESSOR] Processing ${pendingItems.length} pending item(s)`);
+  console.log(
+    `[PHOTO_PROCESSOR] Processing ${pendingItems.length} pending item(s)`
+  );
 
   for (const item of pendingItems) {
     try {
       await processPhotoQueueItem(bot, item.id);
     } catch (error) {
-      console.error(`[PHOTO_PROCESSOR] Error processing item ${item.id}:`, error);
+      console.error(
+        `[PHOTO_PROCESSOR] Error processing item ${item.id}:`,
+        error
+      );
     }
   }
 }
@@ -56,40 +64,52 @@ async function processQueue(bot: Bot): Promise<void> {
 /**
  * Process a single photo queue item
  */
-async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<void> {
+async function processPhotoQueueItem(
+  bot: Bot,
+  queueItemId: number
+): Promise<void> {
   const queueItem = database.photoQueue.findById(queueItemId);
 
-  if (!queueItem || queueItem.status !== 'pending') {
+  if (!queueItem || queueItem.status !== "pending") {
     return;
   }
 
   console.log(`[PHOTO_PROCESSOR] Processing queue item #${queueItemId}`);
 
   // Update status to processing
-  database.photoQueue.update(queueItemId, { status: 'processing' });
+  database.photoQueue.update(queueItemId, { status: "processing" });
 
   try {
     // Download photo from Telegram
     const photoBuffer = await downloadPhoto(bot, queueItem.file_id);
 
-    // Send processed image to chat for debugging
+    // Save processed image to disk for debugging
     try {
-      const sharp = (await import('sharp')).default;
+      const sharp = (await import("sharp")).default;
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
       const processedBuffer = await sharp(photoBuffer)
-        .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
+        .resize(1280, 1280, { fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 90 })
         .toBuffer();
 
-      const group = database.groups.findById(queueItem.group_id);
-      if (group) {
-        await bot.api.sendPhoto({
-          chat_id: group.telegram_group_id,
-          photo: new File([processedBuffer], 'processed.jpg', { type: 'image/jpeg' }),
-          caption: '🔍 Обработанное фото для QR-сканера',
-        });
-      }
+      // Create debug directory if doesn't exist
+      const debugDir = path.join(process.cwd(), "debug-images");
+      await fs.mkdir(debugDir, { recursive: true });
+
+      // Save with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `qr-${queueItemId}-${timestamp}.jpg`;
+      const filepath = path.join(debugDir, filename);
+
+      await fs.writeFile(filepath, processedBuffer);
+      console.log(`[PHOTO_PROCESSOR] 🔍 Debug image saved: ${filepath}`);
     } catch (debugError) {
-      console.error('[PHOTO_PROCESSOR] Failed to send debug image:', debugError);
+      console.error(
+        "[PHOTO_PROCESSOR] Failed to save debug image:",
+        debugError
+      );
     }
 
     // Scan QR code
@@ -97,27 +117,39 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
     if (!qrData) {
       // No QR code found - silently mark as done
-      console.log(`[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}`);
-      database.photoQueue.update(queueItemId, { status: 'done' });
+      console.log(
+        `[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}`
+      );
+      database.photoQueue.update(queueItemId, { status: "done" });
       return;
     }
 
-    console.log(`[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`);
+    console.log(
+      `[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`
+    );
 
     // Fetch receipt data
     let receiptData: string;
     try {
       receiptData = await fetchReceiptData(qrData);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[PHOTO_PROCESSOR] Failed to fetch receipt data:`, errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error(
+        `[PHOTO_PROCESSOR] Failed to fetch receipt data:`,
+        errorMessage
+      );
       database.photoQueue.update(queueItemId, {
-        status: 'error',
+        status: "error",
         error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
       });
 
       // Notify user
-      await notifyUser(bot, queueItem.group_id, `❌ Не удалось загрузить чек: ${errorMessage}`);
+      await notifyUser(
+        bot,
+        queueItem.group_id,
+        `❌ Не удалось загрузить чек: ${errorMessage}`
+      );
       return;
     }
 
@@ -128,34 +160,46 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Extract expenses using AI
     let extractionResult: AIExtractionResult;
     try {
-      extractionResult = await extractExpensesFromReceipt(receiptData, categoryNames);
+      extractionResult = await extractExpensesFromReceipt(
+        receiptData,
+        categoryNames
+      );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[PHOTO_PROCESSOR] Failed to extract expenses:`, errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error(
+        `[PHOTO_PROCESSOR] Failed to extract expenses:`,
+        errorMessage
+      );
       database.photoQueue.update(queueItemId, {
-        status: 'error',
+        status: "error",
         error_message: `❌ AI не распознал чек: ${errorMessage}`,
       });
 
       // Notify user
-      await notifyUser(bot, queueItem.group_id, `❌ AI не распознал чек: ${errorMessage}`);
+      await notifyUser(
+        bot,
+        queueItem.group_id,
+        `❌ AI не распознал чек: ${errorMessage}`
+      );
       return;
     }
 
     if (!extractionResult.items || extractionResult.items.length === 0) {
       database.photoQueue.update(queueItemId, {
-        status: 'error',
-        error_message: '❌ В чеке не найдены расходы',
+        status: "error",
+        error_message: "❌ В чеке не найдены расходы",
       });
 
       // Notify user
-      await notifyUser(bot, queueItem.group_id, '❌ В чеке не найдены расходы');
+      await notifyUser(bot, queueItem.group_id, "❌ В чеке не найдены расходы");
       return;
     }
 
     // Get group default currency if AI didn't detect it
     const group = database.groups.findById(queueItem.group_id);
-    const currency = extractionResult.currency || group?.default_currency || 'EUR';
+    const currency =
+      extractionResult.currency || group?.default_currency || "EUR";
 
     // Save receipt items to database
     for (const aiItem of extractionResult.items) {
@@ -169,28 +213,35 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
         currency,
         suggested_category: aiItem.category,
         possible_categories: aiItem.possible_categories || [],
-        status: 'pending',
+        status: "pending",
       });
     }
 
     // Mark photo as done
-    database.photoQueue.update(queueItemId, { status: 'done' });
+    database.photoQueue.update(queueItemId, { status: "done" });
 
-    console.log(`[PHOTO_PROCESSOR] Successfully extracted ${extractionResult.items.length} items from receipt #${queueItemId}`);
+    console.log(
+      `[PHOTO_PROCESSOR] Successfully extracted ${extractionResult.items.length} items from receipt #${queueItemId}`
+    );
 
     // Show first item for confirmation
     await showNextItemForConfirmation(bot, queueItem.group_id);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     console.error(`[PHOTO_PROCESSOR] Unexpected error:`, errorMessage);
 
     database.photoQueue.update(queueItemId, {
-      status: 'error',
+      status: "error",
       error_message: `❌ Ошибка обработки: ${errorMessage}`,
     });
 
     // Notify user
-    await notifyUser(bot, queueItem.group_id, `❌ Ошибка обработки: ${errorMessage}`);
+    await notifyUser(
+      bot,
+      queueItem.group_id,
+      `❌ Ошибка обработки: ${errorMessage}`
+    );
   }
 }
 
@@ -202,7 +253,7 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
   const file = await bot.api.getFile({ file_id: fileId });
 
   if (!file.file_path) {
-    throw new Error('File path not found');
+    throw new Error("File path not found");
   }
 
   // Download file
@@ -220,11 +271,14 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
 /**
  * Show next pending receipt item for confirmation
  */
-export async function showNextItemForConfirmation(bot: Bot, groupId: number): Promise<void> {
+export async function showNextItemForConfirmation(
+  bot: Bot,
+  groupId: number
+): Promise<void> {
   const nextItem = database.receiptItems.findNextPending();
 
   if (!nextItem) {
-    console.log('[PHOTO_PROCESSOR] No more pending items to confirm');
+    console.log("[PHOTO_PROCESSOR] No more pending items to confirm");
     return;
   }
 
@@ -275,7 +329,7 @@ export async function showNextItemForConfirmation(bot: Bot, groupId: number): Pr
   // Add "Other category" button
   buttons.push([
     {
-      text: '✏️ Другая категория (напишите текстом)',
+      text: "✏️ Другая категория (напишите текстом)",
       callback_data: `receipt_item_other:${nextItem.id}`,
     },
   ]);
@@ -284,7 +338,7 @@ export async function showNextItemForConfirmation(bot: Bot, groupId: number): Pr
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
     text: message,
-    parse_mode: 'HTML',
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: buttons,
     },
@@ -294,7 +348,11 @@ export async function showNextItemForConfirmation(bot: Bot, groupId: number): Pr
 /**
  * Notify user about errors
  */
-async function notifyUser(bot: Bot, groupId: number, message: string): Promise<void> {
+async function notifyUser(
+  bot: Bot,
+  groupId: number,
+  message: string
+): Promise<void> {
   const group = database.groups.findById(groupId);
 
   if (!group) {
@@ -305,6 +363,6 @@ async function notifyUser(bot: Bot, groupId: number, message: string): Promise<v
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
     text: message,
-    parse_mode: 'HTML',
+    parse_mode: "HTML",
   });
 }
