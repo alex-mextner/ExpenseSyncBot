@@ -114,9 +114,11 @@ ${budgetsContext}`;
     let lastMessageText = "";
     let sentMessageId: number | null = null;
     let lastUpdateTime = 0;
-    const UPDATE_INTERVAL_MS = 2000; // Update every 2 seconds max
+    let lastErrorTime = 0;
+    const UPDATE_INTERVAL_MS = 5000; // Update every 5 seconds
+    const ERROR_COOLDOWN_MS = 10000; // Wait 10 seconds after error
 
-    // Stream the response
+    // Stream the response with controlled updates
     for await (const chunk of stream) {
       if (chunk.choices && chunk.choices.length > 0) {
         const delta = chunk.choices[0]?.delta;
@@ -126,10 +128,12 @@ ${budgetsContext}`;
 
           const now = Date.now();
           const timeSinceLastUpdate = now - lastUpdateTime;
+          const timeSinceLastError = now - lastErrorTime;
 
-          // Update message only if enough time has passed and we have meaningful changes
+          // Update message only if enough time has passed
           if (
             timeSinceLastUpdate >= UPDATE_INTERVAL_MS &&
+            timeSinceLastError >= ERROR_COOLDOWN_MS &&
             fullResponse.length - lastMessageText.length > 10
           ) {
             if (sentMessageId) {
@@ -142,35 +146,48 @@ ${budgetsContext}`;
                 });
                 lastMessageText = fullResponse;
                 lastUpdateTime = now;
-              } catch (err) {
-                // Ignore rate limit errors
-                console.error("[ASK] Failed to edit message:", err);
+              } catch (err: any) {
+                // If rate limited, wait longer
+                if (err?.code === 429) {
+                  console.error("[ASK] Rate limited, waiting...");
+                  lastErrorTime = now;
+                  // Wait the cooldown period
+                  await new Promise((resolve) =>
+                    setTimeout(resolve, ERROR_COOLDOWN_MS)
+                  );
+                } else {
+                  console.error("[ASK] Failed to edit message:", err);
+                }
               }
             } else {
               // Send initial message
-              const sent = await ctx.send(fullResponse);
-              sentMessageId = sent.id;
-              lastMessageText = fullResponse;
-              lastUpdateTime = now;
+              try {
+                const sent = await ctx.send(fullResponse);
+                sentMessageId = sent.id;
+                lastMessageText = fullResponse;
+                lastUpdateTime = now;
+              } catch (err) {
+                console.error("[ASK] Failed to send message:", err);
+              }
             }
           }
         }
       }
     }
 
-    // Send final message if not sent yet or update with final version
+    // Send final response
     if (!sentMessageId && fullResponse) {
-      // Split into chunks if too long (Telegram limit: 4096 chars)
+      // No intermediate messages were sent, send final
       const chunks = splitIntoChunks(fullResponse, 4000);
       for (const chunk of chunks) {
         await ctx.send(chunk, { parse_mode: "MarkdownV2" });
       }
     } else if (sentMessageId && fullResponse !== lastMessageText) {
-      // Final edit with complete response
+      // Update with final response
       const chunks = splitIntoChunks(fullResponse, 4000);
 
       if (chunks.length > 0 && chunks[0]) {
-        // Edit first message
+        // Edit first message with final version
         try {
           await bot.api.editMessageText({
             chat_id: chatId,
@@ -180,6 +197,8 @@ ${budgetsContext}`;
           });
         } catch (err) {
           console.error("[ASK] Failed to edit final message:", err);
+          // If edit failed, send as new message
+          await ctx.send(chunks[0], { parse_mode: "MarkdownV2" });
         }
 
         // Send remaining chunks as new messages
