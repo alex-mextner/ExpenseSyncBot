@@ -196,6 +196,21 @@ ${budgetsContext}`;
                   await new Promise((resolve) =>
                     setTimeout(resolve, ERROR_COOLDOWN_MS)
                   );
+                } else if (err?.description?.includes("message is not modified")) {
+                  // If message content is the same, delete and send new
+                  console.log("[ASK] Message not modified, deleting and resending...");
+                  try {
+                    await bot.api.deleteMessage({
+                      chat_id: chatId,
+                      message_id: sentMessageId,
+                    });
+                    const sent = await ctx.send(textToSend);
+                    sentMessageId = sent.id;
+                    lastMessageText = textToSend;
+                    lastUpdateTime = now;
+                  } catch (deleteErr) {
+                    console.error("[ASK] Failed to delete/resend message:", deleteErr);
+                  }
                 } else {
                   console.error("[ASK] Failed to edit message:", err);
                 }
@@ -237,10 +252,24 @@ ${budgetsContext}`;
             text: chunks[0],
             parse_mode: "HTML",
           });
-        } catch (err) {
-          console.error("[ASK] Failed to edit final message:", err);
-          // If edit failed, send as new message
-          await ctx.send(chunks[0], { parse_mode: "HTML" });
+        } catch (err: any) {
+          if (err?.description?.includes("message is not modified")) {
+            // If message content is the same, delete and send new
+            console.log("[ASK] Final message not modified, deleting and resending...");
+            try {
+              await bot.api.deleteMessage({
+                chat_id: chatId,
+                message_id: sentMessageId,
+              });
+              await ctx.send(chunks[0], { parse_mode: "HTML" });
+            } catch (deleteErr) {
+              console.error("[ASK] Failed to delete/resend final message:", deleteErr);
+            }
+          } else {
+            console.error("[ASK] Failed to edit final message:", err);
+            // If edit failed for other reason, send as new message
+            await ctx.send(chunks[0], { parse_mode: "HTML" });
+          }
         }
 
         // Send remaining chunks as new messages
