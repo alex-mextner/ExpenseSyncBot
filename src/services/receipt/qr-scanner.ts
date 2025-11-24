@@ -8,70 +8,124 @@ import sharp from 'sharp';
  * @returns QR code data or null if no QR found
  */
 export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | null> {
-  try {
-    console.log(`[QR_SCANNER] Processing image buffer: ${imageBuffer.length} bytes`);
+  console.log(`[QR_SCANNER] Processing image buffer: ${imageBuffer.length} bytes`);
 
-    // Convert image to raw RGBA pixels using sharp
-    const { data, info } = await sharp(imageBuffer)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
+  // Try multiple image processing variants
+  const variants = [
+    // 1. Small with high contrast and sharpening
+    {
+      name: '500px+sharp+contrast',
+      process: (img: sharp.Sharp) => img
+        .resize(500, 500, { fit: 'inside', withoutEnlargement: true })
+        .sharpen()
+        .normalize()
+        .grayscale()
+    },
+    // 2. Medium with sharpening
+    {
+      name: '800px+sharp',
+      process: (img: sharp.Sharp) => img
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .sharpen()
+        .normalize()
+    },
+    // 3. Original with sharpening
+    {
+      name: 'original+sharp',
+      process: (img: sharp.Sharp) => img
+        .sharpen()
+        .normalize()
+    },
+    // 4. Medium size basic
+    {
+      name: '800px',
+      process: (img: sharp.Sharp) => img.resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+    },
+    // 5. Small size basic
+    {
+      name: '500px',
+      process: (img: sharp.Sharp) => img.resize(500, 500, { fit: 'inside', withoutEnlargement: true })
+    },
+    // 6. Extreme contrast
+    {
+      name: 'extreme-contrast',
+      process: (img: sharp.Sharp) => img
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .grayscale()
+        .normalize()
+        .linear(1.5, -(128 * 0.5)) // Increase contrast
+    },
+    // 7. Original size
+    {
+      name: 'original',
+      process: (img: sharp.Sharp) => img
+    },
+  ];
 
-    console.log(`[QR_SCANNER] Image converted: ${info.width}x${info.height}, ${info.channels} channels, ${data.length} bytes`);
+  for (const variant of variants) {
+    try {
+      console.log(`[QR_SCANNER] Trying variant: ${variant.name}`);
 
-    // Create Uint8ClampedArray for @paulmillr/qr
-    const imageData = new Uint8ClampedArray(data.buffer);
+      // Process image
+      const { data, info } = await variant.process(sharp(imageBuffer))
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
 
-    console.log(`[QR_SCANNER] Scanning for QR code in ${info.width}x${info.height} image...`);
+      console.log(`[QR_SCANNER] Image converted: ${info.width}x${info.height}, ${info.channels} channels`);
 
-    // Scan for QR code using @paulmillr/qr with debug callbacks
-    let patternsDetected = false;
-    let qrExtracted = false;
+      // Create Uint8ClampedArray for qr library
+      const imageData = new Uint8ClampedArray(data.buffer);
 
-    const opts: DecodeOpts = {
-      // Callback when finder patterns are detected (3 finder + 1 alignment)
-      pointsOnDetect: (points: FinderPoints) => {
-        patternsDetected = true;
-        console.log(`[QR_SCANNER] 🎯 Patterns detected at:`, points.map(p => `(${p.x},${p.y})`).join(', '));
-      },
-      // Callback when QR image is extracted
-      imageOnDetect: (img: Image) => {
-        qrExtracted = true;
-        console.log(`[QR_SCANNER] 📦 QR image extracted: ${img.width}x${img.height}`);
-      },
-    };
+      // Scan for QR code with debug callbacks
+      let patternsDetected = false;
+      let qrExtracted = false;
 
-    const qrData = decodeQR(
-      {
-        width: info.width,
-        height: info.height,
-        data: imageData,
-      },
-      opts
-    );
+      const opts: DecodeOpts = {
+        pointsOnDetect: (points: FinderPoints) => {
+          patternsDetected = true;
+          console.log(`[QR_SCANNER] 🎯 Patterns detected at:`, points.map(p => `(${p.x},${p.y})`).join(', '));
+        },
+        imageOnDetect: (img: Image) => {
+          qrExtracted = true;
+          console.log(`[QR_SCANNER] 📦 QR image extracted: ${img.width}x${img.height}`);
+        },
+      };
 
-    if (qrData) {
-      console.log(`[QR_SCANNER] ✅ QR code found! Length: ${qrData.length} chars`);
-      console.log(`[QR_SCANNER] QR data preview: ${qrData.substring(0, 200)}${qrData.length > 200 ? '...' : ''}`);
-      return qrData;
+      const qrData = decodeQR(
+        {
+          width: info.width,
+          height: info.height,
+          data: imageData,
+        },
+        opts
+      );
+
+      if (qrData) {
+        console.log(`[QR_SCANNER] ✅ QR code found with variant: ${variant.name}! Length: ${qrData.length} chars`);
+        console.log(`[QR_SCANNER] QR data preview: ${qrData.substring(0, 200)}${qrData.length > 200 ? '...' : ''}`);
+        return qrData;
+      }
+
+      // Enhanced error reporting
+      if (patternsDetected) {
+        console.log(`[QR_SCANNER] ⚠️ Patterns detected but decoding failed (${variant.name})`);
+      } else {
+        console.log(`[QR_SCANNER] ❌ No QR patterns found (${variant.name})`);
+      }
+
+      if (qrExtracted) {
+        console.log(`[QR_SCANNER] ⚠️ QR image extracted but data decoding failed (${variant.name})`);
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.log(`[QR_SCANNER] Variant ${variant.name} failed: ${errorMsg}`);
+      // Continue to next variant
     }
-
-    // Enhanced error reporting
-    if (patternsDetected) {
-      console.log(`[QR_SCANNER] ⚠️ Patterns detected but decoding failed`);
-    } else {
-      console.log(`[QR_SCANNER] ❌ No QR patterns found in image`);
-    }
-
-    if (qrExtracted) {
-      console.log(`[QR_SCANNER] ⚠️ QR image extracted but data decoding failed`);
-    }
-
-    return null;
-  } catch (error) {
-    console.error('[QR_SCANNER] Error scanning QR code:', error);
-    return null;
   }
+
+  console.log(`[QR_SCANNER] ❌ No QR code found after trying all ${variants.length} variants`);
+  return null;
 }
 
 /**
