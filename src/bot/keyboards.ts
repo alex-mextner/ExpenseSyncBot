@@ -104,3 +104,17 @@ export function createBudgetPromptKeyboard(category: string): InlineKeyboard {
 
   return keyboard;
 }
+
+/**
+ * Create keyboard for adding new category with budget
+ */
+export function createAddCategoryWithBudgetKeyboard(category: string, amount: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text(`✅ Добавить "${category}" с бюджетом €${amount}`, `budget:add-category:${category}:${amount}`)
+    .row()
+    .text('❌ Отменить', `budget:cancel`);
+
+  return keyboard;
+}

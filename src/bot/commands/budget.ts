@@ -8,6 +8,7 @@ import {
   readBudgetData,
   writeBudgetRow,
 } from '../../services/google/sheets';
+import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
 
 /**
  * /budget command handler
@@ -48,10 +49,14 @@ export async function handleBudgetCommand(ctx: Ctx["Command"]): Promise<void> {
 
   // Parse command arguments
   const fullText = ctx.text || ctx.message?.text || '';
-  const args = fullText.split(/\s+/).slice(1);
+
+  // In GramIO, ctx.text for commands contains text WITHOUT the command itself
+  // e.g. for "/budget set Food 100" it will be "set Food 100"
+  const args = fullText.trim().split(/\s+/).filter(arg => arg.length > 0);
 
   console.log('[BUDGET] Full text:', fullText);
   console.log('[BUDGET] Args:', args);
+  console.log('[BUDGET] Args length:', args.length);
 
   if (args.length === 0) {
     // Show current budgets and progress
@@ -209,10 +214,14 @@ async function setBudget(
   const categoryExists = database.categories.exists(group.id, normalizedCategory);
 
   if (!categoryExists) {
+    const existingCategories = database.categories.getCategoryNames(group.id);
+    const keyboard = createAddCategoryWithBudgetKeyboard(normalizedCategory, amount);
+
     await ctx.send(
       `⚠️ Категория "${normalizedCategory}" не существует.\n\n` +
-      `Сначала добавь расход в эту категорию или выбери из существующих:\n` +
-      database.categories.getCategoryNames(group.id).join(', ')
+      `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом €${amount}?\n\n` +
+      `Или выбери из существующих:\n${existingCategories.join(', ')}`,
+      { reply_markup: keyboard.build() }
     );
     return;
   }
@@ -308,7 +317,17 @@ async function syncBudgets(ctx: Ctx["Command"], group: any): Promise<void> {
 
     // Save each budget to database
     let syncedCount = 0;
+    let createdCategoriesCount = 0;
+
     for (const budgetData of budgetsFromSheet) {
+      // Check if category exists, if not - create it
+      const categoryExists = database.categories.exists(group.id, budgetData.category);
+      if (!categoryExists) {
+        database.categories.create({ group_id: group.id, name: budgetData.category });
+        createdCategoriesCount++;
+        console.log(`[BUDGET] Created category: ${budgetData.category}`);
+      }
+
       database.budgets.setBudget({
         group_id: group.id,
         category: budgetData.category,
@@ -319,7 +338,11 @@ async function syncBudgets(ctx: Ctx["Command"], group: any): Promise<void> {
       syncedCount++;
     }
 
-    await ctx.send(`✅ Синхронизировано бюджетов: ${syncedCount}`);
+    let message = `✅ Синхронизировано бюджетов: ${syncedCount}`;
+    if (createdCategoriesCount > 0) {
+      message += `\n✨ Создано новых категорий: ${createdCategoriesCount}`;
+    }
+    await ctx.send(message);
   } catch (err) {
     console.error('[BUDGET] Failed to sync budgets:', err);
     await ctx.send('❌ Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');

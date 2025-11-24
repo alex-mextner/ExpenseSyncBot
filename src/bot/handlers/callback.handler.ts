@@ -306,8 +306,87 @@ async function handleBudgetAction(
       break;
     }
 
+    case "add-category": {
+      // Add new category and set budget
+      const amountStr = rest[0];
+      const amount = amountStr ? parseFloat(amountStr) : 100;
+
+      if (Number.isNaN(amount) || amount <= 0) {
+        await ctx.answerCallbackQuery({ text: "❌ Неверная сумма" });
+        return;
+      }
+
+      // Create category
+      database.categories.create({ group_id: group.id, name: category });
+
+      const now = new Date();
+      const currentMonth = format(now, 'yyyy-MM');
+
+      // Set budget
+      database.budgets.setBudget({
+        group_id: group.id,
+        category,
+        month: currentMonth,
+        limit_amount: amount,
+        currency: 'EUR',
+      });
+
+      // Ensure Budget sheet exists and write to Google Sheets
+      if (group.google_refresh_token && group.spreadsheet_id) {
+        try {
+          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+
+          if (!hasSheet) {
+            const categories = database.categories.getCategoryNames(group.id);
+            await createBudgetSheet(
+              group.google_refresh_token,
+              group.spreadsheet_id,
+              categories,
+              100,
+              'EUR'
+            );
+          }
+
+          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
+            month: currentMonth,
+            category,
+            limit: amount,
+            currency: 'EUR',
+          });
+        } catch (err) {
+          console.error('[BUDGET] Failed to write to Google Sheets:', err);
+        }
+      }
+
+      const emoji = database.categories.exists(group.id, category)
+        ? '✅'
+        : '✅';
+
+      await ctx.answerCallbackQuery({
+        text: `✅ Категория "${category}" создана, бюджет €${amount} установлен`
+      });
+
+      // Delete the button message
+      if (messageId && chatId) {
+        await deleteMessage(chatId, messageId);
+      }
+
+      break;
+    }
+
     case "skip": {
       await ctx.answerCallbackQuery({ text: "⏭️ Пропущено" });
+
+      // Delete the button message
+      if (messageId && chatId) {
+        await deleteMessage(chatId, messageId);
+      }
+
+      break;
+    }
+
+    case "cancel": {
+      await ctx.answerCallbackQuery({ text: "❌ Отменено" });
 
       // Delete the button message
       if (messageId && chatId) {
