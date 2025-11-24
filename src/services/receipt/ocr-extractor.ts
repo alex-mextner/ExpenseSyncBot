@@ -129,16 +129,19 @@ Return the text exactly as it appears on the receipt, preserving the structure a
       `[OCR] Successfully extracted text (${extractedText.length} chars): ${extractedText.substring(0, 200)}...`
     );
 
+    // TEMP: Cleanup disabled for debugging
     // Delay cleanup to allow Hugging Face API to download the image
     // (API returns before actually downloading the file)
-    setTimeout(async () => {
-      try {
-        await fs.unlink(filepath);
-        console.log(`[OCR] Cleaned up temp image: ${filepath}`);
-      } catch (cleanupError) {
-        console.error(`[OCR] Failed to cleanup temp image:`, cleanupError);
-      }
-    }, 30000); // 30 seconds delay
+    // setTimeout(async () => {
+    //   try {
+    //     await fs.unlink(filepath);
+    //     console.log(`[OCR] Cleaned up temp image: ${filepath}`);
+    //   } catch (cleanupError) {
+    //     console.error(`[OCR] Failed to cleanup temp image:`, cleanupError);
+    //   }
+    // }, 30000); // 30 seconds delay
+
+    console.log(`[OCR] Temp image kept for debugging: ${filepath}`);
 
     return extractedText;
   } catch (error) {
@@ -146,13 +149,16 @@ Return the text exactly as it appears on the receipt, preserving the structure a
       error instanceof Error ? error.message : "Unknown error";
     console.error(`[OCR] Failed to extract text from image:`, errorMessage);
 
+    // TEMP: Cleanup disabled for debugging
     // Cleanup on error (no delay needed)
-    try {
-      await fs.unlink(filepath);
-      console.log(`[OCR] Cleaned up temp image after error: ${filepath}`);
-    } catch (cleanupError) {
-      console.error(`[OCR] Failed to cleanup temp image:`, cleanupError);
-    }
+    // try {
+    //   await fs.unlink(filepath);
+    //   console.log(`[OCR] Cleaned up temp image after error: ${filepath}`);
+    // } catch (cleanupError) {
+    //   console.error(`[OCR] Failed to cleanup temp image:`, cleanupError);
+    // }
+
+    console.log(`[OCR] Temp image kept after error for debugging: ${filepath}`);
 
     throw new Error(`OCR extraction failed: ${errorMessage}`);
   }
