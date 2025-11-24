@@ -377,10 +377,7 @@ function processThinkTags(text: string): string {
  */
 function processThinkTagsForAdvice(text: string): string {
   // Replace entire <think>...</think> blocks with "Бот думает..."
-  text = text.replace(
-    /<think>[\s\S]*?<\/think>/g,
-    "<i>Бот думает...</i>\n\n"
-  );
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, "<i>Бот думает...</i>\n\n");
   // Clean up extra newlines
   text = text.replace(/\n{3,}/g, "\n\n");
   return text.trim();
@@ -677,7 +674,6 @@ async function sendDailyAdvice(
   ctx: Ctx["Message"],
   groupId: number
 ): Promise<void> {
-
   try {
     // Get current month expenses and budgets
     const now = new Date();
@@ -779,7 +775,7 @@ ${statsContext}
     const cleanAdvice = processThinkTagsForAdvice(advice);
 
     // Send advice with stats
-    const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}\n\n<i>Статистика:</i>\n<code>${statsContext.trim()}</code>`;
+    const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}\n\n<i>Статистика:</i>`;
 
     await ctx.send(message, { parse_mode: "HTML" });
   } catch (error) {
