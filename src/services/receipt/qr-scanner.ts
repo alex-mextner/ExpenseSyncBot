@@ -147,14 +147,20 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
  * Scan QR code using external API (goqr.me)
  */
 async function scanQRWithExternalAPI(imageBuffer: Buffer): Promise<string | null> {
+  console.log(`[QR_SCANNER] Sending ${imageBuffer.length} bytes to external API...`);
+
+  // Use File constructor instead of Blob for better compatibility
+  const file = new File([imageBuffer], 'qr.jpg', { type: 'image/jpeg' });
+
   const formData = new FormData();
-  const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
-  formData.append('file', blob, 'qr.jpg');
+  formData.append('file', file);
 
   const response = await fetch('https://api.qrserver.com/v1/read-qr-code/', {
     method: 'POST',
     body: formData,
   });
+
+  console.log(`[QR_SCANNER] API response status: ${response.status} ${response.statusText}`);
 
   if (!response.ok) {
     throw new Error(`API request failed: ${response.statusText}`);
@@ -162,18 +168,23 @@ async function scanQRWithExternalAPI(imageBuffer: Buffer): Promise<string | null
 
   const result = await response.json() as Array<{ type: string; symbol: Array<{ data: string | null; error: string | null }> }>;
 
+  console.log(`[QR_SCANNER] API response:`, JSON.stringify(result, null, 2));
+
   if (!result || result.length === 0) {
+    console.log(`[QR_SCANNER] API returned empty result array`);
     return null;
   }
 
   const firstResult = result[0];
   if (!firstResult.symbol || firstResult.symbol.length === 0) {
+    console.log(`[QR_SCANNER] API result has no symbols`);
     return null;
   }
 
   const symbolData = firstResult.symbol[0];
   if (symbolData.error) {
     console.log(`[QR_SCANNER] External API error: ${symbolData.error}`);
+    console.log(`[QR_SCANNER] Full symbol data:`, JSON.stringify(symbolData, null, 2));
     return null;
   }
 
