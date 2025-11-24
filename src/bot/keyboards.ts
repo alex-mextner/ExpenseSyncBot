@@ -94,11 +94,15 @@ export function createConfirmKeyboard(action: string): InlineKeyboard {
 /**
  * Create budget setup prompt keyboard
  */
-export function createBudgetPromptKeyboard(category: string): InlineKeyboard {
+export function createBudgetPromptKeyboard(category: string, defaultCurrency: string = 'EUR'): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
+  const currencySymbol = defaultCurrency === 'EUR' ? '€' :
+                        defaultCurrency === 'USD' ? '$' :
+                        defaultCurrency === 'RUB' ? '₽' : defaultCurrency;
+
   keyboard
-    .text('💰 Установить бюджет €100', `budget:set:${category}:100`)
+    .text(`💰 Установить бюджет ${currencySymbol}100`, `budget:set:${category}:100:${defaultCurrency}`)
     .row()
     .text('⏭️ Пропустить', `budget:skip:${category}`);
 
@@ -108,11 +112,15 @@ export function createBudgetPromptKeyboard(category: string): InlineKeyboard {
 /**
  * Create keyboard for adding new category with budget
  */
-export function createAddCategoryWithBudgetKeyboard(category: string, amount: number): InlineKeyboard {
+export function createAddCategoryWithBudgetKeyboard(category: string, amount: number, currency: string = 'EUR'): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
+  const currencySymbol = currency === 'EUR' ? '€' :
+                        currency === 'USD' ? '$' :
+                        currency === 'RUB' ? '₽' : currency;
+
   keyboard
-    .text(`✅ Добавить "${category}" с бюджетом €${amount}`, `budget:add-category:${category}:${amount}`)
+    .text(`✅ Добавить "${category}" с бюджетом ${currencySymbol}${amount}`, `budget:add-category:${category}:${amount}:${currency}`)
     .row()
     .text('❌ Отменить', `budget:cancel`);
 

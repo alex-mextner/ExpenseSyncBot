@@ -1,12 +1,23 @@
-import { MESSAGES } from "../../config/constants";
+import { MESSAGES, type CurrencyCode } from "../../config/constants";
 import { database } from "../../database";
-import { handleCurrencyCallback, handleDefaultCurrencyCallback } from "../commands/connect";
-import { createCategoriesListKeyboard, createBudgetPromptKeyboard } from "../keyboards";
+import {
+  handleCurrencyCallback,
+  handleDefaultCurrencyCallback,
+} from "../commands/connect";
+import { normalizeCurrency, getCurrencySymbol } from "../commands/budget";
+import {
+  createCategoriesListKeyboard,
+  createBudgetPromptKeyboard,
+} from "../keyboards";
 import type { Ctx } from "../types";
 import { saveExpenseToSheet } from "./message.handler";
 import { deleteMessage, sendMessage } from "../telegram-api";
-import { format } from 'date-fns';
-import { writeBudgetRow, hasBudgetSheet, createBudgetSheet } from "../../services/google/sheets";
+import { format } from "date-fns";
+import {
+  writeBudgetRow,
+  hasBudgetSheet,
+  createBudgetSheet,
+} from "../../services/google/sheets";
 
 /**
  * Handle callback queries from inline keyboards
@@ -75,7 +86,9 @@ async function handleCategoryAction(
   const user = database.users.findByTelegramId(telegramId);
 
   if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({ text: "Пользователь не найден или не привязан к группе" });
+    await ctx.answerCallbackQuery({
+      text: "Пользователь не найден или не привязан к группе",
+    });
     return;
   }
 
@@ -113,12 +126,20 @@ async function handleCategoryAction(
 
       if (pending) {
         database.pendingExpenses.update(pending.id, { status: "confirmed" });
-        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined);
+        await saveExpenseToSheet(
+          user.id,
+          group.id,
+          pending.id,
+          chatId || undefined
+        );
       }
 
       // Prompt for budget setup
       if (chatId) {
-        const keyboard = createBudgetPromptKeyboard(categoryName);
+        const keyboard = createBudgetPromptKeyboard(
+          categoryName,
+          group.default_currency
+        );
         await sendMessage(
           chatId,
           `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
@@ -177,7 +198,12 @@ async function handleCategoryAction(
       }
 
       // Save expense
-      await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined);
+      await saveExpenseToSheet(
+        user.id,
+        group.id,
+        pending.id,
+        chatId || undefined
+      );
       break;
     }
 
@@ -250,7 +276,11 @@ async function handleBudgetAction(
     case "set": {
       // Set budget for category
       const amountStr = rest[0];
+      const currencyStr = rest[1];
       const amount = amountStr ? parseFloat(amountStr) : 100;
+      const currency = currencyStr
+        ? normalizeCurrency(currencyStr) || group.default_currency
+        : group.default_currency;
 
       if (Number.isNaN(amount) || amount <= 0) {
         await ctx.answerCallbackQuery({ text: "❌ Неверная сумма" });
@@ -258,7 +288,7 @@ async function handleBudgetAction(
       }
 
       const now = new Date();
-      const currentMonth = format(now, 'yyyy-MM');
+      const currentMonth = format(now, "yyyy-MM");
 
       // Save to database
       database.budgets.setBudget({
@@ -266,13 +296,16 @@ async function handleBudgetAction(
         category,
         month: currentMonth,
         limit_amount: amount,
-        currency: 'EUR',
+        currency,
       });
 
       // Ensure Budget sheet exists and write to Google Sheets
       if (group.google_refresh_token && group.spreadsheet_id) {
         try {
-          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+          const hasSheet = await hasBudgetSheet(
+            group.google_refresh_token,
+            group.spreadsheet_id
+          );
 
           if (!hasSheet) {
             const categories = database.categories.getCategoryNames(group.id);
@@ -281,22 +314,29 @@ async function handleBudgetAction(
               group.spreadsheet_id,
               categories,
               100,
-              'EUR'
+              currency
             );
           }
 
-          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-            month: currentMonth,
-            category,
-            limit: amount,
-            currency: 'EUR',
-          });
+          await writeBudgetRow(
+            group.google_refresh_token,
+            group.spreadsheet_id,
+            {
+              month: currentMonth,
+              category,
+              limit: amount,
+              currency: currency,
+            }
+          );
         } catch (err) {
-          console.error('[BUDGET] Failed to write to Google Sheets:', err);
+          console.error("[BUDGET] Failed to write to Google Sheets:", err);
         }
       }
 
-      await ctx.answerCallbackQuery({ text: `✅ Бюджет установлен: €${amount}` });
+      const currencySymbol = getCurrencySymbol(currency);
+      await ctx.answerCallbackQuery({
+        text: `✅ Бюджет установлен: ${currencySymbol}${amount}`,
+      });
 
       // Delete the button message
       if (messageId && chatId) {
@@ -309,7 +349,11 @@ async function handleBudgetAction(
     case "add-category": {
       // Add new category and set budget
       const amountStr = rest[0];
+      const currencyStr = rest[1];
       const amount = amountStr ? parseFloat(amountStr) : 100;
+      const currency = currencyStr
+        ? normalizeCurrency(currencyStr) || group.default_currency
+        : group.default_currency;
 
       if (Number.isNaN(amount) || amount <= 0) {
         await ctx.answerCallbackQuery({ text: "❌ Неверная сумма" });
@@ -320,7 +364,7 @@ async function handleBudgetAction(
       database.categories.create({ group_id: group.id, name: category });
 
       const now = new Date();
-      const currentMonth = format(now, 'yyyy-MM');
+      const currentMonth = format(now, "yyyy-MM");
 
       // Set budget
       database.budgets.setBudget({
@@ -328,13 +372,16 @@ async function handleBudgetAction(
         category,
         month: currentMonth,
         limit_amount: amount,
-        currency: 'EUR',
+        currency: currency,
       });
 
       // Ensure Budget sheet exists and write to Google Sheets
       if (group.google_refresh_token && group.spreadsheet_id) {
         try {
-          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+          const hasSheet = await hasBudgetSheet(
+            group.google_refresh_token,
+            group.spreadsheet_id
+          );
 
           if (!hasSheet) {
             const categories = database.categories.getCategoryNames(group.id);
@@ -343,27 +390,29 @@ async function handleBudgetAction(
               group.spreadsheet_id,
               categories,
               100,
-              'EUR'
+              currency
             );
           }
 
-          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-            month: currentMonth,
-            category,
-            limit: amount,
-            currency: 'EUR',
-          });
+          await writeBudgetRow(
+            group.google_refresh_token,
+            group.spreadsheet_id,
+            {
+              month: currentMonth,
+              category,
+              limit: amount,
+              currency,
+            }
+          );
         } catch (err) {
-          console.error('[BUDGET] Failed to write to Google Sheets:', err);
+          console.error("[BUDGET] Failed to write to Google Sheets:", err);
         }
       }
 
-      const emoji = database.categories.exists(group.id, category)
-        ? '✅'
-        : '✅';
+      const currencySymbol = getCurrencySymbol(currency);
 
       await ctx.answerCallbackQuery({
-        text: `✅ Категория "${category}" создана, бюджет €${amount} установлен`
+        text: `✅ Категория "${category}" создана, бюджет ${currencySymbol}${amount} установлен`,
       });
 
       // Delete the button message

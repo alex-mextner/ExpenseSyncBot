@@ -9,6 +9,92 @@ import {
   writeBudgetRow,
 } from '../../services/google/sheets';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
+import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+
+/**
+ * Parse budget amount with optional currency
+ * Supports: 500, 500$, $500, 500 EUR, 500 евро, etc.
+ */
+function parseBudgetAmount(amountStr: string, defaultCurrency: CurrencyCode): { amount: number; currency: CurrencyCode } | null {
+  const trimmed = amountStr.trim();
+
+  // Pattern 1: Currency symbol before amount ($500, €100, ₽500)
+  const pattern1 = /^([\$€£₽¥])\s*([\d\s,\.]+)$/;
+  const match1 = trimmed.match(pattern1);
+
+  if (match1) {
+    const [, currencySymbol, numStr] = match1;
+    if (!currencySymbol || !numStr) return null;
+
+    const normalized = normalizeCurrency(currencySymbol);
+    if (!normalized) return null;
+
+    const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
+    if (Number.isNaN(amount) || amount <= 0) return null;
+
+    return { amount, currency: normalized };
+  }
+
+  // Pattern 2: Amount with currency after (500$, 500 EUR, 500 евро)
+  const pattern2 = /^([\d\s,\.]+)\s*([\$€£₽¥]|[a-zA-Zа-яА-Я]+)$/;
+  const match2 = trimmed.match(pattern2);
+
+  if (match2) {
+    const [, numStr, currencyStr] = match2;
+    if (!numStr) return null;
+
+    const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
+    if (Number.isNaN(amount) || amount <= 0) return null;
+
+    if (currencyStr) {
+      const normalized = normalizeCurrency(currencyStr);
+      if (normalized) {
+        return { amount, currency: normalized };
+      }
+    }
+
+    return { amount, currency: defaultCurrency };
+  }
+
+  // Pattern 3: Just amount (500)
+  const pattern3 = /^([\d\s,\.]+)$/;
+  const match3 = trimmed.match(pattern3);
+
+  if (match3) {
+    const [, numStr] = match3;
+    if (!numStr) return null;
+
+    const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
+    if (Number.isNaN(amount) || amount <= 0) return null;
+
+    return { amount, currency: defaultCurrency };
+  }
+
+  return null;
+}
+
+/**
+ * Normalize currency code from alias
+ */
+export function normalizeCurrency(currencyStr: string): CurrencyCode | null {
+  const normalized = currencyStr.toLowerCase().trim();
+  return (CURRENCY_ALIASES[normalized] as CurrencyCode) || null;
+}
+
+/**
+ * Get currency symbol for display
+ */
+export function getCurrencySymbol(currency: CurrencyCode): string {
+  switch (currency) {
+    case 'EUR': return '€';
+    case 'USD': return '$';
+    case 'RUB': return '₽';
+    case 'GBP': return '£';
+    case 'JPY': return '¥';
+    case 'CNY': return '¥';
+    default: return currency;
+  }
+}
 
 /**
  * /budget command handler
@@ -71,14 +157,15 @@ export async function handleBudgetCommand(ctx: Ctx["Command"]): Promise<void> {
     // /budget set Category Amount
     const category = args[1]!;
     const amountStr = args[2]!;
-    const amount = parseFloat(amountStr);
 
-    if (Number.isNaN(amount) || amount <= 0) {
-      await ctx.send('❌ Неверная сумма. Используй: /budget set Категория 500');
+    const parsed = parseBudgetAmount(amountStr, group.default_currency);
+
+    if (!parsed) {
+      await ctx.send('❌ Неверная сумма. Используй: /budget set Категория 500 или /budget set Категория $500');
       return;
     }
 
-    await setBudget(ctx, group, category, amount);
+    await setBudget(ctx, group, category, parsed.amount, parsed.currency);
     return;
   }
 
@@ -117,7 +204,7 @@ async function showBudgetProgress(ctx: Ctx["Command"], group: any): Promise<void
           group.spreadsheet_id,
           categories,
           100,
-          'EUR'
+          group.default_currency
         );
         await ctx.send('✅ Вкладка Budget создана в таблице!');
       } catch (err) {
@@ -203,7 +290,8 @@ async function setBudget(
   ctx: Ctx["Command"],
   group: any,
   categoryName: string,
-  amount: number
+  amount: number,
+  currency: CurrencyCode
 ): Promise<void> {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
@@ -216,11 +304,13 @@ async function setBudget(
 
   if (!categoryExists) {
     const existingCategories = database.categories.getCategoryNames(group.id);
-    const keyboard = createAddCategoryWithBudgetKeyboard(normalizedCategory, amount);
+    const keyboard = createAddCategoryWithBudgetKeyboard(normalizedCategory, amount, currency);
+
+    const currencySymbol = getCurrencySymbol(currency);
 
     await ctx.send(
       `⚠️ Категория "${normalizedCategory}" не существует.\n\n` +
-      `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом €${amount}?\n\n` +
+      `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом ${currencySymbol}${amount}?\n\n` +
       `Или выбери из существующих:\n${existingCategories.join(', ')}`,
       { reply_markup: keyboard.build() }
     );
@@ -233,7 +323,7 @@ async function setBudget(
     category: normalizedCategory,
     month: currentMonth,
     limit_amount: amount,
-    currency: 'EUR',
+    currency: currency,
   });
 
   // Ensure Budget sheet exists
@@ -246,7 +336,7 @@ async function setBudget(
       group.spreadsheet_id,
       categories,
       100,
-      'EUR'
+      currency
     );
   }
 
@@ -256,11 +346,12 @@ async function setBudget(
       month: currentMonth,
       category: normalizedCategory,
       limit: amount,
-      currency: 'EUR',
+      currency: currency,
     });
 
     const emoji = getCategoryEmoji(normalizedCategory);
-    await ctx.send(`✅ Бюджет установлен: ${emoji} ${normalizedCategory} = €${amount.toFixed(2)}`);
+    const currencySymbol = getCurrencySymbol(currency);
+    await ctx.send(`✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${currencySymbol}${amount.toFixed(2)}`);
   } catch (err) {
     console.error('[BUDGET] Failed to write to Google Sheets:', err);
     await ctx.send(
@@ -288,7 +379,7 @@ async function syncBudgets(ctx: Ctx["Command"], group: any): Promise<void> {
             group.spreadsheet_id,
             categories,
             100,
-            'EUR'
+            group.default_currency
           );
           await ctx.send(
             '✅ Вкладка Budget создана в таблице!\n\n' +

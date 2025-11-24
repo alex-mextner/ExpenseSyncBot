@@ -219,7 +219,7 @@ async function addBudgetInfo(
             group.spreadsheet_id,
             categories,
             100,
-            'EUR'
+            group.default_currency
           );
           console.log('[SUM] Budget sheet created');
         } catch (err) {
