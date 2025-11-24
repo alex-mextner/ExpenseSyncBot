@@ -10,7 +10,8 @@
       "Bash(bun x playwright:*)",
       "Bash(cat:*)",
       "Bash(bun --eval:*)",
-      "Bash(timeout 8 bun run:*)"
+      "Bash(timeout 8 bun run:*)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

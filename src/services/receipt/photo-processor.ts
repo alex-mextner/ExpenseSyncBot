@@ -305,8 +305,8 @@ async function processPhotoQueueItem(
       `[PHOTO_PROCESSOR] Successfully extracted ${extractionResult.items.length} items from receipt #${queueItemId}`
     );
 
-    // Show first item for confirmation
-    await showNextItemForConfirmation(bot, queueItem.group_id);
+    // Show first item for confirmation from this receipt
+    await showNextItemForConfirmation(bot, queueItem.group_id, queueItemId);
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
