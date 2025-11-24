@@ -11,6 +11,17 @@ import { env } from "../../config/env";
 let isProcessing = false;
 
 /**
+ * Escape HTML special characters for Telegram
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
  * Start background photo processor
  * Processes photos from the queue and extracts receipt data
  */
@@ -297,17 +308,17 @@ export async function showNextItemForConfirmation(
     return;
   }
 
-  // Build confirmation message
+  // Build confirmation message (escape HTML special characters)
   let message = `🧾 <b>Подтвердите товар из чека:</b>\n\n`;
-  message += `📦 <b>${nextItem.name_ru}</b>`;
+  message += `📦 <b>${escapeHtml(nextItem.name_ru)}</b>`;
   if (nextItem.name_original) {
-    message += ` (${nextItem.name_original})`;
+    message += ` (${escapeHtml(nextItem.name_original)})`;
   }
   message += `\n`;
   message += `🔢 Количество: <code>${nextItem.quantity}</code>\n`;
-  message += `💰 Цена: <code>${nextItem.price} ${nextItem.currency}</code>\n`;
-  message += `💵 Сумма: <code>${nextItem.total} ${nextItem.currency}</code>\n`;
-  message += `\n📂 Предложенная категория: <b>${nextItem.suggested_category}</b>`;
+  message += `💰 Цена: <code>${nextItem.price} ${escapeHtml(nextItem.currency)}</code>\n`;
+  message += `💵 Сумма: <code>${nextItem.total} ${escapeHtml(nextItem.currency)}</code>\n`;
+  message += `\n📂 Предложенная категория: <b>${escapeHtml(nextItem.suggested_category)}</b>`;
 
   // Build inline keyboard with possible categories
   const buttons: Array<Array<{ text: string; callback_data: string }>> = [];
