@@ -387,6 +387,26 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '013_add_message_thread_id_to_photo_queue',
+      up: () => {
+        // Check if column already exists (SQLite doesn't have IF NOT EXISTS for ALTER TABLE)
+        const checkColumn = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('photo_processing_queue')
+          WHERE name = 'message_thread_id'
+        `);
+        const result = checkColumn.get();
+
+        if (result && result.count === 0) {
+          db.exec(`
+            ALTER TABLE photo_processing_queue
+            ADD COLUMN message_thread_id INTEGER;
+          `);
+          console.log('✓ Added message_thread_id column to photo_processing_queue');
+        }
+      },
+    },
   ];
 
   // Check and run migrations
