@@ -73,6 +73,11 @@ export async function handleAskQuestion(
 
   const systemPrompt = `Ты - ассистент для анализа финансов.
 Отвечай на вопросы пользователя на основе этих данных. Будь точным и конкретным. Используй цифры из предоставленных данных.
+
+ВАЖНО: Если пользователь спрашивает про СВОИ расходы (например "мои расходы", "я потратил", "на что я тратил"),
+отвечай только про расходы в категории с именем этого пользователя.
+Например, если пользователь "Alex" спрашивает "на что я потратил деньги", показывай только расходы из категории "Alex".
+
 У тебя есть доступ к следующим данным:
 
 Expenses Data:
@@ -94,7 +99,7 @@ ${budgetsContext}`;
     });
   }
 
-  // Add current question with username
+  // Add current question with username (for context)
   messages.push({
     role: "user",
     content: `${userName}: ${question}`,
@@ -136,15 +141,25 @@ ${budgetsContext}`;
             timeSinceLastError >= ERROR_COOLDOWN_MS &&
             fullResponse.length - lastMessageText.length > 10
           ) {
+            // Truncate to fit Telegram limit (4096 chars) for intermediate updates
+            const MAX_INTERMEDIATE_LENGTH = 4000;
+            let textToSend = fullResponse;
+            let isTruncated = false;
+
+            if (textToSend.length > MAX_INTERMEDIATE_LENGTH) {
+              textToSend = fullResponse.substring(0, MAX_INTERMEDIATE_LENGTH) + "...";
+              isTruncated = true;
+            }
+
             if (sentMessageId) {
               // Edit existing message
               try {
                 await bot.api.editMessageText({
                   chat_id: chatId,
                   message_id: sentMessageId,
-                  text: fullResponse,
+                  text: textToSend,
                 });
-                lastMessageText = fullResponse;
+                lastMessageText = textToSend;
                 lastUpdateTime = now;
               } catch (err: any) {
                 // If rate limited, wait longer
@@ -159,12 +174,13 @@ ${budgetsContext}`;
                   console.error("[ASK] Failed to edit message:", err);
                 }
               }
-            } else {
-              // Send initial message
+            } else if (!isTruncated) {
+              // Send initial message only if not truncated
+              // (if truncated, wait for final version)
               try {
-                const sent = await ctx.send(fullResponse);
+                const sent = await ctx.send(textToSend);
                 sentMessageId = sent.id;
-                lastMessageText = fullResponse;
+                lastMessageText = textToSend;
                 lastUpdateTime = now;
               } catch (err) {
                 console.error("[ASK] Failed to send message:", err);
