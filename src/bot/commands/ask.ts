@@ -172,8 +172,10 @@ ${budgetsContext}`;
             let isTruncated = false;
 
             if (textToSend.length > MAX_INTERMEDIATE_LENGTH) {
-              textToSend =
-                textToSend.substring(0, MAX_INTERMEDIATE_LENGTH) + "...";
+              textToSend = safelyTruncateHTML(
+                textToSend,
+                MAX_INTERMEDIATE_LENGTH
+              );
               isTruncated = true;
             }
 
@@ -197,20 +199,29 @@ ${budgetsContext}`;
                   await new Promise((resolve) =>
                     setTimeout(resolve, ERROR_COOLDOWN_MS)
                   );
-                } else if (err?.description?.includes("message is not modified")) {
+                } else if (
+                  err?.description?.includes("message is not modified")
+                ) {
                   // If message content is the same, delete and send new
-                  console.log("[ASK] Message not modified, deleting and resending...");
+                  console.log(
+                    "[ASK] Message not modified, deleting and resending..."
+                  );
                   try {
                     await bot.api.deleteMessage({
                       chat_id: chatId,
                       message_id: sentMessageId,
                     });
-                    const sent = await ctx.send(textToSend, { parse_mode: "HTML" });
+                    const sent = await ctx.send(textToSend, {
+                      parse_mode: "HTML",
+                    });
                     sentMessageId = sent.id;
                     lastMessageText = textToSend;
                     lastUpdateTime = now;
                   } catch (deleteErr) {
-                    console.error("[ASK] Failed to delete/resend message:", deleteErr);
+                    console.error(
+                      "[ASK] Failed to delete/resend message:",
+                      deleteErr
+                    );
                   }
                 } else {
                   console.error("[ASK] Failed to edit message:", err);
@@ -256,7 +267,9 @@ ${budgetsContext}`;
         } catch (err: any) {
           if (err?.description?.includes("message is not modified")) {
             // If message content is the same, delete and send new
-            console.log("[ASK] Final message not modified, deleting and resending...");
+            console.log(
+              "[ASK] Final message not modified, deleting and resending..."
+            );
             try {
               await bot.api.deleteMessage({
                 chat_id: chatId,
@@ -264,7 +277,10 @@ ${budgetsContext}`;
               });
               await ctx.send(chunks[0], { parse_mode: "HTML" });
             } catch (deleteErr) {
-              console.error("[ASK] Failed to delete/resend final message:", deleteErr);
+              console.error(
+                "[ASK] Failed to delete/resend final message:",
+                deleteErr
+              );
             }
           } else {
             console.error("[ASK] Failed to edit final message:", err);
@@ -304,10 +320,69 @@ ${budgetsContext}`;
  */
 function processThinkTags(text: string): string {
   // Replace <think> with start marker
-  text = text.replace(/<think>/g, "🤔 <i>Бот начал размышление</i>\n\n");
+  text = text.replace(/<think>/g, "🤔 <i>Бот начал размышление</i>\n");
   // Replace </think> with end marker
-  text = text.replace(/<\/think>/g, "\n\n💬 <i>Бот начал формулировать ответ</i>");
+  text = text.replace(
+    /<\/think>/g,
+    "\n\n💬 <i>Бот начал формулировать ответ</i>\n"
+  );
   return text;
+}
+
+/**
+ * Safely truncate HTML text to maxLength ensuring valid HTML
+ */
+function safelyTruncateHTML(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  // Truncate to max length
+  let truncated = text.substring(0, maxLength);
+
+  // Find last complete character (not in middle of tag)
+  // If we're inside a tag, backtrack to before the tag started
+  const lastTagStart = truncated.lastIndexOf("<");
+  const lastTagEnd = truncated.lastIndexOf(">");
+
+  if (lastTagStart > lastTagEnd) {
+    // We're in the middle of a tag, cut before it
+    truncated = truncated.substring(0, lastTagStart);
+  }
+
+  // Now close any unclosed tags
+  const openTags: string[] = [];
+  const tagRegex = /<\/?([a-z]+)[^>]*>/gi;
+  let match: RegExpExecArray | null;
+
+  // biome-ignore lint/suspicious/noAssignInExpressions: needed for regex iteration
+  while ((match = tagRegex.exec(truncated)) !== null) {
+    const fullTag = match[0];
+    const tagName = match[1];
+
+    if (!tagName) continue;
+
+    if (fullTag.startsWith("</")) {
+      // Closing tag - remove from stack
+      const lastIndex = openTags.lastIndexOf(tagName);
+      if (lastIndex !== -1) {
+        openTags.splice(lastIndex, 1);
+      }
+    } else if (!fullTag.endsWith("/>")) {
+      // Opening tag (not self-closing)
+      openTags.push(tagName);
+    }
+  }
+
+  // Close all unclosed tags in reverse order
+  for (let i = openTags.length - 1; i >= 0; i--) {
+    const tag = openTags[i];
+    if (tag) {
+      truncated += `</${tag}>`;
+    }
+  }
+
+  return `${truncated}...`;
 }
 
 /**
