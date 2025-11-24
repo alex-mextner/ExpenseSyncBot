@@ -440,11 +440,8 @@ export async function showNextItemForConfirmation(
     },
   ]);
 
-  // Get thread ID from any pending item for this group
-  const anyPendingItem = database.receiptItems.findNextPending();
-  const queueItem = anyPendingItem
-    ? database.photoQueue.findById(anyPendingItem.photo_queue_id)
-    : null;
+  // Get thread ID from current item's photo queue
+  const queueItem = database.photoQueue.findById(nextItem.photo_queue_id);
 
   // Send message to group
   await bot.api.sendMessage({
