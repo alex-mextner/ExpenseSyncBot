@@ -43,23 +43,28 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
     });
   }
 
-  // Add all photos to processing queue
-  const photoCount = photos.length;
+  // Get the largest photo (last element in array)
+  // ctx.photo is an array of different sizes of the same image
+  const largestPhoto = photos[photos.length - 1];
 
-  for (const photo of photos) {
-    database.photoQueue.create({
-      group_id: group.id,
-      user_id: user.id,
-      message_id: messageId,
-      file_id: photo.fileId,
-      status: 'pending',
-    });
+  if (!largestPhoto) {
+    console.log('[PHOTO] No photos found in array');
+    return;
   }
 
-  console.log(`[PHOTO] Added ${photoCount} photo(s) to queue from user ${telegramId} in group ${chatId}`);
+  // Add only the largest photo to processing queue
+  database.photoQueue.create({
+    group_id: group.id,
+    user_id: user.id,
+    message_id: messageId,
+    file_id: largestPhoto.fileId,
+    status: 'pending',
+  });
+
+  console.log(`[PHOTO] Added photo to queue: ${largestPhoto.width}x${largestPhoto.height} (${largestPhoto.fileSize} bytes) from user ${telegramId} in group ${chatId}`);
 
   // Send confirmation
-  await ctx.send(`📸 Фото добавлено в очередь обработки (${photoCount} шт.)`);
+  await ctx.send(`📸 Фото добавлено в очередь обработки`);
 
   // Start background processing
   // This will be triggered by the background processor
