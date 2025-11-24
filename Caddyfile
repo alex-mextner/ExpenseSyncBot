@@ -8,7 +8,8 @@ expense-sync-bot.invntrm.ru {
 
 	# Temporary images for OCR processing
 	handle /temp-images/* {
-		reverse_proxy localhost:3000
+		root * /var/www/ExpenseSyncBot
+		file_server
 	}
 
 	# Health check endpoint
