@@ -10,6 +10,7 @@ export interface Group {
   spreadsheet_id: string | null;
   default_currency: CurrencyCode;
   enabled_currencies: CurrencyCode[];
+  custom_prompt: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -24,6 +25,7 @@ export interface UpdateGroupData {
   spreadsheet_id?: string;
   default_currency?: CurrencyCode;
   enabled_currencies?: CurrencyCode[];
+  custom_prompt?: string | null;
 }
 
 /**

@@ -292,6 +292,15 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '009_add_custom_prompt_to_groups',
+      up: () => {
+        // Add custom_prompt column to groups table
+        db.exec(`
+          ALTER TABLE groups ADD COLUMN custom_prompt TEXT;
+        `);
+      },
+    },
   ];
 
   // Check and run migrations

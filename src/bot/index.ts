@@ -15,6 +15,7 @@ import { handleSyncCommand } from "./commands/sync";
 import { handleCallbackQuery } from "./handlers/callback.handler";
 import { handleExpenseMessage } from "./handlers/message.handler";
 import { handleAskQuestion, handleAdviceCommand } from "./commands/ask";
+import { handlePromptCommand } from "./commands/prompt";
 
 /**
  * Initialize and configure bot
@@ -41,6 +42,7 @@ export function createBot(): Bot {
   bot.command("settings", handleSettingsCommand);
   bot.command("reconnect", handleReconnectCommand);
   bot.command("advice", handleAdviceCommand);
+  bot.command("prompt", handlePromptCommand);
 
   // Callback queries (inline keyboard buttons)
   bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));

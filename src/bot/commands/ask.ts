@@ -111,7 +111,7 @@ export async function handleAskQuestion(
     currentMonthSummary += "Нет трат за текущий месяц.\n";
   }
 
-  const systemPrompt = `Ты - ассистент для анализа финансов.
+  let systemPrompt = `Ты - ассистент для анализа финансов.
 Отвечай на вопросы пользователя на основе этих данных. Будь точным и конкретным. Используй цифры из предоставленных данных.
 
 ТЕКУЩАЯ ДАТА: ${currentDate}
@@ -150,6 +150,11 @@ ${expensesContext}
 
 Budget items Data:
 ${budgetsContext}`;
+
+  // Add custom prompt if set
+  if (group.custom_prompt) {
+    systemPrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
+  }
 
   // Build messages array with history
   const messages: Array<{ role: string; content: string }> = [
@@ -745,8 +750,11 @@ async function sendDailyAdvice(
     }${expenseDetails}${recentExpensesDetails}
 `;
 
+    // Get group for custom prompt
+    const group = database.groups.findById(groupId);
+
     // Generate advice using AI
-    const advicePrompt = `Ты - мудрый финансовый советник с философским взглядом на жизнь.
+    let advicePrompt = `Ты - мудрый финансовый советник с философским взглядом на жизнь.
 
 Дай ОДИН краткий философский совет дня (1-2 предложения), который будет уместен для людей, которые следят за своими финансами.
 Совет должен быть мотивирующим, но реалистичным. Избегай банальностей типа "экономьте деньги".
@@ -759,6 +767,11 @@ async function sendDailyAdvice(
 ${statsContext}
 
 Дай совет который учитывает эту статистику (например, если бюджет почти исчерпан, или наоборот осталось много).`;
+
+    // Add custom prompt if set
+    if (group?.custom_prompt) {
+      advicePrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
+    }
 
     const response = await client.chatCompletion({
       provider: "novita",

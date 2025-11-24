@@ -98,6 +98,11 @@ export class GroupRepository {
       values.push(JSON.stringify(data.enabled_currencies));
     }
 
+    if (data.custom_prompt !== undefined) {
+      updates.push('custom_prompt = ?');
+      values.push(data.custom_prompt);
+    }
+
     updates.push('updated_at = CURRENT_TIMESTAMP');
 
     values.push(telegramGroupId);
