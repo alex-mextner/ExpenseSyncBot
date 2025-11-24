@@ -1,5 +1,6 @@
 import type { Ctx } from "../types";
 import { database } from "../../database";
+import { maybeSendDailyAdvice } from "./ask";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { getCategoryEmoji } from "../../config/category-emojis";
 import {
@@ -279,6 +280,7 @@ async function showBudgetProgress(
         `• /budget set <Категория> <Сумма>\n` +
         `• /budget sync - синхронизировать с Google Sheets`
     );
+    await maybeSendDailyAdvice(ctx, group.id);
     return;
   }
 
@@ -336,6 +338,9 @@ async function showBudgetProgress(
   }
 
   await ctx.send(message);
+
+  // Maybe send daily advice (20% probability)
+  await maybeSendDailyAdvice(ctx, group.id);
 }
 
 /**
@@ -429,6 +434,9 @@ async function setBudget(
         `Проверь доступ к таблице или используй /budget sync позже.`
     );
   }
+
+  // Maybe send daily advice (20% probability)
+  await maybeSendDailyAdvice(ctx, group.id);
 }
 
 /**
@@ -590,6 +598,9 @@ async function syncBudgets(ctx: Ctx["Command"], group: any): Promise<void> {
       message += `\n✨ Создано новых категорий: ${createdCategoriesCount}`;
     }
     await ctx.send(message);
+
+    // Maybe send daily advice (20% probability)
+    await maybeSendDailyAdvice(ctx, group.id);
   } catch (err) {
     console.error("[BUDGET] Failed to sync budgets:", err);
     await ctx.send(

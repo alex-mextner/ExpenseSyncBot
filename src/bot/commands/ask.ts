@@ -79,8 +79,44 @@ export async function handleAskQuestion(
     new Set(allExpenses.map((e) => e.category))
   ).sort();
 
+  // Get current date info
+  const now = new Date();
+  const currentMonth = now.toISOString().substring(0, 7); // YYYY-MM
+  const currentDate = now.toISOString().split("T")[0]; // YYYY-MM-DD
+
+  // Build current month category summary
+  const currentMonthExpenses = allExpenses.filter((e) =>
+    e.date.startsWith(currentMonth)
+  );
+  const categoryTotals: Record<string, number> = {};
+  for (const expense of currentMonthExpenses) {
+    categoryTotals[expense.category] =
+      (categoryTotals[expense.category] || 0) + expense.eur_amount;
+  }
+  const sortedCategories = Object.entries(categoryTotals)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15); // Top 15 categories
+
+  let currentMonthSummary = `\nТРАТЫ ЗА ТЕКУЩИЙ МЕСЯЦ (${currentMonth}) ПО КАТЕГОРИЯМ:\n`;
+  if (sortedCategories.length > 0) {
+    const totalMonth = sortedCategories.reduce(
+      (sum, [_, amount]) => sum + amount,
+      0
+    );
+    currentMonthSummary += `Всего потрачено: €${totalMonth.toFixed(2)}\n`;
+    for (const [category, amount] of sortedCategories) {
+      currentMonthSummary += `- ${category}: €${amount.toFixed(2)}\n`;
+    }
+  } else {
+    currentMonthSummary += "Нет трат за текущий месяц.\n";
+  }
+
   const systemPrompt = `Ты - ассистент для анализа финансов.
 Отвечай на вопросы пользователя на основе этих данных. Будь точным и конкретным. Используй цифры из предоставленных данных.
+
+ТЕКУЩАЯ ДАТА: ${currentDate}
+ВАЖНО: Бюджеты привязаны к календарным месяцам. Когда анализируешь бюджет, смотри данные за текущий месяц (${currentMonth}).
+${currentMonthSummary}
 
 ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ:
 - Username: @${userName}
@@ -312,6 +348,9 @@ ${budgetsContext}`;
 
     // Prune old messages (keep last 50)
     database.chatMessages.pruneOldMessages(group.id, 50);
+
+    // Maybe send daily advice (20% probability)
+    await maybeSendDailyAdvice(ctx, group.id);
   } catch (error) {
     console.error("[ASK] Error:", error);
     await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
@@ -567,4 +606,126 @@ function buildBudgetsContext(
   }
 
   return context;
+}
+
+/**
+ * Send daily advice with 20% probability
+ * Includes current spending and budget stats
+ */
+export async function maybeSendDailyAdvice(
+  ctx: Ctx["Message"],
+  groupId: number
+): Promise<void> {
+  // 20% probability
+  if (Math.random() > 0.2) {
+    return;
+  }
+
+  try {
+    // Get current month expenses and budgets
+    const now = new Date();
+    const currentMonth = now.toISOString().substring(0, 7); // YYYY-MM
+    const currentDate = now.toISOString().split("T")[0]; // YYYY-MM-DD
+
+    const allExpenses = database.expenses.findByGroupId(groupId, 1000);
+    const currentMonthExpenses = allExpenses.filter((e) =>
+      e.date.startsWith(currentMonth)
+    );
+    const totalSpent = currentMonthExpenses.reduce(
+      (sum, e) => sum + e.eur_amount,
+      0
+    );
+
+    const budgets = database.budgets.findByGroupId(groupId);
+    const currentMonthBudget = budgets.filter((b) => b.month === currentMonth);
+    const totalBudget = currentMonthBudget.reduce(
+      (sum, b) => sum + b.limit_amount,
+      0
+    );
+
+    const budgetUsedPercent =
+      totalBudget > 0 ? ((totalSpent / totalBudget) * 100).toFixed(1) : "N/A";
+
+    // Group expenses by category
+    const categoryTotals: Record<string, number> = {};
+    for (const expense of currentMonthExpenses) {
+      categoryTotals[expense.category] =
+        (categoryTotals[expense.category] || 0) + expense.eur_amount;
+    }
+
+    // Sort categories by amount descending
+    const sortedCategories = Object.entries(categoryTotals)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10); // Top 10 categories
+
+    // Build expense details by category
+    let expenseDetails = "\n\nТраты по категориям:\n";
+    for (const [category, amount] of sortedCategories) {
+      expenseDetails += `- ${category}: €${amount.toFixed(2)}\n`;
+    }
+
+    // Build recent expenses details (last 10 operations)
+    const recentExpenses = currentMonthExpenses
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 10);
+
+    let recentExpensesDetails = "\n\nПоследние операции:\n";
+    for (const expense of recentExpenses) {
+      recentExpensesDetails += `- ${expense.date}: ${
+        expense.category
+      } €${expense.eur_amount.toFixed(2)}`;
+      if (expense.comment) {
+        recentExpensesDetails += ` (${expense.comment})`;
+      }
+      recentExpensesDetails += "\n";
+    }
+
+    // Build stats context
+    const statsContext = `
+Текущая дата: ${currentDate}
+Текущий месяц: ${currentMonth}
+Потрачено: €${totalSpent.toFixed(2)}
+Бюджет: €${totalBudget.toFixed(2)}
+Использовано бюджета: ${budgetUsedPercent}%
+Количество операций: ${
+      currentMonthExpenses.length
+    }${expenseDetails}${recentExpensesDetails}
+`;
+
+    // Generate advice using AI
+    const advicePrompt = `Ты - мудрый финансовый советник с философским взглядом на жизнь.
+
+Дай ОДИН краткий философский совет дня (1-2 предложения), который будет уместен для людей, которые следят за своими финансами.
+Совет должен быть мотивирующим, но реалистичным. Избегай банальностей типа "экономьте деньги".
+
+Используй ТОЛЬКО HTML теги для форматирования: <b>, <i>, <code>, <blockquote>.
+НЕ используй Markdown синтаксис!
+
+Статистика трат за текущий месяц:
+${statsContext}
+
+Дай совет который учитывает эту статистику (например, если бюджет почти исчерпан, или наоборот осталось много).`;
+
+    const response = await client.chatCompletion({
+      provider: "novita",
+      model: "deepseek-ai/DeepSeek-R1-0528",
+      messages: [{ role: "user", content: advicePrompt }],
+      max_tokens: 300,
+      temperature: 0.9,
+    });
+
+    const advice = response.choices[0]?.message?.content || "";
+    if (!advice) return;
+
+    // Clean up think tags
+    const cleanAdvice = processThinkTags(advice);
+
+    // Send advice with stats
+    const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}\n\n<i>Статистика:</i>\n<code>${statsContext.trim()}</code>`;
+
+    await ctx.send(message, { parse_mode: "HTML" });
+  } catch (error) {
+    console.error("[ADVICE] Failed to generate daily advice:", error);
+    // Silently fail - advice is not critical
+  }
 }

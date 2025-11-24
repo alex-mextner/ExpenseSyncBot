@@ -1,6 +1,7 @@
 import type { Ctx } from '../types';
 import { database } from '../../database';
 import { CURRENCY_SYMBOLS } from '../../config/constants';
+import { maybeSendDailyAdvice } from './ask';
 
 /**
  * /stats command handler
@@ -52,4 +53,7 @@ export async function handleStatsCommand(ctx: Ctx["Command"]): Promise<void> {
   }
 
   await ctx.send(message);
+
+  // Maybe send daily advice (20% probability)
+  await maybeSendDailyAdvice(ctx, group.id);
 }

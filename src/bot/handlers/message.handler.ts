@@ -9,6 +9,7 @@ import {
 import { createCategoryConfirmKeyboard } from "../keyboards";
 import { setMessageReaction, deleteMessage } from "../telegram-api";
 import { silentSyncBudgets } from "../commands/budget";
+import { maybeSendDailyAdvice } from "../commands/ask";
 
 /**
  * Handle expense message
@@ -172,6 +173,11 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
   // Success - no need to send message, reaction is enough
 
   console.log(`[MSG] ✅ Processed ${successCount}/${lines.length} expenses successfully`);
+
+  // Maybe send daily advice (20% probability)
+  if (hasProcessedExpenses) {
+    await maybeSendDailyAdvice(ctx, group.id);
+  }
 }
 
 /**
