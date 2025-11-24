@@ -72,6 +72,26 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Download photo from Telegram
     const photoBuffer = await downloadPhoto(bot, queueItem.file_id);
 
+    // Send processed image to chat for debugging
+    try {
+      const sharp = (await import('sharp')).default;
+      const processedBuffer = await sharp(photoBuffer)
+        .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 90 })
+        .toBuffer();
+
+      const group = database.groups.findById(queueItem.group_id);
+      if (group) {
+        await bot.api.sendPhoto({
+          chat_id: group.telegram_group_id,
+          photo: new File([processedBuffer], 'processed.jpg', { type: 'image/jpeg' }),
+          caption: '🔍 Обработанное фото для QR-сканера',
+        });
+      }
+    } catch (debugError) {
+      console.error('[PHOTO_PROCESSOR] Failed to send debug image:', debugError);
+    }
+
     // Scan QR code
     const qrData = await scanQRFromImage(photoBuffer);
 
