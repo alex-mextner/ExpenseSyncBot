@@ -239,6 +239,28 @@ export class ReceiptItemsRepository {
   }
 
   /**
+   * Delete all processed (confirmed or skipped) items by photo queue ID
+   */
+  deleteProcessedByPhotoQueueId(photoQueueId: number): number {
+    const countQuery = this.db.query<{ count: number }, [number]>(`
+      SELECT COUNT(*) as count
+      FROM receipt_items
+      WHERE photo_queue_id = ? AND status IN ('confirmed', 'skipped')
+    `);
+
+    const result = countQuery.get(photoQueueId);
+    const count = result?.count || 0;
+
+    const deleteQuery = this.db.query<void, [number]>(`
+      DELETE FROM receipt_items
+      WHERE photo_queue_id = ? AND status IN ('confirmed', 'skipped')
+    `);
+
+    deleteQuery.run(photoQueueId);
+    return count;
+  }
+
+  /**
    * Get all confirmed items by photo queue ID
    */
   findConfirmedByPhotoQueueId(photoQueueId: number): ReceiptItem[] {

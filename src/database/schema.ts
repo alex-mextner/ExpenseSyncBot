@@ -427,6 +427,59 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '015_add_skipped_status_to_receipt_items',
+      up: () => {
+        // SQLite doesn't support ALTER TABLE ... MODIFY COLUMN
+        // So we need to recreate the table with the new constraint
+
+        // 1. Create new table with updated constraint
+        db.exec(`
+          CREATE TABLE receipt_items_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            photo_queue_id INTEGER NOT NULL,
+            name_ru TEXT NOT NULL,
+            name_original TEXT,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            total REAL NOT NULL,
+            currency TEXT NOT NULL,
+            suggested_category TEXT NOT NULL,
+            possible_categories TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'skipped')),
+            confirmed_category TEXT,
+            waiting_for_category_input INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (photo_queue_id) REFERENCES photo_processing_queue(id) ON DELETE CASCADE
+          );
+        `);
+
+        // 2. Copy data from old table
+        db.exec(`
+          INSERT INTO receipt_items_new
+          SELECT * FROM receipt_items;
+        `);
+
+        // 3. Drop old table
+        db.exec(`DROP TABLE receipt_items;`);
+
+        // 4. Rename new table
+        db.exec(`ALTER TABLE receipt_items_new RENAME TO receipt_items;`);
+
+        // 5. Recreate indexes
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipt_items_queue_id
+          ON receipt_items(photo_queue_id);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipt_items_status
+          ON receipt_items(status);
+        `);
+
+        console.log('✓ Added "skipped" status to receipt_items');
+      },
+    },
   ];
 
   // Check and run migrations

@@ -222,7 +222,7 @@ export interface ReceiptItem {
   currency: CurrencyCode;
   suggested_category: string;
   possible_categories: string[]; // JSON array
-  status: 'pending' | 'confirmed';
+  status: 'pending' | 'confirmed' | 'skipped';
   confirmed_category: string | null;
   waiting_for_category_input: number; // 0 or 1 (SQLite boolean)
   created_at: string;
@@ -238,11 +238,11 @@ export interface CreateReceiptItemData {
   currency: CurrencyCode;
   suggested_category: string;
   possible_categories: string[];
-  status: 'pending' | 'confirmed';
+  status: 'pending' | 'confirmed' | 'skipped';
 }
 
 export interface UpdateReceiptItemData {
-  status?: 'pending' | 'confirmed';
+  status?: 'pending' | 'confirmed' | 'skipped';
   confirmed_category?: string;
   waiting_for_category_input?: number;
   possible_categories?: string; // JSON string of array

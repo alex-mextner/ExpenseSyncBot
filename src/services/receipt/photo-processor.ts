@@ -440,6 +440,14 @@ export async function showNextItemForConfirmation(
     },
   ]);
 
+  // Add "Skip" button
+  buttons.push([
+    {
+      text: "⏭️ Пропустить товар",
+      callback_data: `skip_receipt_item:${nextItem.id}`,
+    },
+  ]);
+
   // Get thread ID from current item's photo queue
   const queueItem = database.photoQueue.findById(nextItem.photo_queue_id);
 

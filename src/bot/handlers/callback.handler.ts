@@ -77,6 +77,10 @@ export async function handleCallbackQuery(
       await handleReceiptItemOther(ctx, params, telegramId, bot);
       break;
 
+    case "skip_receipt_item":
+      await handleSkipReceiptItem(ctx, params, telegramId, bot);
+      break;
+
     case "use_found_category":
       await handleUseFoundCategory(ctx, params, telegramId, bot);
       break;
@@ -753,8 +757,8 @@ export async function saveReceiptExpenses(
     }
   }
 
-  // Delete confirmed receipt items
-  database.receiptItems.deleteConfirmedByPhotoQueueId(photoQueueId);
+  // Delete all processed receipt items (confirmed + skipped)
+  database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
 
   // Get thread ID from queue item
   const queueItem = database.photoQueue.findById(photoQueueId);
@@ -848,6 +852,81 @@ async function handleUseFoundCategory(
 
   if (allConfirmed) {
     // Save all items
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+  } else {
+    // Show next pending item
+    const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+  }
+}
+
+/**
+ * Handle "skip receipt item" button
+ */
+async function handleSkipReceiptItem(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  telegramId: number,
+  bot: any
+): Promise<void> {
+  const itemIdStr = params[0];
+  const messageId = ctx.message?.id;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!itemIdStr) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const itemId = parseInt(itemIdStr, 10);
+
+  if (Number.isNaN(itemId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user || !user.group_id) {
+    await ctx.answerCallbackQuery({
+      text: "Пользователь не найден или не привязан к группе",
+    });
+    return;
+  }
+
+  const group = database.groups.findById(user.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  // Get receipt item
+  const item = database.receiptItems.findById(itemId);
+
+  if (!item || item.status !== 'pending') {
+    await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
+    return;
+  }
+
+  // Update item status to skipped
+  database.receiptItems.update(itemId, {
+    status: 'skipped',
+  });
+
+  await ctx.answerCallbackQuery({ text: "⏭️ Товар пропущен" });
+
+  // Delete confirmation message
+  if (messageId && chatId) {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  }
+
+  // Check if all items from this receipt are processed (confirmed or skipped)
+  const allItems = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
+  const allPending = allItems.filter(i => i.status === 'pending');
+
+  if (allPending.length === 0) {
+    // No more pending items - save all confirmed items
     await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
   } else {
     // Show next pending item
