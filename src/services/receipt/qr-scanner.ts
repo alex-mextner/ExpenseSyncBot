@@ -124,8 +124,60 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
     }
   }
 
-  console.log(`[QR_SCANNER] ❌ No QR code found after trying all ${variants.length} variants`);
+  console.log(`[QR_SCANNER] ❌ All local variants failed, trying external API...`);
+
+  // Try external API as last resort
+  try {
+    const apiResult = await scanQRWithExternalAPI(imageBuffer);
+    if (apiResult) {
+      console.log(`[QR_SCANNER] ✅ QR code found with external API! Length: ${apiResult.length} chars`);
+      console.log(`[QR_SCANNER] QR data preview: ${apiResult.substring(0, 200)}${apiResult.length > 200 ? '...' : ''}`);
+      return apiResult;
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.log(`[QR_SCANNER] External API failed: ${errorMsg}`);
+  }
+
+  console.log(`[QR_SCANNER] ❌ No QR code found after trying all ${variants.length} local variants + external API`);
   return null;
+}
+
+/**
+ * Scan QR code using external API (goqr.me)
+ */
+async function scanQRWithExternalAPI(imageBuffer: Buffer): Promise<string | null> {
+  const formData = new FormData();
+  const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
+  formData.append('file', blob, 'qr.jpg');
+
+  const response = await fetch('https://api.qrserver.com/v1/read-qr-code/', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.statusText}`);
+  }
+
+  const result = await response.json() as Array<{ type: string; symbol: Array<{ data: string | null; error: string | null }> }>;
+
+  if (!result || result.length === 0) {
+    return null;
+  }
+
+  const firstResult = result[0];
+  if (!firstResult.symbol || firstResult.symbol.length === 0) {
+    return null;
+  }
+
+  const symbolData = firstResult.symbol[0];
+  if (symbolData.error) {
+    console.log(`[QR_SCANNER] External API error: ${symbolData.error}`);
+    return null;
+  }
+
+  return symbolData.data || null;
 }
 
 /**
