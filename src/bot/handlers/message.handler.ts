@@ -31,8 +31,46 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
   const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
 
   if (!isGroup) {
-    // Silently ignore messages from private chats
-    console.log(`[MSG] Ignoring: message from private chat (user ${telegramId})`);
+    console.log(`[MSG] Message from private chat (user ${telegramId})`);
+
+    // Check if user has associated group
+    const user = database.users.findByTelegramId(telegramId);
+
+    if (user) {
+      const group = database.groups.findById(user.group_id);
+
+      if (group?.telegram_group_id) {
+        // Create inline keyboard with link to group
+        // For supergroups: remove -100 prefix, for regular groups: just remove minus
+        const groupIdStr = group.telegram_group_id.toString();
+        const chatId = groupIdStr.startsWith("-100")
+          ? groupIdStr.slice(4)
+          : groupIdStr.slice(1);
+
+        const keyboard = {
+          inline_keyboard: [[
+            {
+              text: "🔗 Перейти в группу",
+              url: `https://t.me/c/${chatId}`,
+            }
+          ]]
+        };
+
+        await ctx.send(
+          "💬 Бот работает только в группах.\n\nДля учета расходов используй команды в группе:",
+          { reply_markup: keyboard }
+        );
+      } else {
+        await ctx.send(
+          "💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки."
+        );
+      }
+    } else {
+      await ctx.send(
+        "💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки."
+      );
+    }
+
     return;
   }
 
