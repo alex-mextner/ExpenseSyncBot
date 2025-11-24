@@ -96,6 +96,27 @@ async function showBudgetProgress(ctx: Ctx["Command"], group: any): Promise<void
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
 
+  // Ensure Budget sheet exists
+  const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+  if (!hasSheet) {
+    const categories = database.categories.getCategoryNames(group.id);
+    if (categories.length > 0) {
+      try {
+        await createBudgetSheet(
+          group.google_refresh_token,
+          group.spreadsheet_id,
+          categories,
+          100,
+          'EUR'
+        );
+        await ctx.send('✅ Вкладка Budget создана в таблице!');
+      } catch (err) {
+        console.error('[BUDGET] Failed to create Budget sheet:', err);
+        await ctx.send('⚠️ Не удалось создать вкладку Budget. Проверь доступ к таблице.');
+      }
+    }
+  }
+
   // Get current month expenses
   const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
   const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
@@ -244,11 +265,32 @@ async function syncBudgets(ctx: Ctx["Command"], group: any): Promise<void> {
     const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
 
     if (!hasSheet) {
-      await ctx.send(
-        `⚠️ Вкладка Budget не найдена в таблице.\n\n` +
-        `Создай бюджет с помощью:\n` +
-        `/budget set <Категория> <Сумма>`
-      );
+      // Try to create Budget sheet
+      const categories = database.categories.getCategoryNames(group.id);
+      if (categories.length > 0) {
+        try {
+          await createBudgetSheet(
+            group.google_refresh_token,
+            group.spreadsheet_id,
+            categories,
+            100,
+            'EUR'
+          );
+          await ctx.send(
+            '✅ Вкладка Budget создана в таблице!\n\n' +
+            'Теперь можешь установить бюджеты через:\n' +
+            '/budget set <Категория> <Сумма>'
+          );
+        } catch (err) {
+          console.error('[BUDGET] Failed to create Budget sheet:', err);
+          await ctx.send('⚠️ Не удалось создать вкладку Budget. Проверь доступ к таблице.');
+        }
+      } else {
+        await ctx.send(
+          `⚠️ Вкладка Budget не найдена в таблице.\n\n` +
+          `Сначала добавь хотя бы один расход, чтобы создать категории.`
+        );
+      }
       return;
     }
 

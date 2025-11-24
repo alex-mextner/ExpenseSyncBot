@@ -207,15 +207,6 @@ async function addBudgetInfo(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
-  // Get budgets for current month
-  const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
-
-  if (budgets.length === 0) {
-    // No budgets set - just send base message
-    await ctx.send(baseMessage);
-    return;
-  }
-
   // Ensure Budget sheet exists
   if (group.google_refresh_token && group.spreadsheet_id) {
     const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
@@ -230,11 +221,21 @@ async function addBudgetInfo(
             100,
             'EUR'
           );
+          console.log('[SUM] Budget sheet created');
         } catch (err) {
           console.error('[SUM] Failed to create Budget sheet:', err);
         }
       }
     }
+  }
+
+  // Get budgets for current month
+  const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
+
+  if (budgets.length === 0) {
+    // No budgets set - just send base message
+    await ctx.send(baseMessage);
+    return;
   }
 
   // Calculate spending by category
