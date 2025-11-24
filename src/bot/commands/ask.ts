@@ -1,8 +1,8 @@
-import type { Ctx } from "../types";
-import type { Bot } from "gramio";
-import { database } from "../../database";
 import { InferenceClient } from "@huggingface/inference";
+import type { Bot } from "gramio";
 import { env } from "../../config/env";
+import { database } from "../../database";
+import type { Ctx } from "../types";
 
 const client = new InferenceClient(env.HF_TOKEN);
 
@@ -775,7 +775,7 @@ ${statsContext}
     const cleanAdvice = processThinkTagsForAdvice(advice);
 
     // Send advice with stats
-    const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}\n\n<i>Статистика:</i>`;
+    const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}`;
 
     await ctx.send(message, { parse_mode: "HTML" });
   } catch (error) {
