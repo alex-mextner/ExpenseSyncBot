@@ -14,8 +14,10 @@ import { handleSumCommand } from "./commands/sum";
 import { handleSyncCommand } from "./commands/sync";
 import { handleCallbackQuery } from "./handlers/callback.handler";
 import { handleExpenseMessage } from "./handlers/message.handler";
+import { handlePhotoMessage } from "./handlers/photo.handler";
 import { handleAskQuestion, handleAdviceCommand } from "./commands/ask";
 import { handlePromptCommand } from "./commands/prompt";
+import { startPhotoProcessor } from "../services/receipt/photo-processor";
 
 /**
  * Initialize and configure bot
@@ -49,6 +51,12 @@ export function createBot(): Bot {
 
   // Text messages (expense entries or questions)
   bot.on("message", async (ctx) => {
+    // Handle photo messages (receipts with QR codes)
+    if (ctx.photo && ctx.photo.length > 0) {
+      await handlePhotoMessage(ctx);
+      return;
+    }
+
     // Skip if it's a command
     if (ctx.text?.startsWith("/")) {
       return;
@@ -95,4 +103,9 @@ export async function startBot(): Promise<void> {
   console.log("🤖 Starting bot...");
   await bot.start();
   console.log("✓ Bot started successfully");
+
+  // Start background photo processor
+  console.log("📸 Starting photo processor...");
+  await startPhotoProcessor(bot);
+  console.log("✓ Photo processor started");
 }

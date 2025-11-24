@@ -178,3 +178,90 @@ export interface CreateChatMessageData {
   role: 'user' | 'assistant';
   content: string;
 }
+
+/**
+ * Photo processing queue model
+ */
+export interface PhotoQueueItem {
+  id: number;
+  group_id: number;
+  user_id: number;
+  message_id: number;
+  file_id: string;
+  status: 'pending' | 'processing' | 'done' | 'error';
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface CreatePhotoQueueData {
+  group_id: number;
+  user_id: number;
+  message_id: number;
+  file_id: string;
+  status: 'pending' | 'processing' | 'done' | 'error';
+}
+
+export interface UpdatePhotoQueueData {
+  status?: 'pending' | 'processing' | 'done' | 'error';
+  error_message?: string | null;
+}
+
+/**
+ * Receipt item model (items from scanned receipts)
+ */
+export interface ReceiptItem {
+  id: number;
+  photo_queue_id: number;
+  name_ru: string;
+  name_original: string | null;
+  quantity: number;
+  price: number;
+  total: number;
+  currency: CurrencyCode;
+  suggested_category: string;
+  possible_categories: string[]; // JSON array
+  status: 'pending' | 'confirmed';
+  confirmed_category: string | null;
+  created_at: string;
+}
+
+export interface CreateReceiptItemData {
+  photo_queue_id: number;
+  name_ru: string;
+  name_original?: string;
+  quantity: number;
+  price: number;
+  total: number;
+  currency: CurrencyCode;
+  suggested_category: string;
+  possible_categories: string[];
+  status: 'pending' | 'confirmed';
+}
+
+export interface UpdateReceiptItemData {
+  status?: 'pending' | 'confirmed';
+  confirmed_category?: string;
+}
+
+/**
+ * Expense item model (detailed items linked to expenses)
+ */
+export interface ExpenseItem {
+  id: number;
+  expense_id: number;
+  name_ru: string;
+  name_original: string | null;
+  quantity: number;
+  price: number;
+  total: number;
+  created_at: string;
+}
+
+export interface CreateExpenseItemData {
+  expense_id: number;
+  name_ru: string;
+  name_original?: string;
+  quantity: number;
+  price: number;
+  total: number;
+}

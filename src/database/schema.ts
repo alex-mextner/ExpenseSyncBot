@@ -301,6 +301,91 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '010_create_photo_processing_queue',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS photo_processing_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            file_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'done', 'error')),
+            error_message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_photo_queue_status
+          ON photo_processing_queue(status);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_photo_queue_group_user
+          ON photo_processing_queue(group_id, user_id);
+        `);
+      },
+    },
+    {
+      name: '011_create_receipt_items',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS receipt_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            photo_queue_id INTEGER NOT NULL,
+            name_ru TEXT NOT NULL,
+            name_original TEXT,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            total REAL NOT NULL,
+            currency TEXT NOT NULL,
+            suggested_category TEXT NOT NULL,
+            possible_categories TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed')),
+            confirmed_category TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (photo_queue_id) REFERENCES photo_processing_queue(id) ON DELETE CASCADE
+          );
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipt_items_queue_id
+          ON receipt_items(photo_queue_id);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipt_items_status
+          ON receipt_items(status);
+        `);
+      },
+    },
+    {
+      name: '012_create_expense_items',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS expense_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            expense_id INTEGER NOT NULL,
+            name_ru TEXT NOT NULL,
+            name_original TEXT,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            total REAL NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE
+          );
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expense_items_expense_id
+          ON expense_items(expense_id);
+        `);
+      },
+    },
   ];
 
   // Check and run migrations

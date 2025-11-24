@@ -1,0 +1,290 @@
+import type { Bot } from 'gramio';
+import { database } from '../../database';
+import { scanQRFromImage } from './qr-scanner';
+import { fetchReceiptData } from './receipt-fetcher';
+import { extractExpensesFromReceipt, type AIExtractionResult } from './ai-extractor';
+import { env } from '../../config/env';
+
+let isProcessing = false;
+
+/**
+ * Start background photo processor
+ * Processes photos from the queue and extracts receipt data
+ */
+export async function startPhotoProcessor(bot: Bot): Promise<void> {
+  console.log('[PHOTO_PROCESSOR] Starting background photo processor');
+
+  // Process queue every 5 seconds
+  setInterval(async () => {
+    if (isProcessing) {
+      return;
+    }
+
+    isProcessing = true;
+
+    try {
+      await processQueue(bot);
+    } catch (error) {
+      console.error('[PHOTO_PROCESSOR] Error in processor:', error);
+    } finally {
+      isProcessing = false;
+    }
+  }, 5000);
+}
+
+/**
+ * Process all pending items in the queue
+ */
+async function processQueue(bot: Bot): Promise<void> {
+  const pendingItems = database.photoQueue.findPending();
+
+  if (pendingItems.length === 0) {
+    return;
+  }
+
+  console.log(`[PHOTO_PROCESSOR] Processing ${pendingItems.length} pending item(s)`);
+
+  for (const item of pendingItems) {
+    try {
+      await processPhotoQueueItem(bot, item.id);
+    } catch (error) {
+      console.error(`[PHOTO_PROCESSOR] Error processing item ${item.id}:`, error);
+    }
+  }
+}
+
+/**
+ * Process a single photo queue item
+ */
+async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<void> {
+  const queueItem = database.photoQueue.findById(queueItemId);
+
+  if (!queueItem || queueItem.status !== 'pending') {
+    return;
+  }
+
+  console.log(`[PHOTO_PROCESSOR] Processing queue item #${queueItemId}`);
+
+  // Update status to processing
+  database.photoQueue.update(queueItemId, { status: 'processing' });
+
+  try {
+    // Download photo from Telegram
+    const photoBuffer = await downloadPhoto(bot, queueItem.file_id);
+
+    // Scan QR code
+    const qrData = await scanQRFromImage(photoBuffer);
+
+    if (!qrData) {
+      // No QR code found - silently mark as done
+      console.log(`[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}`);
+      database.photoQueue.update(queueItemId, { status: 'done' });
+      return;
+    }
+
+    console.log(`[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`);
+
+    // Fetch receipt data
+    let receiptData: string;
+    try {
+      receiptData = await fetchReceiptData(qrData);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[PHOTO_PROCESSOR] Failed to fetch receipt data:`, errorMessage);
+      database.photoQueue.update(queueItemId, {
+        status: 'error',
+        error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
+      });
+
+      // Notify user
+      await notifyUser(bot, queueItem.group_id, `❌ Не удалось загрузить чек: ${errorMessage}`);
+      return;
+    }
+
+    // Get existing categories for the group
+    const categories = database.categories.findByGroupId(queueItem.group_id);
+    const categoryNames = categories.map((c) => c.name);
+
+    // Extract expenses using AI
+    let extractionResult: AIExtractionResult;
+    try {
+      extractionResult = await extractExpensesFromReceipt(receiptData, categoryNames);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[PHOTO_PROCESSOR] Failed to extract expenses:`, errorMessage);
+      database.photoQueue.update(queueItemId, {
+        status: 'error',
+        error_message: `❌ AI не распознал чек: ${errorMessage}`,
+      });
+
+      // Notify user
+      await notifyUser(bot, queueItem.group_id, `❌ AI не распознал чек: ${errorMessage}`);
+      return;
+    }
+
+    if (!extractionResult.items || extractionResult.items.length === 0) {
+      database.photoQueue.update(queueItemId, {
+        status: 'error',
+        error_message: '❌ В чеке не найдены расходы',
+      });
+
+      // Notify user
+      await notifyUser(bot, queueItem.group_id, '❌ В чеке не найдены расходы');
+      return;
+    }
+
+    // Get group default currency if AI didn't detect it
+    const group = database.groups.findById(queueItem.group_id);
+    const currency = extractionResult.currency || group?.default_currency || 'EUR';
+
+    // Save receipt items to database
+    for (const aiItem of extractionResult.items) {
+      database.receiptItems.create({
+        photo_queue_id: queueItemId,
+        name_ru: aiItem.name_ru,
+        name_original: aiItem.name_original,
+        quantity: aiItem.quantity,
+        price: aiItem.price,
+        total: aiItem.total,
+        currency,
+        suggested_category: aiItem.category,
+        possible_categories: aiItem.possible_categories || [],
+        status: 'pending',
+      });
+    }
+
+    // Mark photo as done
+    database.photoQueue.update(queueItemId, { status: 'done' });
+
+    console.log(`[PHOTO_PROCESSOR] Successfully extracted ${extractionResult.items.length} items from receipt #${queueItemId}`);
+
+    // Show first item for confirmation
+    await showNextItemForConfirmation(bot, queueItem.group_id);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[PHOTO_PROCESSOR] Unexpected error:`, errorMessage);
+
+    database.photoQueue.update(queueItemId, {
+      status: 'error',
+      error_message: `❌ Ошибка обработки: ${errorMessage}`,
+    });
+
+    // Notify user
+    await notifyUser(bot, queueItem.group_id, `❌ Ошибка обработки: ${errorMessage}`);
+  }
+}
+
+/**
+ * Download photo from Telegram
+ */
+async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
+  // Get file info
+  const file = await bot.api.getFile({ file_id: fileId });
+
+  if (!file.file_path) {
+    throw new Error('File path not found');
+  }
+
+  // Download file
+  const url = `https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to download file: ${response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/**
+ * Show next pending receipt item for confirmation
+ */
+export async function showNextItemForConfirmation(bot: Bot, groupId: number): Promise<void> {
+  const nextItem = database.receiptItems.findNextPending();
+
+  if (!nextItem) {
+    console.log('[PHOTO_PROCESSOR] No more pending items to confirm');
+    return;
+  }
+
+  const group = database.groups.findById(groupId);
+
+  if (!group) {
+    console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    return;
+  }
+
+  // Build confirmation message
+  let message = `🧾 <b>Подтвердите товар из чека:</b>\n\n`;
+  message += `📦 <b>${nextItem.name_ru}</b>`;
+  if (nextItem.name_original) {
+    message += ` (${nextItem.name_original})`;
+  }
+  message += `\n`;
+  message += `🔢 Количество: <code>${nextItem.quantity}</code>\n`;
+  message += `💰 Цена: <code>${nextItem.price} ${nextItem.currency}</code>\n`;
+  message += `💵 Сумма: <code>${nextItem.total} ${nextItem.currency}</code>\n`;
+  message += `\n📂 Предложенная категория: <b>${nextItem.suggested_category}</b>`;
+
+  // Build inline keyboard with possible categories
+  const buttons: Array<Array<{ text: string; callback_data: string }>> = [];
+
+  // Add suggested category as first button
+  buttons.push([
+    {
+      text: `✅ ${nextItem.suggested_category}`,
+      callback_data: `confirm_receipt_item:${nextItem.id}:${nextItem.suggested_category}`,
+    },
+  ]);
+
+  // Add possible categories if available
+  if (nextItem.possible_categories.length > 0) {
+    for (const category of nextItem.possible_categories) {
+      if (category !== nextItem.suggested_category) {
+        buttons.push([
+          {
+            text: category,
+            callback_data: `confirm_receipt_item:${nextItem.id}:${category}`,
+          },
+        ]);
+      }
+    }
+  }
+
+  // Add "Other category" button
+  buttons.push([
+    {
+      text: '✏️ Другая категория (напишите текстом)',
+      callback_data: `receipt_item_other:${nextItem.id}`,
+    },
+  ]);
+
+  // Send message to group
+  await bot.api.sendMessage({
+    chat_id: group.telegram_group_id,
+    text: message,
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: buttons,
+    },
+  });
+}
+
+/**
+ * Notify user about errors
+ */
+async function notifyUser(bot: Bot, groupId: number, message: string): Promise<void> {
+  const group = database.groups.findById(groupId);
+
+  if (!group) {
+    console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    return;
+  }
+
+  await bot.api.sendMessage({
+    chat_id: group.telegram_group_id,
+    text: message,
+    parse_mode: 'HTML',
+  });
+}

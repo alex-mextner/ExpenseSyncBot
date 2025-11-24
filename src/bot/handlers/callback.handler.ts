@@ -69,6 +69,14 @@ export async function handleCallbackQuery(
       await handleBudgetAction(ctx, params, telegramId, bot);
       break;
 
+    case "confirm_receipt_item":
+      await handleReceiptItemConfirm(ctx, params, telegramId, bot);
+      break;
+
+    case "receipt_item_other":
+      await handleReceiptItemOther(ctx, params, telegramId);
+      break;
+
     default:
       await ctx.answerCallbackQuery({ text: "Unknown action" });
   }
@@ -451,4 +459,247 @@ async function handleBudgetAction(
     default:
       await ctx.answerCallbackQuery({ text: "Unknown budget action" });
   }
+}
+
+/**
+ * Handle receipt item confirmation
+ */
+async function handleReceiptItemConfirm(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  telegramId: number,
+  bot: any
+): Promise<void> {
+  const itemIdStr = params[0];
+  const category = params[1];
+  const messageId = ctx.message?.id;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!itemIdStr || !category) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const itemId = parseInt(itemIdStr, 10);
+
+  if (Number.isNaN(itemId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user || !user.group_id) {
+    await ctx.answerCallbackQuery({
+      text: "Пользователь не найден или не привязан к группе",
+    });
+    return;
+  }
+
+  const group = database.groups.findById(user.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  // Get receipt item
+  const item = database.receiptItems.findById(itemId);
+
+  if (!item || item.status !== 'pending') {
+    await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
+    return;
+  }
+
+  // Update receipt item with confirmed category
+  database.receiptItems.update(itemId, {
+    status: 'confirmed',
+    confirmed_category: category,
+  });
+
+  // Create category if doesn't exist
+  if (!database.categories.exists(group.id, category)) {
+    database.categories.create({
+      group_id: group.id,
+      name: category,
+    });
+  }
+
+  await ctx.answerCallbackQuery({ text: `✅ ${category}` });
+
+  // Delete confirmation message
+  if (messageId && chatId) {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  }
+
+  // Check if all items from this receipt are confirmed
+  const allItems = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
+  const allConfirmed = allItems.every((i) => i.status === 'confirmed');
+
+  if (allConfirmed) {
+    // Save all items to expenses
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+  } else {
+    // Show next pending item
+    const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+    await showNextItemForConfirmation(bot, group.id);
+  }
+}
+
+/**
+ * Handle "Other category" button
+ */
+async function handleReceiptItemOther(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  _telegramId: number
+): Promise<void> {
+  const itemIdStr = params[0];
+
+  if (!itemIdStr) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const itemId = parseInt(itemIdStr, 10);
+
+  if (Number.isNaN(itemId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  await ctx.answerCallbackQuery({
+    text: "✏️ Напишите название категории текстом",
+    show_alert: true,
+  });
+
+  // Store item ID for text handler (we'll handle this in text message flow)
+  // For now, just notify user to type category name
+}
+
+/**
+ * Save all confirmed receipt items as expenses
+ */
+async function saveReceiptExpenses(
+  photoQueueId: number,
+  groupId: number,
+  userId: number,
+  bot: any
+): Promise<void> {
+  const confirmedItems = database.receiptItems.findConfirmedByPhotoQueueId(photoQueueId);
+
+  if (confirmedItems.length === 0) {
+    return;
+  }
+
+  const group = database.groups.findById(groupId);
+
+  if (!group || !group.spreadsheet_id || !group.google_refresh_token) {
+    console.error('[RECEIPT] Group not configured for Google Sheets');
+    return;
+  }
+
+  // Group items by category
+  const itemsByCategory: Map<string, typeof confirmedItems> = new Map();
+
+  for (const item of confirmedItems) {
+    const category = item.confirmed_category;
+    if (!category) {
+      continue;
+    }
+    if (!itemsByCategory.has(category)) {
+      itemsByCategory.set(category, []);
+    }
+    const categoryItems = itemsByCategory.get(category);
+    if (categoryItems) {
+      categoryItems.push(item);
+    }
+  }
+
+  const { convertToEUR } = await import('../../services/currency/converter');
+  const { appendExpenseRow } = await import('../../services/google/sheets');
+  const { format } = await import('date-fns');
+
+  const currentDate = format(new Date(), 'yyyy-MM-dd');
+
+  // For each category, create one expense with multiple items
+  for (const [category, items] of itemsByCategory.entries()) {
+    if (items.length === 0) {
+      continue;
+    }
+
+    // Calculate total amount for this category
+    const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
+    const firstItem = items[0];
+    if (!firstItem) {
+      continue;
+    }
+    const currency = firstItem.currency; // All items should have same currency
+
+    // Convert to EUR
+    const eurAmount = convertToEUR(totalAmount, currency);
+
+    // Build comment with item details
+    const itemNames = items.map((item) => `${item.name_ru} (${item.quantity}x${item.price})`);
+    const comment = `Чек: ${itemNames.join(', ')}`;
+
+    // Prepare amounts for each enabled currency
+    const amounts: Record<string, number | null> = {};
+    for (const curr of group.enabled_currencies) {
+      amounts[curr] = curr === currency ? totalAmount : null;
+    }
+
+    // Append to Google Sheet
+    try {
+      await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
+        date: currentDate,
+        category,
+        comment,
+        amounts,
+        eurAmount,
+      });
+    } catch (error) {
+      console.error('[RECEIPT] Failed to write to Google Sheet:', error);
+      continue;
+    }
+
+    // Create expense in database
+    const expense = database.expenses.create({
+      group_id: groupId,
+      user_id: userId,
+      date: currentDate,
+      category,
+      comment,
+      amount: totalAmount,
+      currency,
+      eur_amount: eurAmount,
+    });
+
+    // Create expense items for each item in this category
+    for (const item of items) {
+      database.expenseItems.create({
+        expense_id: expense.id,
+        name_ru: item.name_ru,
+        name_original: item.name_original || undefined,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total,
+      });
+    }
+  }
+
+  // Delete confirmed receipt items
+  database.receiptItems.deleteConfirmedByPhotoQueueId(photoQueueId);
+
+  // Notify user
+  const totalItems = confirmedItems.length;
+  const totalCategories = itemsByCategory.size;
+
+  await bot.api.sendMessage({
+    chat_id: group.telegram_group_id,
+    text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
+    parse_mode: 'HTML',
+  });
+
+  console.log(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
 }

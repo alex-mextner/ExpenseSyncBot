@@ -7,6 +7,9 @@ import { PendingExpenseRepository } from './repositories/pending-expense.reposit
 import { ExpenseRepository } from './repositories/expense.repository';
 import { BudgetRepository } from './repositories/budget.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
+import { PhotoQueueRepository } from './repositories/photo-queue.repository';
+import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
+import { ExpenseItemsRepository } from './repositories/expense-items.repository';
 
 /**
  * Database instance and repositories
@@ -20,6 +23,9 @@ export class DatabaseService {
   public expenses: ExpenseRepository;
   public budgets: BudgetRepository;
   public chatMessages: ChatMessageRepository;
+  public photoQueue: PhotoQueueRepository;
+  public receiptItems: ReceiptItemsRepository;
+  public expenseItems: ExpenseItemsRepository;
 
   constructor() {
     this.db = setupDatabase();
@@ -30,6 +36,9 @@ export class DatabaseService {
     this.expenses = new ExpenseRepository(this.db);
     this.budgets = new BudgetRepository(this.db);
     this.chatMessages = new ChatMessageRepository(this.db);
+    this.photoQueue = new PhotoQueueRepository(this.db);
+    this.receiptItems = new ReceiptItemsRepository(this.db);
+    this.expenseItems = new ExpenseItemsRepository(this.db);
   }
 
   /**
