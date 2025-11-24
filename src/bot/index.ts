@@ -14,7 +14,7 @@ import { handleSumCommand } from "./commands/sum";
 import { handleSyncCommand } from "./commands/sync";
 import { handleCallbackQuery } from "./handlers/callback.handler";
 import { handleExpenseMessage } from "./handlers/message.handler";
-import { handleAskQuestion } from "./commands/ask";
+import { handleAskQuestion, handleAdviceCommand } from "./commands/ask";
 
 /**
  * Initialize and configure bot
@@ -40,6 +40,7 @@ export function createBot(): Bot {
   bot.command("categories", handleCategoriesCommand);
   bot.command("settings", handleSettingsCommand);
   bot.command("reconnect", handleReconnectCommand);
+  bot.command("advice", handleAdviceCommand);
 
   // Callback queries (inline keyboard buttons)
   bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));

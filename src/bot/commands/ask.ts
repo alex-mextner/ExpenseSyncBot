@@ -609,6 +609,37 @@ function buildBudgetsContext(
 }
 
 /**
+ * /advice command handler - request financial advice explicitly
+ */
+export async function handleAdviceCommand(ctx: Ctx["Command"]): Promise<void> {
+  const chatId = ctx.chat?.id;
+  const chatType = ctx.chat?.type;
+
+  if (!chatId) {
+    await ctx.send("Error: Unable to identify chat");
+    return;
+  }
+
+  // Only allow in groups
+  const isGroup = chatType === "group" || chatType === "supergroup";
+
+  if (!isGroup) {
+    await ctx.send("❌ Эта команда работает только в группах.");
+    return;
+  }
+
+  const group = database.groups.findByTelegramGroupId(chatId);
+
+  if (!group) {
+    await ctx.send("❌ Группа не настроена. Используй /connect");
+    return;
+  }
+
+  // Generate advice without probability check
+  await sendDailyAdvice(ctx, group.id);
+}
+
+/**
  * Send daily advice with 20% probability
  * Includes current spending and budget stats
  */
@@ -620,6 +651,17 @@ export async function maybeSendDailyAdvice(
   if (Math.random() > 0.2) {
     return;
   }
+
+  await sendDailyAdvice(ctx, groupId);
+}
+
+/**
+ * Internal function to generate and send advice
+ */
+async function sendDailyAdvice(
+  ctx: Ctx["Message"],
+  groupId: number
+): Promise<void> {
 
   try {
     // Get current month expenses and budgets
