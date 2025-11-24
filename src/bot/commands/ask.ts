@@ -49,6 +49,9 @@ export async function handleAskQuestion(
 
   // Get user info
   const userName = ctx.from.username || ctx.from.firstName || "User";
+  const userFirstName = ctx.from.firstName || "";
+  const userLastName = ctx.from.lastName || "";
+  const userFullName = [userFirstName, userLastName].filter(Boolean).join(" ");
 
   // Save user question to chat history
   database.chatMessages.create({
@@ -71,12 +74,34 @@ export async function handleAskQuestion(
   const expensesContext = buildExpensesContext(allExpenses);
   const budgetsContext = buildBudgetsContext(allBudgets);
 
+  // Get unique categories from expenses
+  const uniqueCategories = Array.from(
+    new Set(allExpenses.map((e) => e.category))
+  ).sort();
+
   const systemPrompt = `Ты - ассистент для анализа финансов.
 Отвечай на вопросы пользователя на основе этих данных. Будь точным и конкретным. Используй цифры из предоставленных данных.
 
+ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ:
+- Username: @${userName}
+- Полное имя: ${userFullName || "не указано"}
+
+ДОСТУПНЫЕ КАТЕГОРИИ РАСХОДОВ (${uniqueCategories.length} категорий):
+${uniqueCategories.map((cat) => `- ${cat}`).join("\n")}
+
 ВАЖНО: Если пользователь спрашивает про СВОИ расходы (например "мои расходы", "я потратил", "на что я тратил"),
 отвечай только про расходы в категории с именем этого пользователя.
-Например, если пользователь "Alex" спрашивает "на что я потратил деньги", показывай только расходы из категории "Alex".
+Попробуй найти категорию которая содержит одно из: "${userName}", "${userFirstName}", "${userLastName}", "${userFullName}".
+Если такой категории нет - сообщи об этом и перечисли доступные категории.
+
+ФОРМАТИРОВАНИЕ: Используй HTML теги для форматирования ответов:
+- <b>жирный текст</b> для важных сумм и категорий
+- <i>курсив</i> для дополнительной информации
+- <code>код</code> для точных чисел и дат
+- <a href="url">текст ссылки</a> для ссылок
+- <u>подчеркнутый</u> для акцентов
+- <blockquote>цитата</blockquote> для цитирования
+НЕ используй другие теги. Экранируй символы < > & как &lt; &gt; &amp;
 
 У тебя есть доступ к следующим данным:
 
@@ -147,7 +172,8 @@ ${budgetsContext}`;
             let isTruncated = false;
 
             if (textToSend.length > MAX_INTERMEDIATE_LENGTH) {
-              textToSend = fullResponse.substring(0, MAX_INTERMEDIATE_LENGTH) + "...";
+              textToSend =
+                fullResponse.substring(0, MAX_INTERMEDIATE_LENGTH) + "...";
               isTruncated = true;
             }
 
@@ -196,7 +222,7 @@ ${budgetsContext}`;
       // No intermediate messages were sent, send final
       const chunks = splitIntoChunks(fullResponse, 4000);
       for (const chunk of chunks) {
-        await ctx.send(chunk, { parse_mode: "MarkdownV2" });
+        await ctx.send(chunk, { parse_mode: "HTML" });
       }
     } else if (sentMessageId && fullResponse !== lastMessageText) {
       // Update with final response
@@ -209,19 +235,19 @@ ${budgetsContext}`;
             chat_id: chatId,
             message_id: sentMessageId,
             text: chunks[0],
-            parse_mode: "MarkdownV2",
+            parse_mode: "HTML",
           });
         } catch (err) {
           console.error("[ASK] Failed to edit final message:", err);
           // If edit failed, send as new message
-          await ctx.send(chunks[0], { parse_mode: "MarkdownV2" });
+          await ctx.send(chunks[0], { parse_mode: "HTML" });
         }
 
         // Send remaining chunks as new messages
         for (let i = 1; i < chunks.length; i++) {
           const chunk = chunks[i];
           if (chunk) {
-            await ctx.send(chunk, { parse_mode: "MarkdownV2" });
+            await ctx.send(chunk, { parse_mode: "HTML" });
           }
         }
       }
@@ -247,8 +273,11 @@ ${budgetsContext}`;
  * Split text into chunks respecting Telegram message limit
  */
 function splitIntoChunks(text: string, maxLength: number): string[] {
+  // Remove <think> tags if present
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+
   if (text.length <= maxLength) {
-    return [escapeMarkdownV2(text)];
+    return [text];
   }
 
   const chunks: string[] = [];
@@ -260,7 +289,7 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
   for (const paragraph of paragraphs) {
     if ((currentChunk + paragraph).length > maxLength) {
       if (currentChunk) {
-        chunks.push(escapeMarkdownV2(currentChunk.trim()));
+        chunks.push(currentChunk.trim());
         currentChunk = "";
       }
 
@@ -270,14 +299,14 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
         for (const sentence of sentences) {
           if ((currentChunk + sentence).length > maxLength) {
             if (currentChunk) {
-              chunks.push(escapeMarkdownV2(currentChunk.trim()));
+              chunks.push(currentChunk.trim());
               currentChunk = sentence;
             } else {
               // Single sentence too long, split by words
               const words = sentence.split(" ");
               for (const word of words) {
                 if ((currentChunk + " " + word).length > maxLength) {
-                  chunks.push(escapeMarkdownV2(currentChunk.trim()));
+                  chunks.push(currentChunk.trim());
                   currentChunk = word;
                 } else {
                   currentChunk += " " + word;
@@ -297,22 +326,10 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
   }
 
   if (currentChunk) {
-    chunks.push(escapeMarkdownV2(currentChunk.trim()));
+    chunks.push(currentChunk.trim());
   }
 
   return chunks;
-}
-
-/**
- * Escape special characters for MarkdownV2
- */
-function escapeMarkdownV2(text: string): string {
-  // Remove <think> tags if present
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, "");
-
-  // Escape special characters for MarkdownV2
-  // Characters to escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
 }
 
 /**
@@ -376,7 +393,9 @@ function buildExpensesContext(
   // Add ALL expenses with details (not just last 20!)
   context += `\nВсе операции (всего: ${expenses.length}):\n`;
   for (const expense of expenses) {
-    context += `- ${expense.date}: ${expense.category} €${expense.eur_amount.toFixed(2)}`;
+    context += `- ${expense.date}: ${
+      expense.category
+    } €${expense.eur_amount.toFixed(2)}`;
     if (expense.comment) {
       context += ` (${expense.comment})`;
     }
