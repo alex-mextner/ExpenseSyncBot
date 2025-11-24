@@ -79,6 +79,8 @@ ${budgetsContext}`;
     let fullResponse = "";
     let lastMessageText = "";
     let sentMessageId: number | null = null;
+    let lastUpdateTime = 0;
+    const UPDATE_INTERVAL_MS = 2000; // Update every 2 seconds max
 
     // Stream the response
     for await (const chunk of stream) {
@@ -88,10 +90,13 @@ ${budgetsContext}`;
         if (delta.content) {
           fullResponse += delta.content;
 
-          // Update message every 20 characters or when we have a sentence
+          const now = Date.now();
+          const timeSinceLastUpdate = now - lastUpdateTime;
+
+          // Update message only if enough time has passed and we have meaningful changes
           if (
-            fullResponse.length - lastMessageText.length > 20 ||
-            delta.content.match(/[.!?]\s*$/)
+            timeSinceLastUpdate >= UPDATE_INTERVAL_MS &&
+            fullResponse.length - lastMessageText.length > 10
           ) {
             if (sentMessageId) {
               // Edit existing message
@@ -102,6 +107,7 @@ ${budgetsContext}`;
                   text: fullResponse,
                 });
                 lastMessageText = fullResponse;
+                lastUpdateTime = now;
               } catch (err) {
                 // Ignore rate limit errors
                 console.error("[ASK] Failed to edit message:", err);
@@ -111,6 +117,7 @@ ${budgetsContext}`;
               const sent = await ctx.send(fullResponse);
               sentMessageId = sent.id;
               lastMessageText = fullResponse;
+              lastUpdateTime = now;
             }
           }
         }
