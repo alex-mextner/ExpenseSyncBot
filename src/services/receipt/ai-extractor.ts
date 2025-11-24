@@ -1,7 +1,7 @@
-import { InferenceClient } from '@huggingface/inference';
-import { env } from '../../config/env';
-import type { CurrencyCode } from '../../config/constants';
-import { extractTextFromHTML } from './receipt-fetcher';
+import { InferenceClient } from "@huggingface/inference";
+import { env } from "../../config/env";
+import type { CurrencyCode } from "../../config/constants";
+import { extractTextFromHTML } from "./receipt-fetcher";
 
 const client = new InferenceClient(env.HF_TOKEN);
 
@@ -44,28 +44,34 @@ export async function extractExpensesFromReceipt(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // Extract text from HTML if needed
-      const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
+      const isHTML =
+        receiptData.includes("<html") || receiptData.includes("<!DOCTYPE");
       const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
 
       if (isHTML) {
-        console.log(`[AI_EXTRACTOR] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`);
+        console.log(
+          `[AI_EXTRACTOR] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`
+        );
       }
-      console.log(`[AI_EXTRACTOR] Sending ${text.length} chars to AI (attempt ${attempt}/${maxRetries})`);
+      console.log(
+        `[AI_EXTRACTOR] Sending ${text.length} chars to AI (attempt ${attempt}/${maxRetries})`
+      );
 
       // Build prompt
       const prompt = buildExtractionPrompt(text, existingCategories);
 
       // Call AI model
       const response = await client.chatCompletion({
-        provider: 'novita',
-        model: 'Qwen/Qwen2.5-VL-72B-Instruct',
+        provider: "novita",
+        model: "deepseek-ai/DeepSeek-R1-0528",
         messages: [
           {
-            role: 'system',
-            content: 'You are a receipt parser. Extract items from receipts and return valid JSON only.',
+            role: "system",
+            content:
+              "You are a receipt parser. Extract items from receipts and return valid JSON only.",
           },
           {
-            role: 'user',
+            role: "user",
             content: prompt,
           },
         ],
@@ -77,35 +83,53 @@ export async function extractExpensesFromReceipt(
       const responseText = response.choices[0]?.message?.content?.trim();
 
       if (!responseText) {
-        throw new Error('Empty response from AI');
+        throw new Error("Empty response from AI");
       }
 
       // Parse JSON (try to extract JSON from markdown code blocks if present)
-      const jsonMatch = responseText.match(/```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```/) ||
-                       responseText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      const jsonMatch =
+        responseText.match(
+          /```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```/
+        ) || responseText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
 
       if (!jsonMatch || !jsonMatch[1]) {
-        throw new Error('No JSON found in AI response');
+        throw new Error("No JSON found in AI response");
       }
 
       const result = JSON.parse(jsonMatch[1]) as AIExtractionResult;
 
       // Validate result
-      if (!result.items || !Array.isArray(result.items) || result.items.length === 0) {
-        throw new Error('Invalid result: items array is missing or empty');
+      if (
+        !result.items ||
+        !Array.isArray(result.items) ||
+        result.items.length === 0
+      ) {
+        throw new Error("Invalid result: items array is missing or empty");
       }
 
       // Validate each item
       for (const item of result.items) {
-        if (!item.name_ru || typeof item.quantity !== 'number' || typeof item.price !== 'number' || typeof item.total !== 'number' || !item.category) {
+        if (
+          !item.name_ru ||
+          typeof item.quantity !== "number" ||
+          typeof item.price !== "number" ||
+          typeof item.total !== "number" ||
+          !item.category
+        ) {
           throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
         }
       }
 
       return result;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Unknown error during extraction');
-      console.error(`AI extraction attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+      lastError =
+        error instanceof Error
+          ? error
+          : new Error("Unknown error during extraction");
+      console.error(
+        `AI extraction attempt ${attempt}/${maxRetries} failed:`,
+        lastError.message
+      );
 
       if (attempt === maxRetries) {
         break;
@@ -116,13 +140,18 @@ export async function extractExpensesFromReceipt(
     }
   }
 
-  throw new Error(`Failed to extract receipt data after ${maxRetries} attempts: ${lastError?.message}`);
+  throw new Error(
+    `Failed to extract receipt data after ${maxRetries} attempts: ${lastError?.message}`
+  );
 }
 
 /**
  * Build extraction prompt for AI
  */
-function buildExtractionPrompt(receiptText: string, existingCategories: string[]): string {
+function buildExtractionPrompt(
+  receiptText: string,
+  existingCategories: string[]
+): string {
   return `Extract all items from this receipt and return a JSON object with the following structure:
 
 {
@@ -150,7 +179,7 @@ Instructions:
 7. Detect the currency used in the receipt (e.g., RSD, EUR, USD)
 
 Existing categories in this group:
-${existingCategories.map((cat) => `- ${cat}`).join('\n')}
+${existingCategories.map((cat) => `- ${cat}`).join("\n")}
 
 If a product fits into an existing category, use it. If no existing category fits, suggest a new appropriate category name.
 
