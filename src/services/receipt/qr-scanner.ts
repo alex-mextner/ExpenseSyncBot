@@ -1,4 +1,5 @@
-import jsQR from 'jsqr';
+import type { Image } from 'qr';
+import decodeQR, { type DecodeOpts, type FinderPoints } from 'qr/decode.js';
 import sharp from 'sharp';
 
 /**
@@ -18,22 +19,54 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
 
     console.log(`[QR_SCANNER] Image converted: ${info.width}x${info.height}, ${info.channels} channels, ${data.length} bytes`);
 
-    // Create Uint8ClampedArray for jsQR
+    // Create Uint8ClampedArray for @paulmillr/qr
     const imageData = new Uint8ClampedArray(data.buffer);
 
     console.log(`[QR_SCANNER] Scanning for QR code in ${info.width}x${info.height} image...`);
 
-    // Scan for QR code
-    const qrCode = jsQR(imageData, info.width, info.height);
+    // Scan for QR code using @paulmillr/qr with debug callbacks
+    let patternsDetected = false;
+    let qrExtracted = false;
 
-    if (qrCode && qrCode.data) {
-      console.log(`[QR_SCANNER] ✅ QR code found! Length: ${qrCode.data.length} chars`);
-      console.log(`[QR_SCANNER] QR data preview: ${qrCode.data.substring(0, 200)}${qrCode.data.length > 200 ? '...' : ''}`);
-      console.log(`[QR_SCANNER] QR location: (${qrCode.location.topLeftCorner.x}, ${qrCode.location.topLeftCorner.y})`);
-      return qrCode.data;
+    const opts: DecodeOpts = {
+      // Callback when finder patterns are detected (3 finder + 1 alignment)
+      pointsOnDetect: (points: FinderPoints) => {
+        patternsDetected = true;
+        console.log(`[QR_SCANNER] 🎯 Patterns detected at:`, points.map(p => `(${p.x},${p.y})`).join(', '));
+      },
+      // Callback when QR image is extracted
+      imageOnDetect: (img: Image) => {
+        qrExtracted = true;
+        console.log(`[QR_SCANNER] 📦 QR image extracted: ${img.width}x${img.height}`);
+      },
+    };
+
+    const qrData = decodeQR(
+      {
+        width: info.width,
+        height: info.height,
+        data: imageData,
+      },
+      opts
+    );
+
+    if (qrData) {
+      console.log(`[QR_SCANNER] ✅ QR code found! Length: ${qrData.length} chars`);
+      console.log(`[QR_SCANNER] QR data preview: ${qrData.substring(0, 200)}${qrData.length > 200 ? '...' : ''}`);
+      return qrData;
     }
 
-    console.log(`[QR_SCANNER] ❌ No QR code found in image`);
+    // Enhanced error reporting
+    if (patternsDetected) {
+      console.log(`[QR_SCANNER] ⚠️ Patterns detected but decoding failed`);
+    } else {
+      console.log(`[QR_SCANNER] ❌ No QR patterns found in image`);
+    }
+
+    if (qrExtracted) {
+      console.log(`[QR_SCANNER] ⚠️ QR image extracted but data decoding failed`);
+    }
+
     return null;
   } catch (error) {
     console.error('[QR_SCANNER] Error scanning QR code:', error);
