@@ -16,6 +16,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@huggingface/inference": "^4.13.3",
     "currency.js": "^2.0.4",
     "date-fns": "^4.1.0",
     "googleapis": "^166.0.0",

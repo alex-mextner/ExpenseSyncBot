@@ -14,12 +14,16 @@ import { handleSumCommand } from "./commands/sum";
 import { handleSyncCommand } from "./commands/sync";
 import { handleCallbackQuery } from "./handlers/callback.handler";
 import { handleExpenseMessage } from "./handlers/message.handler";
+import { handleAskQuestion } from "./commands/ask";
 
 /**
  * Initialize and configure bot
  */
 export function createBot(): Bot {
   const bot = new Bot(env.BOT_TOKEN);
+
+  // Cache bot username
+  let botUsername: string | undefined;
 
   // Commands
   bot.command("start", handleStartCommand);
@@ -40,7 +44,7 @@ export function createBot(): Bot {
   // Callback queries (inline keyboard buttons)
   bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));
 
-  // Text messages (expense entries)
+  // Text messages (expense entries or questions)
   bot.on("message", async (ctx) => {
     // Skip if it's a command
     if (ctx.text?.startsWith("/")) {
@@ -52,6 +56,27 @@ export function createBot(): Bot {
       return;
     }
 
+    // Get bot username once
+    if (!botUsername) {
+      const botInfo = await bot.api.getMe();
+      botUsername = botInfo.username;
+    }
+
+    const text = ctx.text;
+
+    // Check for @botname mention
+    if (botUsername) {
+      const mentionPattern = new RegExp(`@${botUsername}\\s+(.+)`, "i");
+      const match = text.match(mentionPattern);
+
+      if (match?.[1]) {
+        // Handle as question
+        await handleAskQuestion(ctx, match[1].trim(), bot);
+        return;
+      }
+    }
+
+    // Handle as expense message
     await handleExpenseMessage(ctx);
   });
 

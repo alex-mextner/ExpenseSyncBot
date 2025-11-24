@@ -10,6 +10,7 @@ interface EnvConfig {
   OAUTH_SERVER_PORT: number;
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string;
+  HF_TOKEN: string;
   NODE_ENV: 'development' | 'production';
 }
 
@@ -32,6 +33,7 @@ function validateEnv(): EnvConfig {
     OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000'),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
+    HF_TOKEN: getEnvVariable('HF_TOKEN'),
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
   };
 }
