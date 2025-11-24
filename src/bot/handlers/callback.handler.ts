@@ -11,7 +11,6 @@ import {
 } from "../keyboards";
 import type { Ctx } from "../types";
 import { saveExpenseToSheet } from "./message.handler";
-import { deleteMessage, sendMessage } from "../telegram-api";
 import { format } from "date-fns";
 import {
   writeBudgetRow,
@@ -23,7 +22,8 @@ import {
  * Handle callback queries from inline keyboards
  */
 export async function handleCallbackQuery(
-  ctx: Ctx["CallbackQuery"]
+  ctx: Ctx["CallbackQuery"],
+  bot: any
 ): Promise<void> {
   const data = ctx.data;
   const telegramId = ctx.from.id;
@@ -58,15 +58,15 @@ export async function handleCallbackQuery(
     }
 
     case "category":
-      await handleCategoryAction(ctx, params, telegramId);
+      await handleCategoryAction(ctx, params, telegramId, bot);
       break;
 
     case "confirm":
-      await handleConfirmAction(ctx, params, telegramId);
+      await handleConfirmAction(ctx, params, telegramId, bot);
       break;
 
     case "budget":
-      await handleBudgetAction(ctx, params, telegramId);
+      await handleBudgetAction(ctx, params, telegramId, bot);
       break;
 
     default:
@@ -80,7 +80,8 @@ export async function handleCallbackQuery(
 async function handleCategoryAction(
   ctx: Ctx["CallbackQuery"],
   params: string[],
-  telegramId: number
+  telegramId: number,
+  bot: any
 ): Promise<void> {
   const [subAction, ...rest] = params;
   const user = database.users.findByTelegramId(telegramId);
@@ -113,7 +114,7 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
 
       // Find and save pending expense
@@ -140,11 +141,11 @@ async function handleCategoryAction(
           categoryName,
           group.default_currency
         );
-        await sendMessage(
-          chatId,
-          `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
-          { reply_markup: keyboard.build() }
-        );
+        await bot.api.sendMessage({
+          chat_id: chatId,
+          text: `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
+          reply_markup: keyboard.build()
+        });
       }
 
       break;
@@ -194,7 +195,7 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
 
       // Save expense
@@ -214,7 +215,7 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
       break;
     }
@@ -227,7 +228,8 @@ async function handleCategoryAction(
 async function handleConfirmAction(
   ctx: Ctx["CallbackQuery"],
   params: string[],
-  telegramId: number
+  telegramId: number,
+  bot: any
 ): Promise<void> {
   const [action, answer] = params;
 
@@ -241,7 +243,7 @@ async function handleConfirmAction(
     const messageId = ctx.message?.id;
     const chatId = ctx.message?.chat?.id;
     if (messageId && chatId) {
-      await deleteMessage(chatId, messageId);
+      await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
     }
   }
 }
@@ -252,7 +254,8 @@ async function handleConfirmAction(
 async function handleBudgetAction(
   ctx: Ctx["CallbackQuery"],
   params: string[],
-  telegramId: number
+  telegramId: number,
+  bot: any
 ): Promise<void> {
   const [subAction, category, ...rest] = params;
   const user = database.users.findByTelegramId(telegramId);
@@ -340,7 +343,7 @@ async function handleBudgetAction(
 
       // Delete the button message
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
 
       break;
@@ -417,7 +420,7 @@ async function handleBudgetAction(
 
       // Delete the button message
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
 
       break;
@@ -428,7 +431,7 @@ async function handleBudgetAction(
 
       // Delete the button message
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
 
       break;
@@ -439,7 +442,7 @@ async function handleBudgetAction(
 
       // Delete the button message
       if (messageId && chatId) {
-        await deleteMessage(chatId, messageId);
+        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
       }
 
       break;

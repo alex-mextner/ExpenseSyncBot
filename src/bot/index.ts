@@ -38,7 +38,7 @@ export function createBot(): Bot {
   bot.command("reconnect", handleReconnectCommand);
 
   // Callback queries (inline keyboard buttons)
-  bot.on("callback_query", handleCallbackQuery);
+  bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));
 
   // Text messages (expense entries)
   bot.on("message", async (ctx) => {
