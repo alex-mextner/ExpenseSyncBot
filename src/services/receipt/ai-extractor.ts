@@ -86,15 +86,30 @@ export async function extractExpensesFromReceipt(
         throw new Error("Empty response from AI");
       }
 
+      // Remove thinking tags from response
+      const cleanedResponse = responseText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+      // Log raw AI response for debugging
+      console.log(
+        `[AI_EXTRACTOR] Raw AI response (${responseText.length} chars):\n${responseText.substring(0, 500)}...`
+      );
+
       // Parse JSON (try to extract JSON from markdown code blocks if present)
       const jsonMatch =
-        responseText.match(
+        cleanedResponse.match(
           /```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```/
-        ) || responseText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+        ) || cleanedResponse.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
 
       if (!jsonMatch || !jsonMatch[1]) {
+        console.error(
+          `[AI_EXTRACTOR] Failed to extract JSON. Full response:\n${cleanedResponse}`
+        );
         throw new Error("No JSON found in AI response");
       }
+
+      console.log(
+        `[AI_EXTRACTOR] Extracted JSON (${jsonMatch[1].length} chars):\n${jsonMatch[1].substring(0, 500)}...`
+      );
 
       const result = JSON.parse(jsonMatch[1]) as AIExtractionResult;
 
@@ -107,7 +122,7 @@ export async function extractExpensesFromReceipt(
         throw new Error("Invalid result: items array is missing or empty");
       }
 
-      // Validate each item
+      // Validate and normalize each item
       for (const item of result.items) {
         if (
           !item.name_ru ||
@@ -118,6 +133,50 @@ export async function extractExpensesFromReceipt(
         ) {
           throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
         }
+
+        // Ensure possible_categories exists and is an array
+        if (!item.possible_categories || !Array.isArray(item.possible_categories)) {
+          console.warn(`[AI_EXTRACTOR] Item "${item.name_ru}" missing possible_categories, initializing empty array`);
+          item.possible_categories = [];
+        }
+
+        // If existing categories provided, validate that AI used only those
+        if (existingCategories.length > 0) {
+          const { findBestCategoryMatch } = await import('../../utils/fuzzy-search');
+
+          // Check if suggested category exists
+          if (!existingCategories.includes(item.category)) {
+            console.warn(`[AI_EXTRACTOR] AI suggested non-existing category "${item.category}" for item "${item.name_ru}"`);
+
+            // Try to find closest match
+            const closestMatch = findBestCategoryMatch(item.category, existingCategories);
+
+            if (closestMatch) {
+              console.log(`[AI_EXTRACTOR] Replacing with closest match: "${closestMatch}"`);
+              item.category = closestMatch;
+            } else {
+              // Fallback to first available category or "Разное"
+              const fallback = existingCategories.find(c => c === 'Разное') || existingCategories[0] || 'Разное';
+              console.log(`[AI_EXTRACTOR] Using fallback category: "${fallback}"`);
+              item.category = fallback;
+            }
+          }
+
+          // Validate possible_categories - filter out non-existing ones
+          if (item.possible_categories.length > 0) {
+            const validAlternatives = item.possible_categories.filter(cat =>
+              existingCategories.includes(cat)
+            );
+
+            if (validAlternatives.length < item.possible_categories.length) {
+              console.warn(
+                `[AI_EXTRACTOR] Filtered out ${item.possible_categories.length - validAlternatives.length} ` +
+                `non-existing categories from possible_categories for "${item.name_ru}"`
+              );
+              item.possible_categories = validAlternatives;
+            }
+          }
+        }
       }
 
       return result;
@@ -126,10 +185,19 @@ export async function extractExpensesFromReceipt(
         error instanceof Error
           ? error
           : new Error("Unknown error during extraction");
-      console.error(
-        `AI extraction attempt ${attempt}/${maxRetries} failed:`,
-        lastError.message
-      );
+
+      // Log detailed error info
+      if (error instanceof SyntaxError) {
+        console.error(
+          `[AI_EXTRACTOR] JSON Parse error on attempt ${attempt}/${maxRetries}:`,
+          lastError.message
+        );
+      } else {
+        console.error(
+          `[AI_EXTRACTOR] Extraction failed on attempt ${attempt}/${maxRetries}:`,
+          lastError.message
+        );
+      }
 
       if (attempt === maxRetries) {
         break;
@@ -152,6 +220,8 @@ function buildExtractionPrompt(
   receiptText: string,
   existingCategories: string[]
 ): string {
+  const hasExistingCategories = existingCategories.length > 0;
+
   return `Extract all items from this receipt and return a JSON object with the following structure:
 
 {
@@ -163,25 +233,35 @@ function buildExtractionPrompt(
       "price": 100.50,
       "total": 150.75,
       "category": "Категория",
-      "possible_categories": ["Категория1", "Категория2"]
+      "possible_categories": ["Альтернатива1", "Альтернатива2"]
     }
   ],
   "currency": "RSD"
 }
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 1. Translate all product names to Russian (name_ru)
 2. Keep original names in name_original if they are in a different language
 3. Extract quantity, price per unit, and total amount for each item
-4. Assign the most appropriate category to each item
-5. Provide 1-3 possible_categories (alternative categories) if you're not 100% confident
-6. If possible_categories array is empty or you're very confident, omit it
-7. Detect the currency used in the receipt (e.g., RSD, EUR, USD)
+4. ALWAYS provide "possible_categories" array with 2-3 alternative category names - this field is REQUIRED
+5. Detect the currency used in the receipt (e.g., RSD, EUR, USD)
 
-Existing categories in this group:
+CATEGORY SELECTION (MOST IMPORTANT):
+${hasExistingCategories ? `This group has existing categories. You MUST use ONLY these categories:
 ${existingCategories.map((cat) => `- ${cat}`).join("\n")}
 
-If a product fits into an existing category, use it. If no existing category fits, suggest a new appropriate category name.
+STRICT Rules:
+- You MUST choose "category" from the list above - NO exceptions!
+- DO NOT create new categories - use the closest existing one
+- If unsure, use the most general category from the list (e.g., "Разное", "Хозтовары", etc.)
+- Put 2-3 other existing categories in "possible_categories" as alternatives
+- ALL categories (both "category" and "possible_categories") MUST be from the list above` : `This group has no categories yet. You can suggest new category names.
+- Create clear, concise category names in Russian
+- Provide 2-3 alternative category names in "possible_categories"`}
+
+EXAMPLES of good categorization (use existing categories only):
+- Item: "Молоко 3.2%" + existing ["Еда", "Разное", "Хобби"] → category: "Еда", possible_categories: ["Разное"]
+- Item: "Шуруп 4x50" + existing ["Инструменты", "Разное"] → category: "Инструменты", possible_categories: ["Разное"]
 
 Receipt text:
 ${receiptText}

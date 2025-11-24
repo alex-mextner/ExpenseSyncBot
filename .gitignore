@@ -38,3 +38,7 @@ data/
 *.db
 *.db-shm
 *.db-wal
+
+# Temporary images (OCR processing)
+temp-images/
+debug-images/

@@ -88,7 +88,7 @@ export function createBot(): Bot {
     }
 
     // Handle as expense message
-    await handleExpenseMessage(ctx);
+    await handleExpenseMessage(ctx, bot);
   });
 
   return bot;

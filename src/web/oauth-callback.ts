@@ -41,6 +41,11 @@ export function startOAuthServer(): void {
         return new Response('OK', { status: 200 });
       }
 
+      // Serve temporary images for OCR processing
+      if (url.pathname.startsWith('/temp-images/')) {
+        return handleTempImage(url);
+      }
+
       return new Response('Not Found', { status: 404 });
     },
   });
@@ -236,5 +241,38 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       }
     );
+  }
+}
+
+/**
+ * Handle temporary image serving for OCR
+ */
+async function handleTempImage(url: URL): Promise<Response> {
+  const filename = url.pathname.split('/temp-images/')[1];
+
+  if (!filename) {
+    return new Response('Not Found', { status: 404 });
+  }
+
+  const path = await import('node:path');
+
+  const filepath = path.join(process.cwd(), 'temp-images', filename);
+
+  try {
+    const file = Bun.file(filepath);
+
+    if (!(await file.exists())) {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    return new Response(file, {
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      },
+    });
+  } catch (error) {
+    console.error('[TEMP_IMAGE] Error serving image:', error);
+    return new Response('Internal Server Error', { status: 500 });
   }
 }

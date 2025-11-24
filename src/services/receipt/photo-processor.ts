@@ -90,6 +90,21 @@ async function processPhotoQueueItem(
   // Update status to processing
   database.photoQueue.update(queueItemId, { status: "processing" });
 
+  // Get telegram group ID and set 👀 reaction to indicate processing started
+  const group = database.groups.findById(queueItem.group_id);
+  if (group) {
+    try {
+      await bot.api.setMessageReaction({
+        chat_id: group.telegram_group_id,
+        message_id: queueItem.message_id,
+        reaction: [{ type: "emoji", emoji: "👀" }],
+      });
+      console.log(`[PHOTO_PROCESSOR] Set 👀 reaction for message - processing started`);
+    } catch (error) {
+      console.error(`[PHOTO_PROCESSOR] Failed to set reaction:`, error);
+    }
+  }
+
   try {
     // Download photo from Telegram
     const photoBuffer = await downloadPhoto(bot, queueItem.file_id);
@@ -126,43 +141,91 @@ async function processPhotoQueueItem(
     // Scan QR code
     const qrData = await scanQRFromImage(photoBuffer);
 
-    if (!qrData) {
-      // No QR code found - silently mark as done
-      console.log(
-        `[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}`
-      );
-      database.photoQueue.update(queueItemId, { status: "done" });
-      return;
-    }
-
-    console.log(
-      `[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`
-    );
-
-    // Fetch receipt data
     let receiptData: string;
-    try {
-      receiptData = await fetchReceiptData(qrData);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      console.error(
-        `[PHOTO_PROCESSOR] Failed to fetch receipt data:`,
-        errorMessage
-      );
-      database.photoQueue.update(queueItemId, {
-        status: "error",
-        error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
-      });
 
-      // Notify user
-      await notifyUser(
-        bot,
-        queueItem.group_id,
-        `❌ Не удалось загрузить чек: ${errorMessage}`,
-        queueItem.message_thread_id
+    if (!qrData) {
+      // No QR code found - try OCR fallback
+      console.log(
+        `[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}, trying OCR fallback`
       );
-      return;
+
+      try {
+        const { extractTextFromImage } = await import('./ocr-extractor');
+        receiptData = await extractTextFromImage(photoBuffer);
+        console.log(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
+      } catch (ocrError) {
+        const ocrErrorMessage =
+          ocrError instanceof Error ? ocrError.message : "Unknown error";
+        console.error(
+          `[PHOTO_PROCESSOR] OCR also failed:`,
+          ocrErrorMessage
+        );
+
+        // Both QR and OCR failed - mark as done and set reaction
+        database.photoQueue.update(queueItemId, { status: "done" });
+
+        // Get telegram group ID and set reaction
+        const group = database.groups.findById(queueItem.group_id);
+        if (group) {
+          try {
+            await bot.api.setMessageReaction({
+              chat_id: group.telegram_group_id,
+              message_id: queueItem.message_id,
+              reaction: [{ type: "emoji", emoji: "🤷‍♂️" }],
+            });
+            console.log(`[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`);
+          } catch (error) {
+            console.error(`[PHOTO_PROCESSOR] Failed to set reaction:`, error);
+          }
+        }
+
+        return;
+      }
+    } else {
+      console.log(
+        `[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`
+      );
+
+      // Fetch receipt data from QR
+      try {
+        receiptData = await fetchReceiptData(qrData);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        console.error(
+          `[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback:`,
+          errorMessage
+        );
+
+        // Try OCR as fallback when QR fetch fails
+        try {
+          const { extractTextFromImage } = await import('./ocr-extractor');
+          receiptData = await extractTextFromImage(photoBuffer);
+          console.log(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
+        } catch (ocrError) {
+          // Both QR fetch and OCR failed
+          const ocrErrorMessage =
+            ocrError instanceof Error ? ocrError.message : "Unknown error";
+          console.error(
+            `[PHOTO_PROCESSOR] OCR also failed:`,
+            ocrErrorMessage
+          );
+
+          database.photoQueue.update(queueItemId, {
+            status: "error",
+            error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
+          });
+
+          // Notify user
+          await notifyUser(
+            bot,
+            queueItem.group_id,
+            `❌ Не удалось загрузить чек: ${errorMessage}`,
+            queueItem.message_thread_id
+          );
+          return;
+        }
+      }
     }
 
     // Get existing categories for the group
@@ -292,9 +355,18 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
  */
 export async function showNextItemForConfirmation(
   bot: Bot,
-  groupId: number
+  groupId: number,
+  photoQueueId?: number
 ): Promise<void> {
-  const nextItem = database.receiptItems.findNextPending();
+  // If photo_queue_id provided, find next pending item from that receipt only
+  let nextItem: ReturnType<typeof database.receiptItems.findNextPending> = null;
+
+  if (photoQueueId) {
+    const allItems = database.receiptItems.findByPhotoQueueId(photoQueueId);
+    nextItem = allItems.find(item => item.status === 'pending') || null;
+  } else {
+    nextItem = database.receiptItems.findNextPending();
+  }
 
   if (!nextItem) {
     console.log("[PHOTO_PROCESSOR] No more pending items to confirm");
@@ -307,6 +379,22 @@ export async function showNextItemForConfirmation(
     console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
     return;
   }
+
+  // Collect all confirmed categories from this receipt (custom categories from user)
+  const allItemsFromReceipt = database.receiptItems.findByPhotoQueueId(nextItem.photo_queue_id);
+  const confirmedCategories = allItemsFromReceipt
+    .map(item => item.status === 'confirmed' ? item.confirmed_category : null)
+    .filter((cat): cat is string => cat !== null);
+
+  // Merge with possible_categories, ensuring no duplicates
+  const allPossibleCategories = [
+    ...nextItem.possible_categories,
+    ...confirmedCategories
+  ].filter((cat, index, self) =>
+    cat !== nextItem.suggested_category && self.indexOf(cat) === index
+  );
+
+  console.log(`[PHOTO_PROCESSOR] Item ${nextItem.id}: suggested="${nextItem.suggested_category}", possible=${JSON.stringify(allPossibleCategories)}, confirmed from receipt=${JSON.stringify(confirmedCategories)}`);
 
   // Build confirmation message (escape HTML special characters)
   let message = `🧾 <b>Подтвердите товар из чека:</b>\n\n`;
@@ -323,25 +411,24 @@ export async function showNextItemForConfirmation(
   // Build inline keyboard with possible categories
   const buttons: Array<Array<{ text: string; callback_data: string }>> = [];
 
-  // Add suggested category as first button
+  // Add suggested category as first button (use index -1 for suggested)
   buttons.push([
     {
       text: `✅ ${nextItem.suggested_category}`,
-      callback_data: `confirm_receipt_item:${nextItem.id}:${nextItem.suggested_category}`,
+      callback_data: `confirm_receipt_item:${nextItem.id}:-1`,
     },
   ]);
 
-  // Add possible categories if available
-  if (nextItem.possible_categories.length > 0) {
-    for (const category of nextItem.possible_categories) {
-      if (category !== nextItem.suggested_category) {
-        buttons.push([
-          {
-            text: category,
-            callback_data: `confirm_receipt_item:${nextItem.id}:${category}`,
-          },
-        ]);
-      }
+  // Add all possible categories (including confirmed custom ones) with their indices
+  if (allPossibleCategories.length > 0) {
+    for (let i = 0; i < allPossibleCategories.length; i++) {
+      const category = allPossibleCategories[i];
+      buttons.push([
+        {
+          text: category,
+          callback_data: `confirm_receipt_item:${nextItem.id}:${i}`,
+        },
+      ]);
     }
   }
 
@@ -362,7 +449,7 @@ export async function showNextItemForConfirmation(
   // Send message to group
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    message_thread_id: queueItem?.message_thread_id ?? undefined,
+    ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
     text: message,
     parse_mode: "HTML",
     reply_markup: {
@@ -389,7 +476,7 @@ async function notifyUser(
 
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    message_thread_id: messageThreadId ?? undefined,
+    ...(messageThreadId && { message_thread_id: messageThreadId }),
     text: message,
     parse_mode: "HTML",
   });

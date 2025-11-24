@@ -1,4 +1,5 @@
 import type { Ctx } from '../types';
+import type { ReceiptItem } from '../../database/types';
 import { format } from "date-fns";
 import { MESSAGES } from "../../config/constants";
 import { database } from "../../database";
@@ -7,14 +8,13 @@ import {
   validateParsedExpense,
 } from "../../services/currency/parser";
 import { createCategoryConfirmKeyboard } from "../keyboards";
-import { setMessageReaction, deleteMessage } from "../telegram-api";
 import { silentSyncBudgets } from "../commands/budget";
 import { maybeSendDailyAdvice } from "../commands/ask";
 
 /**
  * Handle expense message
  */
-export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
+export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promise<void> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
@@ -36,7 +36,7 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     // Check if user has associated group
     const user = database.users.findByTelegramId(telegramId);
 
-    if (user) {
+    if (user && user.group_id) {
       const group = database.groups.findById(user.group_id);
 
       if (group?.telegram_group_id) {
@@ -118,6 +118,13 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     if (!user) return;
   }
 
+  // Check if we're waiting for category text input from user
+  const waitingItem = database.receiptItems.findWaitingForCategoryInput(group.id);
+  if (waitingItem) {
+    await handleCategoryTextInput(ctx, bot, text, waitingItem, group.id);
+    return;
+  }
+
   // Split message by lines and process each line
   const lines = text.split('\n').map(line => line.trim()).filter(line => line);
 
@@ -178,7 +185,7 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     // If category exists, save directly
     if (categoryExists || !parsed.category) {
       console.log(`[MSG] Line ${index + 1}: saving to sheet`);
-      await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId);
+      await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId, bot);
       successCount++;
     }
   }
@@ -189,7 +196,11 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
   if (hasProcessedExpenses) {
     // Set reaction on user message
     try {
-      await setMessageReaction(telegramGroupId, messageId, "👍");
+      await bot.api.setMessageReaction({
+        chat_id: telegramGroupId,
+        message_id: messageId,
+        reaction: [{ type: "emoji", emoji: "👍" }],
+      });
     } catch (error) {
       console.error(`[MSG] Failed to set reaction:`, error);
     }
@@ -225,7 +236,8 @@ export async function saveExpenseToSheet(
   userId: number,
   groupId: number,
   pendingExpenseId: number,
-  telegramGroupId?: number
+  telegramGroupId?: number,
+  bot?: any
 ): Promise<void> {
   console.log(`[SAVE] Starting save to sheet...`);
 
@@ -322,8 +334,8 @@ export async function saveExpenseToSheet(
   console.log(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
 
   // Check budget limits
-  if (telegramGroupId) {
-    await checkBudgetLimit(groupId, category, currentDate, telegramGroupId);
+  if (telegramGroupId && bot) {
+    await checkBudgetLimit(groupId, category, currentDate, telegramGroupId, bot);
   }
 }
 
@@ -334,11 +346,11 @@ async function checkBudgetLimit(
   groupId: number,
   category: string,
   currentDate: string,
-  telegramGroupId: number
+  telegramGroupId: number,
+  bot: any
 ): Promise<void> {
   const { startOfMonth, endOfMonth, format } = await import('date-fns');
   const { getCategoryEmoji } = await import('../../config/category-emojis');
-  const { sendMessage } = await import('../telegram-api');
 
   const now = new Date(currentDate);
   const currentMonth = format(now, 'yyyy-MM');
@@ -380,10 +392,143 @@ async function checkBudgetLimit(
     }
 
     try {
-      await sendMessage(telegramGroupId, message);
+      await bot.api.sendMessage({
+        chat_id: telegramGroupId,
+        text: message,
+      });
       console.log(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
     } catch (error) {
       console.error(`[BUDGET] Failed to send warning:`, error);
+    }
+  }
+}
+
+/**
+ * Handle category text input from user
+ */
+async function handleCategoryTextInput(
+  ctx: Ctx["Message"],
+  bot: any,
+  categoryText: string,
+  waitingItem: ReceiptItem,
+  groupId: number
+): Promise<void> {
+  const { findBestCategoryMatch, normalizeCategoryName } = await import('../../utils/fuzzy-search');
+
+  console.log(`[CATEGORY_INPUT] User provided category: "${categoryText}" for item ${waitingItem.id}`);
+
+  // Normalize category name
+  const normalizedCategory = normalizeCategoryName(categoryText);
+
+  // Get all existing categories for this group
+  const allCategories = database.categories.findByGroupId(groupId);
+  const categoryNames = allCategories.map(c => c.name);
+
+  // Try to find best match
+  const bestMatch = findBestCategoryMatch(normalizedCategory, categoryNames);
+
+  if (bestMatch) {
+    // Check if exact match - use it automatically
+    if (bestMatch.toLowerCase() === normalizedCategory.toLowerCase()) {
+      console.log(`[CATEGORY_INPUT] Exact match found: "${bestMatch}", using automatically`);
+
+      // Update item with found category
+      database.receiptItems.update(waitingItem.id, {
+        status: 'confirmed',
+        confirmed_category: bestMatch,
+        waiting_for_category_input: 0,
+      });
+
+      await ctx.send(`✅ Используется категория: <b>${bestMatch}</b>`, { parse_mode: 'HTML' });
+
+      // Check if all items are confirmed
+      const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
+      const allConfirmed = allItems.every((i) => i.status === 'confirmed');
+
+      if (allConfirmed) {
+        // Save all items
+        const { saveReceiptExpenses } = await import('./callback.handler');
+        const user = database.users.findByTelegramId(ctx.from.id);
+        if (user) {
+          const group = database.groups.findById(groupId);
+          if (group) {
+            await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id, bot);
+          }
+        }
+      } else {
+        // Show next pending item
+        const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+        await showNextItemForConfirmation(bot, groupId, waitingItem.photo_queue_id);
+      }
+
+      return;
+    }
+
+    // Found similar but not exact match - ask user to confirm
+    console.log(`[CATEGORY_INPUT] Found similar category: "${bestMatch}"`);
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          {
+            text: `✅ Использовать "${bestMatch}"`,
+            callback_data: `use_found_category:${waitingItem.id}:${bestMatch}`,
+          },
+        ],
+        [
+          {
+            text: `❌ Создать новую "${normalizedCategory}"`,
+            callback_data: `create_new_category:${waitingItem.id}:${normalizedCategory}`,
+          },
+        ],
+      ],
+    };
+
+    await bot.api.sendMessage({
+      chat_id: ctx.chat.id,
+      text: `Найдена похожая категория: <b>${bestMatch}</b>\n\nВыберите действие:`,
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
+  } else {
+    // No match found - create new category directly
+    console.log(`[CATEGORY_INPUT] No similar category found, creating new: "${normalizedCategory}"`);
+
+    // Reset waiting flag
+    database.receiptItems.update(waitingItem.id, {
+      status: 'confirmed',
+      confirmed_category: normalizedCategory,
+      waiting_for_category_input: 0,
+    });
+
+    // Create category if doesn't exist
+    if (!database.categories.exists(groupId, normalizedCategory)) {
+      database.categories.create({
+        group_id: groupId,
+        name: normalizedCategory,
+      });
+    }
+
+    await ctx.send(`✅ Создана новая категория: <b>${normalizedCategory}</b>`, { parse_mode: 'HTML' });
+
+    // Check if all items are confirmed (categories will be collected dynamically in showNextItemForConfirmation)
+    const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
+    const allConfirmed = allItems.every((i) => i.status === 'confirmed');
+
+    if (allConfirmed) {
+      // Save all items
+      const { saveReceiptExpenses } = await import('./callback.handler');
+      const user = database.users.findByTelegramId(ctx.from.id);
+      if (user) {
+        const group = database.groups.findById(groupId);
+        if (group) {
+          await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id, bot);
+        }
+      }
+    } else {
+      // Show next pending item
+      const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+      await showNextItemForConfirmation(bot, groupId, waitingItem.photo_queue_id);
     }
   }
 }

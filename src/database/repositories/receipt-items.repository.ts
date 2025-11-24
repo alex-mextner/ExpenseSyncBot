@@ -147,6 +147,16 @@ export class ReceiptItemsRepository {
       values.push(data.confirmed_category);
     }
 
+    if (data.waiting_for_category_input !== undefined) {
+      updates.push('waiting_for_category_input = ?');
+      values.push(data.waiting_for_category_input);
+    }
+
+    if (data.possible_categories !== undefined) {
+      updates.push('possible_categories = ?');
+      values.push(data.possible_categories);
+    }
+
     if (updates.length === 0) {
       throw new Error('No fields to update');
     }
@@ -168,6 +178,30 @@ export class ReceiptItemsRepository {
     }
 
     return item;
+  }
+
+  /**
+   * Find receipt item waiting for category text input from user
+   */
+  findWaitingForCategoryInput(groupId: number): ReceiptItem | null {
+    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, [number]>(`
+      SELECT ri.* FROM receipt_items ri
+      JOIN photo_processing_queue ppq ON ri.photo_queue_id = ppq.id
+      WHERE ppq.group_id = ? AND ri.waiting_for_category_input = 1
+      ORDER BY ri.created_at ASC
+      LIMIT 1
+    `);
+
+    const result = query.get(groupId);
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      ...result,
+      possible_categories: JSON.parse(result.possible_categories),
+    };
   }
 
   /**

@@ -407,6 +407,26 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '014_add_waiting_for_category_input',
+      up: () => {
+        // Check if column already exists
+        const checkColumn = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('receipt_items')
+          WHERE name = 'waiting_for_category_input'
+        `);
+        const result = checkColumn.get();
+
+        if (result && result.count === 0) {
+          db.exec(`
+            ALTER TABLE receipt_items
+            ADD COLUMN waiting_for_category_input INTEGER DEFAULT 0;
+          `);
+          console.log('✓ Added waiting_for_category_input column to receipt_items');
+        }
+      },
+    },
   ];
 
   // Check and run migrations

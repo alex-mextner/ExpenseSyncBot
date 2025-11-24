@@ -74,7 +74,15 @@ export async function handleCallbackQuery(
       break;
 
     case "receipt_item_other":
-      await handleReceiptItemOther(ctx, params, telegramId);
+      await handleReceiptItemOther(ctx, params, telegramId, bot);
+      break;
+
+    case "use_found_category":
+      await handleUseFoundCategory(ctx, params, telegramId, bot);
+      break;
+
+    case "create_new_category":
+      await handleCreateNewCategory(ctx, params, telegramId, bot);
       break;
 
     default:
@@ -139,7 +147,8 @@ async function handleCategoryAction(
           user.id,
           group.id,
           pending.id,
-          chatId || undefined
+          chatId || undefined,
+          bot
         );
       }
 
@@ -211,7 +220,8 @@ async function handleCategoryAction(
         user.id,
         group.id,
         pending.id,
-        chatId || undefined
+        chatId || undefined,
+        bot
       );
       break;
     }
@@ -471,18 +481,19 @@ async function handleReceiptItemConfirm(
   bot: any
 ): Promise<void> {
   const itemIdStr = params[0];
-  const category = params[1];
+  const categoryIndexStr = params[1];
   const messageId = ctx.message?.id;
   const chatId = ctx.message?.chat?.id;
 
-  if (!itemIdStr || !category) {
+  if (!itemIdStr || categoryIndexStr === undefined) {
     await ctx.answerCallbackQuery({ text: "Invalid parameters" });
     return;
   }
 
   const itemId = parseInt(itemIdStr, 10);
+  const categoryIndex = parseInt(categoryIndexStr, 10);
 
-  if (Number.isNaN(itemId)) {
+  if (Number.isNaN(itemId) || Number.isNaN(categoryIndex)) {
     await ctx.answerCallbackQuery({ text: "Invalid parameters" });
     return;
   }
@@ -509,6 +520,34 @@ async function handleReceiptItemConfirm(
   if (!item || item.status !== 'pending') {
     await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
     return;
+  }
+
+  // Collect all confirmed categories from this receipt (custom categories from user)
+  const allItemsFromReceipt = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
+  const confirmedCategories = allItemsFromReceipt
+    .map(i => i.status === 'confirmed' ? i.confirmed_category : null)
+    .filter((cat): cat is string => cat !== null);
+
+  // Merge with possible_categories to create the same array as in showNextItemForConfirmation
+  const allPossibleCategories = [
+    ...item.possible_categories,
+    ...confirmedCategories
+  ].filter((cat, index, self) =>
+    cat !== item.suggested_category && self.indexOf(cat) === index
+  );
+
+  // Determine category based on index
+  let category: string;
+  if (categoryIndex === -1) {
+    // Use suggested category
+    category = item.suggested_category;
+  } else {
+    // Use category from dynamic allPossibleCategories array
+    if (categoryIndex < 0 || categoryIndex >= allPossibleCategories.length) {
+      await ctx.answerCallbackQuery({ text: "Некорректный индекс категории" });
+      return;
+    }
+    category = allPossibleCategories[categoryIndex];
   }
 
   // Update receipt item with confirmed category
@@ -542,7 +581,7 @@ async function handleReceiptItemConfirm(
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
-    await showNextItemForConfirmation(bot, group.id);
+    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
   }
 }
 
@@ -552,9 +591,12 @@ async function handleReceiptItemConfirm(
 async function handleReceiptItemOther(
   ctx: Ctx["CallbackQuery"],
   params: string[],
-  _telegramId: number
+  _telegramId: number,
+  bot: any
 ): Promise<void> {
   const itemIdStr = params[0];
+  const messageId = ctx.message?.id;
+  const chatId = ctx.message?.chat?.id;
 
   if (!itemIdStr) {
     await ctx.answerCallbackQuery({ text: "Invalid parameters" });
@@ -568,19 +610,42 @@ async function handleReceiptItemOther(
     return;
   }
 
-  await ctx.answerCallbackQuery({
-    text: "✏️ Напишите название категории текстом",
-    show_alert: true,
+  // Get receipt item
+  const item = database.receiptItems.findById(itemId);
+
+  if (!item || item.status !== 'pending') {
+    await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
+    return;
+  }
+
+  // Set waiting flag
+  database.receiptItems.update(itemId, {
+    waiting_for_category_input: 1,
   });
 
-  // Store item ID for text handler (we'll handle this in text message flow)
-  // For now, just notify user to type category name
+  await ctx.answerCallbackQuery({
+    text: "✏️ Напишите название категории",
+  });
+
+  // Delete confirmation message with buttons
+  if (messageId && chatId) {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  }
+
+  // Send new message asking for category
+  if (chatId) {
+    await bot.api.sendMessage({
+      chat_id: chatId,
+      text: `✏️ Напишите категорию для товара:\n<b>${item.name_ru}</b>\n\nПросто отправьте сообщение с названием категории.`,
+      parse_mode: 'HTML',
+    });
+  }
 }
 
 /**
  * Save all confirmed receipt items as expenses
  */
-async function saveReceiptExpenses(
+export async function saveReceiptExpenses(
   photoQueueId: number,
   groupId: number,
   userId: number,
@@ -700,10 +765,182 @@ async function saveReceiptExpenses(
 
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    message_thread_id: queueItem?.message_thread_id ?? undefined,
+    ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
     text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
     parse_mode: 'HTML',
   });
 
   console.log(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
+}
+
+/**
+ * Handle "use found category" button
+ */
+async function handleUseFoundCategory(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  telegramId: number,
+  bot: any
+): Promise<void> {
+  const itemIdStr = params[0];
+  const category = params[1];
+  const messageId = ctx.message?.id;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!itemIdStr || !category) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const itemId = parseInt(itemIdStr, 10);
+
+  if (Number.isNaN(itemId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user || !user.group_id) {
+    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+    return;
+  }
+
+  const group = database.groups.findById(user.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  const item = database.receiptItems.findById(itemId);
+
+  if (!item) {
+    await ctx.answerCallbackQuery({ text: "Товар не найден" });
+    return;
+  }
+
+  // Update item with found category
+  database.receiptItems.update(itemId, {
+    status: 'confirmed',
+    confirmed_category: category,
+    waiting_for_category_input: 0,
+  });
+
+  // Create category if doesn't exist
+  if (!database.categories.exists(group.id, category)) {
+    database.categories.create({
+      group_id: group.id,
+      name: category,
+    });
+  }
+
+  await ctx.answerCallbackQuery({ text: `✅ ${category}` });
+
+  // Delete confirmation message
+  if (messageId && chatId) {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  }
+
+  // Check if all items are confirmed
+  const allItems = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
+  const allConfirmed = allItems.every((i) => i.status === 'confirmed');
+
+  if (allConfirmed) {
+    // Save all items
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+  } else {
+    // Show next pending item
+    const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+  }
+}
+
+/**
+ * Handle "create new category" button
+ */
+async function handleCreateNewCategory(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  telegramId: number,
+  bot: any
+): Promise<void> {
+  const itemIdStr = params[0];
+  const category = params[1];
+  const messageId = ctx.message?.id;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!itemIdStr || !category) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const itemId = parseInt(itemIdStr, 10);
+
+  if (Number.isNaN(itemId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user || !user.group_id) {
+    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+    return;
+  }
+
+  const group = database.groups.findById(user.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  const item = database.receiptItems.findById(itemId);
+
+  if (!item) {
+    await ctx.answerCallbackQuery({ text: "Товар не найден" });
+    return;
+  }
+
+  // Normalize category name
+  const { normalizeCategoryName } = await import('../../utils/fuzzy-search');
+  const normalizedCategory = normalizeCategoryName(category);
+
+  // Update item with new category
+  database.receiptItems.update(itemId, {
+    status: 'confirmed',
+    confirmed_category: normalizedCategory,
+    waiting_for_category_input: 0,
+  });
+
+  // Create new category
+  if (!database.categories.exists(group.id, normalizedCategory)) {
+    database.categories.create({
+      group_id: group.id,
+      name: normalizedCategory,
+    });
+  }
+
+  await ctx.answerCallbackQuery({ text: `✅ Создана новая: ${normalizedCategory}` });
+
+  // Delete confirmation message
+  if (messageId && chatId) {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  }
+
+  // Re-fetch all items after update (categories will be collected dynamically in showNextItemForConfirmation)
+  const allItems = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
+
+  // Check if all items are confirmed
+  const allConfirmed = allItems.every((i) => i.status === 'confirmed');
+
+  if (allConfirmed) {
+    // Save all items
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+  } else {
+    // Show next pending item
+    const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+  }
 }

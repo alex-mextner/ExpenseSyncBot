@@ -184,6 +184,29 @@ export async function handleSyncCommand(ctx: Ctx["Command"]): Promise<void> {
     const users = database.users.findByGroupId ? database.users.findByGroupId(group.id) : [];
     const defaultUserId = users.length > 0 ? users[0]!.id : 1;
 
+    // Collect unique categories from sheet
+    const categoriesInSheet = new Set<string>();
+    for (const expense of sheetExpenses) {
+      if (expense.category && expense.category !== 'Без категории') {
+        categoriesInSheet.add(expense.category);
+      }
+    }
+
+    // Create missing categories
+    let createdCategoriesCount = 0;
+    for (const categoryName of categoriesInSheet) {
+      if (!database.categories.exists(group.id, categoryName)) {
+        database.categories.create({
+          group_id: group.id,
+          name: categoryName,
+        });
+        createdCategoriesCount++;
+        console.log(`[SYNC] Created category: "${categoryName}"`);
+      }
+    }
+
+    console.log(`[SYNC] Created ${createdCategoriesCount} new categories`);
+
     // Insert all expenses from sheet
     let syncedCount = 0;
     for (const expense of sheetExpenses) {
@@ -219,8 +242,9 @@ export async function handleSyncCommand(ctx: Ctx["Command"]): Promise<void> {
 
     await ctx.send(
       `✅ Синхронизация завершена!\n\n` +
-      `📊 Удалено: ${deletedCount}\n` +
-      `📥 Загружено: ${syncedCount}\n` +
+      `📊 Удалено расходов: ${deletedCount}\n` +
+      `📥 Загружено расходов: ${syncedCount}\n` +
+      `📁 Создано категорий: ${createdCategoriesCount}\n` +
       `💾 Всего в БД: ${syncedCount}`
     );
 
