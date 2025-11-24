@@ -8,13 +8,16 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const photos = ctx.photo;
-  const threadId = (ctx as any).messageThreadId;
+
+  // Try different possible field names for thread ID
+  const threadId = (ctx as any).message_thread_id || (ctx as any).messageThreadId;
 
   console.log('[PHOTO] Context details:', {
     messageId,
     threadId,
     chatType: ctx.chat?.type,
-    allKeys: Object.keys(ctx),
+    // Show raw payload to see all fields
+    payload: (ctx as any).payload,
   });
 
   if (!telegramId || !messageId || !photos || photos.length === 0) {
