@@ -10,6 +10,13 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   const photos = ctx.photo;
   const threadId = (ctx as any).messageThreadId;
 
+  console.log('[PHOTO] Context details:', {
+    messageId,
+    threadId,
+    chatType: ctx.chat?.type,
+    allKeys: Object.keys(ctx),
+  });
+
   if (!telegramId || !messageId || !photos || photos.length === 0) {
     console.log('[PHOTO] Ignoring: missing telegramId, messageId or photos');
     return;

@@ -451,6 +451,13 @@ export async function showNextItemForConfirmation(
   // Get thread ID from current item's photo queue
   const queueItem = database.photoQueue.findById(nextItem.photo_queue_id);
 
+  console.log('[PHOTO_PROCESSOR] Sending confirmation:', {
+    photoQueueId: nextItem.photo_queue_id,
+    queueItem,
+    messageThreadId: queueItem?.message_thread_id,
+    willIncludeThreadId: !!(queueItem?.message_thread_id),
+  });
+
   // Send message to group
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
