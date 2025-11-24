@@ -343,8 +343,3 @@ async function checkBudgetLimit(
     }
   }
 }
-
-/**
- * Export saveExpenseToSheet for use in other handlers
- */
-export { saveExpenseToSheet };
