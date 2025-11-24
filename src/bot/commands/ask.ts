@@ -168,12 +168,12 @@ ${budgetsContext}`;
           ) {
             // Truncate to fit Telegram limit (4096 chars) for intermediate updates
             const MAX_INTERMEDIATE_LENGTH = 4000;
-            let textToSend = fullResponse;
+            let textToSend = processThinkTags(fullResponse);
             let isTruncated = false;
 
             if (textToSend.length > MAX_INTERMEDIATE_LENGTH) {
               textToSend =
-                fullResponse.substring(0, MAX_INTERMEDIATE_LENGTH) + "...";
+                textToSend.substring(0, MAX_INTERMEDIATE_LENGTH) + "...";
               isTruncated = true;
             }
 
@@ -300,11 +300,22 @@ ${budgetsContext}`;
 }
 
 /**
+ * Process think tags - replace them with human-readable text
+ */
+function processThinkTags(text: string): string {
+  // Replace <think> with start marker
+  text = text.replace(/<think>/g, "🤔 <i>Бот начал размышление</i>\n\n");
+  // Replace </think> with end marker
+  text = text.replace(/<\/think>/g, "\n\n💬 <i>Бот начал формулировать ответ</i>");
+  return text;
+}
+
+/**
  * Split text into chunks respecting Telegram message limit
  */
 function splitIntoChunks(text: string, maxLength: number): string[] {
-  // Remove <think> tags if present
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+  // Process think tags first
+  text = processThinkTags(text);
 
   if (text.length <= maxLength) {
     return [text];
