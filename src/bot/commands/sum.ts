@@ -3,6 +3,7 @@ import { database } from '../../database';
 import { format, startOfMonth, endOfMonth, subMonths, startOfDay } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { hasBudgetSheet, createBudgetSheet } from '../../services/google/sheets';
+import { silentSyncBudgets } from './budget';
 
 /**
  * /sum and /total command handler - show current month expenses summary
@@ -29,6 +30,18 @@ export async function handleSumCommand(ctx: Ctx["Command"]): Promise<void> {
   if (!group) {
     await ctx.send('❌ Группа не настроена. Используй /connect');
     return;
+  }
+
+  // Silent sync budgets from Google Sheets
+  if (group.google_refresh_token && group.spreadsheet_id) {
+    const syncedCount = await silentSyncBudgets(
+      group.google_refresh_token,
+      group.spreadsheet_id,
+      group.id
+    );
+    if (syncedCount > 0) {
+      await ctx.send(`🔄 Синхронизировано бюджетов: ${syncedCount}`);
+    }
   }
 
   // Get current month boundaries

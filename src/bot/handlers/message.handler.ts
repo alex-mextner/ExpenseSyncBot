@@ -8,6 +8,7 @@ import {
 } from "../../services/currency/parser";
 import { createCategoryConfirmKeyboard } from "../keyboards";
 import { setMessageReaction, deleteMessage } from "../telegram-api";
+import { silentSyncBudgets } from "../commands/budget";
 
 /**
  * Handle expense message
@@ -176,7 +177,7 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
 /**
  * Save expense to Google Sheet
  */
-async function saveExpenseToSheet(
+export async function saveExpenseToSheet(
   userId: number,
   groupId: number,
   pendingExpenseId: number,
@@ -207,6 +208,13 @@ async function saveExpenseToSheet(
 
   const { convertToEUR } = await import("../../services/currency/converter");
   const { appendExpenseRow } = await import("../../services/google/sheets");
+
+  // Silent sync budgets from Google Sheets
+  await silentSyncBudgets(
+    group.google_refresh_token,
+    group.spreadsheet_id,
+    group.id
+  );
 
   // Calculate EUR amount
   const eurAmount = convertToEUR(

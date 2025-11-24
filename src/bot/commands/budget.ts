@@ -145,6 +145,18 @@ export async function handleBudgetCommand(ctx: Ctx["Command"]): Promise<void> {
   console.log('[BUDGET] Args:', args);
   console.log('[BUDGET] Args length:', args.length);
 
+  // Silent sync budgets from Google Sheets
+  if (group.google_refresh_token && group.spreadsheet_id) {
+    const syncedCount = await silentSyncBudgets(
+      group.google_refresh_token,
+      group.spreadsheet_id,
+      group.id
+    );
+    if (syncedCount > 0) {
+      await ctx.send(`🔄 Синхронизировано бюджетов: ${syncedCount}`);
+    }
+  }
+
   if (args.length === 0) {
     // Show current budgets and progress
     await showBudgetProgress(ctx, group);
@@ -358,6 +370,67 @@ async function setBudget(
       `⚠️ Бюджет сохранен в базу данных, но не удалось записать в Google Sheets.\n` +
       `Проверь доступ к таблице или используй /budget sync позже.`
     );
+  }
+}
+
+/**
+ * Silently sync budgets from Google Sheets to database
+ * Returns number of synced budgets
+ */
+export async function silentSyncBudgets(
+  googleRefreshToken: string,
+  spreadsheetId: string,
+  groupId: number
+): Promise<number> {
+  try {
+    // Check if Budget sheet exists
+    const hasSheet = await hasBudgetSheet(googleRefreshToken, spreadsheetId);
+    if (!hasSheet) {
+      return 0;
+    }
+
+    // Read budgets from Google Sheets
+    const budgetsFromSheet = await readBudgetData(googleRefreshToken, spreadsheetId);
+    if (budgetsFromSheet.length === 0) {
+      return 0;
+    }
+
+    let syncedCount = 0;
+
+    for (const budgetData of budgetsFromSheet) {
+      // Check if category exists, if not - create it
+      const categoryExists = database.categories.exists(groupId, budgetData.category);
+      if (!categoryExists) {
+        database.categories.create({ group_id: groupId, name: budgetData.category });
+      }
+
+      // Get existing budget to check if it changed
+      const existing = database.budgets.findByGroupCategoryMonth(
+        groupId,
+        budgetData.category,
+        budgetData.month
+      );
+
+      const hasChanged = !existing ||
+        existing.limit_amount !== budgetData.limit ||
+        existing.currency !== budgetData.currency;
+
+      if (hasChanged) {
+        database.budgets.setBudget({
+          group_id: groupId,
+          category: budgetData.category,
+          month: budgetData.month,
+          limit_amount: budgetData.limit,
+          currency: budgetData.currency,
+        });
+        syncedCount++;
+      }
+    }
+
+    return syncedCount;
+  } catch (err) {
+    console.error('[BUDGET] Silent sync failed:', err);
+    return 0;
   }
 }
 
