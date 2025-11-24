@@ -44,9 +44,13 @@ export async function extractExpensesFromReceipt(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // Extract text from HTML if needed
-      const text = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE')
-        ? extractTextFromHTML(receiptData)
-        : receiptData;
+      const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
+      const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
+
+      if (isHTML) {
+        console.log(`[AI_EXTRACTOR] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`);
+      }
+      console.log(`[AI_EXTRACTOR] Sending ${text.length} chars to AI (attempt ${attempt}/${maxRetries})`);
 
       // Build prompt
       const prompt = buildExtractionPrompt(text, existingCategories);
