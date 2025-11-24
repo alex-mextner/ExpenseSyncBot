@@ -184,6 +184,7 @@ ${budgetsContext}`;
                   chat_id: chatId,
                   message_id: sentMessageId,
                   text: textToSend,
+                  parse_mode: "HTML",
                 });
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
@@ -204,7 +205,7 @@ ${budgetsContext}`;
                       chat_id: chatId,
                       message_id: sentMessageId,
                     });
-                    const sent = await ctx.send(textToSend);
+                    const sent = await ctx.send(textToSend, { parse_mode: "HTML" });
                     sentMessageId = sent.id;
                     lastMessageText = textToSend;
                     lastUpdateTime = now;
@@ -219,7 +220,7 @@ ${budgetsContext}`;
               // Send initial message only if not truncated
               // (if truncated, wait for final version)
               try {
-                const sent = await ctx.send(textToSend);
+                const sent = await ctx.send(textToSend, { parse_mode: "HTML" });
                 sentMessageId = sent.id;
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
