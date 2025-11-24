@@ -372,6 +372,20 @@ function processThinkTags(text: string): string {
 }
 
 /**
+ * Process think tags for advice - completely remove thinking content
+ */
+function processThinkTagsForAdvice(text: string): string {
+  // Replace entire <think>...</think> blocks with "Бот думает..."
+  text = text.replace(
+    /<think>[\s\S]*?<\/think>/g,
+    "<i>Бот думает...</i>\n\n"
+  );
+  // Clean up extra newlines
+  text = text.replace(/\n{3,}/g, "\n\n");
+  return text.trim();
+}
+
+/**
  * Safely truncate HTML text to maxLength ensuring valid HTML
  */
 function safelyTruncateHTML(text: string, maxLength: number): string {
@@ -759,8 +773,8 @@ ${statsContext}
     const advice = response.choices[0]?.message?.content || "";
     if (!advice) return;
 
-    // Clean up think tags
-    const cleanAdvice = processThinkTags(advice);
+    // Clean up think tags - for advice, remove thinking content completely
+    const cleanAdvice = processThinkTagsForAdvice(advice);
 
     // Send advice with stats
     const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}\n\n<i>Статистика:</i>\n<code>${statsContext.trim()}</code>`;
