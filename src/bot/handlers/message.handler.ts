@@ -138,7 +138,7 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
     // If category exists, save directly
     if (categoryExists || !parsed.category) {
       console.log(`[MSG] Line ${index + 1}: saving to sheet`);
-      await saveExpenseToSheet(user.id, group.id, pendingExpense.id);
+      await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId);
       successCount++;
     }
   }
@@ -179,7 +179,8 @@ export async function handleExpenseMessage(ctx: Ctx["Message"]): Promise<void> {
 async function saveExpenseToSheet(
   userId: number,
   groupId: number,
-  pendingExpenseId: number
+  pendingExpenseId: number,
+  telegramGroupId?: number
 ): Promise<void> {
   console.log(`[SAVE] Starting save to sheet...`);
 
@@ -267,6 +268,72 @@ async function saveExpenseToSheet(
   // Delete pending expense
   database.pendingExpenses.delete(pendingExpenseId);
   console.log(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
+
+  // Check budget limits
+  if (telegramGroupId) {
+    await checkBudgetLimit(groupId, category, currentDate, telegramGroupId);
+  }
+}
+
+/**
+ * Check if budget limit is exceeded or approaching for a category
+ */
+async function checkBudgetLimit(
+  groupId: number,
+  category: string,
+  currentDate: string,
+  telegramGroupId: number
+): Promise<void> {
+  const { startOfMonth, endOfMonth, format } = await import('date-fns');
+  const { getCategoryEmoji } = await import('../../config/category-emojis');
+  const { sendMessage } = await import('../telegram-api');
+
+  const now = new Date(currentDate);
+  const currentMonth = format(now, 'yyyy-MM');
+  const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+  const monthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+
+  // Get budget for category
+  const budget = database.budgets.getBudgetForMonth(groupId, category, currentMonth);
+
+  if (!budget) {
+    // No budget set for this category
+    return;
+  }
+
+  // Calculate total spending in category for current month
+  const expenses = database.expenses.findByDateRange(groupId, monthStart, monthEnd);
+  const categorySpending = expenses
+    .filter(exp => exp.category === category)
+    .reduce((sum, exp) => sum + exp.eur_amount, 0);
+
+  const percentage = budget.limit_amount > 0
+    ? Math.round((categorySpending / budget.limit_amount) * 100)
+    : 0;
+
+  // Check if warning or exceeded
+  const isExceeded = categorySpending > budget.limit_amount;
+  const isWarning = percentage >= 90 && !isExceeded;
+
+  if (isExceeded || isWarning) {
+    const emoji = getCategoryEmoji(category);
+    let message = '';
+
+    if (isExceeded) {
+      message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
+      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
+    } else if (isWarning) {
+      message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
+      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
+    }
+
+    try {
+      await sendMessage(telegramGroupId, message);
+      console.log(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
+    } catch (error) {
+      console.error(`[BUDGET] Failed to send warning:`, error);
+    }
+  }
 }
 
 /**

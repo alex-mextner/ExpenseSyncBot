@@ -117,3 +117,43 @@ export interface CreateExpenseData {
   currency: CurrencyCode;
   eur_amount: number;
 }
+
+/**
+ * Budget model
+ */
+export interface Budget {
+  id: number;
+  group_id: number;
+  category: string;
+  month: string; // Format: "YYYY-MM"
+  limit_amount: number;
+  currency: CurrencyCode;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBudgetData {
+  group_id: number;
+  category: string;
+  month: string;
+  limit_amount: number;
+  currency?: CurrencyCode;
+}
+
+export interface UpdateBudgetData {
+  limit_amount?: number;
+  currency?: CurrencyCode;
+}
+
+/**
+ * Budget progress (for analytics and display)
+ */
+export interface BudgetProgress {
+  category: string;
+  limit_amount: number;
+  spent_amount: number;
+  currency: CurrencyCode;
+  percentage: number;
+  is_exceeded: boolean;
+  is_warning: boolean; // >= 90%
+}

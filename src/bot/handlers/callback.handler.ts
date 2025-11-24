@@ -1,10 +1,12 @@
 import { MESSAGES } from "../../config/constants";
 import { database } from "../../database";
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from "../commands/connect";
-import { createCategoriesListKeyboard } from "../keyboards";
+import { createCategoriesListKeyboard, createBudgetPromptKeyboard } from "../keyboards";
 import type { Ctx } from "../types";
 import { saveExpenseToSheet } from "./message.handler";
-import { deleteMessage } from "../telegram-api";
+import { deleteMessage, sendMessage } from "../telegram-api";
+import { format } from 'date-fns';
+import { writeBudgetRow, hasBudgetSheet, createBudgetSheet } from "../../services/google/sheets";
 
 /**
  * Handle callback queries from inline keyboards
@@ -50,6 +52,10 @@ export async function handleCallbackQuery(
 
     case "confirm":
       await handleConfirmAction(ctx, params, telegramId);
+      break;
+
+    case "budget":
+      await handleBudgetAction(ctx, params, telegramId);
       break;
 
     default:
@@ -107,7 +113,17 @@ async function handleCategoryAction(
 
       if (pending) {
         database.pendingExpenses.update(pending.id, { status: "confirmed" });
-        await saveExpenseToSheet(user.id, group.id, pending.id);
+        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined);
+      }
+
+      // Prompt for budget setup
+      if (chatId) {
+        const keyboard = createBudgetPromptKeyboard(categoryName);
+        await sendMessage(
+          chatId,
+          `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
+          { reply_markup: keyboard.build() }
+        );
       }
 
       break;
@@ -161,7 +177,7 @@ async function handleCategoryAction(
       }
 
       // Save expense
-      await saveExpenseToSheet(user.id, group.id, pending.id);
+      await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined);
       break;
     }
 
@@ -201,5 +217,107 @@ async function handleConfirmAction(
     if (messageId && chatId) {
       await deleteMessage(chatId, messageId);
     }
+  }
+}
+
+/**
+ * Handle budget-related callbacks
+ */
+async function handleBudgetAction(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  telegramId: number
+): Promise<void> {
+  const [subAction, category, ...rest] = params;
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user || !user.group_id) {
+    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+    return;
+  }
+
+  const group = database.groups.findById(user.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  const chatId = ctx.message?.chat?.id;
+  const messageId = ctx.message?.id;
+
+  switch (subAction) {
+    case "set": {
+      // Set budget for category
+      const amountStr = rest[0];
+      const amount = amountStr ? parseFloat(amountStr) : 100;
+
+      if (Number.isNaN(amount) || amount <= 0) {
+        await ctx.answerCallbackQuery({ text: "❌ Неверная сумма" });
+        return;
+      }
+
+      const now = new Date();
+      const currentMonth = format(now, 'yyyy-MM');
+
+      // Save to database
+      database.budgets.setBudget({
+        group_id: group.id,
+        category,
+        month: currentMonth,
+        limit_amount: amount,
+        currency: 'EUR',
+      });
+
+      // Ensure Budget sheet exists and write to Google Sheets
+      if (group.google_refresh_token && group.spreadsheet_id) {
+        try {
+          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+
+          if (!hasSheet) {
+            const categories = database.categories.getCategoryNames(group.id);
+            await createBudgetSheet(
+              group.google_refresh_token,
+              group.spreadsheet_id,
+              categories,
+              100,
+              'EUR'
+            );
+          }
+
+          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
+            month: currentMonth,
+            category,
+            limit: amount,
+            currency: 'EUR',
+          });
+        } catch (err) {
+          console.error('[BUDGET] Failed to write to Google Sheets:', err);
+        }
+      }
+
+      await ctx.answerCallbackQuery({ text: `✅ Бюджет установлен: €${amount}` });
+
+      // Delete the button message
+      if (messageId && chatId) {
+        await deleteMessage(chatId, messageId);
+      }
+
+      break;
+    }
+
+    case "skip": {
+      await ctx.answerCallbackQuery({ text: "⏭️ Пропущено" });
+
+      // Delete the button message
+      if (messageId && chatId) {
+        await deleteMessage(chatId, messageId);
+      }
+
+      break;
+    }
+
+    default:
+      await ctx.answerCallbackQuery({ text: "Unknown budget action" });
   }
 }

@@ -1,6 +1,8 @@
 import type { Ctx } from '../types';
 import { database } from '../../database';
 import { format, startOfMonth, endOfMonth, subMonths, startOfDay } from 'date-fns';
+import { getCategoryEmoji } from '../../config/category-emojis';
+import { hasBudgetSheet, createBudgetSheet } from '../../services/google/sheets';
 
 /**
  * /sum and /total command handler - show current month expenses summary
@@ -189,5 +191,102 @@ export async function handleSumCommand(ctx: Ctx["Command"]): Promise<void> {
     }
   }
 
-  await ctx.send(message);
+  // Add budget information
+  await addBudgetInfo(message, group, currentMonthExpenses, ctx);
+}
+
+/**
+ * Add budget information to /sum output
+ */
+async function addBudgetInfo(
+  baseMessage: string,
+  group: { id: number; google_refresh_token: string | null; spreadsheet_id: string | null },
+  currentMonthExpenses: Array<{ category: string; eur_amount: number }>,
+  ctx: Ctx["Command"]
+): Promise<void> {
+  const now = new Date();
+  const currentMonth = format(now, 'yyyy-MM');
+
+  // Get budgets for current month
+  const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
+
+  if (budgets.length === 0) {
+    // No budgets set - just send base message
+    await ctx.send(baseMessage);
+    return;
+  }
+
+  // Ensure Budget sheet exists
+  if (group.google_refresh_token && group.spreadsheet_id) {
+    const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+    if (!hasSheet) {
+      const categories = database.categories.getCategoryNames(group.id);
+      if (categories.length > 0) {
+        try {
+          await createBudgetSheet(
+            group.google_refresh_token,
+            group.spreadsheet_id,
+            categories,
+            100,
+            'EUR'
+          );
+        } catch (err) {
+          console.error('[SUM] Failed to create Budget sheet:', err);
+        }
+      }
+    }
+  }
+
+  // Calculate spending by category
+  const categorySpending: Record<string, number> = {};
+  for (const expense of currentMonthExpenses) {
+    categorySpending[expense.category] = (categorySpending[expense.category] || 0) + expense.eur_amount;
+  }
+
+  // Calculate budget progress
+  const budgetProgress = budgets.map(budget => {
+    const spent = categorySpending[budget.category] || 0;
+    const percentage = budget.limit_amount > 0
+      ? Math.round((spent / budget.limit_amount) * 100)
+      : 0;
+
+    return {
+      category: budget.category,
+      spent,
+      limit: budget.limit_amount,
+      percentage,
+      is_exceeded: spent > budget.limit_amount,
+      is_warning: percentage >= 90,
+    };
+  });
+
+  // Calculate total budget
+  const totalBudget = budgets.reduce((sum, b) => sum + b.limit_amount, 0);
+  const totalSpent = budgets.reduce((sum, b) => sum + (categorySpending[b.category] || 0), 0);
+  const totalPercentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+
+  // Sort by percentage descending
+  budgetProgress.sort((a, b) => b.percentage - a.percentage);
+
+  // Build budget section
+  let budgetMessage = `\n\n💰 Бюджет:\n`;
+  budgetMessage += `Всего: €${totalSpent.toFixed(2)} / €${totalBudget.toFixed(2)} (${totalPercentage}%)\n\n`;
+
+  // Show only exceeded and warning categories
+  const importantCategories = budgetProgress.filter(bp => bp.is_exceeded || bp.is_warning);
+
+  if (importantCategories.length > 0) {
+    for (const bp of importantCategories) {
+      const emoji = getCategoryEmoji(bp.category);
+      const status = bp.is_exceeded ? '🔴' : '⚠️';
+      budgetMessage += `${status} ${emoji} ${bp.category}: €${bp.spent.toFixed(2)} / €${bp.limit.toFixed(2)} (${bp.percentage}%)\n`;
+    }
+  }
+
+  // Add hint to view full budget
+  if (budgets.length > importantCategories.length) {
+    budgetMessage += `\nℹ️ Используй /budget для полного отчета`;
+  }
+
+  await ctx.send(baseMessage + budgetMessage);
 }

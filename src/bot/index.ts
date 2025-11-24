@@ -1,5 +1,6 @@
 import { Bot } from "gramio";
 import { env } from "../config/env";
+import { handleBudgetCommand } from "./commands/budget";
 import { handleCategoriesCommand } from "./commands/categories";
 import { handleConnectCommand } from "./commands/connect";
 import {
@@ -31,6 +32,7 @@ export function createBot(): Bot {
   bot.command("sum", handleSumCommand);
   bot.command("total", handleSumCommand);
   bot.command("sync", handleSyncCommand);
+  bot.command("budget", handleBudgetCommand);
   bot.command("categories", handleCategoriesCommand);
   bot.command("settings", handleSettingsCommand);
   bot.command("reconnect", handleReconnectCommand);

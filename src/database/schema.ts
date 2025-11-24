@@ -229,6 +229,41 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '007_create_budgets_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS budgets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            month TEXT NOT NULL,
+            limit_amount REAL NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'EUR',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            UNIQUE(group_id, category, month)
+          );
+        `);
+
+        // Create indexes for faster lookups
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budgets_group_id
+          ON budgets(group_id);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budgets_month
+          ON budgets(month);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budgets_group_month
+          ON budgets(group_id, month);
+        `);
+      },
+    },
   ];
 
   // Check and run migrations

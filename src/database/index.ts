@@ -5,6 +5,7 @@ import { UserRepository } from './repositories/user.repository';
 import { CategoryRepository } from './repositories/category.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
+import { BudgetRepository } from './repositories/budget.repository';
 
 /**
  * Database instance and repositories
@@ -16,6 +17,7 @@ export class DatabaseService {
   public categories: CategoryRepository;
   public pendingExpenses: PendingExpenseRepository;
   public expenses: ExpenseRepository;
+  public budgets: BudgetRepository;
 
   constructor() {
     this.db = setupDatabase();
@@ -24,6 +26,7 @@ export class DatabaseService {
     this.categories = new CategoryRepository(this.db);
     this.pendingExpenses = new PendingExpenseRepository(this.db);
     this.expenses = new ExpenseRepository(this.db);
+    this.budgets = new BudgetRepository(this.db);
   }
 
   /**

@@ -90,3 +90,17 @@ export function createConfirmKeyboard(action: string): InlineKeyboard {
 
   return keyboard;
 }
+
+/**
+ * Create budget setup prompt keyboard
+ */
+export function createBudgetPromptKeyboard(category: string): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text('💰 Установить бюджет €100', `budget:set:${category}:100`)
+    .row()
+    .text('⏭️ Пропустить', `budget:skip:${category}`);
+
+  return keyboard;
+}
