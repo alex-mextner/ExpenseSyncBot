@@ -4,6 +4,58 @@ import { env } from "../../config/env";
 const client = new InferenceClient(env.HF_TOKEN);
 
 /**
+ * Start periodic cleanup of old temp images
+ * Runs every 5 minutes and deletes files older than 5 minutes
+ */
+export function startTempImageCleanup(): void {
+  const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const MAX_AGE = 5 * 60 * 1000; // 5 minutes
+
+  setInterval(async () => {
+    try {
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const tempDir = path.join(process.cwd(), 'temp-images');
+
+      // Check if directory exists
+      try {
+        await fs.access(tempDir);
+      } catch {
+        // Directory doesn't exist, skip cleanup
+        return;
+      }
+
+      const files = await fs.readdir(tempDir);
+      const now = Date.now();
+      let deletedCount = 0;
+
+      for (const file of files) {
+        const filepath = path.join(tempDir, file);
+        const stats = await fs.stat(filepath);
+        const age = now - stats.mtimeMs;
+
+        if (age > MAX_AGE) {
+          try {
+            await fs.unlink(filepath);
+            deletedCount++;
+          } catch (error) {
+            console.error(`[OCR_CLEANUP] Failed to delete old file ${file}:`, error);
+          }
+        }
+      }
+
+      if (deletedCount > 0) {
+        console.log(`[OCR_CLEANUP] Deleted ${deletedCount} old temp image(s)`);
+      }
+    } catch (error) {
+      console.error('[OCR_CLEANUP] Error during cleanup:', error);
+    }
+  }, CLEANUP_INTERVAL);
+
+  console.log('[OCR_CLEANUP] Started periodic temp image cleanup (every 5 minutes)');
+}
+
+/**
  * Extract text from receipt image using Qwen Vision model
  * @param imageBuffer - Image buffer (JPEG/PNG)
  * @returns Extracted text from receipt
@@ -77,19 +129,31 @@ Return the text exactly as it appears on the receipt, preserving the structure a
       `[OCR] Successfully extracted text (${extractedText.length} chars): ${extractedText.substring(0, 200)}...`
     );
 
+    // Delay cleanup to allow Hugging Face API to download the image
+    // (API returns before actually downloading the file)
+    setTimeout(async () => {
+      try {
+        await fs.unlink(filepath);
+        console.log(`[OCR] Cleaned up temp image: ${filepath}`);
+      } catch (cleanupError) {
+        console.error(`[OCR] Failed to cleanup temp image:`, cleanupError);
+      }
+    }, 30000); // 30 seconds delay
+
     return extractedText;
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
     console.error(`[OCR] Failed to extract text from image:`, errorMessage);
-    throw new Error(`OCR extraction failed: ${errorMessage}`);
-  } finally {
-    // Cleanup temp file
+
+    // Cleanup on error (no delay needed)
     try {
       await fs.unlink(filepath);
-      console.log(`[OCR] Cleaned up temp image: ${filepath}`);
+      console.log(`[OCR] Cleaned up temp image after error: ${filepath}`);
     } catch (cleanupError) {
       console.error(`[OCR] Failed to cleanup temp image:`, cleanupError);
     }
+
+    throw new Error(`OCR extraction failed: ${errorMessage}`);
   }
 }

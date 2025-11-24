@@ -2,6 +2,7 @@ import { startOAuthServer } from './src/web/oauth-callback';
 import { startBot } from './src/bot';
 import { database } from './src/database';
 import { updateExchangeRates } from './src/services/currency/converter';
+import { startTempImageCleanup } from './src/services/receipt/ocr-extractor';
 
 /**
  * Main application entry point
@@ -23,6 +24,11 @@ async function main() {
     // Start OAuth callback server
     console.log('🌐 Starting OAuth server...');
     startOAuthServer();
+    console.log('');
+
+    // Start temp image cleanup
+    console.log('🧹 Starting temp image cleanup...');
+    startTempImageCleanup();
     console.log('');
 
     // Start Telegram bot
