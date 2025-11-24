@@ -9,15 +9,13 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   const messageId = ctx.id;
   const photos = ctx.photo;
 
-  // Try different possible field names for thread ID
-  const threadId = (ctx as any).message_thread_id || (ctx as any).messageThreadId;
+  // Get thread ID from payload (for forum topics)
+  const threadId = (ctx as any).payload?.message_thread_id;
 
-  console.log('[PHOTO] Context details:', {
+  console.log('[PHOTO] Received photo:', {
     messageId,
     threadId,
     chatType: ctx.chat?.type,
-    // Show raw payload to see all fields
-    payload: (ctx as any).payload,
   });
 
   if (!telegramId || !messageId || !photos || photos.length === 0) {
@@ -64,7 +62,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   }
 
   // Add only the largest photo to processing queue
-  database.photoQueue.create({
+  const queueItem = database.photoQueue.create({
     group_id: group.id,
     user_id: user.id,
     message_id: messageId,
@@ -73,7 +71,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
     status: 'pending',
   });
 
-  console.log(`[PHOTO] Added photo to queue: ${largestPhoto.width}x${largestPhoto.height} (${largestPhoto.fileSize} bytes) from user ${telegramId} in group ${chatId}`);
+  console.log(`[PHOTO] Added photo to queue #${queueItem.id}: ${largestPhoto.width}x${largestPhoto.height} (${largestPhoto.fileSize} bytes) from user ${telegramId} in group ${chatId}, thread_id=${threadId || 'none'}`);
 
   // Send confirmation
   await ctx.send(`📸 Фото добавлено в очередь обработки`);
