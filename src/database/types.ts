@@ -157,3 +157,22 @@ export interface BudgetProgress {
   is_exceeded: boolean;
   is_warning: boolean; // >= 90%
 }
+
+/**
+ * Chat message model (for AI conversation history)
+ */
+export interface ChatMessage {
+  id: number;
+  group_id: number;
+  user_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+export interface CreateChatMessageData {
+  group_id: number;
+  user_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+}

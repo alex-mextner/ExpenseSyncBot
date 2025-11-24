@@ -264,6 +264,34 @@ export function runMigrations(db: Database): void {
         `);
       },
     },
+    {
+      name: '008_create_chat_messages_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+
+        // Create indexes for faster lookups
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_group_id
+          ON chat_messages(group_id);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at
+          ON chat_messages(created_at);
+        `);
+      },
+    },
   ];
 
   // Check and run migrations

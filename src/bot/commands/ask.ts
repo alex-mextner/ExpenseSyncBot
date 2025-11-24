@@ -37,6 +37,30 @@ export async function handleAskQuestion(
     return;
   }
 
+  // Get user for storing chat history
+  const userId = ctx.from.id;
+  let user = database.users.findByTelegramId(userId);
+  if (!user) {
+    user = database.users.create({
+      telegram_id: userId,
+      group_id: group.id,
+    });
+  }
+
+  // Get user info
+  const userName = ctx.from.username || ctx.from.firstName || "User";
+
+  // Save user question to chat history
+  database.chatMessages.create({
+    group_id: group.id,
+    user_id: user.id,
+    role: "user",
+    content: `${userName}: ${question}`,
+  });
+
+  // Get recent chat history (last 5 messages)
+  const recentMessages = database.chatMessages.getRecentMessages(group.id, 10); // 5 pairs
+
   // Get all expenses
   const allExpenses = database.expenses.findByGroupId(group.id, 100000);
 
@@ -57,22 +81,32 @@ ${expensesContext}
 Budget items Data:
 ${budgetsContext}`;
 
+  // Build messages array with history
+  const messages: Array<{ role: string; content: string }> = [
+    { role: "system", content: systemPrompt },
+  ];
+
+  // Add recent chat history (excluding current question)
+  for (const msg of recentMessages.slice(0, -1)) {
+    messages.push({
+      role: msg.role,
+      content: msg.content,
+    });
+  }
+
+  // Add current question with username
+  messages.push({
+    role: "user",
+    content: `${userName}: ${question}`,
+  });
+
   try {
     // Create streaming response
     const stream = client.chatCompletionStream({
       provider: "novita",
       model: "deepseek-ai/DeepSeek-R1-0528",
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: question,
-        },
-      ],
-      max_tokens: 2000,
+      messages: messages as any,
+      max_tokens: 4000,
       temperature: 0.7,
     });
 
@@ -124,21 +158,126 @@ ${budgetsContext}`;
       }
     }
 
-    // Send final message if not sent yet
+    // Send final message if not sent yet or update with final version
     if (!sentMessageId && fullResponse) {
-      await ctx.send(fullResponse);
+      // Split into chunks if too long (Telegram limit: 4096 chars)
+      const chunks = splitIntoChunks(fullResponse, 4000);
+      for (const chunk of chunks) {
+        await ctx.send(chunk, { parse_mode: "MarkdownV2" });
+      }
     } else if (sentMessageId && fullResponse !== lastMessageText) {
       // Final edit with complete response
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: sentMessageId,
-        text: fullResponse,
-      });
+      const chunks = splitIntoChunks(fullResponse, 4000);
+
+      if (chunks.length > 0 && chunks[0]) {
+        // Edit first message
+        try {
+          await bot.api.editMessageText({
+            chat_id: chatId,
+            message_id: sentMessageId,
+            text: chunks[0],
+            parse_mode: "MarkdownV2",
+          });
+        } catch (err) {
+          console.error("[ASK] Failed to edit final message:", err);
+        }
+
+        // Send remaining chunks as new messages
+        for (let i = 1; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          if (chunk) {
+            await ctx.send(chunk, { parse_mode: "MarkdownV2" });
+          }
+        }
+      }
     }
+
+    // Save assistant response to chat history
+    database.chatMessages.create({
+      group_id: group.id,
+      user_id: user.id,
+      role: "assistant",
+      content: fullResponse,
+    });
+
+    // Prune old messages (keep last 50)
+    database.chatMessages.pruneOldMessages(group.id, 50);
   } catch (error) {
     console.error("[ASK] Error:", error);
     await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
   }
+}
+
+/**
+ * Split text into chunks respecting Telegram message limit
+ */
+function splitIntoChunks(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) {
+    return [escapeMarkdownV2(text)];
+  }
+
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  // Split by paragraphs first
+  const paragraphs = text.split("\n\n");
+
+  for (const paragraph of paragraphs) {
+    if ((currentChunk + paragraph).length > maxLength) {
+      if (currentChunk) {
+        chunks.push(escapeMarkdownV2(currentChunk.trim()));
+        currentChunk = "";
+      }
+
+      // If single paragraph is too long, split by sentences
+      if (paragraph.length > maxLength) {
+        const sentences = paragraph.split(/([.!?]\s+)/);
+        for (const sentence of sentences) {
+          if ((currentChunk + sentence).length > maxLength) {
+            if (currentChunk) {
+              chunks.push(escapeMarkdownV2(currentChunk.trim()));
+              currentChunk = sentence;
+            } else {
+              // Single sentence too long, split by words
+              const words = sentence.split(" ");
+              for (const word of words) {
+                if ((currentChunk + " " + word).length > maxLength) {
+                  chunks.push(escapeMarkdownV2(currentChunk.trim()));
+                  currentChunk = word;
+                } else {
+                  currentChunk += " " + word;
+                }
+              }
+            }
+          } else {
+            currentChunk += sentence;
+          }
+        }
+      } else {
+        currentChunk = paragraph;
+      }
+    } else {
+      currentChunk += (currentChunk ? "\n\n" : "") + paragraph;
+    }
+  }
+
+  if (currentChunk) {
+    chunks.push(escapeMarkdownV2(currentChunk.trim()));
+  }
+
+  return chunks;
+}
+
+/**
+ * Escape special characters for MarkdownV2
+ */
+function escapeMarkdownV2(text: string): string {
+  // Remove <think> tags if present
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+
+  // Escape special characters for MarkdownV2
+  // Characters to escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
 }
 
 /**
@@ -199,15 +338,10 @@ function buildExpensesContext(
     context += "\n";
   }
 
-  // Add recent expenses with details
-  const recentExpenses = expenses.slice(0, 20);
-  if (recentExpenses.length > 0) {
-    context += "Последние 20 операций:\n";
-  }
-  for (const expense of recentExpenses) {
-    context += `- ${expense.date}: ${
-      expense.category
-    } €${expense.eur_amount.toFixed(2)}`;
+  // Add ALL expenses with details (not just last 20!)
+  context += `\nВсе операции (всего: ${expenses.length}):\n`;
+  for (const expense of expenses) {
+    context += `- ${expense.date}: ${expense.category} €${expense.eur_amount.toFixed(2)}`;
     if (expense.comment) {
       context += ` (${expense.comment})`;
     }

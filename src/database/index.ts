@@ -6,6 +6,7 @@ import { CategoryRepository } from './repositories/category.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
 import { BudgetRepository } from './repositories/budget.repository';
+import { ChatMessageRepository } from './repositories/chat-message.repository';
 
 /**
  * Database instance and repositories
@@ -18,6 +19,7 @@ export class DatabaseService {
   public pendingExpenses: PendingExpenseRepository;
   public expenses: ExpenseRepository;
   public budgets: BudgetRepository;
+  public chatMessages: ChatMessageRepository;
 
   constructor() {
     this.db = setupDatabase();
@@ -27,6 +29,7 @@ export class DatabaseService {
     this.pendingExpenses = new PendingExpenseRepository(this.db);
     this.expenses = new ExpenseRepository(this.db);
     this.budgets = new BudgetRepository(this.db);
+    this.chatMessages = new ChatMessageRepository(this.db);
   }
 
   /**
