@@ -47,7 +47,11 @@ export async function handleBudgetCommand(ctx: Ctx["Command"]): Promise<void> {
   }
 
   // Parse command arguments
-  const args = ctx.message?.text?.split(/\s+/).slice(1) || [];
+  const fullText = ctx.text || ctx.message?.text || '';
+  const args = fullText.split(/\s+/).slice(1);
+
+  console.log('[BUDGET] Full text:', fullText);
+  console.log('[BUDGET] Args:', args);
 
   if (args.length === 0) {
     // Show current budgets and progress
