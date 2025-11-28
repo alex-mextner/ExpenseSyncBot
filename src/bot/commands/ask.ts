@@ -72,7 +72,7 @@ export async function handleAskQuestion(
 
   // Build context from expenses and budgets
   const expensesContext = buildExpensesContext(allExpenses);
-  const budgetsContext = buildBudgetsContext(allBudgets);
+  const budgetsContext = buildBudgetsContext(allBudgets, allExpenses);
 
   // Get unique categories from expenses
   const uniqueCategories = Array.from(
@@ -554,7 +554,7 @@ function buildExpensesContext(
 }
 
 /**
- * Build context from budgets
+ * Build context from budgets with remaining calculations
  */
 function buildBudgetsContext(
   budgets: Array<{
@@ -562,15 +562,34 @@ function buildBudgetsContext(
     month: string;
     limit_amount: number;
     currency: string;
+  }>,
+  expenses: Array<{
+    date: string;
+    category: string;
+    eur_amount: number;
   }>
 ): string {
   if (budgets.length === 0) {
     return "БЮДЖЕТЫ: Бюджеты не установлены.";
   }
 
-  let context = "\n\nБЮДЖЕТЫ:\n\n";
+  // Get current month
+  const currentMonth = new Date().toISOString().substring(0, 7);
 
-  // Group by month
+  // Calculate expenses by category for each month
+  const expensesByMonthCategory: Record<string, Record<string, number>> = {};
+  for (const expense of expenses) {
+    const month = expense.date.substring(0, 7);
+    if (!expensesByMonthCategory[month]) {
+      expensesByMonthCategory[month] = {};
+    }
+    expensesByMonthCategory[month][expense.category] =
+      (expensesByMonthCategory[month][expense.category] || 0) + expense.eur_amount;
+  }
+
+  let context = "\n\nБЮДЖЕТЫ И ОСТАТКИ:\n\n";
+
+  // Group budgets by month
   const byMonth: Record<string, typeof budgets> = {};
   for (const budget of budgets) {
     const monthBudgets = byMonth[budget.month] || [];
@@ -582,15 +601,39 @@ function buildBudgetsContext(
   const months = Object.keys(byMonth).sort().reverse();
 
   for (const month of months.slice(0, 3)) {
-    // Last 3 months
     const monthBudgets = byMonth[month];
     if (!monthBudgets) continue;
-    const total = monthBudgets.reduce((sum, b) => sum + b.limit_amount, 0);
 
-    context += `${month}: €${total.toFixed(2)} всего\n`;
+    const totalLimit = monthBudgets.reduce((sum, b) => sum + b.limit_amount, 0);
+    const monthExpenses = expensesByMonthCategory[month] || {};
 
+    // Calculate total spent for budgeted categories
+    let totalSpentBudgeted = 0;
     for (const budget of monthBudgets) {
-      context += `  - ${budget.category}: €${budget.limit_amount.toFixed(2)}\n`;
+      totalSpentBudgeted += monthExpenses[budget.category] || 0;
+    }
+
+    const totalRemaining = totalLimit - totalSpentBudgeted;
+    const usedPercent = totalLimit > 0 ? ((totalSpentBudgeted / totalLimit) * 100).toFixed(1) : "0";
+
+    const isCurrentMonth = month === currentMonth;
+    const monthLabel = isCurrentMonth ? `${month} (ТЕКУЩИЙ МЕСЯЦ)` : month;
+
+    context += `${monthLabel}:\n`;
+    context += `  Общий бюджет: €${totalLimit.toFixed(2)}\n`;
+    context += `  Потрачено: €${totalSpentBudgeted.toFixed(2)} (${usedPercent}%)\n`;
+    context += `  Остаток: €${totalRemaining.toFixed(2)}\n\n`;
+
+    context += `  По категориям:\n`;
+    for (const budget of monthBudgets) {
+      const spent = monthExpenses[budget.category] || 0;
+      const remaining = budget.limit_amount - spent;
+      const categoryPercent = budget.limit_amount > 0
+        ? ((spent / budget.limit_amount) * 100).toFixed(0)
+        : "0";
+      const status = remaining < 0 ? "⚠️ ПРЕВЫШЕН" : remaining < budget.limit_amount * 0.1 ? "⚠️ почти исчерпан" : "";
+
+      context += `  - ${budget.category}: лимит €${budget.limit_amount.toFixed(2)}, потрачено €${spent.toFixed(2)} (${categoryPercent}%), остаток €${remaining.toFixed(2)} ${status}\n`;
     }
     context += "\n";
   }
