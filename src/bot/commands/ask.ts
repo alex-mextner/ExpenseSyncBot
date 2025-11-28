@@ -225,6 +225,10 @@ ${budgetsContext}`;
             }
 
             if (sentMessageId) {
+              // Skip edit if text is actually the same after processing
+              if (textToSend === lastMessageText) {
+                continue;
+              }
               // Edit existing message
               try {
                 await bot.api.editMessageText({
@@ -247,27 +251,10 @@ ${budgetsContext}`;
                 } else if (
                   err?.description?.includes("message is not modified")
                 ) {
-                  // If message content is the same, delete and send new
-                  console.log(
-                    "[ASK] Message not modified, deleting and resending..."
-                  );
-                  try {
-                    await bot.api.deleteMessage({
-                      chat_id: chatId,
-                      message_id: sentMessageId,
-                    });
-                    const sent = await ctx.send(textToSend, {
-                      parse_mode: "HTML",
-                    });
-                    sentMessageId = sent.id;
-                    lastMessageText = textToSend;
-                    lastUpdateTime = now;
-                  } catch (deleteErr) {
-                    console.error(
-                      "[ASK] Failed to delete/resend message:",
-                      deleteErr
-                    );
-                  }
+                  // Shouldn't happen after the check above, but just in case
+                  console.log("[ASK] Message not modified (unexpected)");
+                  lastMessageText = textToSend;
+                  lastUpdateTime = now;
                 } else {
                   console.error("[ASK] Failed to edit message:", err);
                 }
@@ -296,12 +283,12 @@ ${budgetsContext}`;
       for (const chunk of chunks) {
         await ctx.send(chunk, { parse_mode: "HTML" });
       }
-    } else if (sentMessageId && fullResponse !== lastMessageText) {
+    } else if (sentMessageId) {
       // Update with final response
       const chunks = splitIntoChunks(fullResponse, 4000);
 
-      if (chunks.length > 0 && chunks[0]) {
-        // Edit first message with final version
+      // Edit first message only if it actually differs from last sent message
+      if (chunks.length > 0 && chunks[0] && chunks[0] !== lastMessageText) {
         try {
           await bot.api.editMessageText({
             chat_id: chatId,
@@ -311,35 +298,21 @@ ${budgetsContext}`;
           });
         } catch (err: any) {
           if (err?.description?.includes("message is not modified")) {
-            // If message content is the same, delete and send new
-            console.log(
-              "[ASK] Final message not modified, deleting and resending..."
-            );
-            try {
-              await bot.api.deleteMessage({
-                chat_id: chatId,
-                message_id: sentMessageId,
-              });
-              await ctx.send(chunks[0], { parse_mode: "HTML" });
-            } catch (deleteErr) {
-              console.error(
-                "[ASK] Failed to delete/resend final message:",
-                deleteErr
-              );
-            }
+            // Shouldn't happen after the check above, but just in case
+            console.log("[ASK] Final message not modified (unexpected)");
           } else {
             console.error("[ASK] Failed to edit final message:", err);
             // If edit failed for other reason, send as new message
             await ctx.send(chunks[0], { parse_mode: "HTML" });
           }
         }
+      }
 
-        // Send remaining chunks as new messages
-        for (let i = 1; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          if (chunk) {
-            await ctx.send(chunk, { parse_mode: "HTML" });
-          }
+      // Send remaining chunks as new messages (regardless of first chunk edit)
+      for (let i = 1; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (chunk) {
+          await ctx.send(chunk, { parse_mode: "HTML" });
         }
       }
     }
