@@ -10,6 +10,7 @@ import {
 import { createCategoryConfirmKeyboard } from "../keyboards";
 import { silentSyncBudgets } from "../commands/budget";
 import { maybeSendDailyAdvice } from "../commands/ask";
+import { extractURLsFromText, processPaymentLinks } from "../../services/receipt/link-analyzer";
 
 /**
  * Handle expense message
@@ -123,6 +124,13 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
   if (waitingItem) {
     await handleCategoryTextInput(ctx, bot, text, waitingItem, group.id);
     return;
+  }
+
+  // Check for URLs in message
+  const urls = extractURLsFromText(text);
+  if (urls.length > 0) {
+    const hasPayment = await processPaymentLinks(bot, telegramGroupId, messageId, urls, group, user);
+    if (hasPayment) return;
   }
 
   // Split message by lines and process each line
@@ -532,3 +540,4 @@ async function handleCategoryTextInput(
     }
   }
 }
+

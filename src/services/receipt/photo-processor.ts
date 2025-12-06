@@ -5,8 +5,10 @@ import { fetchReceiptData } from "./receipt-fetcher";
 import {
   extractExpensesFromReceipt,
   type AIExtractionResult,
+  type AIReceiptItem,
 } from "./ai-extractor";
 import { env } from "../../config/env";
+import type { CurrencyCode } from "../../config/constants";
 
 let isProcessing = false;
 
@@ -70,6 +72,37 @@ async function processQueue(bot: Bot): Promise<void> {
       );
     }
   }
+}
+
+/**
+ * Save extracted items to receipt_items table
+ * Reusable for both photo processing and link analysis
+ */
+export function saveExtractedItems(
+  photoQueueId: number,
+  items: AIReceiptItem[],
+  currency: CurrencyCode
+): void {
+  for (const item of items) {
+    database.receiptItems.create({
+      photo_queue_id: photoQueueId,
+      name_ru: item.name_ru,
+      name_original: item.name_original,
+      quantity: item.quantity,
+      price: item.price,
+      total: item.total,
+      currency,
+      suggested_category: item.category,
+      possible_categories: item.possible_categories || [],
+      status: "pending",
+    });
+  }
+
+  database.photoQueue.update(photoQueueId, { status: "done" });
+
+  console.log(
+    `[PHOTO_PROCESSOR] Saved ${items.length} items for queue #${photoQueueId}`
+  );
 }
 
 /**
@@ -283,27 +316,7 @@ async function processPhotoQueueItem(
       extractionResult.currency || group?.default_currency || "EUR";
 
     // Save receipt items to database
-    for (const aiItem of extractionResult.items) {
-      database.receiptItems.create({
-        photo_queue_id: queueItemId,
-        name_ru: aiItem.name_ru,
-        name_original: aiItem.name_original,
-        quantity: aiItem.quantity,
-        price: aiItem.price,
-        total: aiItem.total,
-        currency,
-        suggested_category: aiItem.category,
-        possible_categories: aiItem.possible_categories || [],
-        status: "pending",
-      });
-    }
-
-    // Mark photo as done
-    database.photoQueue.update(queueItemId, { status: "done" });
-
-    console.log(
-      `[PHOTO_PROCESSOR] Successfully extracted ${extractionResult.items.length} items from receipt #${queueItemId}`
-    );
+    saveExtractedItems(queueItemId, extractionResult.items, currency);
 
     // Show first item for confirmation from this receipt
     await showNextItemForConfirmation(bot, queueItem.group_id, queueItemId);
