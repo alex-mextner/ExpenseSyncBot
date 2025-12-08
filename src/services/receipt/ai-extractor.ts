@@ -197,6 +197,27 @@ export async function extractExpensesFromReceipt(
           `[AI_EXTRACTOR] Extraction failed on attempt ${attempt}/${maxRetries}:`,
           lastError.message
         );
+
+        // Log additional error details for network errors
+        const err = error as Error & {
+          status?: number;
+          statusText?: string;
+          cause?: unknown;
+          response?: { status?: number; statusText?: string; body?: unknown };
+        };
+
+        if (err.status || err.statusText) {
+          console.error(`[AI_EXTRACTOR] HTTP Status: ${err.status} ${err.statusText || ''}`);
+        }
+        if (err.cause) {
+          console.error(`[AI_EXTRACTOR] Cause:`, err.cause);
+        }
+        if (err.response) {
+          console.error(`[AI_EXTRACTOR] Response:`, JSON.stringify(err.response, null, 2));
+        }
+        if (lastError.stack) {
+          console.error(`[AI_EXTRACTOR] Stack:`, lastError.stack);
+        }
       }
 
       if (attempt === maxRetries) {
