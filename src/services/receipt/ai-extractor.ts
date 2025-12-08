@@ -136,7 +136,10 @@ export async function extractExpensesFromReceipt(
           } chars):\n${jsonMatch[1].substring(0, 500)}...`
         );
 
-        const result = JSON.parse(jsonMatch[1]) as AIExtractionResult;
+        // Fix decimal separator: replace comma with dot in numbers (e.g., 399,99 -> 399.99)
+        const fixedJson = jsonMatch[1].replace(/(\d),(\d)/g, "$1.$2");
+
+        const result = JSON.parse(fixedJson) as AIExtractionResult;
 
         // Validate result
         if (
