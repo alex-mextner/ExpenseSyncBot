@@ -62,7 +62,7 @@ export async function extractExpensesFromReceipt(
 
       // Call AI model
       const response = await client.chatCompletion({
-        provider: "novita",
+        provider: "nebius",
         model: "deepseek-ai/DeepSeek-R1-0528",
         messages: [
           {
