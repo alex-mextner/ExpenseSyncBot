@@ -9,6 +9,8 @@ import {
 } from "./ai-extractor";
 import { env } from "../../config/env";
 import type { CurrencyCode } from "../../config/constants";
+import { createReceiptSummaryKeyboard } from "../../bot/keyboards";
+import { buildSummaryFromItems, formatSummaryMessage } from "./receipt-summarizer";
 
 let isProcessing = false;
 
@@ -318,8 +320,8 @@ async function processPhotoQueueItem(
     // Save receipt items to database
     saveExtractedItems(queueItemId, extractionResult.items, currency);
 
-    // Show first item for confirmation from this receipt
-    await showNextItemForConfirmation(bot, queueItem.group_id, queueItemId);
+    // Show confirmation options (summary for >5 items, item-by-item otherwise)
+    await showReceiptConfirmationOptions(bot, queueItem.group_id, queueItemId);
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
@@ -361,6 +363,67 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
 
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+/**
+ * Show receipt confirmation options
+ * If items > 5: show summary with bulk options
+ * Otherwise: show item-by-item confirmation
+ */
+export async function showReceiptConfirmationOptions(
+  bot: Bot,
+  groupId: number,
+  photoQueueId: number
+): Promise<void> {
+  const items = database.receiptItems.findByPhotoQueueId(photoQueueId);
+  const pendingItems = items.filter(item => item.status === 'pending');
+
+  if (pendingItems.length === 0) {
+    console.log("[PHOTO_PROCESSOR] No pending items to confirm");
+    return;
+  }
+
+  // If 5 or fewer items, use item-by-item confirmation
+  if (pendingItems.length <= 5) {
+    await showNextItemForConfirmation(bot, groupId, photoQueueId);
+    return;
+  }
+
+  // More than 5 items - show summary with options
+  const group = database.groups.findById(groupId);
+  if (!group) {
+    console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    return;
+  }
+
+  // Build summary from items
+  const summary = buildSummaryFromItems(pendingItems);
+  const summaryMessage = formatSummaryMessage(summary, pendingItems.length);
+
+  // Store summary in photo queue
+  database.photoQueue.update(photoQueueId, {
+    ai_summary: JSON.stringify(summary),
+    summary_mode: 1,
+  });
+
+  // Get thread ID from photo queue
+  const queueItem = database.photoQueue.findById(photoQueueId);
+
+  // Send summary message with keyboard
+  const sentMessage = await bot.api.sendMessage({
+    chat_id: group.telegram_group_id,
+    ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
+    text: summaryMessage,
+    parse_mode: "HTML",
+    reply_markup: createReceiptSummaryKeyboard(photoQueueId).toJSON(),
+  });
+
+  // Store message ID for later editing
+  database.photoQueue.update(photoQueueId, {
+    summary_message_id: sentMessage.message_id,
+  });
+
+  console.log(`[PHOTO_PROCESSOR] Showed receipt summary for ${pendingItems.length} items, queue #${photoQueueId}`);
 }
 
 /**

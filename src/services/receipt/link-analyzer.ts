@@ -3,7 +3,7 @@ import type { Group, User } from "../../database/types";
 import { database } from "../../database";
 import { fetchReceiptData } from "./receipt-fetcher";
 import { extractExpensesFromReceipt } from "./ai-extractor";
-import { saveExtractedItems, showNextItemForConfirmation } from "./photo-processor";
+import { saveExtractedItems, showReceiptConfirmationOptions } from "./photo-processor";
 
 /**
  * Extract URLs from text message
@@ -60,9 +60,9 @@ export async function processPaymentLinks(
       status: 'pending',
     });
 
-    // Save and show
+    // Save and show (summary for >5 items, item-by-item otherwise)
     saveExtractedItems(queueItem.id, result.items, result.currency);
-    await showNextItemForConfirmation(bot, group.id, queueItem.id);
+    await showReceiptConfirmationOptions(bot, group.id, queueItem.id);
   }
 
   // Remove reaction if nothing found

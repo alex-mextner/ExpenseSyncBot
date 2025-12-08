@@ -126,3 +126,36 @@ export function createAddCategoryWithBudgetKeyboard(category: string, amount: nu
 
   return keyboard;
 }
+
+/**
+ * Create receipt summary keyboard (for receipts with >5 items)
+ * Shows options: Accept all, Bulk edit, Item-by-item
+ */
+export function createReceiptSummaryKeyboard(photoQueueId: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text('✅ Принять все разом', `receipt:accept_all:${photoQueueId}`)
+    .row()
+    .text('🎨 Описать крупными мазками', `receipt:bulk_edit:${photoQueueId}`)
+    .row()
+    .text('📦 По одной позиции', `receipt:itemwise:${photoQueueId}`);
+
+  return keyboard;
+}
+
+/**
+ * Create bulk edit mode keyboard (after AI correction)
+ * Shows options: Accept, Item-by-item, Cancel
+ */
+export function createBulkEditKeyboard(photoQueueId: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text('✅ Принять', `receipt:accept_bulk:${photoQueueId}`)
+    .row()
+    .text('📦 По одной позиции', `receipt:itemwise:${photoQueueId}`)
+    .text('❌ Отмена', `receipt:cancel:${photoQueueId}`);
+
+  return keyboard;
+}

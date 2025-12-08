@@ -85,7 +85,7 @@ export class PhotoQueueRepository {
    */
   update(id: number, data: UpdatePhotoQueueData): PhotoQueueItem {
     const updates: string[] = [];
-    const values: (string | number)[] = [];
+    const values: (string | number | null)[] = [];
 
     if (data.status !== undefined) {
       updates.push('status = ?');
@@ -97,13 +97,38 @@ export class PhotoQueueRepository {
       values.push(data.error_message || '');
     }
 
+    if (data.summary_mode !== undefined) {
+      updates.push('summary_mode = ?');
+      values.push(data.summary_mode);
+    }
+
+    if (data.ai_summary !== undefined) {
+      updates.push('ai_summary = ?');
+      values.push(data.ai_summary);
+    }
+
+    if (data.correction_history !== undefined) {
+      updates.push('correction_history = ?');
+      values.push(data.correction_history);
+    }
+
+    if (data.waiting_for_bulk_correction !== undefined) {
+      updates.push('waiting_for_bulk_correction = ?');
+      values.push(data.waiting_for_bulk_correction);
+    }
+
+    if (data.summary_message_id !== undefined) {
+      updates.push('summary_message_id = ?');
+      values.push(data.summary_message_id);
+    }
+
     if (updates.length === 0) {
       throw new Error('No fields to update');
     }
 
     values.push(id);
 
-    const query = this.db.query<void, (string | number)[]>(`
+    const query = this.db.query<void, (string | number | null)[]>(`
       UPDATE photo_processing_queue
       SET ${updates.join(', ')}
       WHERE id = ?
@@ -118,6 +143,20 @@ export class PhotoQueueRepository {
     }
 
     return item;
+  }
+
+  /**
+   * Find item waiting for bulk correction input in a group
+   */
+  findWaitingForBulkCorrection(groupId: number): PhotoQueueItem | null {
+    const query = this.db.query<PhotoQueueItem, [number]>(`
+      SELECT * FROM photo_processing_queue
+      WHERE group_id = ? AND waiting_for_bulk_correction = 1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+
+    return query.get(groupId) || null;
   }
 
   /**

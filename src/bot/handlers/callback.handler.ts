@@ -89,6 +89,10 @@ export async function handleCallbackQuery(
       await handleCreateNewCategory(ctx, params, telegramId, bot);
       break;
 
+    case "receipt":
+      await handleReceiptSummaryAction(ctx, params, telegramId, bot);
+      break;
+
     default:
       await ctx.answerCallbackQuery({ text: "Unknown action" });
   }
@@ -547,11 +551,12 @@ async function handleReceiptItemConfirm(
     category = item.suggested_category;
   } else {
     // Use category from dynamic allPossibleCategories array
-    if (categoryIndex < 0 || categoryIndex >= allPossibleCategories.length) {
+    const selectedCategory = allPossibleCategories[categoryIndex];
+    if (categoryIndex < 0 || categoryIndex >= allPossibleCategories.length || !selectedCategory) {
       await ctx.answerCallbackQuery({ text: "Некорректный индекс категории" });
       return;
     }
-    category = allPossibleCategories[categoryIndex];
+    category = selectedCategory;
   }
 
   // Update receipt item with confirmed category
@@ -1022,4 +1027,331 @@ async function handleCreateNewCategory(
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
     await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
   }
+}
+
+/**
+ * Handle receipt summary actions (accept_all, bulk_edit, itemwise, accept_bulk, cancel)
+ */
+async function handleReceiptSummaryAction(
+  ctx: Ctx["CallbackQuery"],
+  params: string[],
+  telegramId: number,
+  bot: any
+): Promise<void> {
+  const [subAction, queueIdStr] = params;
+  const messageId = ctx.message?.id;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!subAction || !queueIdStr) {
+    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    return;
+  }
+
+  const queueId = parseInt(queueIdStr, 10);
+
+  if (Number.isNaN(queueId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid queue ID" });
+    return;
+  }
+
+  const user = database.users.findByTelegramId(telegramId);
+
+  if (!user || !user.group_id) {
+    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+    return;
+  }
+
+  const group = database.groups.findById(user.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  const queueItem = database.photoQueue.findById(queueId);
+
+  if (!queueItem) {
+    await ctx.answerCallbackQuery({ text: "Чек не найден" });
+    return;
+  }
+
+  switch (subAction) {
+    case "accept_all":
+      await handleReceiptAcceptAll(ctx, queueItem, group, user, bot, messageId, chatId);
+      break;
+
+    case "bulk_edit":
+      await handleReceiptBulkEdit(ctx, queueItem, group, bot, messageId, chatId);
+      break;
+
+    case "itemwise":
+      await handleReceiptItemwise(ctx, queueItem, group, bot, messageId, chatId);
+      break;
+
+    case "accept_bulk":
+      await handleReceiptAcceptBulk(ctx, queueItem, group, user, bot, messageId, chatId);
+      break;
+
+    case "cancel":
+      await handleReceiptCancel(ctx, queueItem, group, bot, messageId, chatId);
+      break;
+
+    default:
+      await ctx.answerCallbackQuery({ text: "Unknown receipt action" });
+  }
+}
+
+/**
+ * Accept all items as-is (using suggested categories)
+ */
+async function handleReceiptAcceptAll(
+  ctx: Ctx["CallbackQuery"],
+  queueItem: any,
+  group: any,
+  user: any,
+  bot: any,
+  messageId?: number,
+  chatId?: number
+): Promise<void> {
+  const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
+
+  // Mark all pending items as confirmed with their suggested category
+  for (const item of items) {
+    if (item.status === 'pending') {
+      database.receiptItems.update(item.id, {
+        status: 'confirmed',
+        confirmed_category: item.suggested_category,
+      });
+
+      // Create category if doesn't exist
+      if (!database.categories.exists(group.id, item.suggested_category)) {
+        database.categories.create({
+          group_id: group.id,
+          name: item.suggested_category,
+        });
+      }
+    }
+  }
+
+  await ctx.answerCallbackQuery({ text: "✅ Принято!" });
+
+  // Delete summary message
+  if (messageId && chatId) {
+    try {
+      await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+    } catch {}
+  }
+
+  // Save to Google Sheets
+  await saveReceiptExpenses(queueItem.id, group.id, user.id, bot);
+}
+
+/**
+ * Enter bulk edit mode (AI correction)
+ */
+async function handleReceiptBulkEdit(
+  ctx: Ctx["CallbackQuery"],
+  queueItem: any,
+  group: any,
+  bot: any,
+  messageId?: number,
+  chatId?: number
+): Promise<void> {
+  const { createBulkEditKeyboard } = await import('../keyboards');
+
+  // Set waiting for bulk correction flag
+  database.photoQueue.update(queueItem.id, {
+    summary_mode: 1,
+    waiting_for_bulk_correction: 1,
+    summary_message_id: messageId || null,
+  });
+
+  await ctx.answerCallbackQuery({ text: "🎨 Напишите корректировку" });
+
+  // Update message to show bulk edit keyboard
+  if (messageId && chatId) {
+    const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
+    const { buildSummaryFromItems, formatSummaryMessage } = await import('../../services/receipt/receipt-summarizer');
+
+    const summary = buildSummaryFromItems(items);
+    const summaryText = formatSummaryMessage(summary, items.length);
+
+    const message = `${summaryText}\n\n✏️ <i>Напишите корректировку текстом, например:</i>\n<code>перенеси салфетки в Хозтовары</code>`;
+
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: message,
+        parse_mode: 'HTML',
+        reply_markup: createBulkEditKeyboard(queueItem.id),
+      });
+    } catch (error) {
+      console.error('[RECEIPT] Failed to edit message:', error);
+    }
+  }
+}
+
+/**
+ * Switch to item-by-item mode
+ */
+async function handleReceiptItemwise(
+  ctx: Ctx["CallbackQuery"],
+  queueItem: any,
+  group: any,
+  bot: any,
+  messageId?: number,
+  chatId?: number
+): Promise<void> {
+  // Reset summary mode flags
+  database.photoQueue.update(queueItem.id, {
+    summary_mode: 0,
+    waiting_for_bulk_correction: 0,
+    ai_summary: null,
+    correction_history: null,
+  });
+
+  await ctx.answerCallbackQuery({ text: "📦 По одной позиции" });
+
+  // Delete summary message
+  if (messageId && chatId) {
+    try {
+      await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+    } catch {}
+  }
+
+  // Show first item
+  const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+  await showNextItemForConfirmation(bot, group.id, queueItem.id);
+}
+
+/**
+ * Accept bulk edit result
+ */
+async function handleReceiptAcceptBulk(
+  ctx: Ctx["CallbackQuery"],
+  queueItem: any,
+  group: any,
+  user: any,
+  bot: any,
+  messageId?: number,
+  chatId?: number
+): Promise<void> {
+  const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
+
+  // If we have AI summary, use it to determine categories
+  if (queueItem.ai_summary) {
+    try {
+      const summary = JSON.parse(queueItem.ai_summary);
+      const { summaryToCategoryMap } = await import('../../services/receipt/receipt-summarizer');
+      const categoryMap = summaryToCategoryMap(summary);
+
+      // Update items with categories from summary
+      for (const item of items) {
+        if (item.status === 'pending') {
+          const category = categoryMap.get(item.name_ru) || item.suggested_category;
+
+          database.receiptItems.update(item.id, {
+            status: 'confirmed',
+            confirmed_category: category,
+          });
+
+          // Create category if doesn't exist
+          if (!database.categories.exists(group.id, category)) {
+            database.categories.create({
+              group_id: group.id,
+              name: category,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[RECEIPT] Failed to parse AI summary:', error);
+      // Fall back to suggested categories
+      for (const item of items) {
+        if (item.status === 'pending') {
+          database.receiptItems.update(item.id, {
+            status: 'confirmed',
+            confirmed_category: item.suggested_category,
+          });
+        }
+      }
+    }
+  } else {
+    // No AI summary - use suggested categories
+    for (const item of items) {
+      if (item.status === 'pending') {
+        database.receiptItems.update(item.id, {
+          status: 'confirmed',
+          confirmed_category: item.suggested_category,
+        });
+
+        if (!database.categories.exists(group.id, item.suggested_category)) {
+          database.categories.create({
+            group_id: group.id,
+            name: item.suggested_category,
+          });
+        }
+      }
+    }
+  }
+
+  // Reset summary mode
+  database.photoQueue.update(queueItem.id, {
+    summary_mode: 0,
+    waiting_for_bulk_correction: 0,
+  });
+
+  await ctx.answerCallbackQuery({ text: "✅ Принято!" });
+
+  // Delete message
+  if (messageId && chatId) {
+    try {
+      await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+    } catch {}
+  }
+
+  // Save to Google Sheets
+  await saveReceiptExpenses(queueItem.id, group.id, user.id, bot);
+}
+
+/**
+ * Cancel receipt processing
+ */
+async function handleReceiptCancel(
+  ctx: Ctx["CallbackQuery"],
+  queueItem: any,
+  group: any,
+  bot: any,
+  messageId?: number,
+  chatId?: number
+): Promise<void> {
+  // Delete all receipt items
+  database.receiptItems.deleteProcessedByPhotoQueueId(queueItem.id);
+
+  // Reset queue item
+  database.photoQueue.update(queueItem.id, {
+    status: 'done',
+    summary_mode: 0,
+    waiting_for_bulk_correction: 0,
+    ai_summary: null,
+    correction_history: null,
+  });
+
+  await ctx.answerCallbackQuery({ text: "❌ Отменено" });
+
+  // Delete message
+  if (messageId && chatId) {
+    try {
+      await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+    } catch {}
+  }
+
+  // Send cancellation notification
+  await bot.api.sendMessage({
+    chat_id: group.telegram_group_id,
+    ...(queueItem.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
+    text: "❌ Обработка чека отменена",
+    parse_mode: 'HTML',
+  });
 }

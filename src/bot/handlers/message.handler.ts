@@ -119,6 +119,13 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
     if (!user) return;
   }
 
+  // Check if we're waiting for bulk correction text input
+  const waitingBulkCorrection = database.photoQueue.findWaitingForBulkCorrection(group.id);
+  if (waitingBulkCorrection) {
+    await handleBulkCorrectionInput(ctx, bot, text, waitingBulkCorrection, group);
+    return;
+  }
+
   // Check if we're waiting for category text input from user
   const waitingItem = database.receiptItems.findWaitingForCategoryInput(group.id);
   if (waitingItem) {
@@ -541,3 +548,148 @@ async function handleCategoryTextInput(
   }
 }
 
+/**
+ * Handle bulk correction text input from user
+ */
+async function handleBulkCorrectionInput(
+  ctx: Ctx["Message"],
+  bot: any,
+  correctionText: string,
+  queueItem: any,
+  group: any
+): Promise<void> {
+  const {
+    buildSummaryFromItems,
+    formatSummaryMessage,
+    applyCorrectionWithAI,
+    validateSummaryTotals,
+  } = await import('../../services/receipt/receipt-summarizer');
+  const { createBulkEditKeyboard } = await import('../keyboards');
+
+  console.log(`[BULK_CORRECTION] User correction: "${correctionText}" for queue ${queueItem.id}`);
+
+  // Get receipt items
+  const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
+
+  if (items.length === 0) {
+    await ctx.send("❌ Товары не найдены");
+    return;
+  }
+
+  // Build current summary (from AI summary if exists, otherwise from items)
+  let currentSummary: any;
+  if (queueItem.ai_summary) {
+    try {
+      currentSummary = JSON.parse(queueItem.ai_summary);
+    } catch {
+      currentSummary = buildSummaryFromItems(items);
+    }
+  } else {
+    currentSummary = buildSummaryFromItems(items);
+  }
+
+  // Get available categories
+  const allCategories = database.categories.findByGroupId(group.id);
+  const categoryNames = allCategories.map(c => c.name);
+
+  // Also add suggested categories from items
+  const suggestedCategories = [...new Set(items.map(i => i.suggested_category))];
+  const availableCategories = [...new Set([...categoryNames, ...suggestedCategories])];
+
+  // Parse existing correction history
+  let correctionHistory: Array<{ user: string; result: string }> = [];
+  if (queueItem.correction_history) {
+    try {
+      correctionHistory = JSON.parse(queueItem.correction_history);
+    } catch {}
+  }
+
+  try {
+    // Apply correction using AI
+    const newSummary = await applyCorrectionWithAI(
+      currentSummary,
+      correctionText,
+      availableCategories,
+      correctionHistory
+    );
+
+    // Validate totals match (±1%)
+    const originalTotal = items.reduce((sum, i) => sum + i.total, 0);
+    if (!validateSummaryTotals(newSummary, originalTotal)) {
+      await ctx.send(
+        "❌ Суммы не сходятся. AI изменил суммы товаров, что недопустимо.\n\n" +
+        "Попробуйте переформулировать корректировку. Например:\n" +
+        "<code>перенеси салфетки в Хозтовары</code>",
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    // Add to correction history
+    correctionHistory.push({
+      user: correctionText,
+      result: `Применена корректировка`,
+    });
+
+    // Save updated summary and history
+    database.photoQueue.update(queueItem.id, {
+      ai_summary: JSON.stringify(newSummary),
+      correction_history: JSON.stringify(correctionHistory),
+    });
+
+    // Format and send updated summary
+    const summaryText = formatSummaryMessage(newSummary, items.length);
+    const message = `${summaryText}\n\n✅ <i>Корректировка применена!</i>\n\n✏️ <i>Напишите еще корректировку или нажмите кнопку:</i>`;
+
+    // Edit the summary message if we have the message ID
+    if (queueItem.summary_message_id && ctx.chat?.id) {
+      try {
+        await bot.api.editMessageText({
+          chat_id: ctx.chat.id,
+          message_id: queueItem.summary_message_id,
+          text: message,
+          parse_mode: 'HTML',
+          reply_markup: createBulkEditKeyboard(queueItem.id),
+        });
+      } catch (error) {
+        // If edit fails, send new message
+        console.error('[BULK_CORRECTION] Failed to edit message:', error);
+        const sentMessage = await bot.api.sendMessage({
+          chat_id: ctx.chat.id,
+          text: message,
+          parse_mode: 'HTML',
+          reply_markup: createBulkEditKeyboard(queueItem.id),
+        });
+
+        // Update summary message ID
+        database.photoQueue.update(queueItem.id, {
+          summary_message_id: sentMessage.message_id,
+        });
+      }
+    } else {
+      // Send new message
+      const sentMessage = await bot.api.sendMessage({
+        chat_id: ctx.chat?.id,
+        text: message,
+        parse_mode: 'HTML',
+        reply_markup: createBulkEditKeyboard(queueItem.id),
+      });
+
+      // Save message ID for future edits
+      database.photoQueue.update(queueItem.id, {
+        summary_message_id: sentMessage.message_id,
+      });
+    }
+
+    console.log(`[BULK_CORRECTION] Correction applied successfully`);
+  } catch (error) {
+    console.error('[BULK_CORRECTION] AI correction failed:', error);
+    await ctx.send(
+      "❌ Не удалось применить корректировку.\n\n" +
+      "Попробуйте переформулировать. Например:\n" +
+      "<code>перенеси салфетки в Хозтовары</code>\n" +
+      "<code>объедини Еда и Напитки</code>",
+      { parse_mode: 'HTML' }
+    );
+  }
+}

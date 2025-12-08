@@ -480,6 +480,77 @@ export function runMigrations(db: Database): void {
         console.log('✓ Added "skipped" status to receipt_items');
       },
     },
+    {
+      name: '016_add_summary_mode_to_photo_queue',
+      up: () => {
+        // Add summary_mode column (0=item-by-item, 1=bulk summary mode)
+        const checkSummaryMode = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('photo_processing_queue')
+          WHERE name = 'summary_mode'
+        `);
+        if (checkSummaryMode.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE photo_processing_queue
+            ADD COLUMN summary_mode INTEGER DEFAULT 0;
+          `);
+        }
+
+        // Add ai_summary column for storing current summary JSON
+        const checkAiSummary = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('photo_processing_queue')
+          WHERE name = 'ai_summary'
+        `);
+        if (checkAiSummary.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE photo_processing_queue
+            ADD COLUMN ai_summary TEXT;
+          `);
+        }
+
+        // Add correction_history column for storing correction history JSON
+        const checkCorrectionHistory = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('photo_processing_queue')
+          WHERE name = 'correction_history'
+        `);
+        if (checkCorrectionHistory.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE photo_processing_queue
+            ADD COLUMN correction_history TEXT;
+          `);
+        }
+
+        // Add waiting_for_bulk_correction flag
+        const checkWaitingBulk = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('photo_processing_queue')
+          WHERE name = 'waiting_for_bulk_correction'
+        `);
+        if (checkWaitingBulk.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE photo_processing_queue
+            ADD COLUMN waiting_for_bulk_correction INTEGER DEFAULT 0;
+          `);
+        }
+
+        // Add summary_message_id to track which message to edit
+        const checkSummaryMessageId = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('photo_processing_queue')
+          WHERE name = 'summary_message_id'
+        `);
+        if (checkSummaryMessageId.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE photo_processing_queue
+            ADD COLUMN summary_message_id INTEGER;
+          `);
+        }
+
+        console.log('✓ Added summary mode columns to photo_processing_queue');
+      },
+    },
   ];
 
   // Check and run migrations

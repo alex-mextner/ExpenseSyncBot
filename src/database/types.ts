@@ -192,6 +192,12 @@ export interface PhotoQueueItem {
   status: 'pending' | 'processing' | 'done' | 'error';
   error_message: string | null;
   created_at: string;
+  // Summary mode fields (migration 016)
+  summary_mode: number; // 0=item-by-item, 1=bulk summary
+  ai_summary: string | null;
+  correction_history: string | null;
+  waiting_for_bulk_correction: number; // 0 or 1
+  summary_message_id: number | null;
 }
 
 export interface CreatePhotoQueueData {
@@ -206,6 +212,11 @@ export interface CreatePhotoQueueData {
 export interface UpdatePhotoQueueData {
   status?: 'pending' | 'processing' | 'done' | 'error';
   error_message?: string | null;
+  summary_mode?: number;
+  ai_summary?: string | null;
+  correction_history?: string | null;
+  waiting_for_bulk_correction?: number;
+  summary_message_id?: number | null;
 }
 
 /**
