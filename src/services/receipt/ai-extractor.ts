@@ -8,7 +8,7 @@ const client = new InferenceClient(env.HF_TOKEN);
 // Models to try in order (reasoning model first, then fallback to non-reasoning)
 const MODELS = [
   { provider: "nebius", model: "deepseek-ai/DeepSeek-R1-0528", name: "DeepSeek-R1" },
-  { provider: "nebius", model: "deepseek-ai/DeepSeek-V3", name: "DeepSeek-V3" },
+  { provider: "nebius", model: "deepseek-ai/DeepSeek-V3.2", name: "DeepSeek-V3.2" },
 ] as const;
 
 /**
