@@ -7,8 +7,16 @@ const client = new InferenceClient(env.HF_TOKEN);
 
 // Models to try in order (reasoning model first, then fallback to non-reasoning)
 const MODELS = [
-  { provider: "nebius", model: "deepseek-ai/DeepSeek-R1-0528", name: "DeepSeek-R1" },
-  { provider: "nebius", model: "deepseek-ai/DeepSeek-V3.2", name: "DeepSeek-V3.2" },
+  {
+    provider: "fireworks-ai",
+    model: "deepseek-ai/DeepSeek-R1-0528",
+    name: "DeepSeek-R1",
+  },
+  {
+    provider: "fireworks-ai",
+    model: "deepseek-ai/DeepSeek-V3.2",
+    name: "DeepSeek-V3",
+  },
 ] as const;
 
 /**
@@ -98,11 +106,15 @@ export async function extractExpensesFromReceipt(
         }
 
         // Remove thinking tags from response (for reasoning models)
-        const cleanedResponse = responseText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        const cleanedResponse = responseText
+          .replace(/<think>[\s\S]*?<\/think>/gi, "")
+          .trim();
 
         // Log raw AI response for debugging
         console.log(
-          `[AI_EXTRACTOR] Raw AI response (${responseText.length} chars):\n${responseText.substring(0, 500)}...`
+          `[AI_EXTRACTOR] Raw AI response (${
+            responseText.length
+          } chars):\n${responseText.substring(0, 500)}...`
         );
 
         // Parse JSON (try to extract JSON from markdown code blocks if present)
@@ -119,7 +131,9 @@ export async function extractExpensesFromReceipt(
         }
 
         console.log(
-          `[AI_EXTRACTOR] Extracted JSON (${jsonMatch[1].length} chars):\n${jsonMatch[1].substring(0, 500)}...`
+          `[AI_EXTRACTOR] Extracted JSON (${
+            jsonMatch[1].length
+          } chars):\n${jsonMatch[1].substring(0, 500)}...`
         );
 
         const result = JSON.parse(jsonMatch[1]) as AIExtractionResult;
@@ -146,43 +160,64 @@ export async function extractExpensesFromReceipt(
           }
 
           // Ensure possible_categories exists and is an array
-          if (!item.possible_categories || !Array.isArray(item.possible_categories)) {
-            console.warn(`[AI_EXTRACTOR] Item "${item.name_ru}" missing possible_categories, initializing empty array`);
+          if (
+            !item.possible_categories ||
+            !Array.isArray(item.possible_categories)
+          ) {
+            console.warn(
+              `[AI_EXTRACTOR] Item "${item.name_ru}" missing possible_categories, initializing empty array`
+            );
             item.possible_categories = [];
           }
 
           // If existing categories provided, validate that AI used only those
           if (existingCategories.length > 0) {
-            const { findBestCategoryMatch } = await import('../../utils/fuzzy-search');
+            const { findBestCategoryMatch } = await import(
+              "../../utils/fuzzy-search"
+            );
 
             // Check if suggested category exists
             if (!existingCategories.includes(item.category)) {
-              console.warn(`[AI_EXTRACTOR] AI suggested non-existing category "${item.category}" for item "${item.name_ru}"`);
+              console.warn(
+                `[AI_EXTRACTOR] AI suggested non-existing category "${item.category}" for item "${item.name_ru}"`
+              );
 
               // Try to find closest match
-              const closestMatch = findBestCategoryMatch(item.category, existingCategories);
+              const closestMatch = findBestCategoryMatch(
+                item.category,
+                existingCategories
+              );
 
               if (closestMatch) {
-                console.log(`[AI_EXTRACTOR] Replacing with closest match: "${closestMatch}"`);
+                console.log(
+                  `[AI_EXTRACTOR] Replacing with closest match: "${closestMatch}"`
+                );
                 item.category = closestMatch;
               } else {
                 // Fallback to first available category or "Разное"
-                const fallback = existingCategories.find(c => c === 'Разное') || existingCategories[0] || 'Разное';
-                console.log(`[AI_EXTRACTOR] Using fallback category: "${fallback}"`);
+                const fallback =
+                  existingCategories.find((c) => c === "Разное") ||
+                  existingCategories[0] ||
+                  "Разное";
+                console.log(
+                  `[AI_EXTRACTOR] Using fallback category: "${fallback}"`
+                );
                 item.category = fallback;
               }
             }
 
             // Validate possible_categories - filter out non-existing ones
             if (item.possible_categories.length > 0) {
-              const validAlternatives = item.possible_categories.filter(cat =>
+              const validAlternatives = item.possible_categories.filter((cat) =>
                 existingCategories.includes(cat)
               );
 
               if (validAlternatives.length < item.possible_categories.length) {
                 console.warn(
-                  `[AI_EXTRACTOR] Filtered out ${item.possible_categories.length - validAlternatives.length} ` +
-                  `non-existing categories from possible_categories for "${item.name_ru}"`
+                  `[AI_EXTRACTOR] Filtered out ${
+                    item.possible_categories.length - validAlternatives.length
+                  } ` +
+                    `non-existing categories from possible_categories for "${item.name_ru}"`
                 );
                 item.possible_categories = validAlternatives;
               }
@@ -190,7 +225,9 @@ export async function extractExpensesFromReceipt(
           }
         }
 
-        console.log(`[AI_EXTRACTOR] Successfully extracted ${result.items.length} items using ${modelConfig.name}`);
+        console.log(
+          `[AI_EXTRACTOR] Successfully extracted ${result.items.length} items using ${modelConfig.name}`
+        );
         return result;
       } catch (error) {
         lastError =
@@ -213,20 +250,29 @@ export async function extractExpensesFromReceipt(
           // Log additional error details for network errors (HuggingFace InferenceClientProviderApiError)
           const err = error as Error & {
             httpRequest?: { url?: string; method?: string };
-            httpResponse?: { status?: number; statusText?: string; body?: unknown };
+            httpResponse?: {
+              status?: number;
+              statusText?: string;
+              body?: unknown;
+            };
             cause?: unknown;
           };
 
           if (err.httpResponse) {
             console.error(
-              `[AI_EXTRACTOR] HTTP Response: ${err.httpResponse.status} ${err.httpResponse.statusText || ''}`
+              `[AI_EXTRACTOR] HTTP Response: ${err.httpResponse.status} ${
+                err.httpResponse.statusText || ""
+              }`
             );
             if (err.httpResponse.body) {
               console.error(
                 `[AI_EXTRACTOR] Response body:`,
-                typeof err.httpResponse.body === 'string'
+                typeof err.httpResponse.body === "string"
                   ? err.httpResponse.body.substring(0, 1000)
-                  : JSON.stringify(err.httpResponse.body, null, 2).substring(0, 1000)
+                  : JSON.stringify(err.httpResponse.body, null, 2).substring(
+                      0,
+                      1000
+                    )
               );
             }
           }
@@ -250,7 +296,9 @@ export async function extractExpensesFromReceipt(
       }
     }
 
-    console.log(`[AI_EXTRACTOR] ${modelConfig.name} failed after ${maxRetries} attempts, trying next model...`);
+    console.log(
+      `[AI_EXTRACTOR] ${modelConfig.name} failed after ${maxRetries} attempts, trying next model...`
+    );
   }
 
   throw new Error(
@@ -292,7 +340,9 @@ CRITICAL INSTRUCTIONS:
 5. Detect the currency used in the receipt (e.g., RSD, EUR, USD)
 
 CATEGORY SELECTION (MOST IMPORTANT):
-${hasExistingCategories ? `This group has existing categories. You MUST use ONLY these categories:
+${
+  hasExistingCategories
+    ? `This group has existing categories. You MUST use ONLY these categories:
 ${existingCategories.map((cat) => `- ${cat}`).join("\n")}
 
 STRICT Rules:
@@ -300,9 +350,11 @@ STRICT Rules:
 - DO NOT create new categories - use the closest existing one
 - If unsure, use the most general category from the list (e.g., "Разное", "Хозтовары", etc.)
 - Put 2-3 other existing categories in "possible_categories" as alternatives
-- ALL categories (both "category" and "possible_categories") MUST be from the list above` : `This group has no categories yet. You can suggest new category names.
+- ALL categories (both "category" and "possible_categories") MUST be from the list above`
+    : `This group has no categories yet. You can suggest new category names.
 - Create clear, concise category names in Russian
-- Provide 2-3 alternative category names in "possible_categories"`}
+- Provide 2-3 alternative category names in "possible_categories"`
+}
 
 EXAMPLES of good categorization (use existing categories only):
 - Item: "Молоко 3.2%" + existing ["Еда", "Разное", "Хобби"] → category: "Еда", possible_categories: ["Разное"]
