@@ -198,22 +198,33 @@ export async function extractExpensesFromReceipt(
           lastError.message
         );
 
-        // Log additional error details for network errors
+        // Log additional error details for network errors (HuggingFace InferenceClientProviderApiError)
         const err = error as Error & {
-          status?: number;
-          statusText?: string;
+          httpRequest?: { url?: string; method?: string };
+          httpResponse?: { status?: number; statusText?: string; body?: unknown };
           cause?: unknown;
-          response?: { status?: number; statusText?: string; body?: unknown };
         };
 
-        if (err.status || err.statusText) {
-          console.error(`[AI_EXTRACTOR] HTTP Status: ${err.status} ${err.statusText || ''}`);
+        if (err.httpResponse) {
+          console.error(
+            `[AI_EXTRACTOR] HTTP Response: ${err.httpResponse.status} ${err.httpResponse.statusText || ''}`
+          );
+          if (err.httpResponse.body) {
+            console.error(
+              `[AI_EXTRACTOR] Response body:`,
+              typeof err.httpResponse.body === 'string'
+                ? err.httpResponse.body.substring(0, 1000)
+                : JSON.stringify(err.httpResponse.body, null, 2).substring(0, 1000)
+            );
+          }
+        }
+        if (err.httpRequest) {
+          console.error(
+            `[AI_EXTRACTOR] Request: ${err.httpRequest.method} ${err.httpRequest.url}`
+          );
         }
         if (err.cause) {
           console.error(`[AI_EXTRACTOR] Cause:`, err.cause);
-        }
-        if (err.response) {
-          console.error(`[AI_EXTRACTOR] Response:`, JSON.stringify(err.response, null, 2));
         }
         if (lastError.stack) {
           console.error(`[AI_EXTRACTOR] Stack:`, lastError.stack);
