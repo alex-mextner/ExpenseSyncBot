@@ -106,17 +106,16 @@ export async function extractExpensesFromReceipt(
         }
 
         // Remove thinking tags from response (for reasoning models)
-        // Using greedy * instead of lazy *? to capture until the LAST </think>
+        // Using greedy * to capture until the LAST </think>
         const cleanedResponse = responseText
           .replace(/<think>[\s\S]*<\/think>/gi, "")
           .trim();
 
         // Log raw AI response for debugging
         console.log(
-          `[AI_EXTRACTOR] Raw AI response (${
-            responseText.length
-          } chars):\n${responseText.substring(0, 500)}...`
+          `[AI_EXTRACTOR] Raw AI response (${responseText.length} chars)`
         );
+        console.log(`[AI_EXTRACTOR] Cleaned response (${cleanedResponse.length} chars):\n${cleanedResponse}`);
 
         // Extract JSON from response
         let jsonStr = cleanedResponse;
