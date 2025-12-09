@@ -106,8 +106,9 @@ export async function extractExpensesFromReceipt(
         }
 
         // Remove thinking tags from response (for reasoning models)
+        // Using greedy * instead of lazy *? to capture until the LAST </think>
         const cleanedResponse = responseText
-          .replace(/<think>[\s\S]*?<\/think>/gi, "")
+          .replace(/<think>[\s\S]*<\/think>/gi, "")
           .trim();
 
         // Log raw AI response for debugging
@@ -117,29 +118,44 @@ export async function extractExpensesFromReceipt(
           } chars):\n${responseText.substring(0, 500)}...`
         );
 
-        // Parse JSON (try to extract JSON from markdown code blocks if present)
-        const jsonMatch =
-          cleanedResponse.match(
-            /```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```/
-          ) || cleanedResponse.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+        // Extract JSON from response
+        let jsonStr = cleanedResponse;
 
-        if (!jsonMatch || !jsonMatch[1]) {
-          console.error(
-            `[AI_EXTRACTOR] Failed to extract JSON. Full response:\n${cleanedResponse}`
-          );
-          throw new Error("No JSON found in AI response");
+        // Step 1: Remove markdown code block wrapper if present
+        const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (codeBlockMatch?.[1]) {
+          jsonStr = codeBlockMatch[1];
+        }
+
+        // Step 2: Fix decimal separator (399,99 -> 399.99)
+        jsonStr = jsonStr.replace(/(\d),(\d)/g, "$1.$2");
+
+        // Step 3: Try direct JSON.parse, fallback to finding {"items"...}
+        let result: AIExtractionResult;
+        try {
+          result = JSON.parse(jsonStr) as AIExtractionResult;
+        } catch {
+          // Fallback: find last {"items"...} object in response
+          const itemsPos = jsonStr.lastIndexOf('{"items"');
+          const lastBrace = jsonStr.lastIndexOf('}');
+
+          if (itemsPos >= 0 && lastBrace > itemsPos) {
+            jsonStr = jsonStr.substring(itemsPos, lastBrace + 1);
+            console.log(
+              `[AI_EXTRACTOR] Fallback: extracted {"items"...} (${jsonStr.length} chars)`
+            );
+            result = JSON.parse(jsonStr) as AIExtractionResult;
+          } else {
+            console.error(
+              `[AI_EXTRACTOR] Failed to parse JSON. Cleaned response:\n${cleanedResponse.substring(0, 1000)}`
+            );
+            throw new Error("No valid JSON found in AI response");
+          }
         }
 
         console.log(
-          `[AI_EXTRACTOR] Extracted JSON (${
-            jsonMatch[1].length
-          } chars):\n${jsonMatch[1].substring(0, 500)}...`
+          `[AI_EXTRACTOR] Parsed JSON with ${result.items?.length || 0} items`
         );
-
-        // Fix decimal separator: replace comma with dot in numbers (e.g., 399,99 -> 399.99)
-        const fixedJson = jsonMatch[1].replace(/(\d),(\d)/g, "$1.$2");
-
-        const result = JSON.parse(fixedJson) as AIExtractionResult;
 
         // Validate result
         if (

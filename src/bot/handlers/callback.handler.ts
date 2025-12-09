@@ -1056,15 +1056,8 @@ async function handleReceiptSummaryAction(
 
   const user = database.users.findByTelegramId(telegramId);
 
-  if (!user || !user.group_id) {
+  if (!user) {
     await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
-    return;
-  }
-
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
     return;
   }
 
@@ -1072,6 +1065,14 @@ async function handleReceiptSummaryAction(
 
   if (!queueItem) {
     await ctx.answerCallbackQuery({ text: "Чек не найден" });
+    return;
+  }
+
+  // Use group from queueItem, not user (user.group_id may change if they message another group)
+  const group = database.groups.findById(queueItem.group_id);
+
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
     return;
   }
 
@@ -1157,8 +1158,6 @@ async function handleReceiptBulkEdit(
   messageId?: number,
   chatId?: number
 ): Promise<void> {
-  const { createBulkEditKeyboard } = await import('../keyboards');
-
   // Set waiting for bulk correction flag
   database.photoQueue.update(queueItem.id, {
     summary_mode: 1,
@@ -1168,7 +1167,7 @@ async function handleReceiptBulkEdit(
 
   await ctx.answerCallbackQuery({ text: "🎨 Напишите корректировку" });
 
-  // Update message to show bulk edit keyboard
+  // Update message to show instruction (no buttons - user just types correction text)
   if (messageId && chatId) {
     const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
     const { buildSummaryFromItems, formatSummaryMessage } = await import('../../services/receipt/receipt-summarizer');
@@ -1184,7 +1183,6 @@ async function handleReceiptBulkEdit(
         message_id: messageId,
         text: message,
         parse_mode: 'HTML',
-        reply_markup: createBulkEditKeyboard(queueItem.id),
       });
     } catch (error) {
       console.error('[RECEIPT] Failed to edit message:', error);

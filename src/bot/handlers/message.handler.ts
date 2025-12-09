@@ -568,6 +568,9 @@ async function handleBulkCorrectionInput(
 
   console.log(`[BULK_CORRECTION] User correction: "${correctionText}" for queue ${queueItem.id}`);
 
+  // Immediately respond that we're processing
+  await ctx.send("⏳ Корректирую...");
+
   // Get receipt items
   const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
 
@@ -637,49 +640,22 @@ async function handleBulkCorrectionInput(
       correction_history: JSON.stringify(correctionHistory),
     });
 
-    // Format and send updated summary
+    // Format result message
     const summaryText = formatSummaryMessage(newSummary, items.length);
-    const message = `${summaryText}\n\n✅ <i>Корректировка применена!</i>\n\n✏️ <i>Напишите еще корректировку или нажмите кнопку:</i>`;
+    const message = `${summaryText}\n\n✅ <i>Корректировка применена!</i>`;
 
-    // Edit the summary message if we have the message ID
-    if (queueItem.summary_message_id && ctx.chat?.id) {
-      try {
-        await bot.api.editMessageText({
-          chat_id: ctx.chat.id,
-          message_id: queueItem.summary_message_id,
-          text: message,
-          parse_mode: 'HTML',
-          reply_markup: createBulkEditKeyboard(queueItem.id),
-        });
-      } catch (error) {
-        // If edit fails, send new message
-        console.error('[BULK_CORRECTION] Failed to edit message:', error);
-        const sentMessage = await bot.api.sendMessage({
-          chat_id: ctx.chat.id,
-          text: message,
-          parse_mode: 'HTML',
-          reply_markup: createBulkEditKeyboard(queueItem.id),
-        });
+    // Always send NEW message with result and buttons
+    const sentMessage = await bot.api.sendMessage({
+      chat_id: ctx.chat?.id,
+      text: message,
+      parse_mode: 'HTML',
+      reply_markup: createBulkEditKeyboard(queueItem.id),
+    });
 
-        // Update summary message ID
-        database.photoQueue.update(queueItem.id, {
-          summary_message_id: sentMessage.message_id,
-        });
-      }
-    } else {
-      // Send new message
-      const sentMessage = await bot.api.sendMessage({
-        chat_id: ctx.chat?.id,
-        text: message,
-        parse_mode: 'HTML',
-        reply_markup: createBulkEditKeyboard(queueItem.id),
-      });
-
-      // Save message ID for future edits
-      database.photoQueue.update(queueItem.id, {
-        summary_message_id: sentMessage.message_id,
-      });
-    }
+    // Save message ID for buttons to work
+    database.photoQueue.update(queueItem.id, {
+      summary_message_id: sentMessage.message_id,
+    });
 
     console.log(`[BULK_CORRECTION] Correction applied successfully`);
   } catch (error) {
