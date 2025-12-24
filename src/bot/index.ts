@@ -11,6 +11,7 @@ import { handleSpreadsheetCommand } from "./commands/spreadsheet";
 import { handleStartCommand } from "./commands/start";
 import { handleStatsCommand } from "./commands/stats";
 import { handleSumCommand } from "./commands/sum";
+import { handlePushCommand } from "./commands/push";
 import { handleSyncCommand } from "./commands/sync";
 import { handleCallbackQuery } from "./handlers/callback.handler";
 import { handleExpenseMessage } from "./handlers/message.handler";
@@ -39,6 +40,7 @@ export function createBot(): Bot {
   bot.command("sum", handleSumCommand);
   bot.command("total", handleSumCommand);
   bot.command("sync", handleSyncCommand);
+  bot.command("push", handlePushCommand);
   bot.command("budget", handleBudgetCommand);
   bot.command("categories", handleCategoriesCommand);
   bot.command("settings", handleSettingsCommand);
