@@ -154,7 +154,7 @@ export async function appendExpenseRow(
     } else {
       // Currency columns
       const currencyCode = header.split(' ')[0] as CurrencyCode;
-      const value = data.amounts[currencyCode] || null;
+      const value = data.amounts[currencyCode] ?? '';
       console.log(`[SHEETS] Header "${header}" -> currency "${currencyCode}" -> value ${value}`);
       row.push(value);
     }
