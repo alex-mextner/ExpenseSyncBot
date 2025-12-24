@@ -162,10 +162,21 @@ export async function appendExpenseRow(
 
   console.log(`[SHEETS] Final row:`, row);
 
-  // Append row
-  const response = await sheets.spreadsheets.values.append({
+  // Find last row with data in column A
+  const dataResponse = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A2:Z`,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+  });
+
+  const existingRows = dataResponse.data.values || [];
+  const nextRow = existingRows.length + 1; // +1 because rows are 1-indexed
+
+  console.log(`[SHEETS] Last row with data: ${existingRows.length}, inserting at row ${nextRow}`);
+
+  // Update specific row instead of append
+  const response = await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:H${nextRow}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [row],
@@ -173,9 +184,9 @@ export async function appendExpenseRow(
   });
 
   // Log API response for debugging
-  const updatedRange = response.data.updates?.updatedRange;
-  const updatedRows = response.data.updates?.updatedRows;
-  const updatedCells = response.data.updates?.updatedCells;
+  const updatedRange = response.data.updatedRange;
+  const updatedRows = response.data.updatedRows;
+  const updatedCells = response.data.updatedCells;
 
   console.log(`[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`);
 
