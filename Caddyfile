@@ -3,7 +3,7 @@ expense-sync-bot.invntrm.ru {
 
 	# OAuth callback endpoint (proxied to local server)
 	handle /callback* {
-		reverse_proxy localhost:3000
+		reverse_proxy localhost:3311
 	}
 
 	# Temporary images for OCR processing
@@ -14,7 +14,7 @@ expense-sync-bot.invntrm.ru {
 
 	# Health check endpoint
 	handle /health {
-		reverse_proxy localhost:3000
+		reverse_proxy localhost:3311
 	}
 
 	# All other requests return 404 (bot doesn't serve web pages)

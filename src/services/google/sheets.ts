@@ -163,7 +163,7 @@ export async function appendExpenseRow(
   console.log(`[SHEETS] Final row:`, row);
 
   // Append row
-  await sheets.spreadsheets.values.append({
+  const response = await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${SPREADSHEET_CONFIG.sheetName}!A2:Z`,
     valueInputOption: 'USER_ENTERED',
@@ -171,6 +171,17 @@ export async function appendExpenseRow(
       values: [row],
     },
   });
+
+  // Log API response for debugging
+  const updatedRange = response.data.updates?.updatedRange;
+  const updatedRows = response.data.updates?.updatedRows;
+  const updatedCells = response.data.updates?.updatedCells;
+
+  console.log(`[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`);
+
+  if (!updatedRows || updatedRows === 0) {
+    console.error(`[SHEETS] ⚠️ No rows were updated! Full response:`, JSON.stringify(response.data, null, 2));
+  }
 }
 
 /**
