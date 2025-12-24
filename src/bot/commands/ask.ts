@@ -1,5 +1,6 @@
 import { InferenceClient } from "@huggingface/inference";
 import type { Bot } from "gramio";
+import { format } from "date-fns";
 import { env } from "../../config/env";
 import { database } from "../../database";
 import type { Ctx } from "../types";
@@ -67,12 +68,13 @@ export async function handleAskQuestion(
   // Get all expenses
   const allExpenses = database.expenses.findByGroupId(group.id, 100000);
 
-  // Get all budgets
-  const allBudgets = database.budgets.findByGroupId(group.id);
+  // Get budgets for current month (with fallback to latest available)
+  const currentMonthForBudgets = format(new Date(), "yyyy-MM");
+  const allBudgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonthForBudgets);
 
   // Build context from expenses and budgets
   const expensesContext = buildExpensesContext(allExpenses);
-  const budgetsContext = buildBudgetsContext(allBudgets, allExpenses);
+  const budgetsContext = buildBudgetsContext(allBudgets, allExpenses, currentMonthForBudgets);
 
   // Get unique categories from expenses
   const uniqueCategories = Array.from(
@@ -555,6 +557,7 @@ function buildExpensesContext(
 
 /**
  * Build context from budgets with remaining calculations
+ * Budgets are already resolved for current month (with fallback to latest)
  */
 function buildBudgetsContext(
   budgets: Array<{
@@ -567,76 +570,52 @@ function buildBudgetsContext(
     date: string;
     category: string;
     eur_amount: number;
-  }>
+  }>,
+  currentMonth: string
 ): string {
   if (budgets.length === 0) {
     return "БЮДЖЕТЫ: Бюджеты не установлены.";
   }
 
-  // Get current month
-  const currentMonth = new Date().toISOString().substring(0, 7);
-
-  // Calculate expenses by category for each month
-  const expensesByMonthCategory: Record<string, Record<string, number>> = {};
+  // Calculate expenses by category for current month
+  const monthExpenses: Record<string, number> = {};
   for (const expense of expenses) {
-    const month = expense.date.substring(0, 7);
-    if (!expensesByMonthCategory[month]) {
-      expensesByMonthCategory[month] = {};
+    if (expense.date.startsWith(currentMonth)) {
+      monthExpenses[expense.category] =
+        (monthExpenses[expense.category] || 0) + expense.eur_amount;
     }
-    expensesByMonthCategory[month][expense.category] =
-      (expensesByMonthCategory[month][expense.category] || 0) + expense.eur_amount;
   }
 
   let context = "\n\nБЮДЖЕТЫ И ОСТАТКИ:\n\n";
 
-  // Group budgets by month
-  const byMonth: Record<string, typeof budgets> = {};
+  const totalLimit = budgets.reduce((sum, b) => sum + b.limit_amount, 0);
+
+  // Calculate total spent for budgeted categories
+  let totalSpentBudgeted = 0;
   for (const budget of budgets) {
-    const monthBudgets = byMonth[budget.month] || [];
-    monthBudgets.push(budget);
-    byMonth[budget.month] = monthBudgets;
+    totalSpentBudgeted += monthExpenses[budget.category] || 0;
   }
 
-  // Sort months descending
-  const months = Object.keys(byMonth).sort().reverse();
+  const totalRemaining = totalLimit - totalSpentBudgeted;
+  const usedPercent = totalLimit > 0 ? ((totalSpentBudgeted / totalLimit) * 100).toFixed(1) : "0";
 
-  for (const month of months.slice(0, 3)) {
-    const monthBudgets = byMonth[month];
-    if (!monthBudgets) continue;
+  context += `${currentMonth} (ТЕКУЩИЙ МЕСЯЦ):\n`;
+  context += `  Общий бюджет: €${totalLimit.toFixed(2)}\n`;
+  context += `  Потрачено: €${totalSpentBudgeted.toFixed(2)} (${usedPercent}%)\n`;
+  context += `  Остаток: €${totalRemaining.toFixed(2)}\n\n`;
 
-    const totalLimit = monthBudgets.reduce((sum, b) => sum + b.limit_amount, 0);
-    const monthExpenses = expensesByMonthCategory[month] || {};
+  context += `  По категориям:\n`;
+  for (const budget of budgets) {
+    const spent = monthExpenses[budget.category] || 0;
+    const remaining = budget.limit_amount - spent;
+    const categoryPercent = budget.limit_amount > 0
+      ? ((spent / budget.limit_amount) * 100).toFixed(0)
+      : "0";
+    const status = remaining < 0 ? "⚠️ ПРЕВЫШЕН" : remaining < budget.limit_amount * 0.1 ? "⚠️ почти исчерпан" : "";
 
-    // Calculate total spent for budgeted categories
-    let totalSpentBudgeted = 0;
-    for (const budget of monthBudgets) {
-      totalSpentBudgeted += monthExpenses[budget.category] || 0;
-    }
-
-    const totalRemaining = totalLimit - totalSpentBudgeted;
-    const usedPercent = totalLimit > 0 ? ((totalSpentBudgeted / totalLimit) * 100).toFixed(1) : "0";
-
-    const isCurrentMonth = month === currentMonth;
-    const monthLabel = isCurrentMonth ? `${month} (ТЕКУЩИЙ МЕСЯЦ)` : month;
-
-    context += `${monthLabel}:\n`;
-    context += `  Общий бюджет: €${totalLimit.toFixed(2)}\n`;
-    context += `  Потрачено: €${totalSpentBudgeted.toFixed(2)} (${usedPercent}%)\n`;
-    context += `  Остаток: €${totalRemaining.toFixed(2)}\n\n`;
-
-    context += `  По категориям:\n`;
-    for (const budget of monthBudgets) {
-      const spent = monthExpenses[budget.category] || 0;
-      const remaining = budget.limit_amount - spent;
-      const categoryPercent = budget.limit_amount > 0
-        ? ((spent / budget.limit_amount) * 100).toFixed(0)
-        : "0";
-      const status = remaining < 0 ? "⚠️ ПРЕВЫШЕН" : remaining < budget.limit_amount * 0.1 ? "⚠️ почти исчерпан" : "";
-
-      context += `  - ${budget.category}: лимит €${budget.limit_amount.toFixed(2)}, потрачено €${spent.toFixed(2)} (${categoryPercent}%), остаток €${remaining.toFixed(2)} ${status}\n`;
-    }
-    context += "\n";
+    context += `  - ${budget.category}: лимит €${budget.limit_amount.toFixed(2)}, потрачено €${spent.toFixed(2)} (${categoryPercent}%), остаток €${remaining.toFixed(2)} ${status}\n`;
   }
+  context += "\n";
 
   return context;
 }
@@ -710,8 +689,7 @@ async function sendDailyAdvice(
       0
     );
 
-    const budgets = database.budgets.findByGroupId(groupId);
-    const currentMonthBudget = budgets.filter((b) => b.month === currentMonth);
+    const currentMonthBudget = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     const totalBudget = currentMonthBudget.reduce(
       (sum, b) => sum + b.limit_amount,
       0
