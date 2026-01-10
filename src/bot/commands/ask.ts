@@ -181,6 +181,8 @@ ${budgetsContext}`;
     content: `${userName}: ${question}`,
   });
 
+  console.log("[ASK] System prompt:", systemPrompt);
+
   try {
     // Create streaming response
     const stream = client.chatCompletionStream({
@@ -722,13 +724,15 @@ async function sendDailyAdvice(
     );
 
     const currentMonthBudget = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
-    const totalBudget = currentMonthBudget.reduce(
-      (sum, b) => sum + b.limit_amount,
-      0
-    );
 
-    const budgetUsedPercent =
-      totalBudget > 0 ? ((totalSpent / totalBudget) * 100).toFixed(1) : "N/A";
+    // Group budgets by currency
+    const budgetsByCurrency: Record<string, number> = {};
+    for (const b of currentMonthBudget) {
+      budgetsByCurrency[b.currency] = (budgetsByCurrency[b.currency] || 0) + b.limit_amount;
+    }
+    const budgetLines = Object.entries(budgetsByCurrency)
+      .map(([currency, amount]) => `${amount.toFixed(2)} ${currency}`)
+      .join(", ");
 
     // Group expenses by category
     const categoryTotals: Record<string, number> = {};
@@ -769,8 +773,7 @@ async function sendDailyAdvice(
 Текущая дата: ${currentDate}
 Текущий месяц: ${currentMonth}
 Потрачено: €${totalSpent.toFixed(2)}
-Бюджет: €${totalBudget.toFixed(2)}
-Использовано бюджета: ${budgetUsedPercent}%
+Бюджет: ${budgetLines || "не установлен"}
 Количество операций: ${
       currentMonthExpenses.length
     }${expenseDetails}${recentExpensesDetails}
