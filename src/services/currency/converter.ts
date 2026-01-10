@@ -194,3 +194,31 @@ export async function updateExchangeRates(): Promise<void> {
 export function getAllExchangeRates(): Record<CurrencyCode, number> {
   return { ...(cachedRates || FALLBACK_RATES) };
 }
+
+/**
+ * Format exchange rates for AI context
+ */
+export function formatExchangeRatesForAI(): string {
+  const rates = getAllExchangeRates();
+  const lines = [
+    "АКТУАЛЬНЫЕ КУРСЫ ВАЛЮТ (к EUR, источник: exchangerate-api.com):",
+  ];
+
+  const formatRate = (currency: CurrencyCode): string => {
+    const rate = rates[currency];
+    // Use more decimals for small rates (RSD, RUB, JPY, INR)
+    const decimals = rate < 0.01 ? 6 : 4;
+    return `- 1 ${currency} = €${rate.toFixed(decimals)}`;
+  };
+
+  for (const currency of Object.keys(rates) as CurrencyCode[]) {
+    if (currency !== "EUR") {
+      lines.push(formatRate(currency));
+    }
+  }
+
+  lines.push("");
+  lines.push("Используй эти курсы для конвертации. НЕ пиши что курс \"ориентировочный\".");
+
+  return lines.join("\n");
+}

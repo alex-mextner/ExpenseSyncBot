@@ -3,6 +3,7 @@ import type { Bot } from "gramio";
 import { format } from "date-fns";
 import { env } from "../../config/env";
 import { database } from "../../database";
+import { formatExchangeRatesForAI } from "../../services/currency/converter";
 import type { Ctx } from "../types";
 
 const client = new InferenceClient(env.HF_TOKEN);
@@ -113,13 +114,15 @@ export async function handleAskQuestion(
     currentMonthSummary += "Нет трат за текущий месяц.\n";
   }
 
+  const ratesContext = formatExchangeRatesForAI();
+
   let systemPrompt = `Ты - ассистент для анализа финансов.
 Отвечай на вопросы пользователя на основе этих данных. Будь точным и конкретным. Используй цифры из предоставленных данных.
 
 ТЕКУЩАЯ ДАТА: ${currentDate}
 ВАЖНО: Бюджеты привязаны к календарным месяцам. Когда анализируешь бюджет, смотри данные за текущий месяц (${currentMonth}).
 ${currentMonthSummary}
-
+${ratesContext}
 ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ:
 - Username: @${userName}
 - Полное имя: ${userFullName || "не указано"}
@@ -742,6 +745,8 @@ async function sendDailyAdvice(
 Количество операций: ${
       currentMonthExpenses.length
     }${expenseDetails}${recentExpensesDetails}
+
+${formatExchangeRatesForAI()}
 `;
 
     // Get group for custom prompt
