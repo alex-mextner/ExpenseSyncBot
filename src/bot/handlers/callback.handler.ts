@@ -19,6 +19,31 @@ import {
 } from "../../services/google/sheets";
 
 /**
+ * Ensure user exists and is linked to group from chat
+ * Creates user if not exists, updates group_id if changed
+ */
+function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
+  if (!chatId) return null;
+
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) return null;
+
+  let user = database.users.findByTelegramId(telegramId);
+
+  if (!user) {
+    user = database.users.create({
+      telegram_id: telegramId,
+      group_id: group.id,
+    });
+  } else if (user.group_id !== group.id) {
+    database.users.update(telegramId, { group_id: group.id });
+    user = database.users.findByTelegramId(telegramId);
+  }
+
+  return user ? { user, group } : null;
+}
+
+/**
  * Handle callback queries from inline keyboards
  */
 export async function handleCallbackQuery(
@@ -108,21 +133,15 @@ async function handleCategoryAction(
   bot: any
 ): Promise<void> {
   const [subAction, ...rest] = params;
-  const user = database.users.findByTelegramId(telegramId);
+  const chatId = ctx.message?.chat?.id;
+  const result = ensureUserInGroup(telegramId, chatId);
 
-  if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({
-      text: "Пользователь не найден или не привязан к группе",
-    });
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
     return;
   }
 
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
-    return;
-  }
+  const { user, group } = result;
 
   switch (subAction) {
     case "add": {
@@ -284,22 +303,16 @@ async function handleBudgetAction(
   bot: any
 ): Promise<void> {
   const [subAction, category, ...rest] = params;
-  const user = database.users.findByTelegramId(telegramId);
-
-  if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
-    return;
-  }
-
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
-    return;
-  }
-
   const chatId = ctx.message?.chat?.id;
   const messageId = ctx.message?.id;
+  const result = ensureUserInGroup(telegramId, chatId);
+
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    return;
+  }
+
+  const { group } = result;
 
   switch (subAction) {
     case "set": {
@@ -506,21 +519,14 @@ async function handleReceiptItemConfirm(
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  const result = ensureUserInGroup(telegramId, chatId);
 
-  if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({
-      text: "Пользователь не найден или не привязан к группе",
-    });
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
     return;
   }
 
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
-    return;
-  }
+  const { user, group } = result;
 
   // Get receipt item
   const item = database.receiptItems.findById(itemId);
@@ -808,19 +814,14 @@ async function handleUseFoundCategory(
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  const result = ensureUserInGroup(telegramId, chatId);
 
-  if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
     return;
   }
 
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
-    return;
-  }
+  const { user, group } = result;
 
   const item = database.receiptItems.findById(itemId);
 
@@ -890,21 +891,14 @@ async function handleSkipReceiptItem(
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  const result = ensureUserInGroup(telegramId, chatId);
 
-  if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({
-      text: "Пользователь не найден или не привязан к группе",
-    });
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
     return;
   }
 
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
-    return;
-  }
+  const { user, group } = result;
 
   // Get receipt item
   const item = database.receiptItems.findById(itemId);
@@ -966,19 +960,14 @@ async function handleCreateNewCategory(
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
+  const result = ensureUserInGroup(telegramId, chatId);
 
-  if (!user || !user.group_id) {
-    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
     return;
   }
 
-  const group = database.groups.findById(user.group_id);
-
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
-    return;
-  }
+  const { user, group } = result;
 
   const item = database.receiptItems.findById(itemId);
 
@@ -1054,13 +1043,6 @@ async function handleReceiptSummaryAction(
     return;
   }
 
-  const user = database.users.findByTelegramId(telegramId);
-
-  if (!user) {
-    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
-    return;
-  }
-
   const queueItem = database.photoQueue.findById(queueId);
 
   if (!queueItem) {
@@ -1068,11 +1050,20 @@ async function handleReceiptSummaryAction(
     return;
   }
 
-  // Use group from queueItem, not user (user.group_id may change if they message another group)
+  // Use group from queueItem (where receipt was created)
   const group = database.groups.findById(queueItem.group_id);
 
   if (!group) {
     await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    return;
+  }
+
+  // Ensure user exists and is linked to group
+  const result = ensureUserInGroup(telegramId, chatId);
+  const user = result?.user ?? database.users.findByTelegramId(telegramId);
+
+  if (!user) {
+    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
     return;
   }
 
