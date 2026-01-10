@@ -342,16 +342,32 @@ ${budgetsContext}`;
 }
 
 /**
+ * Escape HTML entities to prevent parsing errors
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
  * Process think tags - replace them with human-readable text
+ * Escapes HTML inside think blocks to prevent parsing errors
  */
 function processThinkTags(text: string): string {
-  // Replace <think> with start marker
-  text = text.replace(/<think>/g, "🤔 <i>Бот начал размышление</i>\n");
-  // Replace </think> with end marker
-  text = text.replace(
-    /<\/think>/g,
-    "\n\n💬 <i>Бот начал формулировать ответ</i>\n"
-  );
+  // Escape HTML inside think blocks, then replace tags
+  text = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, content) => {
+    const escaped = escapeHtml(content);
+    return `🤔 <i>Бот начал размышление</i>\n${escaped}\n\n💬 <i>Бот начал формулировать ответ</i>\n`;
+  });
+
+  // Handle unclosed <think> (streaming) - escape content after it
+  text = text.replace(/<think>([\s\S]*)$/, (_, content) => {
+    const escaped = escapeHtml(content);
+    return `🤔 <i>Бот начал размышление</i>\n${escaped}`;
+  });
+
   return text;
 }
 
