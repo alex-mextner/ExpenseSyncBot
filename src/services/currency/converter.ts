@@ -139,6 +139,33 @@ export function convertToEUR(
 }
 
 /**
+ * Convert amount between any two currencies
+ * Uses EUR as intermediate currency
+ */
+export function convertCurrency(
+  amount: number,
+  fromCurrency: CurrencyCode,
+  toCurrency: CurrencyCode
+): number {
+  if (fromCurrency === toCurrency) {
+    return amount;
+  }
+
+  const rates = cachedRates || FALLBACK_RATES;
+  const fromRate = rates[fromCurrency];
+  const toRate = rates[toCurrency];
+
+  if (!fromRate || !toRate) {
+    throw new Error(`Exchange rate not found for ${fromCurrency} or ${toCurrency}`);
+  }
+
+  // rates[X] = "1 X = Y EUR"
+  // from -> EUR -> to
+  const eurAmount = amount * fromRate;
+  return Math.round((eurAmount / toRate) * 100) / 100;
+}
+
+/**
  * Get exchange rate for currency
  */
 export function getExchangeRate(currency: CurrencyCode): number {

@@ -11,6 +11,7 @@ import {
 } from "../../services/google/sheets";
 import { createAddCategoryWithBudgetKeyboard } from "../keyboards";
 import { CURRENCY_ALIASES, type CurrencyCode } from "../../config/constants";
+import { convertCurrency } from "../../services/currency/converter";
 
 /**
  * Parse budget amount with optional currency
@@ -284,27 +285,36 @@ async function showBudgetProgress(
     return;
   }
 
-  // Calculate total budget and total spent
-  let totalBudget = 0;
-  let totalSpent = 0;
+  // Group budgets by currency and calculate totals
+  const budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }> = {} as Record<CurrencyCode, { totalBudget: number; totalSpent: number }>;
 
   for (const budget of budgets) {
-    totalBudget += budget.limit_amount;
-    totalSpent += categorySpending[budget.category] || 0;
-  }
+    const currency = budget.currency;
+    if (!budgetsByCurrency[currency]) {
+      budgetsByCurrency[currency] = { totalBudget: 0, totalSpent: 0 };
+    }
+    const spentEur = categorySpending[budget.category] || 0;
+    const spentInCurrency = convertCurrency(spentEur, "EUR", currency);
 
-  const totalPercentage =
-    totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+    budgetsByCurrency[currency].totalBudget += budget.limit_amount;
+    budgetsByCurrency[currency].totalSpent += spentInCurrency;
+  }
 
   // Build message
   let message = `📊 Бюджет на ${currentMonthName}\n\n`;
-  message += `💰 Всего: €${totalSpent.toFixed(2)} / €${totalBudget.toFixed(
-    2
-  )} (${totalPercentage}%)\n\n`;
+
+  // Display totals for each currency
+  for (const [currency, { totalBudget, totalSpent }] of Object.entries(budgetsByCurrency)) {
+    const symbol = getCurrencySymbol(currency as CurrencyCode);
+    const percentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+    message += `💰 Всего (${currency}): ${symbol}${totalSpent.toFixed(2)} / ${symbol}${totalBudget.toFixed(2)} (${percentage}%)\n`;
+  }
+  message += "\n";
 
   // Sort budgets by percentage descending (exceeded first)
   const budgetProgress = budgets.map((budget) => {
-    const spent = categorySpending[budget.category] || 0;
+    const spentEur = categorySpending[budget.category] || 0;
+    const spent = convertCurrency(spentEur, "EUR", budget.currency);
     const percentage =
       budget.limit_amount > 0
         ? Math.round((spent / budget.limit_amount) * 100)
@@ -331,10 +341,11 @@ async function showBudgetProgress(
   } of budgetProgress) {
     const emoji = getCategoryEmoji(budget.category);
     const status = is_exceeded ? "🔴" : is_warning ? "⚠️" : "";
+    const symbol = getCurrencySymbol(budget.currency);
 
-    message += `${emoji} ${budget.category}: €${spent.toFixed(
+    message += `${emoji} ${budget.category}: ${symbol}${spent.toFixed(
       2
-    )} / €${budget.limit_amount.toFixed(2)} (${percentage}%) ${status}\n`;
+    )} / ${symbol}${budget.limit_amount.toFixed(2)} (${percentage}%) ${status}\n`;
   }
 
   await ctx.send(message);
