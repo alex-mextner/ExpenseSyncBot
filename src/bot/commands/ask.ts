@@ -3,7 +3,8 @@ import type { Bot } from "gramio";
 import { format } from "date-fns";
 import { env } from "../../config/env";
 import { database } from "../../database";
-import { formatExchangeRatesForAI } from "../../services/currency/converter";
+import { formatExchangeRatesForAI, convertCurrency } from "../../services/currency/converter";
+import type { CurrencyCode } from "../../config/constants";
 import type { Ctx } from "../types";
 
 const client = new InferenceClient(env.HF_TOKEN);
@@ -578,6 +579,7 @@ function buildExpensesContext(
 /**
  * Build context from budgets with remaining calculations
  * Budgets are already resolved for current month (with fallback to latest)
+ * Expenses are converted from EUR to budget currency for comparison
  */
 function buildBudgetsContext(
   budgets: Array<{
@@ -597,46 +599,56 @@ function buildBudgetsContext(
     return "БЮДЖЕТЫ: Бюджеты не установлены.";
   }
 
-  // Calculate expenses by category for current month
-  const monthExpenses: Record<string, number> = {};
+  // Calculate expenses by category for current month (in EUR)
+  const monthExpensesEur: Record<string, number> = {};
   for (const expense of expenses) {
     if (expense.date.startsWith(currentMonth)) {
-      monthExpenses[expense.category] =
-        (monthExpenses[expense.category] || 0) + expense.eur_amount;
+      monthExpensesEur[expense.category] =
+        (monthExpensesEur[expense.category] || 0) + expense.eur_amount;
     }
   }
 
   let context = "\n\nБЮДЖЕТЫ И ОСТАТКИ:\n\n";
+  context += `${currentMonth} (ТЕКУЩИЙ МЕСЯЦ):\n\n`;
 
-  const totalLimit = budgets.reduce((sum, b) => sum + b.limit_amount, 0);
-
-  // Calculate total spent for budgeted categories
-  let totalSpentBudgeted = 0;
-  for (const budget of budgets) {
-    totalSpentBudgeted += monthExpenses[budget.category] || 0;
-  }
-
-  const totalRemaining = totalLimit - totalSpentBudgeted;
-  const usedPercent = totalLimit > 0 ? ((totalSpentBudgeted / totalLimit) * 100).toFixed(1) : "0";
-
-  context += `${currentMonth} (ТЕКУЩИЙ МЕСЯЦ):\n`;
-  context += `  Общий бюджет: €${totalLimit.toFixed(2)}\n`;
-  context += `  Потрачено: €${totalSpentBudgeted.toFixed(2)} (${usedPercent}%)\n`;
-  context += `  Остаток: €${totalRemaining.toFixed(2)}\n\n`;
+  // Group budgets by currency for totals
+  const byCurrency: Record<string, { limit: number; spent: number }> = {};
 
   context += `  По категориям:\n`;
   for (const budget of budgets) {
-    const spent = monthExpenses[budget.category] || 0;
-    const remaining = budget.limit_amount - spent;
-    const categoryPercent = budget.limit_amount > 0
-      ? ((spent / budget.limit_amount) * 100).toFixed(0)
+    const currency = budget.currency as CurrencyCode;
+    const spentEur = monthExpensesEur[budget.category] || 0;
+    // Convert EUR spent to budget currency
+    const spentInCurrency = convertCurrency(spentEur, "EUR", currency);
+    const remaining = budget.limit_amount - spentInCurrency;
+    const percent = budget.limit_amount > 0
+      ? ((spentInCurrency / budget.limit_amount) * 100).toFixed(0)
       : "0";
-    const status = remaining < 0 ? "⚠️ ПРЕВЫШЕН" : remaining < budget.limit_amount * 0.1 ? "⚠️ почти исчерпан" : "";
+    const status = remaining < 0
+      ? "⚠️ ПРЕВЫШЕН"
+      : remaining < budget.limit_amount * 0.1
+        ? "⚠️ почти исчерпан"
+        : "";
 
-    context += `  - ${budget.category}: лимит €${budget.limit_amount.toFixed(2)}, потрачено €${spent.toFixed(2)} (${categoryPercent}%), остаток €${remaining.toFixed(2)} ${status}\n`;
+    context += `  - ${budget.category}: лимит ${budget.limit_amount.toFixed(2)} ${currency}, потрачено ${spentInCurrency.toFixed(2)} ${currency} (${percent}%), остаток ${remaining.toFixed(2)} ${currency} ${status}\n`;
+
+    // Accumulate for totals by currency
+    if (!byCurrency[currency]) {
+      byCurrency[currency] = { limit: 0, spent: 0 };
+    }
+    byCurrency[currency].limit += budget.limit_amount;
+    byCurrency[currency].spent += spentInCurrency;
   }
-  context += "\n";
 
+  // Add totals by currency
+  context += `\n  Итого по валютам:\n`;
+  for (const [currency, totals] of Object.entries(byCurrency)) {
+    const remaining = totals.limit - totals.spent;
+    const percent = totals.limit > 0 ? ((totals.spent / totals.limit) * 100).toFixed(1) : "0";
+    context += `  - ${currency}: бюджет ${totals.limit.toFixed(2)}, потрачено ${totals.spent.toFixed(2)} (${percent}%), остаток ${remaining.toFixed(2)}\n`;
+  }
+
+  context += "\n";
   return context;
 }
 
