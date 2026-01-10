@@ -160,6 +160,7 @@ export const MESSAGES = {
 export const KEYBOARD_TEXTS = {
   addNewCategory: '➕ Добавить новую категорию',
   selectExistingCategory: '📋 Выбрать из существующих',
+  skip: '⏭️ Пропустить',
   cancel: '❌ Отмена',
   done: '✅ Готово',
   next: '✅ Далее',

@@ -58,7 +58,9 @@ export function createCategoryConfirmKeyboard(category: string): InlineKeyboard 
   keyboard
     .text(KEYBOARD_TEXTS.addNewCategory, `category:add:${category}`)
     .row()
-    .text(KEYBOARD_TEXTS.selectExistingCategory, 'category:select');
+    .text(KEYBOARD_TEXTS.selectExistingCategory, 'category:select')
+    .row()
+    .text(KEYBOARD_TEXTS.skip, 'category:cancel');
 
   return keyboard;
 }
