@@ -10,6 +10,8 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'usd': 'USD',
   'усд': 'USD',
   'доллар': 'USD',
+  'долларов': 'USD',
+  'доллара': 'USD',
 
   // Euro variants
   '€': 'EUR',
@@ -25,6 +27,7 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'руб': 'RUB',
   'рубль': 'RUB',
   'рублей': 'RUB',
+  'рубля': 'RUB',
   'rub': 'RUB',
   'ruble': 'RUB',
   'rubles': 'RUB',
@@ -36,6 +39,7 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'дин': 'RSD',
   'динар': 'RSD',
   'динара': 'RSD',
+  'динаров': 'RSD',
 
   // Pound
   '£': 'GBP',
@@ -44,6 +48,8 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'pound': 'GBP',
   'pounds': 'GBP',
   'фунт': 'GBP',
+  'фунтов': 'GBP',
+  'фунта': 'GBP',
 
   // Other common currencies
   'chf': 'CHF',
@@ -52,12 +58,18 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'jpy': 'JPY',
   'йпй': 'JPY',
   'иена': 'JPY',
+  'иен': 'JPY',
+  'иены': 'JPY',
   'cny': 'CNY',
   'цни': 'CNY',
   'юань': 'CNY',
+  'юаней': 'CNY',
+  'юаня': 'CNY',
   'inr': 'INR',
   'инр': 'INR',
   'рупия': 'INR',
+  'рупий': 'INR',
+  'рупии': 'INR',
 };
 
 /**
