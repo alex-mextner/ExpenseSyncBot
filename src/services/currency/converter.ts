@@ -14,6 +14,8 @@ const FALLBACK_RATES: Record<CurrencyCode, number> = {
   JPY: 0.0062, // 1 JPY = 0.0062 EUR (approx 161 JPY = 1 EUR)
   CNY: 0.13, // 1 CNY = 0.13 EUR (approx 7.7 CNY = 1 EUR)
   INR: 0.011, // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
+  LKR: 0.0028, // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
+  AED: 0.25, // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
 };
 
 /**
@@ -70,6 +72,8 @@ async function fetchExchangeRates(): Promise<Record<
       JPY: 1 / (data.rates.JPY || 1),
       CNY: 1 / (data.rates.CNY || 1),
       INR: 1 / (data.rates.INR || 1),
+      LKR: 1 / (data.rates.LKR || 1),
+      AED: 1 / (data.rates.AED || 1),
     };
 
     console.log("[CURRENCY] ✅ Successfully fetched exchange rates from API");
@@ -82,6 +86,8 @@ async function fetchExchangeRates(): Promise<Record<
     console.log(`  /1 JPY = €${(1 / rates.JPY).toFixed(6)}`);
     console.log(`  /1 CNY = €${(1 / rates.CNY).toFixed(4)}`);
     console.log(`  /1 INR = €${(1 / rates.INR).toFixed(6)}`);
+    console.log(`  /1 LKR = €${(1 / rates.LKR).toFixed(6)}`);
+    console.log(`  /1 AED = €${(1 / rates.AED).toFixed(4)}`);
 
     return rates;
   } catch (error) {

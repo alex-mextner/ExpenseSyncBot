@@ -70,13 +70,24 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'рупия': 'INR',
   'рупий': 'INR',
   'рупии': 'INR',
+
+  // Sri Lankan Rupee
+  'lkr': 'LKR',
+  'лкр': 'LKR',
+
+  // UAE Dirham
+  'aed': 'AED',
+  'аед': 'AED',
+  'дирхам': 'AED',
+  'дирхама': 'AED',
+  'дирхамов': 'AED',
 };
 
 /**
  * Supported currency codes
  */
 export const SUPPORTED_CURRENCIES = [
-  'USD', 'EUR', 'RUB', 'RSD', 'GBP', 'CHF', 'JPY', 'CNY', 'INR'
+  'USD', 'EUR', 'RUB', 'RSD', 'GBP', 'CHF', 'JPY', 'CNY', 'INR', 'LKR', 'AED'
 ] as const;
 
 export type CurrencyCode = typeof SUPPORTED_CURRENCIES[number];
@@ -94,6 +105,8 @@ export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   JPY: '¥',
   CNY: '¥',
   INR: '₹',
+  LKR: 'LKR',
+  AED: 'AED',
 };
 
 /**

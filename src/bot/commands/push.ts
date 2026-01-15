@@ -127,6 +127,8 @@ export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
           JPY: null,
           CNY: null,
           INR: null,
+          LKR: null,
+          AED: null,
         };
         amounts[expense.currency as CurrencyCode] = expense.amount;
 
