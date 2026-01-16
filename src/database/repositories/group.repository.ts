@@ -103,6 +103,11 @@ export class GroupRepository {
       values.push(data.custom_prompt);
     }
 
+    if (data.active_topic_id !== undefined) {
+      updates.push('active_topic_id = ?');
+      values.push(data.active_topic_id);
+    }
+
     updates.push('updated_at = CURRENT_TIMESTAMP');
 
     values.push(telegramGroupId);

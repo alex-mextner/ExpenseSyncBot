@@ -40,6 +40,13 @@ export async function handleAskQuestion(
     return;
   }
 
+  // Check topic restriction
+  const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
+    console.log(`[ASK] Ignoring: question from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`);
+    return;
+  }
+
   // Get user for storing chat history
   const userId = ctx.from.id;
   let user = database.users.findByTelegramId(userId);

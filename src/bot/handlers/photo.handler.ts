@@ -43,6 +43,12 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
     return;
   }
 
+  // Check topic restriction
+  if (group.active_topic_id && threadId !== group.active_topic_id) {
+    console.log(`[PHOTO] Ignoring: photo from topic ${threadId || 'general'}, bot listens to topic ${group.active_topic_id}`);
+    return;
+  }
+
   // Get or create user
   let user = database.users.findByTelegramId(telegramId);
   if (!user) {

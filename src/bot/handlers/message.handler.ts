@@ -100,6 +100,13 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
     return;
   }
 
+  // Check topic restriction
+  const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
+    console.log(`[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`);
+    return;
+  }
+
   console.log(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
 
   // Get or create user
@@ -226,10 +233,12 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
     console.log(`[MSG] Asking for confirmation of ${newCategories.length} new categories`);
     for (const category of newCategories) {
       const keyboard = createCategoryConfirmKeyboard(category);
-      await ctx.send(
-        MESSAGES.newCategoryDetected.replace("{category}", category),
-        { reply_markup: keyboard }
-      );
+      await bot.api.sendMessage({
+        chat_id: telegramGroupId,
+        text: MESSAGES.newCategoryDetected.replace("{category}", category),
+        reply_markup: keyboard,
+        ...(messageThreadId && { message_thread_id: messageThreadId }),
+      });
     }
     return;
   }
@@ -407,9 +416,12 @@ async function checkBudgetLimit(
     }
 
     try {
+      // Get group to check for active topic
+      const groupForTopic = database.groups.findById(groupId);
       await bot.api.sendMessage({
         chat_id: telegramGroupId,
         text: message,
+        ...(groupForTopic?.active_topic_id && { message_thread_id: groupForTopic.active_topic_id }),
       });
       console.log(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
     } catch (error) {

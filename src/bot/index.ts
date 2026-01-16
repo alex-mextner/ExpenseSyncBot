@@ -18,6 +18,7 @@ import { handleExpenseMessage } from "./handlers/message.handler";
 import { handlePhotoMessage } from "./handlers/photo.handler";
 import { handleAskQuestion, handleAdviceCommand } from "./commands/ask";
 import { handlePromptCommand } from "./commands/prompt";
+import { handleTopicCommand } from "./commands/topic";
 import { startPhotoProcessor } from "../services/receipt/photo-processor";
 
 /**
@@ -47,6 +48,7 @@ export function createBot(): Bot {
   bot.command("reconnect", handleReconnectCommand);
   bot.command("advice", handleAdviceCommand);
   bot.command("prompt", handlePromptCommand);
+  bot.command("topic", handleTopicCommand);
 
   // Callback queries (inline keyboard buttons)
   bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));

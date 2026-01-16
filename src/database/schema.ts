@@ -551,6 +551,25 @@ export function runMigrations(db: Database): void {
         console.log('✓ Added summary mode columns to photo_processing_queue');
       },
     },
+    {
+      name: '017_add_active_topic_id_to_groups',
+      up: () => {
+        const checkColumn = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count
+          FROM pragma_table_info('groups')
+          WHERE name = 'active_topic_id'
+        `);
+        const result = checkColumn.get();
+
+        if (result && result.count === 0) {
+          db.exec(`
+            ALTER TABLE groups
+            ADD COLUMN active_topic_id INTEGER;
+          `);
+          console.log('✓ Added active_topic_id column to groups');
+        }
+      },
+    },
   ];
 
   // Check and run migrations
