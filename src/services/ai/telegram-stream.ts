@@ -106,17 +106,29 @@ export class TelegramStreamWriter {
    * Send final message, cleaning up tool indicators
    */
   async finalize(): Promise<void> {
-    // Strip tool indicators from final text -- the model's text is the real answer
     let cleanText = this.fullText;
+
+    // Collect completed tool indicators into an expandable blockquote
+    const toolLines: string[] = [];
     for (const indicator of this.toolIndicators) {
       cleanText = cleanText.replace(indicator, '');
     }
-    // Also clean up completed indicators (the replacements)
-    cleanText = cleanText.replace(/\n[\u2705\u274c] <i>[^<]+<\/i>/g, '');
+    // Capture completed indicators (✅/❌ lines) and remove from main text
+    cleanText = cleanText.replace(/\n([\u2705\u274c] <i>[^<]+<\/i>)/g, (_, line) => {
+      toolLines.push(line);
+      return '';
+    });
+
     // Process <think> tags -> expandable blockquote (same as HF path)
     cleanText = processThinkTags(cleanText);
     // Clean up leading/trailing whitespace and extra newlines
     cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
+
+    // Prepend tool summary as expandable blockquote
+    if (toolLines.length > 0) {
+      const toolSummary = `<blockquote expandable>\u2699\ufe0f <b>Инструменты</b>\n${toolLines.join('\n')}</blockquote>`;
+      cleanText = toolSummary + '\n\n' + cleanText;
+    }
 
     if (!cleanText) {
       cleanText = '\u26a0\ufe0f AI did not produce a response.';

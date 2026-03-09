@@ -7,7 +7,7 @@ import { database } from "../../database";
 import { formatExchangeRatesForAI, convertCurrency } from "../../services/currency/converter";
 import type { CurrencyCode } from "../../config/constants";
 import type { Ctx } from "../types";
-import { ExpenseBotAgent } from "../../services/ai/agent";
+import { ExpenseBotAgent, AI_MODEL, AI_BASE_URL } from "../../services/ai/agent";
 import type { AgentContext } from "../../services/ai/types";
 import { spendingAnalytics } from "../../services/analytics/spending-analytics";
 import { formatSnapshotForPrompt, computeOverallSeverity } from "../../services/analytics/formatters";
@@ -1059,10 +1059,10 @@ async function sendSmartAdvice(
     if (useAnthropic) {
       const anthropic = new Anthropic({
         apiKey: env.ANTHROPIC_API_KEY,
-        baseURL: env.AI_BASE_URL || undefined,
+        baseURL: AI_BASE_URL,
       });
       const response = await anthropic.messages.create({
-        model: env.AI_MODEL,
+        model: AI_MODEL,
         max_tokens: tierConfig.max_tokens,
         messages: [{ role: "user", content: fullPrompt }],
       });

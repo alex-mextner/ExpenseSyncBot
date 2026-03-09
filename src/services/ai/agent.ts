@@ -15,8 +15,8 @@ import type { ChatMessage } from '../../database/types';
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
-const AI_MODEL = process.env.AI_MODEL || 'glm-4.7';
-const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.z.ai/api/anthropic';
+export const AI_MODEL = process.env.AI_MODEL || 'glm-4.7';
+export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.z.ai/api/anthropic';
 
 export class ExpenseBotAgent {
   private anthropic: Anthropic;
@@ -114,9 +114,13 @@ export class ExpenseBotAgent {
             if (currentToolUse) {
               const input = JSON.parse(currentToolUse.inputJson || '{}');
 
+              console.log(`[AGENT] Tool call: ${currentToolUse.name}`, JSON.stringify(input));
+
               await writer.onToolStart(currentToolUse.name, input);
 
               const result = await executeTool(currentToolUse.name, input, this.ctx);
+
+              console.log(`[AGENT] Tool result: ${currentToolUse.name}`, result.success ? 'OK' : `ERR: ${result.error}`);
 
               writer.onToolResult(currentToolUse.name, input, result);
 
@@ -219,8 +223,8 @@ RULES:
 1. Use tools to get data. NEVER invent numbers.
 2. For questions about expenses -- call get_expenses with filters.
 3. For budget info -- call get_budgets.
-4. For actions -- use the appropriate tool.
-5. IMPORTANT: Confirm with the user before write/delete operations.
+4. For actions -- ALWAYS use the appropriate tool. NEVER claim you did something without calling the tool.
+5. When the user asks to add an expense -- call add_expense. When they ask to delete -- call delete_expense. Do NOT just say "done" without calling the tool.
 6. When the user asks about THEIR expenses, look for a category matching their name.
 
 FORMATTING: Use ONLY HTML tags:
