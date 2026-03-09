@@ -11,6 +11,7 @@ import { createCategoryConfirmKeyboard } from "../keyboards";
 import { silentSyncBudgets } from "../commands/budget";
 import { maybeSmartAdvice } from "../commands/ask";
 import { extractURLsFromText, processPaymentLinks } from "../../services/receipt/link-analyzer";
+import { consumePendingDesignEdit, getPipelineInstance } from "../commands/dev";
 
 /**
  * Handle expense message
@@ -124,6 +125,20 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
     database.users.update(telegramId, { group_id: group.id });
     user = database.users.findByTelegramId(telegramId);
     if (!user) return;
+  }
+
+  // Check if we're waiting for design edit input
+  const pendingTaskId = consumePendingDesignEdit(telegramGroupId);
+  if (pendingTaskId !== null) {
+    const pl = getPipelineInstance();
+    if (pl) {
+      try {
+        await pl.editDesign(pendingTaskId, text);
+      } catch (error) {
+        await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return;
   }
 
   // Check if we're waiting for bulk correction text input

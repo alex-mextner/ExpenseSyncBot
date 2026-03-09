@@ -23,13 +23,29 @@ import {
 /** Singleton pipeline instance — initialized lazily */
 let pipeline: DevPipeline | null = null;
 
+/** Tracks chats waiting for design edit input: chatId → taskId */
+const pendingDesignEdits = new Map<number, number>();
+
+/**
+ * Check if a chat has a pending design edit, consume it if so.
+ * Called from message handler.
+ */
+export function consumePendingDesignEdit(chatId: number): number | null {
+  const taskId = pendingDesignEdits.get(chatId);
+  if (taskId !== undefined) {
+    pendingDesignEdits.delete(chatId);
+    return taskId;
+  }
+  return null;
+}
+
 /**
  * Initialize the pipeline with a notification callback.
  *
  * Must be called once with a bot instance to enable notifications.
  */
 export function initDevPipeline(bot: any): DevPipeline {
-  const notify: NotifyCallback = async (groupId: number, message: string) => {
+  const notify: NotifyCallback = async (groupId: number, message: string, options?: { reply_markup?: any }) => {
     const group = database.groups.findById(groupId);
     if (!group) return;
 
@@ -38,6 +54,7 @@ export function initDevPipeline(bot: any): DevPipeline {
         chat_id: group.telegram_group_id,
         text: message,
         parse_mode: 'HTML',
+        ...options,
       });
     } catch (error) {
       console.error('[DEV-CMD] Failed to send notification:', error);
@@ -49,10 +66,15 @@ export function initDevPipeline(bot: any): DevPipeline {
 }
 
 /**
- * Get or create the pipeline instance.
+ * Get the pipeline instance.
  * Returns null if not initialized yet.
  */
 function getPipeline(): DevPipeline | null {
+  return pipeline;
+}
+
+/** Exposed for message handler to call editDesign */
+export function getPipelineInstance(): DevPipeline | null {
   return pipeline;
 }
 
@@ -542,6 +564,17 @@ export async function handleDevCallback(
         await pl.cancelTask(taskId);
         await ctx.answerCallbackQuery({ text: 'Cancelled' });
         break;
+
+      case 'edit':
+        // Send prompt for edit input, track pending edit
+        pendingDesignEdits.set(chatId!, taskId);
+        await ctx.answerCallbackQuery({ text: 'Опишите правки' });
+        await bot.api.sendMessage({
+          chat_id: chatId,
+          text: `✏️ Опишите, что изменить в дизайне задачи #${taskId}:`,
+          reply_markup: { force_reply: true, selective: true },
+        });
+        return; // Don't delete the design message
 
       default:
         await ctx.answerCallbackQuery({ text: 'Unknown action' });

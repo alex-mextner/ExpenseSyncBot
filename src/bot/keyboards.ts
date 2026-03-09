@@ -130,6 +130,20 @@ export function createAddCategoryWithBudgetKeyboard(category: string, amount: nu
 }
 
 /**
+ * Create dev task approval keyboard
+ */
+export function createDevApprovalKeyboard(taskId: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text('✅ Approve', `dev:approve:${taskId}`)
+    .text('❌ Cancel', `dev:cancel:${taskId}`)
+    .text('✏️ Edit (AI)', `dev:edit:${taskId}`);
+
+  return keyboard;
+}
+
+/**
  * Create receipt summary keyboard (for receipts with >5 items)
  * Shows options: Accept all, Bulk edit, Item-by-item
  */

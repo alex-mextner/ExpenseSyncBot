@@ -38,6 +38,7 @@ import {
 import { runCodexReview } from './codex-integration';
 import { DevAgent } from './dev-agent';
 import { escapeHtml } from '../../bot/commands/ask';
+import { createDevApprovalKeyboard } from '../../bot/keyboards';
 
 /**
  * Shared development rules injected into all DevAgent prompts.
@@ -66,7 +67,8 @@ DEVELOPMENT RULES (follow strictly):
  */
 export type NotifyCallback = (
   groupId: number,
-  message: string
+  message: string,
+  options?: { reply_markup?: any }
 ) => Promise<void>;
 
 /**
@@ -371,9 +373,38 @@ Keep the plan concise — 20-40 lines max.`;
 
     await this.notify(
       task.group_id,
-      `📐 Dev task #${task.id} design ready:\n\n<pre>${escapeHtml(design.slice(0, 2000))}</pre>\n\n` +
-        `Use /dev approve ${task.id} to proceed or /dev reject ${task.id} to cancel.`
+      `📐 Dev task #${task.id} design ready:\n\n<pre>${escapeHtml(design.slice(0, 2000))}</pre>`,
+      { reply_markup: createDevApprovalKeyboard(task.id) }
     );
+  }
+
+  /**
+   * Edit design based on user feedback — re-runs designing with corrections.
+   */
+  async editDesign(taskId: number, feedback: string): Promise<DevTask> {
+    const task = database.devTasks.findById(taskId);
+    if (!task) {
+      throw new Error(`Task #${taskId} not found`);
+    }
+
+    if (task.state !== DevTaskState.APPROVAL) {
+      throw new Error(`Task #${taskId} is not in approval state (current: ${task.state})`);
+    }
+
+    // Go back to DESIGNING with feedback appended
+    const enrichedDescription = `${task.description}\n\nDESIGN FEEDBACK:\nPrevious design:\n${task.design || ''}\n\nUser requested changes:\n${feedback}`;
+
+    const updated = transition(task, DevTaskState.DESIGNING);
+    database.devTasks.update(taskId, { description: enrichedDescription } as any);
+    updated.description = enrichedDescription;
+
+    await this.notify(
+      task.group_id,
+      `✏️ Dev task #${task.id}: redesigning with your feedback...`
+    );
+
+    this.processStateAsync(updated);
+    return updated;
   }
 
   /**
