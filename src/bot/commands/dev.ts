@@ -126,6 +126,10 @@ export async function handleDevCommand(ctx: Ctx['Command']): Promise<void> {
       await handleCancel(ctx, args, group.id);
       break;
 
+    case 'answer':
+      await handleAnswer(ctx, args, group.id);
+      break;
+
     case 'history':
       await showHistory(ctx, group.id);
       break;
@@ -149,6 +153,7 @@ async function showUsage(ctx: Ctx['Command']): Promise<void> {
       '/dev approve &lt;id&gt; — approve a design\n' +
       '/dev reject &lt;id&gt; — reject a task\n' +
       '/dev cancel &lt;id&gt; — cancel a task\n' +
+      '/dev answer &lt;id&gt; &lt;text&gt; — answer clarifying questions\n' +
       '/dev history — recent completed tasks',
     { parse_mode: 'HTML' }
   );
@@ -358,6 +363,52 @@ async function handleCancel(
   } catch (error) {
     await ctx.send(
       `Failed to cancel: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/**
+ * Answer clarifying questions for a task
+ */
+async function handleAnswer(
+  ctx: Ctx['Command'],
+  args: string[],
+  groupId: number
+): Promise<void> {
+  const taskId = parseInt(args[1] || '', 10);
+
+  if (Number.isNaN(taskId)) {
+    await ctx.send('Usage: /dev answer <task_id> <your answers>');
+    return;
+  }
+
+  const answer = args.slice(2).join(' ');
+  if (!answer.trim()) {
+    await ctx.send('Provide your answers: /dev answer <task_id> <text>');
+    return;
+  }
+
+  const pl = getPipeline();
+  if (!pl) {
+    await ctx.send('Dev pipeline not initialized.');
+    return;
+  }
+
+  try {
+    const task = database.devTasks.findById(taskId);
+    if (!task) {
+      await ctx.send(`Task #${taskId} not found.`);
+      return;
+    }
+    if (task.group_id !== groupId) {
+      await ctx.send(`Task #${taskId} does not belong to this group.`);
+      return;
+    }
+
+    await pl.answerTask(taskId, answer);
+  } catch (error) {
+    await ctx.send(
+      `Failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }

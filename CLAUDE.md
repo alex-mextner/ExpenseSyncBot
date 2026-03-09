@@ -273,6 +273,64 @@ See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 
 ---
 
+## Development Philosophy
+
+### Foundational Rules
+
+- Doing it right is better than doing it fast. NEVER skip steps or take shortcuts.
+- Tedious, systematic work is often the correct solution. Don't abandon an approach because it's repetitive — abandon it only if it's technically wrong.
+- ALWAYS STOP and ask for clarification rather than making assumptions.
+- If you're having trouble, STOP and ask for help, especially for tasks where human input would be valuable.
+- When you disagree with an approach, push back. Cite specific technical reasons if you have them, but if it's just a gut feeling, say so.
+
+### Writing Code
+
+- Make the SMALLEST reasonable changes to achieve the desired outcome.
+- STRONGLY prefer simple, clean, maintainable solutions over clever or complex ones. Readability and maintainability are PRIMARY CONCERNS.
+- WORK HARD to reduce code duplication, even if the refactoring takes extra effort.
+- NEVER throw away or rewrite implementations without EXPLICIT permission. If considering this, STOP and ask first.
+- MATCH the style and formatting of surrounding code, even if it differs from standard style guides. Consistency within a file trumps external standards.
+- Fix broken things immediately when you find them. Don't ask permission to fix bugs.
+
+### Naming
+
+- Names MUST tell what code does, not how it's implemented or its history
+- NEVER use implementation details in names (e.g., "ZodValidator", "MCPWrapper", "JSONParser")
+- NEVER use temporal/historical context in names (e.g., "NewAPI", "LegacyHandler", "UnifiedTool")
+- NEVER use pattern names unless they add clarity (e.g., prefer "Tool" over "ToolFactory")
+
+### Code Comments
+
+- NEVER add comments explaining that something is "improved", "better", "new", "enhanced", or referencing what it used to be
+- Comments should explain WHAT the code does or WHY it exists, not how it's better than something else
+- NEVER remove code comments unless you can PROVE they are actively false
+- NEVER refer to temporal context in comments ("recently refactored", "moved", "new")
+- All code files MUST start with a brief 1-2 line comment explaining what the file does
+
+### Systematic Debugging
+
+Follow this framework for ANY technical issue:
+
+1. **Root Cause Investigation** (BEFORE attempting fixes): read error messages carefully, reproduce consistently, check recent changes
+2. **Pattern Analysis**: find working examples, compare against references, identify differences
+3. **Hypothesis and Testing**: form single hypothesis, make smallest possible change, verify before continuing
+4. **Implementation**: NEVER add multiple fixes at once. If first fix doesn't work, STOP and re-analyze rather than adding more fixes
+
+### Testing
+
+- NEVER delete a test because it's failing — raise the issue instead
+- NEVER write tests that "test" mocked behavior instead of real logic
+- NEVER ignore system or test output — logs and messages often contain CRITICAL information
+- Test output MUST BE PRISTINE TO PASS
+
+### Version Control
+
+- NEVER use `git add -A` without checking `git status` first
+- Commit frequently throughout development, even if high-level tasks are not yet done
+- NEVER skip, evade, or disable a pre-commit hook
+
+---
+
 ## Default to using Bun instead of Node.js
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`

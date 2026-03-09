@@ -40,6 +40,27 @@ import { DevAgent } from './dev-agent';
 import { escapeHtml } from '../../bot/commands/ask';
 
 /**
+ * Shared development rules injected into all DevAgent prompts.
+ * Based on obra's development philosophy — keeps the AI focused.
+ */
+const DEV_RULES = `
+DEVELOPMENT RULES (follow strictly):
+- Make the smallest reasonable change to get the job done. No extras.
+- Read existing code BEFORE writing. Understand the patterns, then follow them.
+- Simple code over clever code. Readable beats concise.
+- Match the surrounding code style exactly — formatting, naming, patterns.
+- Names describe PURPOSE, not implementation (getUserById, not fetchDataFromDB).
+- One change at a time. Never bundle unrelated fixes.
+- No speculative generality — don't add features "just in case".
+- No dead code, no commented-out code, no TODO placeholders.
+- When fixing bugs: find root cause FIRST. Read error messages carefully. Form a hypothesis, verify it, then fix.
+- After a fix, verify you haven't broken anything else.
+- Keep functions small and focused. If a function does two things, split it.
+- Don't refactor code you're not changing. Stay focused on the task.
+- Protected paths (NEVER modify): src/services/dev-pipeline/, src/database/schema.ts, .github/
+`;
+
+/**
  * Notification callback type.
  * The pipeline calls this to send messages to Telegram.
  */
@@ -169,25 +190,82 @@ export class DevPipeline {
    * and ask clarifying questions if needed.
    */
   private async handlePending(task: DevTask): Promise<void> {
-    console.log(`[DEV-PIPELINE] Task #${task.id}: description length=${task.description.length}, going to DESIGNING`);
-    const updated = transition(task, DevTaskState.DESIGNING);
-    await this.processState(updated);
+    // Short clear descriptions → design directly, ambiguous → clarify
+    if (task.description.length < 100) {
+      console.log(`[DEV-PIPELINE] Task #${task.id}: short description, going to DESIGNING`);
+      const updated = transition(task, DevTaskState.DESIGNING);
+      await this.processState(updated);
+    } else {
+      console.log(`[DEV-PIPELINE] Task #${task.id}: long description, going to CLARIFYING`);
+      const updated = transition(task, DevTaskState.CLARIFYING);
+      await this.processState(updated);
+    }
   }
 
   /**
-   * Handle CLARIFYING state: ask user questions.
-   *
-   * Placeholder — will use AI tool_use to generate questions.
+   * Handle CLARIFYING state: AI generates questions, waits for user answer.
    */
   private async handleClarifying(task: DevTask): Promise<void> {
-    // TODO: Use AI to generate clarifying questions
-    // For now, this is a manual step — transition happens when user
-    // provides answers via callback
     await this.notify(
       task.group_id,
-      `💬 Dev task #${task.id}: analyzing requirements...\n` +
-        `(Clarification step will be implemented with AI tool_use)`
+      `💬 Dev task #${task.id}: analyzing requirements...`
     );
+
+    const agent = new DevAgent(await getRepoRoot());
+
+    const systemPrompt = `You are a senior software architect reviewing a task description for a Telegram bot (TypeScript, Bun, GramIO, SQLite).
+
+Analyze the task and generate 2-5 clarifying questions to better understand what needs to be done.
+Focus on ambiguities, missing details, and potential edge cases.
+
+Output ONLY the questions, numbered 1-5. No preamble.`;
+
+    const questions = await agent.run(systemPrompt, task.description);
+
+    // Save questions and notify user
+    const updated = transition(task, DevTaskState.CLARIFYING, {
+      design: `QUESTIONS:\n${questions}`,
+    });
+
+    await this.notify(
+      task.group_id,
+      `💬 Dev task #${task.id} needs clarification:\n\n${questions}\n\n` +
+        `Reply with /dev answer ${task.id} <your answers>\n` +
+        `Or /dev approve ${task.id} to skip and proceed with designing.`
+    );
+  }
+
+  /**
+   * Handle user providing answers to clarifying questions.
+   */
+  async answerTask(taskId: number, answer: string): Promise<DevTask> {
+    const task = database.devTasks.findById(taskId);
+    if (!task) {
+      throw new Error(`Task #${taskId} not found`);
+    }
+
+    if (task.state !== DevTaskState.CLARIFYING) {
+      throw new Error(`Task #${taskId} is not waiting for clarification (current state: ${task.state})`);
+    }
+
+    // Append answers to description for context
+    const enrichedDescription = `${task.description}\n\nCLARIFICATION:\nQuestions: ${task.design || ''}\nAnswers: ${answer}`;
+
+    const updated = transition(task, DevTaskState.DESIGNING, {
+      design: undefined, // will be regenerated
+    });
+
+    // Update description with clarification context
+    database.devTasks.update(taskId, { description: enrichedDescription } as any);
+    updated.description = enrichedDescription;
+
+    await this.notify(
+      task.group_id,
+      `💬 Dev task #${task.id}: answers received, proceeding to design...`
+    );
+
+    this.processStateAsync(updated);
+    return updated;
   }
 
   /**
@@ -207,7 +285,7 @@ export class DevPipeline {
     const systemPrompt = `You are a senior software architect analyzing a Telegram bot codebase (TypeScript, Bun, GramIO, SQLite).
 
 Your task: create a concise implementation plan for the requested feature/change.
-
+${DEV_RULES}
 PROCESS:
 1. Use tools to explore relevant files and understand the current architecture
 2. Identify which files need to be created or modified
@@ -254,6 +332,14 @@ Keep the plan concise — 20-40 lines max.`;
     const task = database.devTasks.findById(taskId);
     if (!task) {
       throw new Error(`Task #${taskId} not found`);
+    }
+
+    // Allow approve from CLARIFYING (skip questions) or APPROVAL
+    if (task.state === DevTaskState.CLARIFYING) {
+      const updated = transition(task, DevTaskState.DESIGNING);
+      await this.notify(task.group_id, `⏩ Dev task #${taskId}: skipping clarification, proceeding to design...`);
+      this.processStateAsync(updated);
+      return updated;
     }
 
     if (task.state !== DevTaskState.APPROVAL) {
@@ -375,8 +461,7 @@ CRITICAL RULES:
 4. Do NOT rewrite files that aren't broken.
 5. Do NOT delete or recreate files that already exist unless they're fundamentally wrong.
 6. After fixing, use the commit tool.
-7. Do NOT modify protected paths: src/services/dev-pipeline/, src/database/schema.ts, .github/
-
+${DEV_RULES}
 ${techNotes}`;
 
       userMessage = `Tests/type-check FAILED. Fix the errors below.
@@ -395,10 +480,8 @@ IMPORTANT RULES:
 1. Use tools to read existing code BEFORE writing. Understand patterns first.
 2. Write complete files — no partial snippets or TODOs.
 3. Follow existing code style and patterns in the project.
-4. Do NOT modify protected paths: src/services/dev-pipeline/, src/database/schema.ts, .github/
-5. After writing all files, use the commit tool to save your work.
-6. Keep changes minimal and focused on the task.
-
+4. After writing all files, use the commit tool to save your work.
+${DEV_RULES}
 ${techNotes}`;
 
       userMessage = `Implement this task:
@@ -605,7 +688,7 @@ RULES:
 1. Read the files mentioned in the review before making changes.
 2. Fix ONLY the issues mentioned — don't refactor unrelated code.
 3. After fixing, commit your changes.
-4. Do NOT modify protected paths: src/services/dev-pipeline/, src/database/schema.ts, .github/`;
+${DEV_RULES}`;
 
     const userMessage = `Fix these code review issues:
 

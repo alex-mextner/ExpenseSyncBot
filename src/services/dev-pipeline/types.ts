@@ -113,7 +113,7 @@ export const PROTECTED_FILES = [
 /**
  * Maximum retry attempts for test failures before marking as failed
  */
-export const MAX_RETRY_ATTEMPTS = 3;
+export const MAX_RETRY_ATTEMPTS = 15;
 
 /**
  * Human-readable state labels (Russian)
