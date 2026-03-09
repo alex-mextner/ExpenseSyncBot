@@ -93,7 +93,7 @@ const DEV_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-const MAX_ROUNDS = 50;
+const MAX_ROUNDS = 500;
 const AGENT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 export class DevAgent {
