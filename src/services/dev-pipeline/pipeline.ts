@@ -342,19 +342,54 @@ Keep the plan concise — 20-40 lines max.`;
       throw new Error(`Task #${task.id} missing worktree_path or branch_name`);
     }
 
+    const isRetry = (task.retry_count || 0) > 0;
+
     await this.notify(
       task.group_id,
-      `🔨 Dev task #${task.id}: implementing in branch ${task.branch_name}...`
+      isRetry
+        ? `🔧 Dev task #${task.id}: fixing test failures (attempt ${task.retry_count}/${MAX_RETRY_ATTEMPTS})...`
+        : `🔨 Dev task #${task.id}: implementing in branch ${task.branch_name}...`
     );
 
     const agent = new DevAgent(task.worktree_path);
 
-    const isRetry = (task.retry_count || 0) > 0;
-    const errorContext = isRetry && task.error_log
-      ? `\n\nPREVIOUS ATTEMPT FAILED with these errors:\n${task.error_log}\n\nFix these issues.`
-      : '';
+    const techNotes = `TECH NOTES:
+- Bun runtime, not Node.js
+- bun:sqlite for database
+- GramIO for Telegram bot
+- date-fns for dates
+- currency.js for money formatting
+- Bun auto-loads .env`;
 
-    const systemPrompt = `You are a senior TypeScript developer implementing a feature in a Telegram bot (Bun runtime, GramIO, SQLite via bun:sqlite).
+    let systemPrompt: string;
+    let userMessage: string;
+
+    if (isRetry && task.error_log) {
+      // RETRY MODE: focused fix, not rewrite
+      systemPrompt = `You are a senior TypeScript developer FIXING test/type-check failures in a Telegram bot.
+
+CRITICAL RULES:
+1. You are NOT reimplementing from scratch. Code already exists in the worktree.
+2. First, READ the files that failed — understand what's already there.
+3. Make MINIMAL targeted fixes to pass the failing tests/type-checks.
+4. Do NOT rewrite files that aren't broken.
+5. Do NOT delete or recreate files that already exist unless they're fundamentally wrong.
+6. After fixing, use the commit tool.
+7. Do NOT modify protected paths: src/services/dev-pipeline/, src/database/schema.ts, .github/
+
+${techNotes}`;
+
+      userMessage = `Tests/type-check FAILED. Fix the errors below.
+
+ERRORS:
+${task.error_log}
+
+Original task for context: ${task.description}
+
+Read the failing files first, then make minimal fixes.`;
+    } else {
+      // FIRST RUN: implement from design
+      systemPrompt = `You are a senior TypeScript developer implementing a feature in a Telegram bot.
 
 IMPORTANT RULES:
 1. Use tools to read existing code BEFORE writing. Understand patterns first.
@@ -364,20 +399,15 @@ IMPORTANT RULES:
 5. After writing all files, use the commit tool to save your work.
 6. Keep changes minimal and focused on the task.
 
-TECH NOTES:
-- Bun runtime, not Node.js
-- bun:sqlite for database
-- GramIO for Telegram bot
-- date-fns for dates
-- currency.js for money formatting
-- Bun auto-loads .env`;
+${techNotes}`;
 
-    const userMessage = `Implement this task:
+      userMessage = `Implement this task:
 
 ${task.description}
 
 DESIGN PLAN:
-${task.design || 'No design provided. Analyze the codebase and implement directly.'}${errorContext}`;
+${task.design || 'No design provided. Analyze the codebase and implement directly.'}`;
+    }
 
     await agent.run(systemPrompt, userMessage);
 
