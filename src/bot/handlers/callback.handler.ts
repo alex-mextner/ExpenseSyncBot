@@ -17,6 +17,7 @@ import {
   hasBudgetSheet,
   createBudgetSheet,
 } from "../../services/google/sheets";
+import { handleDevCallback } from "../commands/dev";
 
 /**
  * Ensure user exists and is linked to group from chat
@@ -116,6 +117,10 @@ export async function handleCallbackQuery(
 
     case "receipt":
       await handleReceiptSummaryAction(ctx, params, telegramId, bot);
+      break;
+
+    case "dev":
+      await handleDevCallback(ctx, params, telegramId, bot);
       break;
 
     default:

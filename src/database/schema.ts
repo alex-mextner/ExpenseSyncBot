@@ -573,13 +573,11 @@ export function runMigrations(db: Database): void {
     {
       name: '018_add_analytics_indexes_and_advice_log',
       up: () => {
-        // Composite index for analytical queries on expenses (WHERE group_id = ? AND date >= ? AND date <= ?)
         db.exec(`
           CREATE INDEX IF NOT EXISTS idx_expenses_group_date
           ON expenses(group_id, date);
         `);
 
-        // Advice log table for tracking generated advice and anti-repetition
         db.exec(`
           CREATE TABLE IF NOT EXISTS advice_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -594,13 +592,57 @@ export function runMigrations(db: Database): void {
           );
         `);
 
-        // Composite index for "last N advice for group" queries
         db.exec(`
           CREATE INDEX IF NOT EXISTS idx_advice_log_group_created
           ON advice_log(group_id, created_at);
         `);
 
         console.log('✓ Added composite index on expenses(group_id, date) and advice_log table');
+      },
+    },
+    {
+      name: '019_create_dev_tasks_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS dev_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending',
+            title TEXT,
+            description TEXT NOT NULL,
+            branch_name TEXT,
+            worktree_path TEXT,
+            pr_number INTEGER,
+            pr_url TEXT,
+            design TEXT,
+            plan TEXT,
+            code_review TEXT,
+            error_log TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_dev_tasks_group_id
+          ON dev_tasks(group_id);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_dev_tasks_state
+          ON dev_tasks(state);
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_dev_tasks_user_id
+          ON dev_tasks(user_id);
+        `);
+
+        console.log('✓ Created dev_tasks table');
       },
     },
   ];

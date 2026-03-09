@@ -19,6 +19,7 @@ import { handlePhotoMessage } from "./handlers/photo.handler";
 import { handleAskQuestion, handleAdviceCommand } from "./commands/ask";
 import { handlePromptCommand } from "./commands/prompt";
 import { handleTopicCommand } from "./commands/topic";
+import { handleDevCommand, initDevPipeline } from "./commands/dev";
 import { startPhotoProcessor } from "../services/receipt/photo-processor";
 
 /**
@@ -49,6 +50,7 @@ export function createBot(): Bot {
   bot.command("advice", handleAdviceCommand);
   bot.command("prompt", handlePromptCommand);
   bot.command("topic", handleTopicCommand);
+  bot.command("dev", handleDevCommand);
 
   // Callback queries (inline keyboard buttons)
   bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));
@@ -112,4 +114,10 @@ export async function startBot(): Promise<void> {
   console.log("📸 Starting photo processor...");
   await startPhotoProcessor(bot);
   console.log("✓ Photo processor started");
+
+  // Initialize dev pipeline and resume incomplete tasks
+  console.log("🔧 Starting dev pipeline...");
+  const devPipeline = initDevPipeline(bot);
+  await devPipeline.resumeIncompleteTasksOnStartup();
+  console.log("✓ Dev pipeline started");
 }

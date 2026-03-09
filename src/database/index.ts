@@ -11,6 +11,7 @@ import { PhotoQueueRepository } from './repositories/photo-queue.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
 import { ExpenseItemsRepository } from './repositories/expense-items.repository';
 import { AdviceLogRepository } from './repositories/advice-log.repository';
+import { DevTaskRepository } from './repositories/dev-task.repository';
 
 /**
  * Database instance and repositories
@@ -28,6 +29,7 @@ export class DatabaseService {
   public receiptItems: ReceiptItemsRepository;
   public expenseItems: ExpenseItemsRepository;
   public adviceLogs: AdviceLogRepository;
+  public devTasks: DevTaskRepository;
 
   constructor() {
     this.db = setupDatabase();
@@ -42,6 +44,7 @@ export class DatabaseService {
     this.receiptItems = new ReceiptItemsRepository(this.db);
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);
+    this.devTasks = new DevTaskRepository(this.db);
   }
 
   /**
