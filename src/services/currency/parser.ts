@@ -9,6 +9,138 @@ export interface ParsedExpense {
   raw: string;
 }
 
+// ── Math expression evaluator (no eval/Function) ──────────────────────
+
+type MathToken = number | "+" | "*" | "/";
+
+/**
+ * Tokenize a cleaned math expression into alternating numbers and operators.
+ * Returns null if the expression is structurally invalid.
+ */
+function tokenize(expr: string): MathToken[] | null {
+  const tokens: MathToken[] = [];
+  const regex = /(\d+(?:[.,]\d+)?)|([+*×/])/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(expr)) !== null) {
+    if (match[1]) {
+      let numStr = match[1];
+      if (numStr.includes(",")) {
+        numStr = numStr.replace(",", ".");
+      }
+      const num = parseFloat(numStr);
+      if (isNaN(num)) return null;
+      tokens.push(num);
+    } else if (match[2]) {
+      const op = match[2] === "×" ? "*" : match[2];
+      tokens.push(op as MathToken);
+    }
+  }
+
+  // Must alternate number-operator-number: minimum 3 tokens, always odd count
+  if (tokens.length < 3 || tokens.length % 2 === 0) return null;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const isNumber = i % 2 === 0;
+    if (isNumber && typeof tokens[i] !== "number") return null;
+    if (!isNumber && typeof tokens[i] !== "string") return null;
+  }
+
+  return tokens;
+}
+
+/**
+ * Evaluate tokens with standard operator precedence (* / before +).
+ * Returns null on division by zero.
+ */
+function evaluateTokens(tokens: MathToken[]): number | null {
+  if (!tokens || tokens.length === 0) return null;
+
+  // Phase 1: handle * and / (higher precedence)
+  const addQueue: MathToken[] = [];
+  let i = 0;
+
+  while (i < tokens.length) {
+    if (i + 2 <= tokens.length) {
+      const op = tokens[i + 1];
+      if (op === "*" || op === "/") {
+        let left = tokens[i] as number;
+        // Consume all consecutive * and /
+        while (
+          i + 2 < tokens.length &&
+          (tokens[i + 1] === "*" || tokens[i + 1] === "/")
+        ) {
+          const operator = tokens[i + 1] as string;
+          const right = tokens[i + 2] as number;
+          if (operator === "*") {
+            left *= right;
+          } else {
+            if (right === 0) return null;
+            left = left / right;
+          }
+          i += 2;
+        }
+        addQueue.push(left);
+        i++;
+        continue;
+      }
+    }
+    addQueue.push(tokens[i]!);
+    i++;
+  }
+
+  // Phase 2: handle + (lower precedence)
+  let result = addQueue[0] as number;
+  for (let j = 1; j < addQueue.length; j += 2) {
+    const op = addQueue[j];
+    const right = addQueue[j + 1] as number;
+    if (op === "+") result += right;
+  }
+
+  return result;
+}
+
+/**
+ * Evaluate a simple math expression (no eval, no Function).
+ * Supports: +, *, ×, /
+ * Does NOT support: -, parentheses
+ *
+ * Returns null for invalid expressions, single numbers, overflow, or division by zero.
+ *
+ * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35
+ */
+export function evaluateMathExpression(expr: string): number | null {
+  // Remove spaces
+  const cleaned = expr.replace(/\s+/g, "");
+
+  // Safety: reject overly long expressions
+  if (cleaned.length > 50) return null;
+
+  // Validate: only digits, dots, commas, and operators +*/×
+  // Must have at least one operator (single numbers are not expressions)
+  if (!/^[\d.,]+([+*×/][\d.,]+)+$/.test(cleaned)) {
+    return null;
+  }
+
+  // Tokenize
+  const tokens = tokenize(cleaned);
+  if (!tokens) return null;
+
+  // Safety: max 10 operators
+  const opCount = tokens.filter((t) => typeof t === "string").length;
+  if (opCount > 10) return null;
+
+  // Evaluate with operator precedence (* / before +)
+  const result = evaluateTokens(tokens);
+
+  // Safety: reject unreasonable amounts
+  if (result === null || result >= 10_000_000) return null;
+
+  return result;
+}
+
+// ── End math expression evaluator ─────────────────────────────────────
+
 /**
  * Normalize currency code from alias
  */
@@ -32,6 +164,7 @@ function normalizeCurrency(currencyStr: string): CurrencyCode | null {
  * - 190 Eur Алекс кулёма
  * - 190 EUR Алекс кулёма
  * - 1 900 RSD   Алекс
+ * - 10*3$ food pizza (math expressions)
  */
 export function parseExpenseMessage(
   text: string,
@@ -43,8 +176,8 @@ export function parseExpenseMessage(
     return null;
   }
 
-  // Pattern 1: Currency symbol before amount ($190, €100, ₽500)
-  const pattern1 = /^([\$€£₽¥])\s*([\d\s,\.]+)\s*(.+)?$/;
+  // Pattern 1: Currency symbol before amount ($190, €100, ₽500, $10*3)
+  const pattern1 = /^([\$€£₽¥])\s*([\d\s,.+*×/]+)\s*(.+)?$/;
   const match1 = trimmed.match(pattern1);
 
   if (match1) {
@@ -67,8 +200,8 @@ export function parseExpenseMessage(
     }
   }
 
-  // Pattern 2: Amount with currency symbol/code after (190€, 100$, 1900RSD, 190 евро)
-  const pattern2 = /^([\d\s,\.]+)\s*([а-яА-ЯёЁa-zA-Z\$€£₽¥]+)\s+(.+)$/;
+  // Pattern 2: Amount with currency symbol/code after (190€, 100$, 1900RSD, 190 евро, 10*3$)
+  const pattern2 = /^([\d\s,.+*×/]+)\s*([а-яА-ЯёЁa-zA-Z$€£₽¥]+)\s+(.+)$/;
   const match2 = trimmed.match(pattern2);
 
   if (match2) {
@@ -89,8 +222,8 @@ export function parseExpenseMessage(
     }
   }
 
-  // Pattern 3: Amount only (use default currency)
-  const pattern3 = /^([\d\s,\.]+)\s+(.+)$/;
+  // Pattern 3: Amount only (use default currency), must start with digit
+  const pattern3 = /^(\d[\d\s,.+*×/]*)\s+(.+)$/;
   const match3 = trimmed.match(pattern3);
 
   if (match3) {
@@ -110,8 +243,8 @@ export function parseExpenseMessage(
     }
   }
 
-  // Pattern 4: Currency symbol after, no space (190е, 100д)
-  const pattern4 = /^([\d\s,\.]+)([а-яА-ЯёЁ])\s+(.+)$/;
+  // Pattern 4: Currency symbol after, no space (190е, 100д, 10*3д)
+  const pattern4 = /^([\d\s,.+*×/]+)([а-яА-ЯёЁ])\s+(.+)$/;
   const match4 = trimmed.match(pattern4);
 
   if (match4) {
@@ -138,11 +271,20 @@ export function parseExpenseMessage(
 /**
  * Parse amount string to number
  * Handles: 190, 1900, 1 900, 1,900, 1.900, 1900.50
+ * Also handles math expressions: 10*3, 100/4, 10+5, 10*3+5
  */
 function parseAmount(amountStr: string): number | null {
   try {
     // Remove spaces
     let cleaned = amountStr.replace(/\s+/g, "");
+
+    // Check if this is a math expression (contains operator)
+    if (/[+*×/]/.test(cleaned)) {
+      const result = evaluateMathExpression(cleaned);
+      if (result === null || result <= 0) return null;
+      // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
+      return Math.round(result * 100) / 100;
+    }
 
     // Handle European format (1.234,56 -> 1234.56)
     if (cleaned.match(/\d+\.\d{3},\d{2}$/)) {
