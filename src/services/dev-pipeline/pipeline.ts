@@ -596,65 +596,80 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
       `🧪 Dev task #${task.id}: running tests...`
     );
 
-    let testOutput = '';
+    let fullOutput = '';
+    let typeCheckPassed = true;
     let testsPassed = true;
+    let typeCheckOutput = '';
+    let testsOutput = '';
 
     // Run type check
     try {
-      const typeCheck =
-        await $`cd ${task.worktree_path} && bunx tsc --noEmit 2>&1`.text();
-      testOutput += 'TYPE CHECK:\n' + typeCheck + '\n';
-    } catch (error) {
-      testsPassed = false;
-      testOutput +=
-        'TYPE CHECK FAILED:\n' +
-        (error instanceof Error ? error.message : String(error)) +
-        '\n';
+      const result = await $`cd ${task.worktree_path} && bunx tsc --noEmit 2>&1`.text();
+      typeCheckOutput = result.trim();
+    } catch (error: any) {
+      typeCheckPassed = false;
+      // Bun shell puts stdout+stderr in error.stdout or error.message
+      typeCheckOutput = (error.stdout?.toString() || error.message || String(error)).trim();
     }
 
     // Run tests
     try {
-      const tests =
-        await $`cd ${task.worktree_path} && bun test 2>&1`.text();
-      testOutput += 'TESTS:\n' + tests + '\n';
-    } catch (error) {
+      const result = await $`cd ${task.worktree_path} && bun test 2>&1`.text();
+      testsOutput = result.trim();
+    } catch (error: any) {
       testsPassed = false;
-      testOutput +=
-        'TESTS FAILED:\n' +
-        (error instanceof Error ? error.message : String(error)) +
-        '\n';
+      testsOutput = (error.stdout?.toString() || error.message || String(error)).trim();
     }
 
-    if (testsPassed) {
+    // Build full output for error_log (raw, for the AI agent)
+    fullOutput = `TYPE CHECK ${typeCheckPassed ? 'PASSED' : 'FAILED'}:\n${typeCheckOutput}\n\nTESTS ${testsPassed ? 'PASSED' : 'FAILED'}:\n${testsOutput}`;
+
+    const allPassed = typeCheckPassed && testsPassed;
+
+    if (allPassed) {
       const updated = transition(task, DevTaskState.PULL_REQUEST);
       await this.notify(
         task.group_id,
-        `✅ Dev task #${task.id}: tests passed!`
+        `✅ Dev task #${task.id}: all checks passed!\n\n` +
+          `✅ Тайпчекер: OK\n` +
+          `✅ Тесты: OK`
       );
       await this.processState(updated);
     } else {
       const retryCount = (task.retry_count || 0) + 1;
 
+      // Build pretty notification
+      const lines: string[] = [];
+      lines.push(`🧪 <b>Dev task #${task.id}</b> — результаты (попытка ${retryCount}/${MAX_RETRY_ATTEMPTS})\n`);
+
+      if (typeCheckPassed) {
+        lines.push(`✅ <b>Тайпчекер:</b> OK`);
+      } else {
+        lines.push(`❌ <b>Тайпчекер:</b> ошибки`);
+        lines.push(`<blockquote expandable>${escapeHtml(typeCheckOutput.slice(0, 1500))}</blockquote>`);
+      }
+
+      if (testsPassed) {
+        lines.push(`✅ <b>Тесты:</b> OK`);
+      } else {
+        lines.push(`❌ <b>Тесты:</b> ошибки`);
+        lines.push(`<blockquote expandable>${escapeHtml(testsOutput.slice(0, 1500))}</blockquote>`);
+      }
+
       if (retryCount >= MAX_RETRY_ATTEMPTS) {
         transition(task, DevTaskState.FAILED, {
-          error_log: testOutput,
+          error_log: fullOutput,
           retry_count: retryCount,
         });
-        await this.notify(
-          task.group_id,
-          `💥 Dev task #${task.id} failed after ${retryCount} attempts.\n\n` +
-            `Error:\n${testOutput.slice(0, 500)}`
-        );
+        lines.push(`\n💥 Задача провалена после ${retryCount} попыток.`);
+        await this.notify(task.group_id, lines.join('\n'));
       } else {
-        // Go back to implementing to fix issues
         const updated = transition(task, DevTaskState.IMPLEMENTING, {
-          error_log: testOutput,
+          error_log: fullOutput,
           retry_count: retryCount,
         });
-        await this.notify(
-          task.group_id,
-          `⚠️ Dev task #${task.id}: tests failed (attempt ${retryCount}/${MAX_RETRY_ATTEMPTS}). Retrying...`
-        );
+        lines.push(`\n🔄 Отправлено на исправление...`);
+        await this.notify(task.group_id, lines.join('\n'));
         await this.processState(updated);
       }
     }
