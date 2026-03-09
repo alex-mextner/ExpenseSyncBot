@@ -120,6 +120,13 @@ async function handleAskWithAnthropic(
   const historyMessages = recentMessages.slice(0, -1);
 
   try {
+    // Show "typing" status and placeholder message
+    await bot.api.sendChatAction({
+      chat_id: chatId,
+      action: 'typing',
+      ...(messageThreadId && { message_thread_id: messageThreadId }),
+    });
+
     const agent = new ExpenseBotAgent(env.ANTHROPIC_API_KEY, agentCtx);
 
     const finalResponse = await agent.run(

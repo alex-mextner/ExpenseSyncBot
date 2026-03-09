@@ -50,12 +50,33 @@ export class TelegramStreamWriter {
   private lastSentText = '';
   private lastErrorTime = 0;
   private toolIndicators: string[] = [];
+  private typingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private bot: Bot,
     private chatId: number,
     private messageThreadId?: number
-  ) {}
+  ) {
+    // Keep "typing" status alive until first message is sent
+    this.typingInterval = setInterval(() => {
+      if (!this.sentMessageId) {
+        this.bot.api.sendChatAction({
+          chat_id: this.chatId,
+          action: 'typing',
+          ...(this.messageThreadId && { message_thread_id: this.messageThreadId }),
+        }).catch(() => {});
+      } else {
+        this.stopTyping();
+      }
+    }, 4000);
+  }
+
+  private stopTyping(): void {
+    if (this.typingInterval) {
+      clearInterval(this.typingInterval);
+      this.typingInterval = null;
+    }
+  }
 
   /**
    * Append text delta from streaming
@@ -106,6 +127,7 @@ export class TelegramStreamWriter {
    * Send final message, cleaning up tool indicators
    */
   async finalize(): Promise<void> {
+    this.stopTyping();
     let cleanText = this.fullText;
 
     // Collect completed tool indicators into an expandable blockquote
