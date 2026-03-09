@@ -228,7 +228,7 @@ ${budgetsContext}`;
           ) {
             // Truncate to fit Telegram limit (4096 chars) for intermediate updates
             const MAX_INTERMEDIATE_LENGTH = 4000;
-            let textToSend = processThinkTags(fullResponse);
+            let textToSend = sanitizeHtmlForTelegram(processThinkTags(fullResponse));
             let isTruncated = false;
 
             if (textToSend.length > MAX_INTERMEDIATE_LENGTH) {
@@ -264,12 +264,27 @@ ${budgetsContext}`;
                     setTimeout(resolve, ERROR_COOLDOWN_MS)
                   );
                 } else if (
-                  err?.description?.includes("message is not modified")
+                  err?.message?.includes("message is not modified")
                 ) {
                   // Shouldn't happen after the check above, but just in case
                   console.log("[ASK] Message not modified (unexpected)");
                   lastMessageText = textToSend;
                   lastUpdateTime = now;
+                } else if (
+                  err?.message?.includes("can't parse entities")
+                ) {
+                  console.error("[ASK] HTML parse error in edit, falling back to plain text:", err.message);
+                  try {
+                    await bot.api.editMessageText({
+                      chat_id: chatId,
+                      message_id: sentMessageId,
+                      text: stripAllHtml(textToSend),
+                    });
+                    lastMessageText = textToSend;
+                    lastUpdateTime = now;
+                  } catch (innerErr) {
+                    console.error("[ASK] Failed even plain text edit:", innerErr);
+                  }
                 } else {
                   console.error("[ASK] Failed to edit message:", err);
                 }
@@ -282,8 +297,20 @@ ${budgetsContext}`;
                 sentMessageId = sent.id;
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
-              } catch (err) {
-                console.error("[ASK] Failed to send message:", err);
+              } catch (err: any) {
+                if (err?.message?.includes("can't parse entities")) {
+                  console.error("[ASK] HTML parse error in initial send, falling back to plain text");
+                  try {
+                    const sent = await ctx.send(stripAllHtml(textToSend));
+                    sentMessageId = sent.id;
+                    lastMessageText = textToSend;
+                    lastUpdateTime = now;
+                  } catch (innerErr) {
+                    console.error("[ASK] Failed even plain text send:", innerErr);
+                  }
+                } else {
+                  console.error("[ASK] Failed to send message:", err);
+                }
               }
             }
           }
@@ -296,7 +323,7 @@ ${budgetsContext}`;
       // No intermediate messages were sent, send final
       const chunks = splitIntoChunks(fullResponse, 4000);
       for (const chunk of chunks) {
-        await ctx.send(chunk, { parse_mode: "HTML" });
+        await safeSend(ctx, chunk, { parse_mode: "HTML" });
       }
     } else if (sentMessageId) {
       // Update with final response
@@ -312,13 +339,24 @@ ${budgetsContext}`;
             parse_mode: "HTML",
           });
         } catch (err: any) {
-          if (err?.description?.includes("message is not modified")) {
+          if (err?.message?.includes("message is not modified")) {
             // Shouldn't happen after the check above, but just in case
             console.log("[ASK] Final message not modified (unexpected)");
+          } else if (err?.message?.includes("can't parse entities")) {
+            console.error("[ASK] HTML parse error in final edit, falling back to plain text");
+            try {
+              await bot.api.editMessageText({
+                chat_id: chatId,
+                message_id: sentMessageId,
+                text: stripAllHtml(chunks[0]),
+              });
+            } catch (innerErr) {
+              console.error("[ASK] Failed even plain text final edit:", innerErr);
+            }
           } else {
             console.error("[ASK] Failed to edit final message:", err);
-            // If edit failed for other reason, send as new message
-            await ctx.send(chunks[0], { parse_mode: "HTML" });
+            // If edit failed for other reason, send as new message with fallback
+            await safeSend(ctx, chunks[0], { parse_mode: "HTML" });
           }
         }
       }
@@ -327,7 +365,7 @@ ${budgetsContext}`;
       for (let i = 1; i < chunks.length; i++) {
         const chunk = chunks[i];
         if (chunk) {
-          await ctx.send(chunk, { parse_mode: "HTML" });
+          await safeSend(ctx, chunk, { parse_mode: "HTML" });
         }
       }
     }
@@ -362,6 +400,175 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * Telegram-allowed HTML tags whitelist
+ */
+const ALLOWED_TAGS = [
+  "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+  "code", "pre", "a", "blockquote", "tg-spoiler", "tg-emoji", "span",
+];
+
+/**
+ * Restore only safe attributes for allowed tags.
+ * Everything else is stripped.
+ */
+function restoreAllowedAttributes(tag: string, escapedAttrs: string): string {
+  if (!escapedAttrs) return "";
+
+  // Unescape to parse attributes
+  const attrs = escapedAttrs
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+
+  const t = tag.toLowerCase();
+
+  if (t === "a") {
+    const hrefMatch = attrs.match(/href=["']([^"']*)["']/i);
+    if (hrefMatch) {
+      const safeHref = (hrefMatch[1] || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;");
+      return ` href="${safeHref}"`;
+    }
+    return "";
+  }
+  if (t === "blockquote") {
+    if (attrs.includes("expandable")) return " expandable";
+    return "";
+  }
+  if (t === "pre" || t === "code") {
+    const classMatch = attrs.match(/class=["']([^"']*)["']/i);
+    if (classMatch) {
+      const safeClass = (classMatch[1] || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;");
+      return ` class="${safeClass}"`;
+    }
+    return "";
+  }
+  if (t === "span") {
+    if (attrs.includes("tg-spoiler")) return ' class="tg-spoiler"';
+    return "";
+  }
+  if (t === "tg-emoji") {
+    const idMatch = attrs.match(/emoji-id=["']([^"']*)["']/i);
+    if (idMatch) {
+      const safeId = (idMatch[1] || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;");
+      return ` emoji-id="${safeId}"`;
+    }
+    return "";
+  }
+  return "";
+}
+
+/**
+ * Close any unclosed HTML tags to ensure valid HTML for Telegram.
+ */
+function closeUnmatchedTags(html: string): string {
+  const openTags: string[] = [];
+  const tagRegex = /<\/?([a-z][a-z0-9-]*)[^>]*>/gi;
+  let match: RegExpExecArray | null;
+
+  // biome-ignore lint/suspicious/noAssignInExpressions: needed for regex iteration
+  while ((match = tagRegex.exec(html)) !== null) {
+    const fullTag = match[0];
+    const tagName = (match[1] || "").toLowerCase();
+    if (!tagName) continue;
+
+    if (fullTag.startsWith("</")) {
+      const lastIndex = openTags.lastIndexOf(tagName);
+      if (lastIndex !== -1) {
+        openTags.splice(lastIndex, 1);
+      }
+    } else if (!fullTag.endsWith("/>")) {
+      openTags.push(tagName);
+    }
+  }
+
+  let result = html;
+  for (let i = openTags.length - 1; i >= 0; i--) {
+    result += `</${openTags[i]}>`;
+  }
+  return result;
+}
+
+/**
+ * Sanitize AI-generated text for Telegram HTML parse mode.
+ *
+ * Strategy: escape everything first, then restore only whitelisted tags.
+ * This guarantees no unsupported tag or unescaped special character leaks through.
+ */
+function sanitizeHtmlForTelegram(text: string): string {
+  // Step 1: Escape ALL special characters
+  let result = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Step 2: Restore whitelisted tags
+  for (const tag of ALLOWED_TAGS) {
+    // Opening tags with optional attributes
+    const openRegex = new RegExp(
+      `&lt;(${tag})((?:\\s|&amp;).*?)?&gt;`,
+      "gi"
+    );
+    result = result.replace(openRegex, (_, tagName, attrs) => {
+      const safeAttrs = restoreAllowedAttributes(tagName, attrs || "");
+      return `<${tagName}${safeAttrs}>`;
+    });
+
+    // Closing tags
+    const closeRegex = new RegExp(`&lt;/${tag}&gt;`, "gi");
+    result = result.replace(closeRegex, `</${tag}>`);
+  }
+
+  // Step 3: Close any unclosed tags
+  result = closeUnmatchedTags(result);
+
+  return result;
+}
+
+/**
+ * Strip ALL HTML tags and decode entities back to plain text.
+ * Used as a last-resort fallback when Telegram rejects our HTML.
+ */
+function stripAllHtml(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"');
+}
+
+/**
+ * Send a message with automatic fallback to plain text if HTML parsing fails.
+ */
+async function safeSend(
+  ctx: Ctx["Message"],
+  text: string,
+  options?: { parse_mode?: "HTML" | "MarkdownV2" | "Markdown" }
+): Promise<any> {
+  try {
+    return await ctx.send(text, options);
+  } catch (err: any) {
+    if (err?.message?.includes("can't parse entities")) {
+      console.error("[ASK] HTML error in safeSend, falling back to plain text");
+      return await ctx.send(stripAllHtml(text));
+    }
+    if (err?.message?.includes("message is too long")) {
+      console.error("[ASK] Message too long in safeSend, truncating");
+      const plainText = stripAllHtml(text);
+      const truncated = plainText.substring(0, 4000) + "...";
+      return await ctx.send(truncated);
+    }
+    throw err;
+  }
+}
+
+/**
  * Process think tags - replace them with human-readable text
  * Completed blocks -> expandable blockquote
  * Streaming blocks -> visible with escape
@@ -388,21 +595,25 @@ function processThinkTags(text: string): string {
 function processThinkTagsForAdvice(text: string): string {
   // Replace entire <think>...</think> blocks with "Бот думает..."
   text = text.replace(/<think>[\s\S]*?<\/think>/g, "<i>Бот думает...</i>\n\n");
+  // Remove unclosed <think> blocks (streaming leftovers)
+  text = text.replace(/<think>[\s\S]*$/, "");
   // Clean up extra newlines
   text = text.replace(/\n{3,}/g, "\n\n");
   return text.trim();
 }
 
 /**
- * Safely truncate HTML text to maxLength ensuring valid HTML
+ * Safely truncate HTML text to maxLength ensuring valid HTML.
+ * Reserves space for closing tags and the "..." suffix.
  */
 function safelyTruncateHTML(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
 
-  // Truncate to max length
-  let truncated = text.substring(0, maxLength);
+  // Reserve space for closing tags (worst case: several nested tags) + "..."
+  const SAFETY_MARGIN = 200;
+  let truncated = text.substring(0, maxLength - SAFETY_MARGIN);
 
   // Find last complete character (not in middle of tag)
   // If we're inside a tag, backtrack to before the tag started
@@ -414,47 +625,24 @@ function safelyTruncateHTML(text: string, maxLength: number): string {
     truncated = truncated.substring(0, lastTagStart);
   }
 
-  // Now close any unclosed tags
-  const openTags: string[] = [];
-  const tagRegex = /<\/?([a-z]+)[^>]*>/gi;
-  let match: RegExpExecArray | null;
+  // Close unclosed tags
+  truncated = closeUnmatchedTags(truncated);
 
-  // biome-ignore lint/suspicious/noAssignInExpressions: needed for regex iteration
-  while ((match = tagRegex.exec(truncated)) !== null) {
-    const fullTag = match[0];
-    const tagName = match[1];
-
-    if (!tagName) continue;
-
-    if (fullTag.startsWith("</")) {
-      // Closing tag - remove from stack
-      const lastIndex = openTags.lastIndexOf(tagName);
-      if (lastIndex !== -1) {
-        openTags.splice(lastIndex, 1);
-      }
-    } else if (!fullTag.endsWith("/>")) {
-      // Opening tag (not self-closing)
-      openTags.push(tagName);
-    }
-  }
-
-  // Close all unclosed tags in reverse order
-  for (let i = openTags.length - 1; i >= 0; i--) {
-    const tag = openTags[i];
-    if (tag) {
-      truncated += `</${tag}>`;
-    }
+  // Final safety: if somehow still too long, strip HTML and hard-truncate
+  if (truncated.length > maxLength - 3) {
+    return stripAllHtml(text).substring(0, maxLength - 3) + "...";
   }
 
   return `${truncated}...`;
 }
 
 /**
- * Split text into chunks respecting Telegram message limit
+ * Split text into chunks respecting Telegram message limit.
+ * Sanitizes HTML before splitting and ensures each chunk has valid HTML.
  */
 function splitIntoChunks(text: string, maxLength: number): string[] {
-  // Process think tags first
-  text = processThinkTags(text);
+  // Process think tags first, then sanitize for Telegram
+  text = sanitizeHtmlForTelegram(processThinkTags(text));
 
   if (text.length <= maxLength) {
     return [text];
@@ -509,7 +697,8 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
     chunks.push(currentChunk.trim());
   }
 
-  return chunks;
+  // Ensure valid HTML in each chunk by closing unclosed tags
+  return chunks.map((chunk) => closeUnmatchedTags(chunk));
 }
 
 /**
@@ -822,13 +1011,23 @@ ${statsContext}
     const advice = response.choices[0]?.message?.content || "";
     if (!advice) return;
 
-    // Clean up think tags - for advice, remove thinking content completely
+    // Clean up think tags - remove thinking content completely, then sanitize
     const cleanAdvice = processThinkTagsForAdvice(advice);
+    const sanitizedAdvice = sanitizeHtmlForTelegram(cleanAdvice);
 
     // Send advice with stats
-    const message = `\n\n💡 <b>Совет дня</b>\n\n${cleanAdvice}`;
+    const message = `\n\n💡 <b>Совет дня</b>\n\n${sanitizedAdvice}`;
 
-    await ctx.send(message, { parse_mode: "HTML" });
+    try {
+      await ctx.send(message, { parse_mode: "HTML" });
+    } catch (sendErr: any) {
+      if (sendErr?.message?.includes("can't parse entities")) {
+        console.error("[ADVICE] HTML parse error, falling back to plain text");
+        await ctx.send(`💡 Совет дня\n\n${stripAllHtml(cleanAdvice)}`);
+      } else {
+        throw sendErr;
+      }
+    }
   } catch (error) {
     console.error("[ADVICE] Failed to generate daily advice:", error);
     // Silently fail - advice is not critical
