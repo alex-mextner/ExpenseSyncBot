@@ -93,8 +93,8 @@ const DEV_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-const MAX_ROUNDS = 30;
-const AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_ROUNDS = 50;
+const AGENT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 export class DevAgent {
   private anthropic: Anthropic;
@@ -126,17 +126,26 @@ export class DevAgent {
 
       while (round < MAX_ROUNDS) {
         round++;
+        console.log(`[DEV-AGENT] Round ${round}/${MAX_ROUNDS}`);
 
-        const response = await this.anthropic.messages.create(
-          {
-            model: AI_MODEL,
-            max_tokens: 8192,
-            system: systemPrompt,
-            messages,
-            tools: DEV_TOOLS,
-          },
-          { signal: controller.signal }
-        );
+        let response: Anthropic.Message;
+        try {
+          response = await this.anthropic.messages.create(
+            {
+              model: AI_MODEL,
+              max_tokens: 8192,
+              system: systemPrompt,
+              messages,
+              tools: DEV_TOOLS,
+            },
+            { signal: controller.signal }
+          );
+        } catch (err: any) {
+          if (err?.name === 'APIUserAbortError' || controller.signal.aborted) {
+            throw new Error(`Agent timed out after ${AGENT_TIMEOUT_MS / 60000} minutes (completed ${round - 1} rounds)`);
+          }
+          throw err;
+        }
 
         // Collect text and tool_use blocks
         const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
