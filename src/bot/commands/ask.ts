@@ -8,6 +8,10 @@ import type { CurrencyCode } from "../../config/constants";
 import type { Ctx } from "../types";
 import { ExpenseBotAgent } from "../../services/ai/agent";
 import type { AgentContext } from "../../services/ai/types";
+import { spendingAnalytics } from "../../services/analytics/spending-analytics";
+import { formatSnapshotForPrompt, computeOverallSeverity } from "../../services/analytics/formatters";
+import { checkSmartTriggers, recordAdviceSent } from "../../services/analytics/advice-triggers";
+import type { AdviceTier, TriggerResult, FinancialSnapshot } from "../../services/analytics/types";
 
 const hfClient = env.HF_TOKEN ? new InferenceClient(env.HF_TOKEN) : null;
 
@@ -136,7 +140,7 @@ async function handleAskWithAnthropic(
     database.chatMessages.pruneOldMessages(group.id, 50);
 
     // Maybe send daily advice (20% probability)
-    await maybeSendDailyAdvice(ctx, group.id);
+    await maybeSmartAdvice(ctx, group.id);
   } catch (error) {
     console.error("[ASK] Anthropic agent error:", error);
     await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
@@ -217,6 +221,15 @@ async function handleAskWithHuggingFace(
 
   const ratesContext = formatExchangeRatesForAI();
 
+  // Compute financial snapshot for enriched context
+  let financialSnapshotContext = '';
+  try {
+    const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
+    financialSnapshotContext = formatSnapshotForPrompt(snapshot);
+  } catch (err) {
+    console.error('[ASK] Failed to compute financial snapshot:', err);
+  }
+
   let systemPrompt = `Ты - ассистент для анализа финансов.
 Отвечай на вопросы пользователя на основе этих данных. Будь точным и конкретным. Используй цифры из предоставленных данных.
 
@@ -255,7 +268,7 @@ Expenses Data:
 ${expensesContext}
 
 Budget items Data:
-${budgetsContext}`;
+${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АНАЛИТИКА ===\n${financialSnapshotContext}` : ''}`;
 
   // Add custom prompt if set
   if (group.custom_prompt) {
@@ -474,8 +487,8 @@ ${budgetsContext}`;
     // Prune old messages (keep last 50)
     database.chatMessages.pruneOldMessages(group.id, 50);
 
-    // Maybe send daily advice (20% probability)
-    await maybeSendDailyAdvice(ctx, group.id);
+    // Check smart triggers for advice
+    await maybeSmartAdvice(ctx, group.id);
   } catch (error) {
     console.error("[ASK] Error:", error);
     await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
@@ -944,7 +957,7 @@ function buildBudgetsContext(
 }
 
 /**
- * /advice command handler - request financial advice explicitly
+ * /advice command handler - request deep financial analysis (Tier 3)
  */
 export async function handleAdviceCommand(ctx: Ctx["Command"]): Promise<void> {
   const chatId = ctx.chat?.id;
@@ -970,127 +983,69 @@ export async function handleAdviceCommand(ctx: Ctx["Command"]): Promise<void> {
     return;
   }
 
-  // Generate advice without probability check
-  await sendDailyAdvice(ctx, group.id);
+  // Deep analysis: Tier 3, manual trigger
+  const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
+  const trigger: TriggerResult = {
+    type: 'manual',
+    tier: 'deep',
+    topic: `deep_analysis:${format(new Date(), 'yyyy-MM-dd')}`,
+    data: {},
+  };
+
+  await sendSmartAdvice(ctx, group.id, trigger, snapshot);
 }
 
 /**
- * Send daily advice with 20% probability
- * Includes current spending and budget stats
+ * Check smart triggers and maybe send advice
+ * Replaces the old maybeSendDailyAdvice() with event-driven logic
  */
-export async function maybeSendDailyAdvice(
-  ctx: Ctx["Message"],
-  groupId: number
-): Promise<void> {
-  // 20% probability
-  if (Math.random() > 0.2) {
-    return;
-  }
-
-  await sendDailyAdvice(ctx, groupId);
-}
-
-/**
- * Internal function to generate and send advice
- */
-async function sendDailyAdvice(
+export async function maybeSmartAdvice(
   ctx: Ctx["Message"],
   groupId: number
 ): Promise<void> {
   try {
-    // Get current month expenses and budgets
-    const now = new Date();
-    const currentMonth = now.toISOString().substring(0, 7); // YYYY-MM
-    const currentDate = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
+    const trigger = checkSmartTriggers(groupId, snapshot);
 
-    const allExpenses = database.expenses.findByGroupId(groupId, 1000);
-    const currentMonthExpenses = allExpenses.filter((e) =>
-      e.date.startsWith(currentMonth)
-    );
-    const totalSpent = currentMonthExpenses.reduce(
-      (sum, e) => sum + e.eur_amount,
-      0
-    );
+    if (!trigger) return;
 
-    const currentMonthBudget = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+    console.log(`[ADVICE] Smart trigger fired: ${trigger.type} (tier: ${trigger.tier}) for group ${groupId}`);
+    await sendSmartAdvice(ctx, groupId, trigger, snapshot);
+  } catch (error) {
+    console.error("[ADVICE] Error in smart advice check:", error);
+  }
+}
 
-    // Group budgets by currency
-    const budgetsByCurrency: Record<string, number> = {};
-    for (const b of currentMonthBudget) {
-      budgetsByCurrency[b.currency] = (budgetsByCurrency[b.currency] || 0) + b.limit_amount;
-    }
-    const budgetLines = Object.entries(budgetsByCurrency)
-      .map(([currency, amount]) => `${amount.toFixed(2)} ${currency}`)
-      .join(", ");
+/**
+ * Tiered advice system:
+ *   Tier 1 (quick): 500 max_tokens, temp 0.5, brief insight
+ *   Tier 2 (alert): 1000 max_tokens, temp 0.5, budget warning
+ *   Tier 3 (deep):  3000 max_tokens, temp 0.6, comprehensive analysis
+ */
+async function sendSmartAdvice(
+  ctx: Ctx["Message"],
+  groupId: number,
+  trigger: TriggerResult,
+  snapshot: FinancialSnapshot,
+): Promise<void> {
+  try {
+    const tier = trigger.tier;
+    const severity = computeOverallSeverity(snapshot);
+    const snapshotText = formatSnapshotForPrompt(snapshot);
 
-    // Group expenses by category
-    const categoryTotals: Record<string, number> = {};
-    for (const expense of currentMonthExpenses) {
-      categoryTotals[expense.category] =
-        (categoryTotals[expense.category] || 0) + expense.eur_amount;
-    }
-
-    // Sort categories by amount descending
-    const sortedCategories = Object.entries(categoryTotals)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10); // Top 10 categories
-
-    // Build expense details by category
-    let expenseDetails = "\n\nТраты по категориям:\n";
-    for (const [category, amount] of sortedCategories) {
-      expenseDetails += `- ${category}: €${amount.toFixed(2)}\n`;
-    }
-
-    // Build recent expenses details (last 10 operations)
-    const recentExpenses = currentMonthExpenses
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .slice(0, 10);
-
-    let recentExpensesDetails = "\n\nПоследние операции:\n";
-    for (const expense of recentExpenses) {
-      recentExpensesDetails += `- ${expense.date}: ${
-        expense.category
-      } €${expense.eur_amount.toFixed(2)}`;
-      if (expense.comment) {
-        recentExpensesDetails += ` (${expense.comment})`;
-      }
-      recentExpensesDetails += "\n";
-    }
-
-    // Build stats context
-    const statsContext = `
-Текущая дата: ${currentDate}
-Текущий месяц: ${currentMonth}
-Потрачено: €${totalSpent.toFixed(2)}
-Бюджет: ${budgetLines || "не установлен"}
-Количество операций: ${
-      currentMonthExpenses.length
-    }${expenseDetails}${recentExpensesDetails}
-
-${formatExchangeRatesForAI()}
-`;
+    // Get recent advice topics for anti-repetition
+    const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);
 
     // Get group for custom prompt
     const group = database.groups.findById(groupId);
 
-    // Generate advice using AI
-    let advicePrompt = `Ты - мудрый финансовый советник с философским взглядом на жизнь.
-
-Дай ОДИН краткий философский совет дня (1-2 предложения), который будет уместен для людей, которые следят за своими финансами.
-Совет должен быть мотивирующим, но реалистичным. Избегай банальностей типа "экономьте деньги".
-
-Используй ТОЛЬКО HTML теги для форматирования: <b>, <i>, <code>, <blockquote>.
-НЕ используй Markdown синтаксис!
-НЕ выдумывай ссылки! Не используй теги <a> если нет реальных URL.
-
-Статистика трат за текущий месяц:
-${statsContext}
-
-Дай совет который учитывает эту статистику (например, если бюджет почти исчерпан, или наоборот осталось много).`;
+    // Build tier-specific prompt
+    const advicePrompt = buildTieredPrompt(tier, severity, snapshotText, recentTopics, trigger);
 
     // Add custom prompt if set
+    let fullPrompt = advicePrompt;
     if (group?.custom_prompt) {
-      advicePrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
+      fullPrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
     }
 
     if (!hfClient) {
@@ -1098,36 +1053,141 @@ ${statsContext}
       return;
     }
 
+    // Tier-specific parameters
+    const tierConfig = TIER_CONFIGS[tier];
+
+    console.log(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
+
     const response = await hfClient.chatCompletion({
       provider: "novita",
       model: "deepseek-ai/DeepSeek-R1-0528",
-      messages: [{ role: "user", content: advicePrompt }],
-      max_tokens: 300,
-      temperature: 0.9,
+      messages: [{ role: "user", content: fullPrompt }],
+      max_tokens: tierConfig.max_tokens,
+      temperature: tierConfig.temperature,
     });
 
     const advice = response.choices[0]?.message?.content || "";
     if (!advice) return;
 
-    // Clean up think tags - remove thinking content completely, then sanitize
+    // Clean up think tags
     const cleanAdvice = processThinkTagsForAdvice(advice);
     const sanitizedAdvice = sanitizeHtmlForTelegram(cleanAdvice);
+    if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
 
-    // Send advice with stats
-    const message = `\n\n💡 <b>Совет дня</b>\n\n${sanitizedAdvice}`;
+    // Send with tier-appropriate header
+    const header = tierConfig.emoji + " " + tierConfig.title;
+    const message = `\n\n${header}\n\n${sanitizedAdvice}`;
 
     try {
       await ctx.send(message, { parse_mode: "HTML" });
     } catch (sendErr: any) {
       if (sendErr?.message?.includes("can't parse entities")) {
         console.error("[ADVICE] HTML parse error, falling back to plain text");
-        await ctx.send(`💡 Совет дня\n\n${stripAllHtml(cleanAdvice)}`);
+        await ctx.send(`${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`);
       } else {
         throw sendErr;
       }
     }
+
+    // Record advice in log and update cooldown
+    recordAdviceSent(groupId, tier);
+    database.adviceLogs.create({
+      group_id: groupId,
+      tier,
+      trigger_type: trigger.type,
+      trigger_data: JSON.stringify(trigger.data),
+      topic: trigger.topic,
+      advice_text: cleanAdvice,
+    });
+
+    console.log(`[ADVICE] Sent ${tier} advice for group ${groupId}, topic: ${trigger.topic}`);
   } catch (error) {
-    console.error("[ADVICE] Failed to generate daily advice:", error);
+    console.error("[ADVICE] Failed to generate smart advice:", error);
     // Silently fail - advice is not critical
   }
+}
+
+const TIER_CONFIGS: Record<AdviceTier, { max_tokens: number; temperature: number; emoji: string; title: string }> = {
+  quick: { max_tokens: 500, temperature: 0.5, emoji: '💡', title: '<b>Инсайт</b>' },
+  alert: { max_tokens: 1000, temperature: 0.5, emoji: '⚠️', title: '<b>Финансовый алерт</b>' },
+  deep: { max_tokens: 3000, temperature: 0.6, emoji: '📊', title: '<b>Финансовый обзор</b>' },
+};
+
+/**
+ * Build tier-specific prompt with financial data and anti-repetition
+ */
+function buildTieredPrompt(
+  tier: AdviceTier,
+  severity: string,
+  snapshotText: string,
+  recentTopics: string[],
+  trigger: TriggerResult,
+): string {
+  const antiRepetition = recentTopics.length > 0
+    ? `\nПоследние ${recentTopics.length} советов были на темы: ${JSON.stringify(recentTopics)}\nНЕ повторяй эти темы. Найди новый ракурс.\n`
+    : '';
+
+  const htmlRules = `
+Используй ТОЛЬКО HTML теги для форматирования: <b>, <i>, <code>, <blockquote>.
+НЕ используй Markdown синтаксис (**, *, \`, ##, ###, []() и т.д.)!
+НЕ выдумывай ссылки! Не используй теги <a> если нет реальных URL.`;
+
+  if (tier === 'quick') {
+    return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
+Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
+
+УРОВЕНЬ СИТУАЦИИ: ${severity}
+${severity === 'good' ? 'Похвали и дай совет по оптимизации.' : 'Начни с самого важного наблюдения.'}
+
+ДАННЫЕ:
+${snapshotText}
+${antiRepetition}
+${htmlRules}
+
+Дай ОДИН конкретный финансовый инсайт на основе данных выше.
+Не философствуй. Назови конкретную цифру и конкретное действие.
+Максимум 1-2 предложения.`;
+  }
+
+  if (tier === 'alert') {
+    return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
+Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
+
+УРОВЕНЬ СИТУАЦИИ: ${severity}
+ТРИГГЕР: ${trigger.type} — ${JSON.stringify(trigger.data)}
+
+ДАННЫЕ:
+${snapshotText}
+${antiRepetition}
+${htmlRules}
+
+Обнаружена финансовая ситуация, требующая внимания.
+Опиши проблему с конкретными числами. Предложи 1-2 действия.
+3-5 предложений максимум.`;
+  }
+
+  // Tier 3: deep
+  return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
+Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
+
+УРОВЕНЬ СИТУАЦИИ: ${severity}
+
+ПРАВИЛА АНАЛИЗА:
+- Burn rate > 100% к текущему дню месяца = перерасход
+- Anomaly > 2x среднего = нужен alert
+- Budget utilization > 90% = concern, > 100% = critical
+- Week-over-week рост > 20% = тренд вверх
+
+ДАННЫЕ:
+${snapshotText}
+${antiRepetition}
+${htmlRules}
+
+Сделай полный финансовый обзор на основе данных.
+Структура:
+1. Общая картина (total spend vs budget, budget utilization)
+2. Тренды (week/month comparison)
+3. Проблемные категории (anomalies, exceeded budgets)
+4. Прогноз на конец месяца
+5. Рекомендации (max 3, конкретные, с числами)`;
 }

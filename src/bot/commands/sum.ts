@@ -13,7 +13,7 @@ import {
   createBudgetSheet,
 } from "../../services/google/sheets";
 import { silentSyncBudgets } from "./budget";
-import { maybeSendDailyAdvice } from "./ask";
+import { maybeSmartAdvice } from "./ask";
 
 /**
  * /sum and /total command handler - show current month expenses summary
@@ -238,7 +238,7 @@ export async function handleSumCommand(ctx: Ctx["Command"]): Promise<void> {
   await addBudgetInfo(message, group, currentMonthExpenses, ctx);
 
   // Maybe send daily advice (20% probability)
-  await maybeSendDailyAdvice(ctx, group.id);
+  await maybeSmartAdvice(ctx, group.id);
 }
 
 /**

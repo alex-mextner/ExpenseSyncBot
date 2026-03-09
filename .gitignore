@@ -42,3 +42,6 @@ data/
 # Temporary images (OCR processing)
 temp-images/
 debug-images/
+
+# Other
+.claude/worktrees/

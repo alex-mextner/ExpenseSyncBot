@@ -570,6 +570,39 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '018_add_analytics_indexes_and_advice_log',
+      up: () => {
+        // Composite index for analytical queries on expenses (WHERE group_id = ? AND date >= ? AND date <= ?)
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expenses_group_date
+          ON expenses(group_id, date);
+        `);
+
+        // Advice log table for tracking generated advice and anti-repetition
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS advice_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            tier TEXT NOT NULL CHECK(tier IN ('quick', 'alert', 'deep')),
+            trigger_type TEXT NOT NULL,
+            trigger_data TEXT,
+            topic TEXT,
+            advice_text TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+          );
+        `);
+
+        // Composite index for "last N advice for group" queries
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_advice_log_group_created
+          ON advice_log(group_id, created_at);
+        `);
+
+        console.log('✓ Added composite index on expenses(group_id, date) and advice_log table');
+      },
+    },
   ];
 
   // Check and run migrations

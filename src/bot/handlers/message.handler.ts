@@ -9,7 +9,7 @@ import {
 } from "../../services/currency/parser";
 import { createCategoryConfirmKeyboard } from "../keyboards";
 import { silentSyncBudgets } from "../commands/budget";
-import { maybeSendDailyAdvice } from "../commands/ask";
+import { maybeSmartAdvice } from "../commands/ask";
 import { extractURLsFromText, processPaymentLinks } from "../../services/receipt/link-analyzer";
 
 /**
@@ -249,7 +249,7 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
 
   // Maybe send daily advice (20% probability)
   if (hasProcessedExpenses) {
-    await maybeSendDailyAdvice(ctx, group.id);
+    await maybeSmartAdvice(ctx, group.id);
   }
 }
 
