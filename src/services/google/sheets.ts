@@ -173,10 +173,13 @@ export async function appendExpenseRow(
 
   console.log(`[SHEETS] Last row with data: ${existingRows.length}, inserting at row ${nextRow}`);
 
+  // Calculate last column letter dynamically based on row length
+  const lastColLetter = String.fromCharCode(64 + row.length); // 1=A, 2=B, ..., 9=I, etc.
+
   // Update specific row instead of append
   const response = await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:H${nextRow}`,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:${lastColLetter}${nextRow}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [row],

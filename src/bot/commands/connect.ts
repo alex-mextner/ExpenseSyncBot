@@ -1,7 +1,7 @@
 import type { Ctx } from '../types';
 import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
-import { registerOAuthState } from '../../web/oauth-callback';
+import { registerOAuthState, unregisterOAuthState } from '../../web/oauth-callback';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import { MESSAGES, type CurrencyCode } from '../../config/constants';
@@ -44,7 +44,20 @@ export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
     console.log(`[CMD] Creating new group ${chatId}`);
     group = database.groups.create({ telegram_group_id: chatId });
   } else {
-    console.log(`[CMD] Group ${group.id} found, reconfiguring...`);
+    console.log(`[CMD] Group ${group.id} found`);
+
+    // If group is already fully configured, don't re-run OAuth
+    if (group.google_refresh_token && group.spreadsheet_id) {
+      console.log(`[CMD] Group ${group.id} already configured, skipping`);
+      const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${group.spreadsheet_id}`;
+      await ctx.send(
+        `✅ Группа уже подключена к Google Sheets.\n\n` +
+        `📊 <a href="${spreadsheetUrl}">Открыть таблицу</a>\n\n` +
+        `Если нужно переподключить аккаунт, используй /reconnect`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
   }
 
   // Generate OAuth URL - use group ID as state
@@ -64,11 +77,13 @@ export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
 
   // Wait for OAuth callback
   console.log(`[CMD] Waiting for OAuth callback for group ${group.id}...`);
+  const groupId = group.id;
   const refreshToken = await new Promise<string>((resolve, reject) => {
-    registerOAuthState(group!.id, resolve, reject);
+    registerOAuthState(groupId, resolve, reject);
 
     // Timeout after 5 minutes
     setTimeout(() => {
+      unregisterOAuthState(groupId);
       reject(new Error('OAuth timeout'));
     }, 5 * 60 * 1000);
   }).catch(err => {
@@ -77,13 +92,25 @@ export async function handleConnectCommand(ctx: Ctx["Command"]): Promise<void> {
   });
 
   if (!refreshToken) {
-    console.log(`[CMD] ❌ OAuth failed for group ${group.id}`);
-    await ctx.send('❌ Не удалось подключить Google аккаунт. Попробуй еще раз: /connect');
-    return;
+    // Check if token was saved to DB by the callback anyway (race condition)
+    const updatedGroup = database.groups.findByTelegramGroupId(chatId);
+    if (updatedGroup?.google_refresh_token && updatedGroup?.spreadsheet_id) {
+      // Group is fully configured — silently ignore the timeout
+      console.log(`[CMD] OAuth timeout but group ${groupId} already configured, ignoring`);
+      return;
+    }
+    if (updatedGroup?.google_refresh_token) {
+      console.log(`[CMD] ✅ OAuth token found in DB despite timeout for group ${groupId}`);
+      // Continue to currency selection below
+    } else {
+      console.log(`[CMD] ❌ OAuth failed for group ${groupId}`);
+      await ctx.send('❌ Не удалось подключить Google аккаунт. Попробуй еще раз: /connect');
+      return;
+    }
+  } else {
+    console.log(`[CMD] ✅ OAuth successful for group ${groupId}`);
+    await ctx.send(MESSAGES.authSuccess);
   }
-
-  console.log(`[CMD] ✅ OAuth successful for group ${group.id}`);
-  await ctx.send(MESSAGES.authSuccess);
 
   // Show currency set selection keyboard (Step 1)
   const keyboard = createCurrencyKeyboard();

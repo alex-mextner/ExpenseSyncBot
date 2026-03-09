@@ -25,6 +25,13 @@ export function registerOAuthState(
 }
 
 /**
+ * Remove pending OAuth state (e.g. on timeout)
+ */
+export function unregisterOAuthState(groupId: number): void {
+  pendingOAuthStates.delete(groupId.toString());
+}
+
+/**
  * OAuth callback server
  */
 export function startOAuthServer(): void {
@@ -144,6 +151,8 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
     if (pending) {
       pending.resolve(tokens.refresh_token);
       pendingOAuthStates.delete(state);
+    } else {
+      console.log(`[OAuth] ⚠️ No pending state for group ${state} (token saved to DB anyway)`);
     }
 
     console.log(`✓ OAuth successful for group ${groupId}`);
