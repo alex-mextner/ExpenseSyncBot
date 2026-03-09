@@ -8,9 +8,6 @@
  * The pipeline is designed to be resumable — tasks in progress are
  * recovered on bot startup by checking worktree existence.
  *
- * NOTE: This depends on AI tool_use being available (being implemented
- * in parallel). For now, this is the infrastructure — the actual AI
- * calls will be plugged in later.
  */
 
 import { $ } from 'bun';
@@ -30,6 +27,7 @@ import {
   createWorktree,
   removeWorktree,
   worktreeExists,
+  getRepoRoot,
   commitChanges,
   pushBranch,
   createPR,
@@ -38,6 +36,8 @@ import {
   generateBranchName,
 } from './git-ops';
 import { runCodexReview } from './codex-integration';
+import { DevAgent } from './dev-agent';
+import { escapeHtml } from '../../bot/commands/ask';
 
 /**
  * Notification callback type.
@@ -169,8 +169,7 @@ export class DevPipeline {
    * and ask clarifying questions if needed.
    */
   private async handlePending(task: DevTask): Promise<void> {
-    // TODO: When AI tool_use is ready, analyze description complexity
-    // and decide whether to clarify or design directly.
+    console.log(`[DEV-PIPELINE] Task #${task.id}: description length=${task.description.length}, going to DESIGNING`);
     const updated = transition(task, DevTaskState.DESIGNING);
     await this.processState(updated);
   }
@@ -203,17 +202,47 @@ export class DevPipeline {
       `📐 Dev task #${task.id}: designing solution...`
     );
 
-    // TODO: Use AI to create design document
-    // For now, generate a placeholder design
-    const design = `Design for: ${task.description}\n\n` +
-      `[AI-generated design will be here when tool_use is available]\n\n` +
-      `This task is waiting for AI integration to proceed.`;
+    const agent = new DevAgent(await getRepoRoot());
 
-    const updated = transition(task, DevTaskState.APPROVAL, { design });
+    const systemPrompt = `You are a senior software architect analyzing a Telegram bot codebase (TypeScript, Bun, GramIO, SQLite).
+
+Your task: create a concise implementation plan for the requested feature/change.
+
+PROCESS:
+1. Use tools to explore relevant files and understand the current architecture
+2. Identify which files need to be created or modified
+3. Write a clear plan with specific file paths and changes
+
+OUTPUT FORMAT (plain text, not markdown):
+TITLE: <short title for the task>
+
+FILES TO MODIFY:
+- <path>: <what changes>
+
+FILES TO CREATE:
+- <path>: <purpose>
+
+IMPLEMENTATION STEPS:
+1. <step>
+2. <step>
+...
+
+RISKS/NOTES:
+- <any concerns>
+
+Be specific about file paths. Reference existing patterns in the codebase.
+Keep the plan concise — 20-40 lines max.`;
+
+    const design = await agent.run(systemPrompt, task.description);
+
+    const titleMatch = design.match(/TITLE:\s*(.+)/);
+    const title = titleMatch?.[1]?.trim() || task.description.slice(0, 70);
+
+    const updated = transition(task, DevTaskState.APPROVAL, { design, title });
 
     await this.notify(
       task.group_id,
-      `📐 Dev task #${task.id} design ready:\n\n${design}\n\n` +
+      `📐 Dev task #${task.id} design ready:\n\n<pre>${escapeHtml(design.slice(0, 2000))}</pre>\n\n` +
         `Use /dev approve ${task.id} to proceed or /dev reject ${task.id} to cancel.`
     );
   }
@@ -310,9 +339,7 @@ export class DevPipeline {
    */
   private async handleImplementing(task: DevTask): Promise<void> {
     if (!task.worktree_path || !task.branch_name) {
-      throw new Error(
-        `Task #${task.id} missing worktree_path or branch_name`
-      );
+      throw new Error(`Task #${task.id} missing worktree_path or branch_name`);
     }
 
     await this.notify(
@@ -320,14 +347,40 @@ export class DevPipeline {
       `🔨 Dev task #${task.id}: implementing in branch ${task.branch_name}...`
     );
 
-    // TODO: Use AI tool_use to write code in the worktree
-    // For now, we just log and move to testing
-    // When AI is ready, it will:
-    // 1. Read relevant files using file-ops
-    // 2. Write new/modified files using file-ops
-    // 3. Commit changes using git-ops
+    const agent = new DevAgent(task.worktree_path);
 
-    // Placeholder: just transition to testing
+    const isRetry = (task.retry_count || 0) > 0;
+    const errorContext = isRetry && task.error_log
+      ? `\n\nPREVIOUS ATTEMPT FAILED with these errors:\n${task.error_log}\n\nFix these issues.`
+      : '';
+
+    const systemPrompt = `You are a senior TypeScript developer implementing a feature in a Telegram bot (Bun runtime, GramIO, SQLite via bun:sqlite).
+
+IMPORTANT RULES:
+1. Use tools to read existing code BEFORE writing. Understand patterns first.
+2. Write complete files — no partial snippets or TODOs.
+3. Follow existing code style and patterns in the project.
+4. Do NOT modify protected paths: src/services/dev-pipeline/, src/database/schema.ts, .github/
+5. After writing all files, use the commit tool to save your work.
+6. Keep changes minimal and focused on the task.
+
+TECH NOTES:
+- Bun runtime, not Node.js
+- bun:sqlite for database
+- GramIO for Telegram bot
+- date-fns for dates
+- currency.js for money formatting
+- Bun auto-loads .env`;
+
+    const userMessage = `Implement this task:
+
+${task.description}
+
+DESIGN PLAN:
+${task.design || 'No design provided. Analyze the codebase and implement directly.'}${errorContext}`;
+
+    await agent.run(systemPrompt, userMessage);
+
     const updated = transition(task, DevTaskState.TESTING);
     await this.processState(updated);
   }
@@ -469,31 +522,34 @@ export class DevPipeline {
       throw new Error(`Task #${task.id} missing worktree_path`);
     }
 
-    await this.notify(
-      task.group_id,
-      `🔍 Dev task #${task.id}: running code review...`
-    );
+    await this.notify(task.group_id, `🔍 Dev task #${task.id}: running code review...`);
 
     const diff = await getDiffFromMain(task.worktree_path);
     const review = await runCodexReview(diff);
 
-    // For now, auto-complete after review
-    // In the future, this could check review severity and request changes
-    const updated = transition(task, DevTaskState.COMPLETED, {
-      code_review: review,
-    });
+    // Check if review found serious issues
+    const hasIssues = /\b(bug|security|error|fix|wrong|incorrect|vulnerability|injection)\b/i.test(review)
+      && !/looks good|no issues|approve|clean/i.test(review);
 
-    // Clean up worktree
-    if (task.worktree_path) {
-      await removeWorktree(task.worktree_path);
+    if (hasIssues) {
+      const updated = transition(task, DevTaskState.UPDATING, { code_review: review });
+      await this.notify(
+        task.group_id,
+        `⚠️ Dev task #${task.id}: review found issues, fixing...\n\n${review.slice(0, 500)}`
+      );
+      await this.processState(updated);
+    } else {
+      const updated = transition(task, DevTaskState.COMPLETED, { code_review: review });
+
+      if (task.worktree_path) {
+        await removeWorktree(task.worktree_path);
+      }
+
+      await this.notify(
+        task.group_id,
+        `✅ Dev task #${task.id} completed!\n\nPR: ${task.pr_url}\n\nReview:\n${review.slice(0, 1000)}`
+      );
     }
-
-    await this.notify(
-      task.group_id,
-      `✅ Dev task #${task.id} completed!\n\n` +
-        `PR: ${task.pr_url}\n\n` +
-        `Review:\n${review.slice(0, 1000)}`
-    );
   }
 
   /**
@@ -502,8 +558,33 @@ export class DevPipeline {
    * Placeholder — will use AI tool_use to fix review issues.
    */
   private async handleUpdating(task: DevTask): Promise<void> {
-    // TODO: Use AI to address review comments
-    // For now, just go back to testing
+    if (!task.worktree_path) {
+      throw new Error(`Task #${task.id} missing worktree_path`);
+    }
+
+    await this.notify(
+      task.group_id,
+      `🔄 Dev task #${task.id}: addressing review feedback...`
+    );
+
+    const agent = new DevAgent(task.worktree_path);
+
+    const systemPrompt = `You are a senior TypeScript developer fixing code review issues in a Telegram bot (Bun, GramIO, SQLite).
+
+RULES:
+1. Read the files mentioned in the review before making changes.
+2. Fix ONLY the issues mentioned — don't refactor unrelated code.
+3. After fixing, commit your changes.
+4. Do NOT modify protected paths: src/services/dev-pipeline/, src/database/schema.ts, .github/`;
+
+    const userMessage = `Fix these code review issues:
+
+${task.code_review || 'No specific review comments.'}
+
+Original task: ${task.description}`;
+
+    await agent.run(systemPrompt, userMessage);
+
     const updated = transition(task, DevTaskState.TESTING);
     await this.processState(updated);
   }
