@@ -1,75 +1,66 @@
 /**
- * Codex CLI integration for automated code review.
+ * AI-powered code review using Anthropic/GLM API.
  *
- * Uses claude code in --full-auto mode for code review.
- * NOTE: /review slash commands do NOT work in codex exec mode —
- * we use regular prompts with the diff passed inline.
+ * Replaced the old Claude CLI approach with direct API calls.
  */
 
-import { $ } from 'bun';
+import Anthropic from '@anthropic-ai/sdk';
+import { AI_MODEL, AI_BASE_URL } from '../ai/agent';
+import { env } from '../../config/env';
 
 /**
- * Run a code review on a diff using Claude Code CLI.
- *
- * Sends the diff as part of a prompt (not as a slash command).
- *
- * @param diff - The git diff to review
- * @returns Review comments as a string
+ * Run code review using Anthropic/GLM API.
  */
 export async function runCodexReview(diff: string): Promise<string> {
   if (!diff.trim()) {
     return 'No changes to review.';
   }
 
-  // Truncate very large diffs to avoid token limits
+  if (!env.ANTHROPIC_API_KEY) {
+    return 'Code review skipped: no AI API key configured.';
+  }
+
   const maxDiffLength = 50000;
   const truncatedDiff =
     diff.length > maxDiffLength
       ? diff.slice(0, maxDiffLength) + '\n\n[... diff truncated ...]'
       : diff;
 
-  const prompt = `Review this code diff. Focus on:
+  const anthropic = new Anthropic({
+    apiKey: env.ANTHROPIC_API_KEY,
+    baseURL: AI_BASE_URL,
+  });
+
+  try {
+    const response = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 4096,
+      messages: [
+        {
+          role: 'user',
+          content: `Review this code diff. Focus on:
 1. Bugs or logic errors
-2. Security issues (especially path traversal, injection)
+2. Security issues (path traversal, injection)
 3. Missing error handling
-4. TypeScript type safety issues
+4. TypeScript type safety
 5. Performance concerns
 
 Be concise. List issues as bullet points. If the code looks good, say so.
 
 \`\`\`diff
 ${truncatedDiff}
-\`\`\``;
+\`\`\``,
+        },
+      ],
+    });
 
-  try {
-    const result =
-      await $`echo ${prompt} | claude --print`.text();
-    return result.trim();
+    let review = '';
+    for (const block of response.content) {
+      if (block.type === 'text') review += block.text;
+    }
+    return review.trim() || 'No review comments.';
   } catch (error) {
-    console.error('[CODEX] Review failed:', error);
+    console.error('[REVIEW] Failed:', error);
     return `Review failed: ${error instanceof Error ? error.message : String(error)}`;
-  }
-}
-
-/**
- * Ask Claude Code to implement a feature in a worktree.
- *
- * Uses --full-auto mode which means no interactive prompts.
- *
- * @param worktreePath - Absolute path to the worktree
- * @param prompt - What to implement
- * @returns Claude's response
- */
-export async function runCodexImplement(
-  worktreePath: string,
-  prompt: string
-): Promise<string> {
-  try {
-    const result =
-      await $`cd ${worktreePath} && echo ${prompt} | claude --print`.text();
-    return result.trim();
-  } catch (error) {
-    console.error('[CODEX] Implementation failed:', error);
-    return `Implementation failed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
