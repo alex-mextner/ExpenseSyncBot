@@ -1,4 +1,5 @@
 import { InferenceClient } from "@huggingface/inference";
+import Anthropic from "@anthropic-ai/sdk";
 import type { Bot } from "gramio";
 import { format } from "date-fns";
 import { env } from "../../config/env";
@@ -498,7 +499,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
 /**
  * Escape HTML entities to prevent parsing errors
  */
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -572,7 +573,7 @@ function restoreAllowedAttributes(tag: string, escapedAttrs: string): string {
 /**
  * Close any unclosed HTML tags to ensure valid HTML for Telegram.
  */
-function closeUnmatchedTags(html: string): string {
+export function closeUnmatchedTags(html: string): string {
   const openTags: string[] = [];
   const tagRegex = /<\/?([a-z][a-z0-9-]*)[^>]*>/gi;
   let match: RegExpExecArray | null;
@@ -606,7 +607,7 @@ function closeUnmatchedTags(html: string): string {
  * Strategy: escape everything first, then restore only whitelisted tags.
  * This guarantees no unsupported tag or unescaped special character leaks through.
  */
-function sanitizeHtmlForTelegram(text: string): string {
+export function sanitizeHtmlForTelegram(text: string): string {
   // Step 1: Escape ALL special characters
   let result = text
     .replace(/&/g, "&amp;")
@@ -640,7 +641,7 @@ function sanitizeHtmlForTelegram(text: string): string {
  * Strip ALL HTML tags and decode entities back to plain text.
  * Used as a last-resort fallback when Telegram rejects our HTML.
  */
-function stripAllHtml(text: string): string {
+export function stripAllHtml(text: string): string {
   return text
     .replace(/<[^>]*>/g, "")
     .replace(/&lt;/g, "<")
@@ -679,7 +680,7 @@ async function safeSend(
  * Completed blocks -> expandable blockquote
  * Streaming blocks -> visible with escape
  */
-function processThinkTags(text: string): string {
+export function processThinkTags(text: string): string {
   // Completed think blocks -> expandable blockquote
   text = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, content) => {
     const escaped = escapeHtml(content);
@@ -712,7 +713,7 @@ function processThinkTagsForAdvice(text: string): string {
  * Safely truncate HTML text to maxLength ensuring valid HTML.
  * Reserves space for closing tags and the "..." suffix.
  */
-function safelyTruncateHTML(text: string, maxLength: number): string {
+export function safelyTruncateHTML(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
@@ -1048,25 +1049,39 @@ async function sendSmartAdvice(
       fullPrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
     }
 
-    if (!hfClient) {
-      console.log("[ADVICE] No HF client available, skipping advice");
-      return;
-    }
-
     // Tier-specific parameters
     const tierConfig = TIER_CONFIGS[tier];
 
     console.log(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
 
-    const response = await hfClient.chatCompletion({
-      provider: "novita",
-      model: "deepseek-ai/DeepSeek-R1-0528",
-      messages: [{ role: "user", content: fullPrompt }],
-      max_tokens: tierConfig.max_tokens,
-      temperature: tierConfig.temperature,
-    });
+    let advice = "";
 
-    const advice = response.choices[0]?.message?.content || "";
+    if (useAnthropic) {
+      const anthropic = new Anthropic({
+        apiKey: env.ANTHROPIC_API_KEY,
+        baseURL: env.AI_BASE_URL || undefined,
+      });
+      const response = await anthropic.messages.create({
+        model: env.AI_MODEL,
+        max_tokens: tierConfig.max_tokens,
+        messages: [{ role: "user", content: fullPrompt }],
+      });
+      for (const block of response.content) {
+        if (block.type === "text") advice += block.text;
+      }
+    } else if (hfClient) {
+      const response = await hfClient.chatCompletion({
+        provider: "novita",
+        model: "deepseek-ai/DeepSeek-R1-0528",
+        messages: [{ role: "user", content: fullPrompt }],
+        max_tokens: tierConfig.max_tokens,
+        temperature: tierConfig.temperature,
+      });
+      advice = response.choices[0]?.message?.content || "";
+    } else {
+      console.log("[ADVICE] No AI client available, skipping advice");
+      return;
+    }
     if (!advice) return;
 
     // Clean up think tags
