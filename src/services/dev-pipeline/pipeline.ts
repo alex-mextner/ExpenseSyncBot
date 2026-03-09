@@ -40,6 +40,13 @@ import { DevAgent } from './dev-agent';
 import { escapeHtml } from '../../bot/commands/ask';
 import { createDevApprovalKeyboard } from '../../bot/keyboards';
 
+/** Replace bun test markers (pass)/(fail) with emoji for Telegram */
+function prettifyTestOutput(raw: string): string {
+  return raw
+    .replace(/\(pass\)/g, '✅')
+    .replace(/\(fail\)/g, '❌');
+}
+
 /**
  * Shared development rules injected into all DevAgent prompts.
  * Based on obra's development philosophy — keeps the AI focused.
@@ -597,29 +604,21 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
     );
 
     let fullOutput = '';
-    let typeCheckPassed = true;
-    let testsPassed = true;
     let typeCheckOutput = '';
     let testsOutput = '';
 
-    // Run type check
-    try {
-      const result = await $`cd ${task.worktree_path} && bunx tsc --noEmit 2>&1`.text();
-      typeCheckOutput = result.trim();
-    } catch (error: any) {
-      typeCheckPassed = false;
-      // Bun shell puts stdout+stderr in error.stdout or error.message
-      typeCheckOutput = (error.stdout?.toString() || error.message || String(error)).trim();
-    }
+    // Run type check — nothrow() to always get output
+    const typeCheckResult = await $`cd ${task.worktree_path} && bunx tsc --noEmit 2>&1`.nothrow().quiet();
+    const typeCheckPassed = typeCheckResult.exitCode === 0;
+    typeCheckOutput = typeCheckResult.text().trim();
 
-    // Run tests
-    try {
-      const result = await $`cd ${task.worktree_path} && bun test 2>&1`.text();
-      testsOutput = result.trim();
-    } catch (error: any) {
-      testsPassed = false;
-      testsOutput = (error.stdout?.toString() || error.message || String(error)).trim();
-    }
+    // Run tests — nothrow() to always get output
+    const testsResult = await $`cd ${task.worktree_path} && bun test 2>&1`.nothrow().quiet();
+    testsOutput = testsResult.text().trim();
+    // bun test may exit non-zero for "Unhandled error between tests" even if all tests pass
+    // rely on actual (fail) markers, not just exit code
+    const hasFailedTests = /\(fail\)/.test(testsOutput);
+    const testsPassed = !hasFailedTests;
 
     // Build full output for error_log (raw, for the AI agent)
     fullOutput = `TYPE CHECK ${typeCheckPassed ? 'PASSED' : 'FAILED'}:\n${typeCheckOutput}\n\nTESTS ${testsPassed ? 'PASSED' : 'FAILED'}:\n${testsOutput}`;
@@ -628,11 +627,19 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
 
     if (allPassed) {
       const updated = transition(task, DevTaskState.PULL_REQUEST);
+
+      // Count pass/fail from bun test output
+      const passCount = (testsOutput.match(/\(pass\)/g) || []).length;
+      const failCount = (testsOutput.match(/\(fail\)/g) || []).length;
+      const testSummary = failCount > 0
+        ? `${passCount} ✅ / ${failCount} ❌`
+        : `${passCount} ✅`;
+
       await this.notify(
         task.group_id,
-        `✅ Dev task #${task.id}: all checks passed!\n\n` +
-          `✅ Тайпчекер: OK\n` +
-          `✅ Тесты: OK`
+        `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
+          `✅ <b>Тайпчекер:</b> OK\n` +
+          `✅ <b>Тесты:</b> ${testSummary}`
       );
       await this.processState(updated);
     } else {
@@ -653,7 +660,7 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
         lines.push(`✅ <b>Тесты:</b> OK`);
       } else {
         lines.push(`❌ <b>Тесты:</b> ошибки`);
-        lines.push(`<blockquote expandable>${escapeHtml(testsOutput.slice(0, 1500))}</blockquote>`);
+        lines.push(`<blockquote expandable>${prettifyTestOutput(escapeHtml(testsOutput.slice(0, 1500)))}</blockquote>`);
       }
 
       if (retryCount >= MAX_RETRY_ATTEMPTS) {
