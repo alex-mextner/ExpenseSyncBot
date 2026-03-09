@@ -4,7 +4,39 @@
  */
 import type { Bot } from 'gramio';
 import { TOOL_LABELS } from './tools';
+import { escapeHtml, processThinkTags } from '../../bot/commands/ask';
 import type { ToolResult } from './types';
+
+/**
+ * Extract key parameters from tool input for display in the indicator
+ */
+function formatToolInput(name: string, input?: Record<string, unknown>): string {
+  if (!input) return '';
+
+  switch (name) {
+    case 'set_budget':
+      return [input.category, input.amount && `${input.amount} ${input.currency || ''}`.trim()]
+        .filter(Boolean).join(', ');
+    case 'delete_budget':
+      return [input.category, input.month].filter(Boolean).join(', ');
+    case 'add_expense':
+      return [input.amount && `${input.amount} ${input.currency || ''}`.trim(), input.category, input.comment]
+        .filter(Boolean).join(', ');
+    case 'delete_expense':
+      return input.expense_id ? `#${input.expense_id}` : '';
+    case 'get_expenses':
+      return [input.category, input.period, input.summary_only && 'сводка']
+        .filter(Boolean).join(', ');
+    case 'get_budgets':
+      return [input.category, input.month].filter(Boolean).join(', ');
+    case 'manage_category':
+      return [input.action, input.name].filter(Boolean).join(' ');
+    case 'set_custom_prompt':
+      return input.prompt ? `${String(input.prompt).length} символов` : 'очистка';
+    default:
+      return '';
+  }
+}
 
 const UPDATE_INTERVAL_MS = 3000;
 const ERROR_COOLDOWN_MS = 10000;
@@ -40,11 +72,13 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Show tool execution indicator
+   * Show tool execution indicator with input details
    */
-  async onToolStart(name: string): Promise<void> {
+  async onToolStart(name: string, input?: Record<string, unknown>): Promise<void> {
     const toolLabel = TOOL_LABELS[name] || name;
-    const indicator = `\n<code>  </code><i>${toolLabel}...</i>`;
+    const details = formatToolInput(name, input);
+    const detailsSuffix = details ? `: ${details}` : '';
+    const indicator = `\n<code>  </code><i>${toolLabel}${detailsSuffix}...</i>`;
     this.toolIndicators.push(indicator);
     this.fullText += indicator;
 
@@ -57,11 +91,13 @@ export class TelegramStreamWriter {
   /**
    * Update tool execution indicator with result status
    */
-  onToolResult(name: string, result: ToolResult): void {
+  onToolResult(name: string, input: Record<string, unknown> | undefined, result: ToolResult): void {
     const toolLabel = TOOL_LABELS[name] || name;
-    const pendingPattern = `\n<code>  </code><i>${toolLabel}...</i>`;
+    const details = formatToolInput(name, input);
+    const detailsSuffix = details ? `: ${details}` : '';
+    const pendingPattern = `\n<code>  </code><i>${toolLabel}${detailsSuffix}...</i>`;
     const status = result.success ? '\u2705' : '\u274c';
-    const replacement = `\n${status} <i>${toolLabel}</i>`;
+    const replacement = `\n${status} <i>${toolLabel}${detailsSuffix}</i>`;
 
     this.fullText = this.fullText.replace(pendingPattern, replacement);
   }
@@ -77,6 +113,8 @@ export class TelegramStreamWriter {
     }
     // Also clean up completed indicators (the replacements)
     cleanText = cleanText.replace(/\n[\u2705\u274c] <i>[^<]+<\/i>/g, '');
+    // Process <think> tags -> expandable blockquote (same as HF path)
+    cleanText = processThinkTags(cleanText);
     // Clean up leading/trailing whitespace and extra newlines
     cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
 
@@ -102,7 +140,7 @@ export class TelegramStreamWriter {
    * Send or edit the Telegram message
    */
   private async flushUpdate(): Promise<void> {
-    const textToSend = this.truncateForTelegram(this.fullText);
+    const textToSend = this.truncateForTelegram(processThinkTags(this.fullText));
 
     if (textToSend === this.lastSentText) return;
 
