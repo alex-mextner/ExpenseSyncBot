@@ -179,12 +179,18 @@ export class DevAgent {
 
   private async executeTool(name: string, input: Record<string, unknown>): Promise<string> {
     try {
+      const str = (key: string): string => {
+        const v = input[key];
+        if (typeof v !== 'string' || !v) throw new Error(`Missing required param: ${key}`);
+        return v;
+      };
+
       switch (name) {
         case 'read_file':
-          return await readFile(this.worktreePath, input.path as string);
+          return await readFile(this.worktreePath, str('path'));
 
         case 'write_file':
-          await writeFile(this.worktreePath, input.path as string, input.content as string);
+          await writeFile(this.worktreePath, str('path'), str('content'));
           return `Written: ${input.path}`;
 
         case 'list_directory':
@@ -192,18 +198,18 @@ export class DevAgent {
           return files.join('\n');
 
         case 'search_code':
-          const results = await searchCode(this.worktreePath, input.pattern as string, input.glob as string | undefined);
+          const results = await searchCode(this.worktreePath, str('pattern'), input.glob as string | undefined);
           return results || 'No matches found.';
 
         case 'file_exists':
-          return fileExists(this.worktreePath, input.path as string) ? 'true' : 'false';
+          return fileExists(this.worktreePath, str('path')) ? 'true' : 'false';
 
         case 'delete_file':
-          await deleteFile(this.worktreePath, input.path as string);
+          await deleteFile(this.worktreePath, str('path'));
           return `Deleted: ${input.path}`;
 
         case 'commit':
-          await commitChanges(this.worktreePath, input.message as string);
+          await commitChanges(this.worktreePath, str('message'));
           return `Committed: ${input.message}`;
 
         default:

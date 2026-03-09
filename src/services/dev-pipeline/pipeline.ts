@@ -615,26 +615,22 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
     // Run tests — nothrow() to always get output
     const testsResult = await $`cd ${task.worktree_path} && bun test 2>&1`.nothrow().quiet();
     testsOutput = testsResult.text().trim();
-    // bun test may exit non-zero for "Unhandled error between tests" even if all tests pass
-    // rely on actual (fail) markers, not just exit code
-    const hasFailedTests = /\(fail\)/.test(testsOutput);
-    const testsPassed = !hasFailedTests;
+    const testExitCode = testsResult.exitCode;
+    const testsPassed = testExitCode === 0;
+
+    // Parse test counts from bun test output
+    const passCount = (testsOutput.match(/\(pass\)/g) || []).length;
+    const failCount = (testsOutput.match(/\(fail\)/g) || []).length;
 
     // Build full output for error_log (raw, for the AI agent)
-    fullOutput = `TYPE CHECK ${typeCheckPassed ? 'PASSED' : 'FAILED'}:\n${typeCheckOutput}\n\nTESTS ${testsPassed ? 'PASSED' : 'FAILED'}:\n${testsOutput}`;
+    fullOutput = `TYPE CHECK ${typeCheckPassed ? 'PASSED' : 'FAILED'}:\n${typeCheckOutput}\n\nTESTS ${testsPassed ? 'PASSED' : 'FAILED'} (exit code ${testExitCode}):\n${testsOutput}`;
 
     const allPassed = typeCheckPassed && testsPassed;
 
     if (allPassed) {
       const updated = transition(task, DevTaskState.PULL_REQUEST);
 
-      // Count pass/fail from bun test output
-      const passCount = (testsOutput.match(/\(pass\)/g) || []).length;
-      const failCount = (testsOutput.match(/\(fail\)/g) || []).length;
-      const testSummary = failCount > 0
-        ? `${passCount} ✅ / ${failCount} ❌`
-        : `${passCount} ✅`;
-
+      const testSummary = `${passCount} ✅`;
       await this.notify(
         task.group_id,
         `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
@@ -657,9 +653,13 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
       }
 
       if (testsPassed) {
-        lines.push(`✅ <b>Тесты:</b> OK`);
+        lines.push(`✅ <b>Тесты:</b> ${passCount} ✅`);
+      } else if (failCount > 0) {
+        lines.push(`❌ <b>Тесты:</b> ${passCount} ✅ / ${failCount} ❌`);
+        lines.push(`<blockquote expandable>${prettifyTestOutput(escapeHtml(testsOutput.slice(0, 1500)))}</blockquote>`);
       } else {
-        lines.push(`❌ <b>Тесты:</b> ошибки`);
+        // No (fail) markers but exit code != 0 — unhandled errors / runtime crashes
+        lines.push(`⚠️ <b>Тесты:</b> ${passCount} ✅, но exit code ${testExitCode}`);
         lines.push(`<blockquote expandable>${prettifyTestOutput(escapeHtml(testsOutput.slice(0, 1500)))}</blockquote>`);
       }
 
