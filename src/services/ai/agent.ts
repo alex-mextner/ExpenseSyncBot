@@ -15,7 +15,8 @@ import type { ChatMessage } from '../../database/types';
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
-const AI_MODEL = process.env.AI_MODEL || 'claude-sonnet-4-5-20250514';
+const AI_MODEL = process.env.AI_MODEL || 'glm-4.7';
+const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.z.ai/api/anthropic';
 
 export class ExpenseBotAgent {
   private anthropic: Anthropic;
@@ -24,6 +25,7 @@ export class ExpenseBotAgent {
   constructor(apiKey: string, ctx: AgentContext) {
     this.anthropic = new Anthropic({
       apiKey,
+      baseURL: AI_BASE_URL || undefined,
     });
     this.ctx = ctx;
   }
@@ -112,11 +114,11 @@ export class ExpenseBotAgent {
             if (currentToolUse) {
               const input = JSON.parse(currentToolUse.inputJson || '{}');
 
-              await writer.onToolStart(currentToolUse.name);
+              await writer.onToolStart(currentToolUse.name, input);
 
               const result = await executeTool(currentToolUse.name, input, this.ctx);
 
-              writer.onToolResult(currentToolUse.name, result);
+              writer.onToolResult(currentToolUse.name, input, result);
 
               toolResults.push({ id: currentToolUse.id, result });
 

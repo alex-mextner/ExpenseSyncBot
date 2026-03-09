@@ -12,6 +12,7 @@ interface EnvConfig {
   ENCRYPTION_KEY: string;
   HF_TOKEN: string;
   ANTHROPIC_API_KEY: string;
+  AI_BASE_URL: string;
   AI_MODEL: string;
   NODE_ENV: 'development' | 'production';
 }
@@ -37,7 +38,8 @@ function validateEnv(): EnvConfig {
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
     HF_TOKEN: getEnvVariable('HF_TOKEN', false),
     ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
-    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'claude-sonnet-4-5-20250514',
+    AI_BASE_URL: getEnvVariable('AI_BASE_URL', false),
+    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-4.7',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
   };
 }
