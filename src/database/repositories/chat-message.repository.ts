@@ -59,7 +59,7 @@ export class ChatMessageRepository {
    * Delete old messages (keep only last N messages per group)
    */
   pruneOldMessages(groupId: number, keepCount: number = 50): number {
-    const query = this.db.query<void, [number, number]>(`
+    const query = this.db.query<void, [number, number, number]>(`
       DELETE FROM chat_messages
       WHERE group_id = ? AND id NOT IN (
         SELECT id FROM chat_messages

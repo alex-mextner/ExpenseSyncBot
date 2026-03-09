@@ -335,7 +335,7 @@ async function handleBudgetAction(
       // Save to database
       database.budgets.setBudget({
         group_id: group.id,
-        category,
+        category: category ?? '',
         month: currentMonth,
         limit_amount: amount,
         currency,
@@ -365,7 +365,7 @@ async function handleBudgetAction(
             group.spreadsheet_id,
             {
               month: currentMonth,
-              category,
+              category: category ?? '',
               limit: amount,
               currency: currency,
             }
@@ -403,7 +403,7 @@ async function handleBudgetAction(
       }
 
       // Create category
-      database.categories.create({ group_id: group.id, name: category });
+      database.categories.create({ group_id: group.id, name: category ?? '' });
 
       const now = new Date();
       const currentMonth = format(now, "yyyy-MM");
@@ -411,7 +411,7 @@ async function handleBudgetAction(
       // Set budget
       database.budgets.setBudget({
         group_id: group.id,
-        category,
+        category: category ?? '',
         month: currentMonth,
         limit_amount: amount,
         currency: currency,
@@ -441,7 +441,7 @@ async function handleBudgetAction(
             group.spreadsheet_id,
             {
               month: currentMonth,
-              category,
+              category: category ?? '',
               limit: amount,
               currency,
             }

@@ -146,7 +146,7 @@ export async function handleBudgetCommand(ctx: Ctx["Command"]): Promise<void> {
   }
 
   // Parse command arguments
-  const fullText = ctx.text || ctx.message?.text || "";
+  const fullText = ctx.text || "";
   const parts = fullText
     .trim()
     .split(/\s+/)

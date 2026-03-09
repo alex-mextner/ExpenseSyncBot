@@ -250,6 +250,7 @@ async function addBudgetInfo(
     id: number;
     google_refresh_token: string | null;
     spreadsheet_id: string | null;
+    default_currency: import('../../config/constants').CurrencyCode;
   },
   currentMonthExpenses: Array<{ category: string; eur_amount: number }>,
   ctx: Ctx["Command"]

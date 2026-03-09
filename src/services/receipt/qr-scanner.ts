@@ -176,14 +176,14 @@ async function scanQRWithExternalAPI(imageBuffer: Buffer): Promise<string | null
   }
 
   const firstResult = result[0];
-  if (!firstResult.symbol || firstResult.symbol.length === 0) {
+  if (!firstResult?.symbol || firstResult.symbol.length === 0) {
     console.log(`[QR_SCANNER] API result has no symbols`);
     return null;
   }
 
   const symbolData = firstResult.symbol[0];
-  if (symbolData.error) {
-    console.log(`[QR_SCANNER] External API error: ${symbolData.error}`);
+  if (!symbolData || symbolData.error) {
+    console.log(`[QR_SCANNER] External API error: ${symbolData?.error}`);
     console.log(`[QR_SCANNER] Full symbol data:`, JSON.stringify(symbolData, null, 2));
     return null;
   }

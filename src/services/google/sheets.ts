@@ -486,7 +486,7 @@ export async function writeBudgetRow(
 
   // Find existing row for this month+category
   for (let i = 0; i < rows.length; i++) {
-    const [month, category] = rows[i];
+    const [month, category] = rows[i] ?? [];
     if (
       month?.trim() === data.month &&
       category?.trim().toLowerCase() === data.category.toLowerCase()

@@ -20,7 +20,7 @@ export class BudgetRepository {
 
     if (existing) {
       // Update existing budget
-      const query = this.db.query<void, [number, string, number, string]>(`
+      const query = this.db.query<void, [number, number, string, string]>(`
         UPDATE budgets
         SET limit_amount = ?, updated_at = CURRENT_TIMESTAMP
         WHERE group_id = ? AND category = ? AND month = ?
