@@ -124,6 +124,17 @@ export class GroupRepository {
   }
 
   /**
+   * Get all groups
+   */
+  getAll(): Group[] {
+    const query = this.db.query<Group, []>(`SELECT * FROM groups`);
+    return query.all().map((row) => ({
+      ...row,
+      enabled_currencies: JSON.parse(row.enabled_currencies as unknown as string) as CurrencyCode[],
+    }));
+  }
+
+  /**
    * Delete group
    */
   delete(telegramGroupId: number): boolean {

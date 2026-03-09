@@ -3,6 +3,7 @@ import { startBot } from './src/bot';
 import { database } from './src/database';
 import { updateExchangeRates } from './src/services/currency/converter';
 import { startTempImageCleanup } from './src/services/receipt/ocr-extractor';
+import { scheduleNewsBroadcast } from './src/services/broadcast';
 
 /**
  * Main application entry point
@@ -33,7 +34,11 @@ async function main() {
 
     // Start Telegram bot
     console.log('🤖 Starting Telegram bot...');
-    await startBot();
+    const bot = await startBot();
+    console.log('');
+
+    // Schedule news broadcast
+    scheduleNewsBroadcast(bot);
     console.log('');
 
     console.log('✅ ExpenseSyncBot is running!\n');

@@ -103,7 +103,7 @@ export function createBot(): Bot {
 /**
  * Start bot
  */
-export async function startBot(): Promise<void> {
+export async function startBot(): Promise<Bot> {
   const bot = createBot();
 
   console.log("🤖 Starting bot...");
@@ -120,4 +120,6 @@ export async function startBot(): Promise<void> {
   const devPipeline = initDevPipeline(bot);
   await devPipeline.resumeIncompleteTasksOnStartup();
   console.log("✓ Dev pipeline started");
+
+  return bot;
 }
