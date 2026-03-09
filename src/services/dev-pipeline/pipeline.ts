@@ -269,10 +269,61 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
   }
 
   /**
+   * Continue/resume a failed or stuck task with an optional message.
+   */
+  async continueTask(taskId: number, message: string): Promise<DevTask> {
+    const task = database.devTasks.findById(taskId);
+    if (!task) {
+      throw new Error(`Task #${taskId} not found`);
+    }
+
+    if (task.state === DevTaskState.COMPLETED || task.state === DevTaskState.REJECTED) {
+      throw new Error(`Task #${taskId} is already ${task.state}, cannot continue`);
+    }
+
+    if (task.state === DevTaskState.FAILED) {
+      // Restart from PENDING, append message to description
+      const enrichedDescription = message !== 'Продолжай'
+        ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
+        : task.description;
+
+      const updated = transition(task, DevTaskState.PENDING, {
+        error_log: undefined,
+        retry_count: 0,
+      });
+
+      database.devTasks.update(taskId, { description: enrichedDescription } as any);
+      updated.description = enrichedDescription;
+
+      await this.notify(
+        task.group_id,
+        `🔄 Dev task #${task.id}: restarting from scratch...`
+      );
+
+      this.processStateAsync(updated);
+      return updated;
+    }
+
+    if (task.state === DevTaskState.CLARIFYING) {
+      return this.answerTask(taskId, message);
+    }
+
+    if (task.state === DevTaskState.APPROVAL) {
+      return this.approveTask(taskId);
+    }
+
+    // For any other active state — re-trigger processing
+    await this.notify(
+      task.group_id,
+      `▶️ Dev task #${task.id}: resuming from ${task.state}...`
+    );
+
+    this.processStateAsync(task);
+    return task;
+  }
+
+  /**
    * Handle DESIGNING state: create a design/plan for the task.
-   *
-   * Placeholder — will use AI tool_use to analyze codebase and
-   * create a detailed implementation plan.
    */
   private async handleDesigning(task: DevTask): Promise<void> {
     await this.notify(
