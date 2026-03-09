@@ -51,13 +51,22 @@ export class TelegramStreamWriter {
   private lastErrorTime = 0;
   private toolIndicators: string[] = [];
   private typingInterval: ReturnType<typeof setInterval> | null = null;
+  private placeholderMessageId: number | null = null;
 
   constructor(
     private bot: Bot,
     private chatId: number,
     private messageThreadId?: number
   ) {
-    // Keep "typing" status alive until first message is sent
+    // Send placeholder and keep "typing" status alive
+    this.bot.api.sendMessage({
+      chat_id: this.chatId,
+      text: '⏳ Минутку...',
+      ...(this.messageThreadId && { message_thread_id: this.messageThreadId }),
+    }).then(msg => {
+      this.placeholderMessageId = msg.message_id;
+    }).catch(() => {});
+
     this.typingInterval = setInterval(() => {
       if (!this.sentMessageId) {
         this.bot.api.sendChatAction({
@@ -75,6 +84,18 @@ export class TelegramStreamWriter {
     if (this.typingInterval) {
       clearInterval(this.typingInterval);
       this.typingInterval = null;
+    }
+    this.deletePlaceholder();
+  }
+
+  private deletePlaceholder(): void {
+    if (this.placeholderMessageId) {
+      const id = this.placeholderMessageId;
+      this.placeholderMessageId = null;
+      this.bot.api.deleteMessage({
+        chat_id: this.chatId,
+        message_id: id,
+      }).catch(() => {});
     }
   }
 
