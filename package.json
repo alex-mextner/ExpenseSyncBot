@@ -16,6 +16,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@huggingface/inference": "^4.13.3",
     "currency.js": "^2.0.4",
     "date-fns": "^4.1.0",

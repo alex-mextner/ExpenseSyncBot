@@ -6,8 +6,13 @@ import { database } from "../../database";
 import { formatExchangeRatesForAI, convertCurrency } from "../../services/currency/converter";
 import type { CurrencyCode } from "../../config/constants";
 import type { Ctx } from "../types";
+import { ExpenseBotAgent } from "../../services/ai/agent";
+import type { AgentContext } from "../../services/ai/types";
 
-const client = new InferenceClient(env.HF_TOKEN);
+const hfClient = env.HF_TOKEN ? new InferenceClient(env.HF_TOKEN) : null;
+
+/** Feature flag: use Anthropic agent when API key is present */
+const useAnthropic = !!env.ANTHROPIC_API_KEY;
 
 /**
  * Handle questions to the bot via @botname question
@@ -70,6 +75,94 @@ export async function handleAskQuestion(
     role: "user",
     content: `${userName}: ${question}`,
   });
+
+  // Route to Anthropic agent or HF fallback
+  if (useAnthropic) {
+    await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName, messageThreadId);
+  } else {
+    await handleAskWithHuggingFace(ctx, question, bot, group, user, userName, userFullName, chatId);
+  }
+}
+
+/**
+ * Handle question using Anthropic Claude agent with tool calling
+ */
+async function handleAskWithAnthropic(
+  ctx: Ctx["Message"],
+  question: string,
+  bot: Bot,
+  group: any,
+  user: any,
+  userName: string,
+  userFullName: string,
+  messageThreadId: number | undefined
+): Promise<void> {
+  const chatId = ctx.chat!.id;
+
+  const agentCtx: AgentContext = {
+    groupId: group.id,
+    userId: user.id,
+    chatId,
+    userName,
+    userFullName,
+    customPrompt: group.custom_prompt,
+    telegramGroupId: group.telegram_group_id,
+  };
+
+  // Get recent chat history (last 10 messages / 5 pairs)
+  const recentMessages = database.chatMessages.getRecentMessages(group.id, 10);
+  // Exclude the current question (just saved above)
+  const historyMessages = recentMessages.slice(0, -1);
+
+  try {
+    const agent = new ExpenseBotAgent(env.ANTHROPIC_API_KEY, agentCtx);
+
+    const finalResponse = await agent.run(
+      `${userName}: ${question}`,
+      historyMessages,
+      bot,
+      messageThreadId
+    );
+
+    // Save only the final text response to chat history (not tool_use rounds)
+    database.chatMessages.create({
+      group_id: group.id,
+      user_id: user.id,
+      role: "assistant",
+      content: finalResponse,
+    });
+
+    // Prune old messages (keep last 50)
+    database.chatMessages.pruneOldMessages(group.id, 50);
+
+    // Maybe send daily advice (20% probability)
+    await maybeSendDailyAdvice(ctx, group.id);
+  } catch (error) {
+    console.error("[ASK] Anthropic agent error:", error);
+    await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
+  }
+}
+
+/**
+ * Handle question using HuggingFace Inference (legacy fallback)
+ */
+async function handleAskWithHuggingFace(
+  ctx: Ctx["Message"],
+  question: string,
+  bot: Bot,
+  group: any,
+  user: any,
+  userName: string,
+  userFullName: string,
+  chatId: number
+): Promise<void> {
+  if (!hfClient) {
+    await ctx.send("❌ AI не настроен. Нужен HF_TOKEN или ANTHROPIC_API_KEY.");
+    return;
+  }
+
+  const userFirstName = ctx.from.firstName || "";
+  const userLastName = ctx.from.lastName || "";
 
   // Get recent chat history (last 5 messages)
   const recentMessages = database.chatMessages.getRecentMessages(group.id, 10); // 5 pairs
@@ -192,7 +285,7 @@ ${budgetsContext}`;
 
   try {
     // Create streaming response
-    const stream = client.chatCompletionStream({
+    const stream = hfClient.chatCompletionStream({
       provider: "novita",
       model: "deepseek-ai/DeepSeek-R1-0528",
       messages: messages as any,
@@ -1000,7 +1093,12 @@ ${statsContext}
       advicePrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
     }
 
-    const response = await client.chatCompletion({
+    if (!hfClient) {
+      console.log("[ADVICE] No HF client available, skipping advice");
+      return;
+    }
+
+    const response = await hfClient.chatCompletion({
       provider: "novita",
       model: "deepseek-ai/DeepSeek-R1-0528",
       messages: [{ role: "user", content: advicePrompt }],

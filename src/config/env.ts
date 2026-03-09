@@ -11,6 +11,8 @@ interface EnvConfig {
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string;
   HF_TOKEN: string;
+  ANTHROPIC_API_KEY: string;
+  AI_MODEL: string;
   NODE_ENV: 'development' | 'production';
 }
 
@@ -33,7 +35,9 @@ function validateEnv(): EnvConfig {
     OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000'),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
-    HF_TOKEN: getEnvVariable('HF_TOKEN'),
+    HF_TOKEN: getEnvVariable('HF_TOKEN', false),
+    ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
+    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'claude-sonnet-4-5-20250514',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
   };
 }
