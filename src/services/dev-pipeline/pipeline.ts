@@ -34,6 +34,7 @@ import {
   createPR,
   getCurrentDiff,
   getDiffFromMain,
+  getChangedFilesFromMain,
   generateBranchName,
 } from './git-ops';
 import { runCodexReview } from './codex-integration';
@@ -690,6 +691,11 @@ Keep the plan concise — 20-40 lines max.`;
 
     if (isRetry && task.error_log) {
       // RETRY MODE: focused fix after test failure
+      const changedFiles = await getChangedFilesFromMain(task.worktree_path);
+      const changedFilesList = changedFiles.length > 0
+        ? changedFiles.join('\n')
+        : '(no files changed yet)';
+
       systemPrompt = `You are a senior TypeScript developer FIXING test/type-check failures in a Telegram bot.
 
 CRITICAL RULES:
@@ -699,17 +705,26 @@ CRITICAL RULES:
 4. Do NOT rewrite files that aren't broken.
 5. Do NOT delete or recreate files that already exist unless they're fundamentally wrong.
 6. After fixing, use the commit tool.
+
+SCOPE AWARENESS:
+- Tests run on the ENTIRE project, not just your changes.
+- If a test fails in a file you did NOT modify, your changes probably broke it indirectly (e.g., changed imports, moved exports).
+- In that case, FIX YOUR CODE, don't fix the other test. Or use revert_file to undo your unnecessary changes.
+- Do NOT "fix" pre-existing code, refactor unrelated files, or extract utilities. Stay focused on your task.
 ${DEV_RULES}
 ${techNotes}`;
 
       userMessage = `Tests/type-check FAILED. Fix the errors below.
+
+YOUR CHANGED FILES (your scope — these are the files you modified vs main):
+${changedFilesList}
 
 ERRORS:
 ${task.error_log}
 
 Original task for context: ${task.description}
 
-Read the failing files first, then make minimal fixes.`;
+IMPORTANT: If errors are in files NOT in your changed files list, your changes likely broke them indirectly. Revert unnecessary changes with revert_file rather than trying to fix unrelated tests.`;
     } else if (hasExistingWork) {
       // RESUME MODE: code already exists from a previous failed run
       systemPrompt = `You are a senior TypeScript developer RESUMING work on a Telegram bot feature.

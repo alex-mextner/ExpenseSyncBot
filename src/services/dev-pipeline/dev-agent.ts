@@ -10,7 +10,7 @@ import {
   fileExists,
   deleteFile,
 } from './file-ops';
-import { commitChanges } from './git-ops';
+import { commitChanges, revertFileToMain } from './git-ops';
 
 const DEV_TOOLS: Anthropic.Tool[] = [
   {
@@ -76,6 +76,17 @@ const DEV_TOOLS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'Relative file path' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'revert_file',
+    description: 'Revert a file to its original version from main branch. Use this when you modified a file that is NOT part of your task and it caused test failures. If the file did not exist on main, it will be deleted.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Relative file path to revert' },
       },
       required: ['path'],
     },
@@ -226,6 +237,10 @@ export class DevAgent {
         case 'delete_file':
           await deleteFile(this.worktreePath, str('path'));
           return `Deleted: ${input.path}`;
+
+        case 'revert_file':
+          await revertFileToMain(this.worktreePath, str('path'));
+          return `Reverted to main: ${input.path}`;
 
         case 'commit':
           await commitChanges(this.worktreePath, str('message'));

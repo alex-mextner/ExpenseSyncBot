@@ -207,6 +207,47 @@ export async function getDiffFromMain(worktreePath: string): Promise<string> {
 }
 
 /**
+ * Get list of files changed in worktree compared to main.
+ */
+export async function getChangedFilesFromMain(worktreePath: string): Promise<string[]> {
+  // Committed changes
+  const committed = await $`git -C ${worktreePath} diff main --name-only`.nothrow().quiet().text();
+  // Uncommitted changes (staged + unstaged + untracked)
+  const unstaged = await $`git -C ${worktreePath} diff --name-only`.nothrow().quiet().text();
+  const untracked = await $`git -C ${worktreePath} ls-files --others --exclude-standard`.nothrow().quiet().text();
+
+  const all = new Set(
+    [committed, unstaged, untracked]
+      .join('\n')
+      .split('\n')
+      .map(f => f.trim())
+      .filter(Boolean)
+  );
+  return [...all];
+}
+
+/**
+ * Revert a file in worktree to its main branch version.
+ */
+export async function revertFileToMain(worktreePath: string, filePath: string): Promise<void> {
+  // Check if file exists on main
+  const existsOnMain = await $`git -C ${worktreePath} cat-file -e main:${filePath}`.nothrow().quiet();
+
+  if (existsOnMain.exitCode === 0) {
+    // File exists on main — restore it
+    await $`git -C ${worktreePath} checkout main -- ${filePath}`.quiet();
+    console.log(`[GIT-OPS] Reverted to main: ${filePath}`);
+  } else {
+    // File doesn't exist on main — it was created by agent, delete it
+    const absolutePath = path.resolve(worktreePath, filePath);
+    if (existsSync(absolutePath)) {
+      await $`rm ${absolutePath}`.quiet();
+      console.log(`[GIT-OPS] Deleted (not on main): ${filePath}`);
+    }
+  }
+}
+
+/**
  * Generate a safe branch name from a task description.
  *
  * @param taskId - The task ID
