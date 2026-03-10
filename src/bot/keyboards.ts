@@ -144,6 +144,34 @@ export function createDevApprovalKeyboard(taskId: number): InlineKeyboard {
 }
 
 /**
+ * Create dev task review keyboard (after auto code review)
+ */
+export function createDevReviewKeyboard(taskId: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text('✅ Accept Review', `dev:accept_review:${taskId}`)
+    .text('✏️ Edit (AI)', `dev:edit:${taskId}`)
+    .text('❌ Cancel Task', `dev:cancel:${taskId}`);
+
+  return keyboard;
+}
+
+/**
+ * Create dev task merge keyboard (after fixes, ready to merge)
+ */
+export function createDevMergeKeyboard(taskId: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  keyboard
+    .text('🚀 Merge', `dev:merge:${taskId}`)
+    .text('✏️ Edit (AI)', `dev:edit:${taskId}`)
+    .text('❌ Cancel Task', `dev:cancel:${taskId}`);
+
+  return keyboard;
+}
+
+/**
  * Create receipt summary keyboard (for receipts with >5 items)
  * Shows options: Accept all, Bulk edit, Item-by-item
  */
