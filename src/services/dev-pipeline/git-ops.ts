@@ -56,7 +56,7 @@ export async function createWorktree(branchName: string): Promise<string> {
 }
 
 /**
- * Remove a git worktree and its branch.
+ * Remove a git worktree (directory only, does not delete the branch).
  *
  * @param worktreePath - Absolute path to the worktree
  */
@@ -71,6 +71,23 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
     console.log(`[GIT-OPS] Removed worktree: ${worktreePath}`);
   } catch (error) {
     console.error(`[GIT-OPS] Failed to remove worktree: ${worktreePath}`, error);
+  }
+}
+
+/**
+ * Delete a local git branch.
+ *
+ * Safe to call even if the branch doesn't exist — fails silently.
+ *
+ * @param branchName - Branch name to delete (e.g., "dev/add-feature-42")
+ */
+export async function deleteLocalBranch(branchName: string): Promise<void> {
+  try {
+    await $`git branch -D ${branchName}`.quiet();
+    console.log(`[GIT-OPS] Deleted local branch: ${branchName}`);
+  } catch {
+    // Branch may not exist or already deleted — that's fine
+    console.log(`[GIT-OPS] Branch ${branchName} not found or already deleted`);
   }
 }
 

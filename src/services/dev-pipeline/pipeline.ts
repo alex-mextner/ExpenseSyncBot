@@ -27,6 +27,7 @@ import {
 import {
   createWorktree,
   removeWorktree,
+  deleteLocalBranch,
   worktreeExists,
   getRepoRoot,
   commitChanges,
@@ -199,6 +200,22 @@ export class DevPipeline {
     if (agent) {
       agent.abort();
       this.activeAgents.delete(taskId);
+    }
+  }
+
+  /**
+   * Clean up worktree directory and local branch for a task.
+   * Also clears worktree_path in the database.
+   */
+  private async cleanupWorktree(task: DevTask): Promise<void> {
+    if (task.worktree_path) {
+      await removeWorktree(task.worktree_path);
+    }
+    if (task.branch_name) {
+      await deleteLocalBranch(task.branch_name);
+    }
+    if (task.worktree_path || task.branch_name) {
+      database.devTasks.update(task.id, { worktree_path: undefined } as any);
     }
   }
 
@@ -623,11 +640,12 @@ Keep the plan concise — 20-40 lines max.`;
     }
 
     if (isTerminalState(task.state)) {
-      // Already terminal — just clean up worktree if it's still around
-      if (task.worktree_path && worktreeExists(task.worktree_path)) {
-        await removeWorktree(task.worktree_path);
-        database.devTasks.update(taskId, { worktree_path: undefined } as any);
-        await this.notify(task.group_id, `🗑 Dev task #${task.id}: worktree removed.`);
+      // Already terminal — just clean up worktree/branch if still around
+      const hasWorktree = task.worktree_path && worktreeExists(task.worktree_path);
+      const hasBranch = !!task.branch_name;
+      if (hasWorktree || hasBranch) {
+        await this.cleanupWorktree(task);
+        await this.notify(task.group_id, `🗑 Dev task #${task.id}: cleaned up.`);
       } else {
         await this.notify(task.group_id, `Task #${taskId} is already ${task.state}.`);
       }
@@ -639,10 +657,8 @@ Keep the plan concise — 20-40 lines max.`;
 
     const updated = transition(task, DevTaskState.REJECTED);
 
-    // Clean up worktree if it exists
-    if (task.worktree_path) {
-      await removeWorktree(task.worktree_path);
-    }
+    // Clean up worktree and local branch
+    await this.cleanupWorktree(task);
 
     await this.notify(task.group_id, `❌ Dev task #${task.id} cancelled.`);
 
@@ -996,9 +1012,8 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
     } else {
       const updated = transition(task, DevTaskState.COMPLETED, { code_review: review });
 
-      if (task.worktree_path) {
-        await removeWorktree(task.worktree_path);
-      }
+      // Clean up worktree and local branch (remote branch deleted by mergePR --delete-branch)
+      await this.cleanupWorktree(task);
 
       await this.notify(
         task.group_id,
