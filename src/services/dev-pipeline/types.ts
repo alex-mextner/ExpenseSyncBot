@@ -58,7 +58,7 @@ export const STATE_TRANSITIONS: Record<DevTaskState, DevTaskState[]> = {
   [DevTaskState.AWAITING_MERGE]: [DevTaskState.COMPLETED, DevTaskState.UPDATING, DevTaskState.REJECTED],
   [DevTaskState.COMPLETED]: [],
   [DevTaskState.REJECTED]: [],
-  [DevTaskState.FAILED]: [DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING, DevTaskState.REJECTED],
+  [DevTaskState.FAILED]: [DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING, DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING, DevTaskState.AWAITING_REVIEW, DevTaskState.REJECTED],
 };
 
 /**
@@ -79,6 +79,7 @@ export interface DevTask {
   plan: string | null;
   code_review: string | null;
   error_log: string | null;
+  failed_at_state: string | null;
   retry_count: number;
   created_at: string;
   updated_at: string;
@@ -102,6 +103,7 @@ export interface UpdateDevTaskData {
   plan?: string;
   code_review?: string;
   error_log?: string;
+  failed_at_state?: string;
   retry_count?: number;
 }
 

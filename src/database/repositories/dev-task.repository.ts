@@ -163,6 +163,11 @@ export class DevTaskRepository {
       values.push(data.error_log);
     }
 
+    if (data.failed_at_state !== undefined) {
+      fields.push('failed_at_state = ?');
+      values.push(data.failed_at_state);
+    }
+
     if (data.retry_count !== undefined) {
       fields.push('retry_count = ?');
       values.push(data.retry_count);

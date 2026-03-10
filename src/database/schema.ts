@@ -645,6 +645,13 @@ export function runMigrations(db: Database): void {
         console.log('✓ Created dev_tasks table');
       },
     },
+    {
+      name: '020_add_failed_at_state_to_dev_tasks',
+      up: () => {
+        db.exec(`ALTER TABLE dev_tasks ADD COLUMN failed_at_state TEXT`);
+        console.log('✓ Added failed_at_state column to dev_tasks');
+      },
+    },
   ];
 
   // Check and run migrations
