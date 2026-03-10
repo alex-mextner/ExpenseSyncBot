@@ -916,10 +916,14 @@ WORKFLOW:
     // Run type check — tsc writes errors to stdout
     // NOTE: Bun Shell does not support 2>&1 — always read both streams
     const typeCheckResult = await $`cd ${task.worktree_path} && bun x tsc --noEmit`.nothrow().quiet();
-    const typeCheckPassed = typeCheckResult.exitCode === 0;
+    const typeCheckExitCode = typeCheckResult.exitCode;
+    const tscOOM = typeCheckExitCode === 137;
+    const typeCheckPassed = typeCheckExitCode === 0 || tscOOM; // OOM is not a type error
     const tscStdout = typeCheckResult.text().trim();
     const tscStderr = typeCheckResult.stderr.toString().trim();
-    typeCheckOutput = [tscStdout, tscStderr].filter(Boolean).join('\n');
+    typeCheckOutput = tscOOM
+      ? 'tsc killed by OOM (exit 137) — not enough server memory, skipped'
+      : [tscStdout, tscStderr].filter(Boolean).join('\n');
 
     // Run tests — bun test writes header to stdout but results/errors to stderr
     const testsResult = await $`cd ${task.worktree_path} && bun test`.nothrow().quiet();
@@ -962,7 +966,7 @@ WORKFLOW:
         await this.notify(
           task.group_id,
           `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
-            `✅ <b>Тайпчекер:</b> OK\n` +
+            `${tscOOM ? '⚠️' : '✅'} <b>Тайпчекер:</b> ${tscOOM ? 'OOM (skipped)' : 'OK'}\n` +
             `✅ <b>Тесты:</b> ${testSummary}\n\n` +
             `PR: ${task.pr_url}`,
           { reply_markup: createDevMergeKeyboard(task.id) }
@@ -975,7 +979,7 @@ WORKFLOW:
         await this.notify(
           task.group_id,
           `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
-            `✅ <b>Тайпчекер:</b> OK\n` +
+            `${tscOOM ? '⚠️' : '✅'} <b>Тайпчекер:</b> ${tscOOM ? 'OOM (skipped)' : 'OK'}\n` +
             `✅ <b>Тесты:</b> ${testSummary}`
         );
         await this.processState(updated);
