@@ -12,6 +12,7 @@ import { silentSyncBudgets } from "../commands/budget";
 import { maybeSmartAdvice } from "../commands/ask";
 import { extractURLsFromText, processPaymentLinks } from "../../services/receipt/link-analyzer";
 import { consumePendingDesignEdit, getPipelineInstance } from "../commands/dev";
+import { DevTaskState } from "../../services/dev-pipeline/types";
 
 /**
  * Handle expense message
@@ -127,13 +128,22 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
     if (!user) return;
   }
 
-  // Check if we're waiting for design edit input
+  // Check if we're waiting for design edit or code edit input
   const pendingTaskId = consumePendingDesignEdit(telegramGroupId);
   if (pendingTaskId !== null) {
     const pl = getPipelineInstance();
     if (pl) {
       try {
-        await pl.editDesign(pendingTaskId, text);
+        const pendingTask = database.devTasks.findById(pendingTaskId);
+        const isCodeEdit =
+          pendingTask?.state === DevTaskState.AWAITING_REVIEW ||
+          pendingTask?.state === DevTaskState.AWAITING_MERGE;
+
+        if (isCodeEdit) {
+          await pl.editPR(pendingTaskId, text);
+        } else {
+          await pl.editDesign(pendingTaskId, text);
+        }
       } catch (error) {
         await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
       }

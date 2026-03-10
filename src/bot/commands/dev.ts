@@ -570,16 +570,33 @@ export async function handleDevCallback(
         }
         return;
 
-      case 'edit':
-        // Send prompt for edit input, track pending edit
+      case 'accept_review':
+        await pl.acceptReview(taskId);
+        await ctx.answerCallbackQuery({ text: 'Fixing review issues...' });
+        break;
+
+      case 'merge':
+        await pl.mergeTask(taskId);
+        await ctx.answerCallbackQuery({ text: 'Merging...' });
+        break;
+
+      case 'edit': {
+        const editTask = database.devTasks.findById(taskId);
         pendingDesignEdits.set(chatId!, taskId);
         await ctx.answerCallbackQuery({ text: 'Опишите правки' });
+
+        const isDesignEdit = editTask?.state === DevTaskState.APPROVAL;
+        const promptText = isDesignEdit
+          ? `✏️ Опишите, что изменить в дизайне задачи #${taskId}:`
+          : `✏️ Опишите, что изменить в коде задачи #${taskId}:`;
+
         await bot.api.sendMessage({
           chat_id: chatId,
-          text: `✏️ Опишите, что изменить в дизайне задачи #${taskId}:`,
+          text: promptText,
           reply_markup: { force_reply: true, selective: true },
         });
-        return; // Don't delete the design message
+        return; // Don't delete the button message
+      }
 
       default:
         await ctx.answerCallbackQuery({ text: 'Unknown action' });
