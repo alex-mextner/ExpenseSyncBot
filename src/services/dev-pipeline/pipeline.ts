@@ -33,6 +33,7 @@ import {
   commitChanges,
   pushBranch,
   createPR,
+  mergePR,
   getCurrentDiff,
   getDiffFromMain,
   getChangedFilesFromMain,
@@ -41,7 +42,7 @@ import {
 import { runCodexReview } from './codex-integration';
 import { DevAgent, AgentAbortedError } from './dev-agent';
 import { escapeHtml } from '../../bot/commands/ask';
-import { createDevApprovalKeyboard } from '../../bot/keyboards';
+import { createDevApprovalKeyboard, createDevReviewKeyboard, createDevMergeKeyboard } from '../../bot/keyboards';
 
 /** Reorder test output: failures and errors first, then passing tests fill remaining space */
 function prioritizeFailures(raw: string, maxChars: number): string {
@@ -339,6 +340,12 @@ export class DevPipeline {
       case DevTaskState.REVIEWING:
         await this.handleReviewing(task);
         break;
+      case DevTaskState.AWAITING_REVIEW:
+        // Wait for user — do nothing
+        break;
+      case DevTaskState.AWAITING_MERGE:
+        // Wait for user — do nothing
+        break;
       case DevTaskState.UPDATING:
         await this.handleUpdating(task);
         break;
@@ -513,6 +520,14 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
     if (task.state === DevTaskState.APPROVAL) {
       return this.approveTask(taskId);
+    }
+
+    if (task.state === DevTaskState.AWAITING_REVIEW) {
+      return this.acceptReview(taskId);
+    }
+
+    if (task.state === DevTaskState.AWAITING_MERGE) {
+      return this.mergeTask(taskId);
     }
 
     // For any other active state — re-trigger processing
@@ -912,16 +927,35 @@ WORKFLOW:
     }
 
     if (allPassed) {
-      const updated = transition(task, DevTaskState.PULL_REQUEST);
+      if (task.pr_number) {
+        // PR already exists — we're in the fix cycle, push and show merge keyboard
+        await commitChanges(task.worktree_path, `fix: address review feedback (task #${task.id})`);
+        await pushBranch(task.worktree_path, task.branch_name!);
 
-      const testSummary = `${passCount} ✅`;
-      await this.notify(
-        task.group_id,
-        `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
-          `✅ <b>Тайпчекер:</b> OK\n` +
-          `✅ <b>Тесты:</b> ${testSummary}`
-      );
-      await this.processState(updated);
+        const updated = transition(task, DevTaskState.AWAITING_MERGE);
+
+        const testSummary = `${passCount} ✅`;
+        await this.notify(
+          task.group_id,
+          `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
+            `✅ <b>Тайпчекер:</b> OK\n` +
+            `✅ <b>Тесты:</b> ${testSummary}\n\n` +
+            `PR: ${task.pr_url}`,
+          { reply_markup: createDevMergeKeyboard(task.id) }
+        );
+      } else {
+        // First run — create PR (existing flow)
+        const updated = transition(task, DevTaskState.PULL_REQUEST);
+
+        const testSummary = `${passCount} ✅`;
+        await this.notify(
+          task.group_id,
+          `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
+            `✅ <b>Тайпчекер:</b> OK\n` +
+            `✅ <b>Тесты:</b> ${testSummary}`
+        );
+        await this.processState(updated);
+      }
     } else {
       const retryCount = (task.retry_count || 0) + 1;
 
@@ -1022,9 +1056,10 @@ WORKFLOW:
   }
 
   /**
-   * Handle REVIEWING state: run automated code review.
+   * Handle REVIEWING state: run automated code review and show result to user.
    *
-   * Uses Claude Code CLI for review.
+   * Always transitions to AWAITING_REVIEW so the user can decide
+   * whether to accept, edit, or merge.
    */
   private async handleReviewing(task: DevTask): Promise<void> {
     if (!task.worktree_path) {
@@ -1036,28 +1071,89 @@ WORKFLOW:
     const diff = await getDiffFromMain(task.worktree_path);
     const review = await runCodexReview(diff);
 
-    // Check if review found serious issues
-    const hasIssues = /\b(bug|security|error|fix|wrong|incorrect|vulnerability|injection)\b/i.test(review)
-      && !/looks good|no issues|approve|clean/i.test(review);
+    const updated = transition(task, DevTaskState.AWAITING_REVIEW, { code_review: review });
 
-    if (hasIssues) {
-      const updated = transition(task, DevTaskState.UPDATING, { code_review: review });
-      await this.notify(
-        task.group_id,
-        `⚠️ Dev task #${task.id}: review found issues, fixing...\n\n${review.slice(0, 500)}`
-      );
-      await this.processState(updated);
-    } else {
-      const updated = transition(task, DevTaskState.COMPLETED, { code_review: review });
+    await this.notify(
+      task.group_id,
+      `🔍 <b>Dev task #${task.id}:</b> code review done\n\n` +
+        `<blockquote expandable>${escapeHtml(review.slice(0, 1500))}</blockquote>\n\n` +
+        `PR: ${task.pr_url}`,
+      { reply_markup: createDevReviewKeyboard(task.id) }
+    );
+  }
 
-      // Clean up worktree and local branch (remote branch deleted by mergePR --delete-branch)
-      await this.cleanupWorktree(task);
-
-      await this.notify(
-        task.group_id,
-        `✅ Dev task #${task.id} completed!\n\nPR: ${task.pr_url}\n\nReview:\n${review.slice(0, 1000)}`
-      );
+  /**
+   * Accept the code review — AI fixes the issues found.
+   */
+  async acceptReview(taskId: number): Promise<DevTask> {
+    const task = database.devTasks.findById(taskId);
+    if (!task) throw new Error(`Task #${taskId} not found`);
+    if (task.state !== DevTaskState.AWAITING_REVIEW) {
+      throw new Error(`Task #${taskId} is not awaiting review (current: ${task.state})`);
     }
+
+    const updated = transition(task, DevTaskState.UPDATING);
+
+    await this.notify(
+      task.group_id,
+      `🔄 Dev task #${task.id}: fixing review issues...`
+    );
+
+    this.processStateAsync(updated);
+    return updated;
+  }
+
+  /**
+   * Merge the PR and complete the task.
+   */
+  async mergeTask(taskId: number): Promise<DevTask> {
+    const task = database.devTasks.findById(taskId);
+    if (!task) throw new Error(`Task #${taskId} not found`);
+    if (task.state !== DevTaskState.AWAITING_MERGE) {
+      throw new Error(`Task #${taskId} is not awaiting merge (current: ${task.state})`);
+    }
+    if (!task.pr_number) {
+      throw new Error(`Task #${taskId} has no PR number`);
+    }
+
+    await this.notify(task.group_id, `🚀 Dev task #${task.id}: merging PR #${task.pr_number}...`);
+
+    await mergePR(task.pr_number);
+
+    const updated = transition(task, DevTaskState.COMPLETED);
+
+    await this.cleanupWorktree(task);
+
+    await this.notify(
+      task.group_id,
+      `✅ Dev task #${task.id} merged and completed!\n\nPR: ${task.pr_url}`
+    );
+
+    return updated;
+  }
+
+  /**
+   * Edit PR code based on user feedback — transitions to UPDATING.
+   */
+  async editPR(taskId: number, feedback: string): Promise<DevTask> {
+    const task = database.devTasks.findById(taskId);
+    if (!task) throw new Error(`Task #${taskId} not found`);
+
+    if (task.state !== DevTaskState.AWAITING_REVIEW && task.state !== DevTaskState.AWAITING_MERGE) {
+      throw new Error(`Task #${taskId} is not awaiting review/merge (current: ${task.state})`);
+    }
+
+    const updated = transition(task, DevTaskState.UPDATING, {
+      code_review: `USER FEEDBACK:\n${feedback}`,
+    });
+
+    await this.notify(
+      task.group_id,
+      `✏️ Dev task #${task.id}: applying your changes...`
+    );
+
+    this.processStateAsync(updated);
+    return updated;
   }
 
   /**
