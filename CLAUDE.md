@@ -220,6 +220,17 @@ Uses `date-fns` library. Spreadsheet dates are in `DD.MM.YYYY` format (European)
 
 Uses `currency.js` library. Display format matches currency (e.g., `$100.50`, `€50,00`, `1 900 RSD`).
 
+### Topic-Aware Messaging
+
+Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/topic-middleware.ts)) to automatically inject `message_thread_id` into all outgoing Telegram API calls within request handler context.
+
+**Rules:**
+
+- **Do NOT manually pass `message_thread_id`** in command handlers, message handlers, or callback handlers — the middleware handles it
+- **DO pass `message_thread_id` explicitly** in background operations (photo-processor, broadcast, dev pipeline notify) since they run outside handler context
+- The middleware is registered in [src/bot/index.ts](src/bot/index.ts) before all handlers
+- Topic restriction checks still require extracting `message_thread_id` from context manually
+
 ### Testing
 
 Currently minimal tests. Test file example: [src/services/currency/parser.test.ts](src/services/currency/parser.test.ts)
@@ -246,7 +257,7 @@ Required in `.env` (see [.env.example](.env.example)):
 - **Server:** Digital Ocean (www-data user)
 - **Process Manager:** PM2
 - **Reverse Proxy:** Caddy (for HTTPS OAuth callback)
-- **Auto-deploy:** GitHub Actions on push to main
+- **Auto-deploy:** GitHub Actions on push to main (`git pull` on server)
 - **Logs:** PM2 logs at `/var/www/ExpenseSyncBot/logs/`
 
 See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
@@ -262,6 +273,7 @@ See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 7. **Group migration** - old users have group_id=NULL, handle gracefully
 8. **AI context size** - limit expense history to recent (e.g., 100000 items) to avoid token limits
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
+10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
 
 ## When Modifying Code
 

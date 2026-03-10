@@ -83,7 +83,7 @@ export async function handleAskQuestion(
 
   // Route to Anthropic agent or HF fallback
   if (useAnthropic) {
-    await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName, messageThreadId);
+    await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName);
   } else {
     await handleAskWithHuggingFace(ctx, question, bot, group, user, userName, userFullName, chatId);
   }
@@ -100,7 +100,6 @@ async function handleAskWithAnthropic(
   user: any,
   userName: string,
   userFullName: string,
-  messageThreadId: number | undefined
 ): Promise<void> {
   const chatId = ctx.chat!.id;
 
@@ -124,7 +123,6 @@ async function handleAskWithAnthropic(
     await bot.api.sendChatAction({
       chat_id: chatId,
       action: 'typing',
-      ...(messageThreadId && { message_thread_id: messageThreadId }),
     });
 
     const agent = new ExpenseBotAgent(env.ANTHROPIC_API_KEY, agentCtx);
@@ -133,7 +131,6 @@ async function handleAskWithAnthropic(
       `${userName}: ${question}`,
       historyMessages,
       bot,
-      messageThreadId
     );
 
     // Save only the final text response to chat history (not tool_use rounds)

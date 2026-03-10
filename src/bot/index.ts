@@ -22,12 +22,16 @@ import { handlePromptCommand } from "./commands/prompt";
 import { handleTopicCommand } from "./commands/topic";
 import { handleDevCommand, initDevPipeline } from "./commands/dev";
 import { startPhotoProcessor } from "../services/receipt/photo-processor";
+import { registerTopicMiddleware } from "./topic-middleware";
 
 /**
  * Initialize and configure bot
  */
 export function createBot(): Bot {
   const bot = new Bot(env.BOT_TOKEN);
+
+  // Global topic-aware middleware — must be registered before handlers
+  registerTopicMiddleware(bot);
 
   // Cache bot username
   let botUsername: string | undefined;

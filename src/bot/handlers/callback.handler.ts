@@ -785,7 +785,6 @@ export async function saveReceiptExpenses(
 
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
     text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
     parse_mode: 'HTML',
   });
@@ -1344,7 +1343,6 @@ async function handleReceiptCancel(
   // Send cancellation notification
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    ...(queueItem.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
     text: "❌ Обработка чека отменена",
     parse_mode: 'HTML',
   });

@@ -43,9 +43,8 @@ export class ExpenseBotAgent {
     userMessage: string,
     conversationHistory: ChatMessage[],
     bot: Bot,
-    messageThreadId?: number
   ): Promise<string> {
-    const writer = new TelegramStreamWriter(bot, this.ctx.chatId, messageThreadId);
+    const writer = new TelegramStreamWriter(bot, this.ctx.chatId);
 
     const messages: Anthropic.MessageParam[] = [
       ...this.buildHistoryMessages(conversationHistory),
@@ -169,7 +168,6 @@ export class ExpenseBotAgent {
           await bot.api.sendMessage({
             chat_id: this.ctx.chatId,
             text: timeoutMsg,
-            ...(messageThreadId && { message_thread_id: messageThreadId }),
           });
         } catch {}
         return timeoutMsg;
@@ -190,7 +188,6 @@ export class ExpenseBotAgent {
           await bot.api.sendMessage({
             chat_id: this.ctx.chatId,
             text: errorMsg,
-            ...(messageThreadId && { message_thread_id: messageThreadId }),
           });
         } catch {}
         return errorMsg;

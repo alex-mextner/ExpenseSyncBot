@@ -56,13 +56,11 @@ export class TelegramStreamWriter {
   constructor(
     private bot: Bot,
     private chatId: number,
-    private messageThreadId?: number
   ) {
     // Send placeholder and keep "typing" status alive
     this.bot.api.sendMessage({
       chat_id: this.chatId,
       text: '⏳ Минутку...',
-      ...(this.messageThreadId && { message_thread_id: this.messageThreadId }),
     }).then(msg => {
       this.placeholderMessageId = msg.message_id;
     }).catch(() => {});
@@ -72,7 +70,6 @@ export class TelegramStreamWriter {
         this.bot.api.sendChatAction({
           chat_id: this.chatId,
           action: 'typing',
-          ...(this.messageThreadId && { message_thread_id: this.messageThreadId }),
         }).catch(() => {});
       } else {
         this.stopTyping();
@@ -212,7 +209,6 @@ export class TelegramStreamWriter {
           chat_id: this.chatId,
           text: textToSend,
           parse_mode: 'HTML',
-          ...(this.messageThreadId && { message_thread_id: this.messageThreadId }),
         });
         this.sentMessageId = sent.message_id;
       }
@@ -287,7 +283,6 @@ export class TelegramStreamWriter {
             chat_id: this.chatId,
             text: chunk,
             parse_mode: 'HTML',
-            ...(this.messageThreadId && { message_thread_id: this.messageThreadId }),
           });
         } catch (err) {
           console.error('[STREAM] Failed to send chunk:', err);

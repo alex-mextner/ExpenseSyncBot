@@ -56,6 +56,7 @@ export function initDevPipeline(bot: any): DevPipeline {
         chat_id: group.telegram_group_id,
         text: message,
         parse_mode: 'HTML',
+        ...(group.active_topic_id && { message_thread_id: group.active_topic_id }),
         ...options,
       });
     } catch (error) {

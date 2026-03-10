@@ -10,23 +10,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to Digital Ocean via rsync
-        uses: easingthemes/ssh-deploy@v5.1.0
+      - name: Deploy via git pull
+        uses: appleboy/ssh-action@v1
         with:
-          SSH_PRIVATE_KEY: ${{ secrets.DIGITAL_OCEAN_SSH_KEY }}
-          REMOTE_HOST: 104.248.84.190
-          REMOTE_USER: www-data
-          TARGET: /var/www/ExpenseSyncBot
-          EXCLUDE: ".git,.github,node_modules,data,.env,.env.example,.gitignore,*.db,*.db-shm,*.db-wal"
-          SCRIPT_AFTER: |
+          host: 104.248.84.190
+          username: www-data
+          key: ${{ secrets.DIGITAL_OCEAN_SSH_KEY }}
+          script: |
             set -e
             cd /var/www/ExpenseSyncBot
 
-            # Add node to PATH for PM2
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+
+            echo "📥 Pulling latest changes..."
+            git pull origin main
 
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install

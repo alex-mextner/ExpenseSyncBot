@@ -145,6 +145,10 @@ TESTING RULES (Bun test):
 - When creating fake objects (e.g. fake bot for testing): stub ALL methods that the constructor or tested code calls, not just the ones your test uses.
 - If a test file needs database: either use spyOn on the singleton, or create an in-memory SQLite database — do NOT mock the database module.
 - Do NOT modify or "fix" tests that are unrelated to your task. If pre-existing tests fail, report it but do not change them.
+
+TOPIC-AWARE MESSAGING:
+- When sending Telegram messages from command/callback handlers: do NOT pass message_thread_id — AsyncLocalStorage middleware (src/bot/topic-middleware.ts) handles it automatically.
+- When sending from background workers (photo-processor, broadcast, pipeline notifications): DO pass message_thread_id explicitly.
 `;
 
 /**

@@ -262,7 +262,6 @@ export async function handleExpenseMessage(ctx: Ctx["Message"], bot: any): Promi
         chat_id: telegramGroupId,
         text: MESSAGES.newCategoryDetected.replace("{category}", category),
         reply_markup: keyboard,
-        ...(messageThreadId && { message_thread_id: messageThreadId }),
       });
     }
     return;
@@ -441,12 +440,9 @@ async function checkBudgetLimit(
     }
 
     try {
-      // Get group to check for active topic
-      const groupForTopic = database.groups.findById(groupId);
       await bot.api.sendMessage({
         chat_id: telegramGroupId,
         text: message,
-        ...(groupForTopic?.active_topic_id && { message_thread_id: groupForTopic.active_topic_id }),
       });
       console.log(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
     } catch (error) {
