@@ -61,70 +61,77 @@ export async function handleCallbackQuery(
 
   const [action, ...params] = data.split(":");
 
-  switch (action) {
-    case "currency": {
-      const currencyAction = params[0];
-      if (!currencyAction || !chatId) {
-        await ctx.answerCallbackQuery({ text: "Invalid parameters" });
-        return;
+  try {
+    switch (action) {
+      case "currency": {
+        const currencyAction = params[0];
+        if (!currencyAction || !chatId) {
+          await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+          return;
+        }
+        await handleCurrencyCallback(ctx, currencyAction, chatId);
+        break;
       }
-      await handleCurrencyCallback(ctx, currencyAction, chatId);
-      break;
-    }
 
-    case "default": {
-      // Step 2: Default currency selection
-      const currency = params[0];
-      if (!currency || !chatId) {
-        await ctx.answerCallbackQuery({ text: "Invalid parameters" });
-        return;
+      case "default": {
+        // Step 2: Default currency selection
+        const currency = params[0];
+        if (!currency || !chatId) {
+          await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+          return;
+        }
+        await handleDefaultCurrencyCallback(ctx, currency, chatId);
+        break;
       }
-      await handleDefaultCurrencyCallback(ctx, currency, chatId);
-      break;
+
+      case "category":
+        await handleCategoryAction(ctx, params, telegramId, bot);
+        break;
+
+      case "confirm":
+        await handleConfirmAction(ctx, params, telegramId, bot);
+        break;
+
+      case "budget":
+        await handleBudgetAction(ctx, params, telegramId, bot);
+        break;
+
+      case "confirm_receipt_item":
+        await handleReceiptItemConfirm(ctx, params, telegramId, bot);
+        break;
+
+      case "receipt_item_other":
+        await handleReceiptItemOther(ctx, params, telegramId, bot);
+        break;
+
+      case "skip_receipt_item":
+        await handleSkipReceiptItem(ctx, params, telegramId, bot);
+        break;
+
+      case "use_found_category":
+        await handleUseFoundCategory(ctx, params, telegramId, bot);
+        break;
+
+      case "create_new_category":
+        await handleCreateNewCategory(ctx, params, telegramId, bot);
+        break;
+
+      case "receipt":
+        await handleReceiptSummaryAction(ctx, params, telegramId, bot);
+        break;
+
+      case "dev":
+        await handleDevCallback(ctx, params, telegramId, bot);
+        break;
+
+      default:
+        await ctx.answerCallbackQuery({ text: "Unknown action" });
     }
-
-    case "category":
-      await handleCategoryAction(ctx, params, telegramId, bot);
-      break;
-
-    case "confirm":
-      await handleConfirmAction(ctx, params, telegramId, bot);
-      break;
-
-    case "budget":
-      await handleBudgetAction(ctx, params, telegramId, bot);
-      break;
-
-    case "confirm_receipt_item":
-      await handleReceiptItemConfirm(ctx, params, telegramId, bot);
-      break;
-
-    case "receipt_item_other":
-      await handleReceiptItemOther(ctx, params, telegramId, bot);
-      break;
-
-    case "skip_receipt_item":
-      await handleSkipReceiptItem(ctx, params, telegramId, bot);
-      break;
-
-    case "use_found_category":
-      await handleUseFoundCategory(ctx, params, telegramId, bot);
-      break;
-
-    case "create_new_category":
-      await handleCreateNewCategory(ctx, params, telegramId, bot);
-      break;
-
-    case "receipt":
-      await handleReceiptSummaryAction(ctx, params, telegramId, bot);
-      break;
-
-    case "dev":
-      await handleDevCallback(ctx, params, telegramId, bot);
-      break;
-
-    default:
-      await ctx.answerCallbackQuery({ text: "Unknown action" });
+  } catch (error) {
+    console.error(`[CALLBACK] Unhandled error for action "${data}":`, error);
+    try {
+      await ctx.answerCallbackQuery({ text: 'Internal error' });
+    } catch {}
   }
 }
 

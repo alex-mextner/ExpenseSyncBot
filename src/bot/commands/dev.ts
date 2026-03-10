@@ -610,6 +610,8 @@ export async function handleDevCallback(
   const messageId = ctx.message?.id;
   const chatId = ctx.message?.chat?.id;
 
+  console.log(`[DEV-CB] Callback: dev:${subAction}:${taskIdStr} from user ${telegramId}, chat ${chatId}`);
+
   if (!subAction || !taskIdStr) {
     await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
@@ -629,21 +631,25 @@ export async function handleDevCallback(
     return;
   }
 
+  let answered = false;
   try {
     switch (subAction) {
       case 'approve':
         await pl.approveTask(taskId);
         await ctx.answerCallbackQuery({ text: 'Approved!' });
+        answered = true;
         break;
 
       case 'reject':
       case 'cancel':
         await pl.cancelTask(taskId);
         await ctx.answerCallbackQuery({ text: 'Cancelled' });
+        answered = true;
         break;
 
       case 'hide_plan':
         await ctx.answerCallbackQuery({ text: 'OK' });
+        answered = true;
         if (messageId && chatId) {
           try {
             await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
@@ -654,17 +660,21 @@ export async function handleDevCallback(
       case 'accept_review':
         await pl.acceptReview(taskId);
         await ctx.answerCallbackQuery({ text: 'Fixing review issues...' });
+        answered = true;
         break;
 
       case 'merge':
         await pl.mergeTask(taskId);
         await ctx.answerCallbackQuery({ text: 'Merging...' });
+        answered = true;
         break;
 
       case 'edit': {
         const editTask = database.devTasks.findById(taskId);
+        console.log(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
         pendingDesignEdits.set(chatId!, taskId);
         await ctx.answerCallbackQuery({ text: 'Опишите правки' });
+        answered = true;
 
         const isDesignEdit = editTask?.state === DevTaskState.APPROVAL;
         const promptText = isDesignEdit
@@ -676,16 +686,23 @@ export async function handleDevCallback(
           text: promptText,
           reply_markup: { force_reply: true, selective: true },
         });
+        console.log(`[DEV-CB] Edit force_reply sent for task #${taskId}`);
         return; // Don't delete the button message
       }
 
       default:
         await ctx.answerCallbackQuery({ text: 'Unknown action' });
+        answered = true;
     }
   } catch (error) {
-    await ctx.answerCallbackQuery({
-      text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-    });
+    console.error(`[DEV-CB] Error handling dev:${subAction}:${taskIdStr}:`, error);
+    if (!answered) {
+      try {
+        await ctx.answerCallbackQuery({
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      } catch {}
+    }
   }
 
   // Delete the button message
