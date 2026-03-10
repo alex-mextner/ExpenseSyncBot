@@ -123,6 +123,7 @@ export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
           RUB: null,
           RSD: null,
           GBP: null,
+          BYN: null,
           CHF: null,
           JPY: null,
           CNY: null,
