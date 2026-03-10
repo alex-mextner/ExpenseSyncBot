@@ -10,6 +10,7 @@ const FALLBACK_RATES: Record<CurrencyCode, number> = {
   RUB: 0.0093, // 1 RUB = 0.0093 EUR (approx 108 RUB = 1 EUR)
   RSD: 0.0086, // 1 RSD = 0.0086 EUR (approx 117 RSD = 1 EUR)
   GBP: 1.18, // 1 GBP = 1.18 EUR
+  BYN: 0.28, // 1 BYN = 0.28 EUR (approx 3.5 BYN = 1 EUR)
   CHF: 1.05, // 1 CHF = 1.05 EUR
   JPY: 0.0062, // 1 JPY = 0.0062 EUR (approx 161 JPY = 1 EUR)
   CNY: 0.13, // 1 CNY = 0.13 EUR (approx 7.7 CNY = 1 EUR)
@@ -68,6 +69,7 @@ async function fetchExchangeRates(): Promise<Record<
       RUB: 1 / (data.rates.RUB || 1),
       RSD: 1 / (data.rates.RSD || 1),
       GBP: 1 / (data.rates.GBP || 1),
+      BYN: 1 / (data.rates.BYN || 1),
       CHF: 1 / (data.rates.CHF || 1),
       JPY: 1 / (data.rates.JPY || 1),
       CNY: 1 / (data.rates.CNY || 1),
@@ -82,6 +84,7 @@ async function fetchExchangeRates(): Promise<Record<
     console.log(`  /1 RSD = €${(1 / rates.RSD).toFixed(6)}`);
     console.log(`  /1 RUB = €${(1 / rates.RUB).toFixed(6)}`);
     console.log(`  /1 GBP = €${(1 / rates.GBP).toFixed(4)}`);
+    console.log(`  /1 BYN = €${(1 / rates.BYN).toFixed(4)}`);
     console.log(`  /1 CHF = €${(1 / rates.CHF).toFixed(4)}`);
     console.log(`  /1 JPY = €${(1 / rates.JPY).toFixed(6)}`);
     console.log(`  /1 CNY = €${(1 / rates.CNY).toFixed(4)}`);

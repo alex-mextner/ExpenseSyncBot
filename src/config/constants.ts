@@ -51,6 +51,15 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'фунтов': 'GBP',
   'фунта': 'GBP',
 
+  // Belarusian Ruble
+  'byn': 'BYN',
+  'б': 'BYN',
+  'бр': 'BYN',
+  'бел': 'BYN',
+  'белорусский рубль': 'BYN',
+  'б rub': 'BYN',
+  'br': 'BYN',
+
   // Other common currencies
   'chf': 'CHF',
   'чф': 'CHF',
@@ -87,7 +96,7 @@ export const CURRENCY_ALIASES: Record<string, string> = {
  * Supported currency codes
  */
 export const SUPPORTED_CURRENCIES = [
-  'USD', 'EUR', 'RUB', 'RSD', 'GBP', 'CHF', 'JPY', 'CNY', 'INR', 'LKR', 'AED'
+  'USD', 'EUR', 'RUB', 'RSD', 'GBP', 'BYN', 'CHF', 'JPY', 'CNY', 'INR', 'LKR', 'AED'
 ] as const;
 
 export type CurrencyCode = typeof SUPPORTED_CURRENCIES[number];
@@ -101,6 +110,7 @@ export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   RUB: '₽',
   RSD: 'RSD',
   GBP: '£',
+  BYN: 'Br',
   CHF: 'CHF',
   JPY: '¥',
   CNY: '¥',

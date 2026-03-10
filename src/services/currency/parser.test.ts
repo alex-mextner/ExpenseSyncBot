@@ -462,3 +462,55 @@ describe("math expressions in expenses", () => {
     expect(r?.currency).toBe("RSD");
   });
 });
+
+// ── BYN (Belarusian Ruble) currency tests ─────────────────────────────
+
+describe("BYN currency parsing", () => {
+  test("should parse 100 BYN food", () => {
+    const result = parseExpenseMessage("100 BYN food", "EUR");
+    expect(result).not.toBeNull();
+    expect(result?.amount).toBe(100);
+    expect(result?.currency).toBe("BYN");
+    expect(result?.category).toBe("Food");
+  });
+
+  test("should parse 50б food (Cyrillic б alias)", () => {
+    const result = parseExpenseMessage("50б food", "EUR");
+    expect(result).not.toBeNull();
+    expect(result?.amount).toBe(50);
+    expect(result?.currency).toBe("BYN");
+    expect(result?.category).toBe("Food");
+  });
+
+  test("should parse 100 бр food (Cyrillic бр alias)", () => {
+    const result = parseExpenseMessage("100 бр food", "EUR");
+    expect(result).not.toBeNull();
+    expect(result?.amount).toBe(100);
+    expect(result?.currency).toBe("BYN");
+    expect(result?.category).toBe("Food");
+  });
+
+  test("should parse byn lowercase alias", () => {
+    const result = parseExpenseMessage("75 byn coffee", "EUR");
+    expect(result).not.toBeNull();
+    expect(result?.amount).toBe(75);
+    expect(result?.currency).toBe("BYN");
+    expect(result?.category).toBe("Coffee");
+  });
+
+  test("should parse Br symbol (Latin)", () => {
+    const result = parseExpenseMessage("120 Br lunch", "EUR");
+    expect(result).not.toBeNull();
+    expect(result?.amount).toBe(120);
+    expect(result?.currency).toBe("BYN");
+    expect(result?.category).toBe("Lunch");
+  });
+
+  test("should parse br lowercase symbol", () => {
+    const result = parseExpenseMessage("80 br transport", "EUR");
+    expect(result).not.toBeNull();
+    expect(result?.amount).toBe(80);
+    expect(result?.currency).toBe("BYN");
+    expect(result?.category).toBe("Transport");
+  });
+});
