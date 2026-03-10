@@ -301,6 +301,7 @@ export class DevPipeline {
         try {
           transition(freshTask, DevTaskState.FAILED, {
             error_log: errorMsg,
+            failed_at_state: freshTask.state,
           });
         } catch {
           console.error(
@@ -476,12 +477,73 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
       database.devTasks.update(taskId, { description: enrichedDescription } as any);
 
-      // Smart resume: use existing design and worktree if available
-      if (task.design && task.worktree_path && worktreeExists(task.worktree_path)) {
-        // Worktree + design exist — resume from where we left off
+      // Smart resume: check what was already completed before the failure
+      const hasWorktree = task.worktree_path && worktreeExists(task.worktree_path);
+
+      // PR created + review done → show review buttons immediately
+      if (task.pr_number && task.code_review && hasWorktree) {
+        const updated = transition(task, DevTaskState.AWAITING_REVIEW, {
+          retry_count: 0,
+          failed_at_state: undefined,
+        });
+        updated.description = enrichedDescription;
+
+        await this.notify(
+          task.group_id,
+          `🔍 <b>Dev task #${task.id}:</b> resuming — review already done\n\n` +
+            `<blockquote expandable>${escapeHtml(task.code_review.slice(0, 1500))}</blockquote>\n\n` +
+            `PR: ${task.pr_url}`,
+          { reply_markup: createDevReviewKeyboard(task.id) }
+        );
+
+        return updated;
+      }
+
+      // PR created but no review → run review only
+      if (task.pr_number && hasWorktree) {
+        const updated = transition(task, DevTaskState.REVIEWING, {
+          retry_count: 0,
+          failed_at_state: undefined,
+        });
+        updated.description = enrichedDescription;
+
+        await this.notify(
+          task.group_id,
+          `▶️ Dev task #${task.id}: resuming — PR exists, running code review...`
+        );
+
+        this.processStateAsync(updated);
+        return updated;
+      }
+
+      // Failed at PR/review stage (tests already passed) → create PR
+      const failedAt = task.failed_at_state as DevTaskState | null;
+      if (
+        failedAt &&
+        (failedAt === DevTaskState.PULL_REQUEST || failedAt === DevTaskState.REVIEWING) &&
+        hasWorktree
+      ) {
+        const updated = transition(task, DevTaskState.PULL_REQUEST, {
+          retry_count: 0,
+          failed_at_state: undefined,
+        });
+        updated.description = enrichedDescription;
+
+        await this.notify(
+          task.group_id,
+          `▶️ Dev task #${task.id}: resuming — tests passed, creating PR...`
+        );
+
+        this.processStateAsync(updated);
+        return updated;
+      }
+
+      // Design + worktree exist → resume implementation
+      if (task.design && hasWorktree) {
         // Keep error_log so the agent knows what went wrong last time
         const updated = transition(task, DevTaskState.IMPLEMENTING, {
           retry_count: 0,
+          failed_at_state: undefined,
         });
         updated.description = enrichedDescription;
 
@@ -504,6 +566,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
           retry_count: 0,
           branch_name: branchName,
           worktree_path: worktreePath,
+          failed_at_state: undefined,
         });
         updated.description = enrichedDescription;
 
@@ -520,6 +583,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       const updated = transition(task, DevTaskState.PENDING, {
         error_log: undefined,
         retry_count: 0,
+        failed_at_state: undefined,
       });
       updated.description = enrichedDescription;
 

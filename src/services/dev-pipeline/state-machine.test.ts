@@ -140,11 +140,14 @@ describe('getAllowedTransitions', () => {
     expect(getAllowedTransitions(DevTaskState.REJECTED)).toEqual([]);
   });
 
-  test('FAILED can transition to PENDING, DESIGNING, IMPLEMENTING, or REJECTED', () => {
+  test('FAILED can transition to PENDING, DESIGNING, IMPLEMENTING, PULL_REQUEST, REVIEWING, AWAITING_REVIEW, or REJECTED', () => {
     expect(getAllowedTransitions(DevTaskState.FAILED)).toEqual([
       DevTaskState.PENDING,
       DevTaskState.DESIGNING,
       DevTaskState.IMPLEMENTING,
+      DevTaskState.PULL_REQUEST,
+      DevTaskState.REVIEWING,
+      DevTaskState.AWAITING_REVIEW,
       DevTaskState.REJECTED,
     ]);
   });
