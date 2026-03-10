@@ -77,17 +77,17 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
 }
 
 /**
- * Schedule news broadcast at 12:00 today
+ * Schedule news broadcast for March 11 at 12:00 UTC (one-time)
  */
 export function scheduleNewsBroadcast(bot: Bot): void {
-  // Run at 12:00 every day — but the alreadySent flag ensures it only fires once
-  const task = cron.schedule("0 12 * * *", () => {
-    console.log("[BROADCAST] Cron triggered at 12:00");
+  // Run at 12:00 on March 11 only — stops after execution
+  const task = cron.schedule("0 12 11 3 *", () => {
+    console.log("[BROADCAST] Cron triggered — March 11 12:00");
     broadcastToAllGroups(bot).then(() => {
       task.stop();
       console.log("[BROADCAST] Cron task stopped after execution");
     });
   });
 
-  console.log("📢 News broadcast scheduled for 12:00");
+  console.log("📢 News broadcast scheduled for March 11 at 12:00");
 }
