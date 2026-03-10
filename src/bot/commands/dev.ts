@@ -524,15 +524,14 @@ async function showHistory(
 }
 
 /** PM2 log file paths on the server */
-const PM2_LOG_DIR = '/var/www/.pm2/logs';
-const LOG_NAMES: Record<string, { out: string; error: string }> = {
+const LOG_PATHS: Record<string, { out: string; error: string }> = {
   prod: {
-    out: 'expensesyncbot-out.log',
-    error: 'expensesyncbot-error.log',
+    out: '/var/www/ExpenseSyncBot/logs/out.log',
+    error: '/var/www/ExpenseSyncBot/logs/error.log',
   },
   stage: {
-    out: 'expensesyncbot-stage-out.log',
-    error: 'expensesyncbot-stage-error.log',
+    out: '/var/www/ExpenseSyncBot-stage/logs/out.log',
+    error: '/var/www/ExpenseSyncBot-stage/logs/error.log',
   },
 };
 
@@ -549,14 +548,14 @@ async function handleLogs(
 ): Promise<void> {
   const target = args[1]?.toLowerCase();
 
-  if (!target || !LOG_NAMES[target]) {
+  if (!target || !LOG_PATHS[target]) {
     await ctx.send('Usage: /dev logs prod|stage');
     return;
   }
 
-  const logs = LOG_NAMES[target]!;
-  const outPath = `${PM2_LOG_DIR}/${logs.out}`;
-  const errorPath = `${PM2_LOG_DIR}/${logs.error}`;
+  const logs = LOG_PATHS[target]!;
+  const outPath = logs.out;
+  const errorPath = logs.error;
 
   const outFile = Bun.file(outPath);
   const errorFile = Bun.file(errorPath);
@@ -576,7 +575,7 @@ async function handleLogs(
     const outContent = await outFile.slice(outStart, outSize).text();
 
     await ctx.sendDocument(
-      new File([outContent], logs.out, { type: 'text/plain' }),
+      new File([outContent], `${target}-out.log`, { type: 'text/plain' }),
       { caption: `📋 ${target} stdout (last ${Math.round(outContent.length / 1024)}KB)` }
     );
   }
@@ -591,7 +590,7 @@ async function handleLogs(
       const errorContent = await errorFile.slice(errorStart, errorSize).text();
 
       await ctx.sendDocument(
-        new File([errorContent], logs.error, { type: 'text/plain' }),
+        new File([errorContent], `${target}-error.log`, { type: 'text/plain' }),
         { caption: `⚠️ ${target} stderr (last ${Math.round(errorContent.length / 1024)}KB)` }
       );
     }
