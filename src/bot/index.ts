@@ -13,6 +13,7 @@ import { handleStatsCommand } from "./commands/stats";
 import { handleSumCommand } from "./commands/sum";
 import { handlePushCommand } from "./commands/push";
 import { handleSyncCommand } from "./commands/sync";
+import { handlePingCommand } from "./commands/ping";
 import { handleCallbackQuery } from "./handlers/callback.handler";
 import { handleExpenseMessage } from "./handlers/message.handler";
 import { handlePhotoMessage } from "./handlers/photo.handler";
@@ -51,6 +52,7 @@ export function createBot(): Bot {
   bot.command("prompt", handlePromptCommand);
   bot.command("topic", handleTopicCommand);
   bot.command("dev", handleDevCommand);
+  bot.command("ping", handlePingCommand);
 
   // Callback queries (inline keyboard buttons)
   bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));

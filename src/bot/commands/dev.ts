@@ -4,14 +4,15 @@
  * Usage:
  *   /dev <description>     — start a new dev task
  *   /dev status             — show active dev tasks
+ *   /dev plan <id>          — show task design plan
  *   /dev approve <id>       — approve a task's design
- *   /dev reject <id>        — reject a task
  *   /dev cancel <id>        — cancel a task
  *   /dev continue <id> [msg] — resume a failed/stuck task
  *   /dev history            — show recent completed tasks
  */
 
 import type { Ctx } from '../types';
+import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
 import {
@@ -141,12 +142,12 @@ export async function handleDevCommand(ctx: Ctx['Command']): Promise<void> {
       await handleApprove(ctx, args, group.id);
       break;
 
-    case 'reject':
-      await handleReject(ctx, args, group.id);
-      break;
-
     case 'cancel':
       await handleCancel(ctx, args, group.id);
+      break;
+
+    case 'plan':
+      await handlePlan(ctx, args, group.id);
       break;
 
     case 'answer':
@@ -177,8 +178,8 @@ async function showUsage(ctx: Ctx['Command']): Promise<void> {
       'Usage:\n' +
       '/dev &lt;description&gt; — start a new task\n' +
       '/dev status — show active tasks\n' +
+      '/dev plan &lt;id&gt; — show task design plan\n' +
       '/dev approve &lt;id&gt; — approve a design\n' +
-      '/dev reject &lt;id&gt; — reject a task\n' +
       '/dev cancel &lt;id&gt; — cancel a task\n' +
       '/dev answer &lt;id&gt; &lt;text&gt; — answer clarifying questions\n' +
       '/dev continue &lt;id&gt; [msg] — resume a failed/stuck task\n' +
@@ -310,50 +311,7 @@ async function handleApprove(
 }
 
 /**
- * Reject a task
- */
-async function handleReject(
-  ctx: Ctx['Command'],
-  args: string[],
-  groupId: number
-): Promise<void> {
-  const taskId = parseInt(args[1] || '', 10);
-
-  if (Number.isNaN(taskId)) {
-    await ctx.send('Usage: /dev reject <task_id>');
-    return;
-  }
-
-  const pl = getPipeline();
-
-  if (!pl) {
-    await ctx.send('Dev pipeline not initialized.');
-    return;
-  }
-
-  try {
-    const task = database.devTasks.findById(taskId);
-
-    if (!task) {
-      await ctx.send(`Task #${taskId} not found.`);
-      return;
-    }
-
-    if (task.group_id !== groupId) {
-      await ctx.send(`Task #${taskId} does not belong to this group.`);
-      return;
-    }
-
-    await pl.rejectTask(taskId);
-  } catch (error) {
-    await ctx.send(
-      `Failed to reject: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
-/**
- * Cancel a task
+ * Cancel (or reject) a task
  */
 async function handleCancel(
   ctx: Ctx['Command'],
@@ -393,6 +351,48 @@ async function handleCancel(
       `Failed to cancel: ${error instanceof Error ? error.message : String(error)}`
     );
   }
+}
+
+/**
+ * Show the design plan for a task
+ */
+async function handlePlan(
+  ctx: Ctx['Command'],
+  args: string[],
+  groupId: number
+): Promise<void> {
+  const taskId = parseInt(args[1] || '', 10);
+
+  if (Number.isNaN(taskId)) {
+    await ctx.send('Usage: /dev plan <task_id>');
+    return;
+  }
+
+  const task = database.devTasks.findById(taskId);
+
+  if (!task) {
+    await ctx.send(`Task #${taskId} not found.`);
+    return;
+  }
+
+  if (task.group_id !== groupId) {
+    await ctx.send(`Task #${taskId} does not belong to this group.`);
+    return;
+  }
+
+  if (!task.design) {
+    await ctx.send(`Task #${taskId} has no design plan yet.`);
+    return;
+  }
+
+  const { escapeHtml } = await import('./ask');
+  const keyboard = new InlineKeyboard().text('✕ Скрыть', `dev:hide_plan:${taskId}`);
+
+  await ctx.send(
+    `📐 <b>Dev task #${taskId}:</b> ${escapeHtml(task.title || 'plan')}\n\n` +
+      `<pre>${escapeHtml(task.design.slice(0, 3500))}</pre>`,
+    { parse_mode: 'HTML', reply_markup: keyboard }
+  );
 }
 
 /**
@@ -556,14 +556,19 @@ export async function handleDevCallback(
         break;
 
       case 'reject':
-        await pl.rejectTask(taskId);
-        await ctx.answerCallbackQuery({ text: 'Rejected' });
-        break;
-
       case 'cancel':
         await pl.cancelTask(taskId);
         await ctx.answerCallbackQuery({ text: 'Cancelled' });
         break;
+
+      case 'hide_plan':
+        await ctx.answerCallbackQuery({ text: 'OK' });
+        if (messageId && chatId) {
+          try {
+            await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+          } catch {}
+        }
+        return;
 
       case 'edit':
         // Send prompt for edit input, track pending edit
