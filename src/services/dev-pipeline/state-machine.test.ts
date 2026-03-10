@@ -57,12 +57,20 @@ describe('isTransitionAllowed', () => {
     expect(isTransitionAllowed(DevTaskState.TESTING, DevTaskState.PULL_REQUEST)).toBe(true);
   });
 
-  test('REVIEWING -> COMPLETED is allowed', () => {
-    expect(isTransitionAllowed(DevTaskState.REVIEWING, DevTaskState.COMPLETED)).toBe(true);
+  test('REVIEWING -> AWAITING_REVIEW is allowed', () => {
+    expect(isTransitionAllowed(DevTaskState.REVIEWING, DevTaskState.AWAITING_REVIEW)).toBe(true);
   });
 
-  test('REVIEWING -> UPDATING is allowed', () => {
-    expect(isTransitionAllowed(DevTaskState.REVIEWING, DevTaskState.UPDATING)).toBe(true);
+  test('AWAITING_REVIEW -> UPDATING is allowed', () => {
+    expect(isTransitionAllowed(DevTaskState.AWAITING_REVIEW, DevTaskState.UPDATING)).toBe(true);
+  });
+
+  test('AWAITING_MERGE -> COMPLETED is allowed', () => {
+    expect(isTransitionAllowed(DevTaskState.AWAITING_MERGE, DevTaskState.COMPLETED)).toBe(true);
+  });
+
+  test('AWAITING_MERGE -> UPDATING is allowed', () => {
+    expect(isTransitionAllowed(DevTaskState.AWAITING_MERGE, DevTaskState.UPDATING)).toBe(true);
   });
 
   test('UPDATING -> TESTING is allowed (re-test after changes)', () => {
