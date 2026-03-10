@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import type { Category, CreateCategoryData } from '../types';
+import { findBestCategoryMatch } from '../../utils/fuzzy-search';
 
 export class CategoryRepository {
   constructor(private db: Database) {}
@@ -27,6 +28,23 @@ export class CategoryRepository {
     `);
 
     return query.get(groupId, name) || null;
+  }
+
+  /**
+   * Find category using fuzzy matching with Levenshtein distance
+   * Returns the best matching category or null if no match found (threshold 0.9)
+   */
+  findFuzzyMatch(groupId: number, name: string): Category | null {
+    const categories = this.findByGroupId(groupId);
+    const categoryNames = categories.map(c => c.name);
+    
+    const bestMatch = findBestCategoryMatch(name, categoryNames);
+    
+    if (!bestMatch) {
+      return null;
+    }
+    
+    return categories.find(c => c.name === bestMatch) || null;
   }
 
   /**
