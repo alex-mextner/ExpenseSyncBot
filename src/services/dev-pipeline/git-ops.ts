@@ -46,6 +46,9 @@ export async function createWorktree(branchName: string): Promise<string> {
   // Create the worktree with a new branch from main
   await $`git worktree add -b ${branchName} ${worktreePath} main`.quiet();
 
+  // Create data/ dir for SQLite (DATABASE_PATH is relative)
+  await $`mkdir -p ${path.join(worktreePath, 'data')}`.quiet().nothrow();
+
   console.log(
     `[GIT-OPS] Created worktree: ${worktreePath} (branch: ${branchName})`
   );

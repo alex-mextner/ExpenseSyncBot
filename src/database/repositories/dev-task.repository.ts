@@ -54,6 +54,18 @@ export class DevTaskRepository {
   }
 
   /**
+   * Find terminal tasks that still have a worktree_path set.
+   */
+  findWithStaleWorktrees(): DevTask[] {
+    const query = this.db.query<DevTask, []>(`
+      SELECT * FROM dev_tasks
+      WHERE state IN ('completed', 'rejected', 'failed')
+        AND worktree_path IS NOT NULL
+    `);
+    return query.all();
+  }
+
+  /**
    * Find all active (non-terminal) tasks
    */
   findActive(): DevTask[] {

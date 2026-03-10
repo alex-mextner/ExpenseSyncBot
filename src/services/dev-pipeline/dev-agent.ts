@@ -100,12 +100,21 @@ export class DevAgent {
   private anthropic: Anthropic;
   private worktreePath: string;
 
+  private externalAbort: AbortController | null = null;
+
   constructor(worktreePath: string) {
     this.anthropic = new Anthropic({
       apiKey: env.ANTHROPIC_API_KEY,
       baseURL: AI_BASE_URL,
     });
     this.worktreePath = worktreePath;
+  }
+
+  /**
+   * Abort the running agent from outside.
+   */
+  abort(): void {
+    this.externalAbort?.abort();
   }
 
   /**
@@ -118,6 +127,7 @@ export class DevAgent {
     ];
 
     const controller = new AbortController();
+    this.externalAbort = controller;
     const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
     try {
