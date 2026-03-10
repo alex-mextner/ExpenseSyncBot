@@ -39,7 +39,7 @@ import {
   generateBranchName,
 } from './git-ops';
 import { runCodexReview } from './codex-integration';
-import { DevAgent } from './dev-agent';
+import { DevAgent, AgentAbortedError } from './dev-agent';
 import { escapeHtml } from '../../bot/commands/ask';
 import { createDevApprovalKeyboard } from '../../bot/keyboards';
 
@@ -255,6 +255,12 @@ export class DevPipeline {
     try {
       await this.processState(task);
     } catch (error) {
+      // Agent was aborted because user cancelled — task is already REJECTED, nothing to do
+      if (error instanceof AgentAbortedError) {
+        console.log(`[DEV-PIPELINE] Task #${task.id} agent aborted (cancelled by user)`);
+        return;
+      }
+
       console.error(
         `[DEV-PIPELINE] Error processing task #${task.id}:`,
         error
@@ -262,15 +268,17 @@ export class DevPipeline {
       const errorMsg =
         error instanceof Error ? error.message : String(error);
 
-      try {
-        transition(task, DevTaskState.FAILED, {
-          error_log: errorMsg,
-        });
-      } catch {
-        // If we can't even transition to FAILED, just log it
-        console.error(
-          `[DEV-PIPELINE] Cannot transition task #${task.id} to FAILED`
-        );
+      // Task may already be in a terminal state (e.g. REJECTED by concurrent cancel)
+      if (!isTerminalState(task.state)) {
+        try {
+          transition(task, DevTaskState.FAILED, {
+            error_log: errorMsg,
+          });
+        } catch {
+          console.error(
+            `[DEV-PIPELINE] Cannot transition task #${task.id} to FAILED`
+          );
+        }
       }
 
       await this.notify(

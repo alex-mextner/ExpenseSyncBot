@@ -107,11 +107,20 @@ const DEV_TOOLS: Anthropic.Tool[] = [
 const MAX_ROUNDS = 500;
 const AGENT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
+/** Thrown when agent is aborted externally (e.g. user cancelled the task). */
+export class AgentAbortedError extends Error {
+  constructor() {
+    super('Agent was cancelled by user');
+    this.name = 'AgentAbortedError';
+  }
+}
+
 export class DevAgent {
   private anthropic: Anthropic;
   private worktreePath: string;
 
   private externalAbort: AbortController | null = null;
+  private aborted = false;
 
   constructor(worktreePath: string) {
     this.anthropic = new Anthropic({
@@ -122,9 +131,10 @@ export class DevAgent {
   }
 
   /**
-   * Abort the running agent from outside.
+   * Abort the running agent from outside (e.g. user cancelled).
    */
   abort(): void {
+    this.aborted = true;
     this.externalAbort?.abort();
   }
 
@@ -163,6 +173,9 @@ export class DevAgent {
           );
         } catch (err: any) {
           if (err?.name === 'APIUserAbortError' || controller.signal.aborted) {
+            if (this.aborted) {
+              throw new AgentAbortedError();
+            }
             throw new Error(`Agent timed out after ${AGENT_TIMEOUT_MS / 60000} minutes (completed ${round - 1} rounds)`);
           }
           throw err;
