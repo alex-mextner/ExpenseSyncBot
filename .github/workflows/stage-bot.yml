@@ -1,0 +1,68 @@
+name: Stage Bot
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+jobs:
+  stage-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy or stop stage bot
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 104.248.84.190
+          username: www-data
+          key: ${{ secrets.DIGITAL_OCEAN_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+
+            BRANCH="${{ github.head_ref }}"
+            WORKTREE="/var/www/ExpenseSyncBot/.claude/worktrees/$BRANCH"
+            ENV_FILE="/var/www/ExpenseSyncBot/.env.stage"
+            PM2="/var/www/.bun/bin/pm2"
+            BUN="/var/www/.bun/bin/bun"
+
+            if [ "${{ github.event.action }}" = "closed" ]; then
+              echo "🛑 Stopping stage bot..."
+              $PM2 delete expensesyncbot-stage 2>/dev/null || true
+
+              if [ -d "$WORKTREE" ]; then
+                cd /var/www/ExpenseSyncBot
+                git worktree remove "$WORKTREE" --force 2>/dev/null || true
+              fi
+
+              echo "✅ Stage bot stopped"
+              exit 0
+            fi
+
+            echo "🚀 Deploying stage bot from branch: $BRANCH"
+
+            cd /var/www/ExpenseSyncBot
+            git fetch origin
+
+            if [ ! -d "$WORKTREE" ]; then
+              echo "📁 Creating worktree..."
+              git worktree add "$WORKTREE" "origin/$BRANCH"
+            else
+              echo "🔄 Updating worktree..."
+              cd "$WORKTREE"
+              git fetch origin
+              git reset --hard "origin/$BRANCH"
+            fi
+
+            cd "$WORKTREE"
+            $BUN install
+
+            $PM2 describe expensesyncbot-stage > /dev/null 2>&1 \
+              && $PM2 restart expensesyncbot-stage \
+              || $PM2 start src/index.ts \
+                   --name expensesyncbot-stage \
+                   --interpreter $BUN \
+                   -- --env-file $ENV_FILE
+
+            echo "✅ Stage bot deployed"
+            $PM2 list
