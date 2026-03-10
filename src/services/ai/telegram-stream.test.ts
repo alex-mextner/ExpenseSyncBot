@@ -1,4 +1,4 @@
-import { test, expect, describe } from 'bun:test';
+import { test, expect, describe, afterEach } from 'bun:test';
 import { TelegramStreamWriter } from './telegram-stream';
 
 /**
@@ -7,7 +7,14 @@ import { TelegramStreamWriter } from './telegram-stream';
  * pure string methods don't touch the bot API.
  */
 function makeWriter(): TelegramStreamWriter {
-  const fakeBot = { api: {} } as any;
+  const fakeBot = {
+    api: {
+      sendMessage: () => Promise.resolve({ message_id: 1 }),
+      sendChatAction: () => Promise.resolve(),
+      deleteMessage: () => Promise.resolve(),
+      editMessageText: () => Promise.resolve(),
+    },
+  } as any;
   return new TelegramStreamWriter(fakeBot, 123);
 }
 
@@ -15,6 +22,7 @@ function makeWriter(): TelegramStreamWriter {
 
 describe('splitIntoChunks', () => {
   const writer = makeWriter();
+  afterEach(() => (writer as any).stopTyping());
   const split = (text: string, max: number): string[] =>
     (writer as any).splitIntoChunks(text, max);
 
@@ -61,6 +69,7 @@ describe('splitIntoChunks', () => {
 
 describe('truncateForTelegram', () => {
   const writer = makeWriter();
+  afterEach(() => (writer as any).stopTyping());
   const truncate = (text: string): string =>
     (writer as any).truncateForTelegram(text);
 
