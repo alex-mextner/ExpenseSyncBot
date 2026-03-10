@@ -10,7 +10,7 @@ import {
   fileExists,
   deleteFile,
 } from './file-ops';
-import { commitChanges, revertFileToMain } from './git-ops';
+import { commitChanges, revertFileToMain, managePackages } from './git-ops';
 
 const DEV_TOOLS: Anthropic.Tool[] = [
   {
@@ -100,6 +100,27 @@ const DEV_TOOLS: Anthropic.Tool[] = [
         message: { type: 'string', description: 'Commit message' },
       },
       required: ['message'],
+    },
+  },
+  {
+    name: 'manage_packages',
+    description:
+      'Install or remove npm packages in the project. Use this when your implementation requires a new dependency or when replacing one library with another.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['add', 'remove'],
+          description: 'Whether to add or remove packages',
+        },
+        packages: {
+          type: 'string',
+          description:
+            'Space-separated package names (e.g., "lodash zod" or "@types/lodash")',
+        },
+      },
+      required: ['action', 'packages'],
     },
   },
 ];
@@ -258,6 +279,14 @@ export class DevAgent {
         case 'commit':
           await commitChanges(this.worktreePath, str('message'));
           return `Committed: ${input.message}`;
+
+        case 'manage_packages': {
+          const action = str('action');
+          if (action !== 'add' && action !== 'remove') {
+            return 'Error: action must be "add" or "remove"';
+          }
+          return await managePackages(this.worktreePath, action, str('packages'));
+        }
 
         default:
           return `Unknown tool: ${name}`;
