@@ -43,6 +43,15 @@ describe("parseExpenseMessage", () => {
       expect(result?.comment).toBe("Кулёма");
     });
 
+    test("should parse abbreviated currency (дол for USD)", () => {
+      const result = parseExpenseMessage("1 дол алекс тест", "EUR");
+      expect(result).not.toBeNull();
+      expect(result?.amount).toBe(1);
+      expect(result?.currency).toBe("USD");
+      expect(result?.category).toBe("Алекс");
+      expect(result?.comment).toBe("Тест");
+    });
+
     test("should parse amount with currency code (RSD)", () => {
       const result = parseExpenseMessage("1900 RSD транспорт", "USD");
       expect(result).not.toBeNull();

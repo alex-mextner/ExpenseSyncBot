@@ -9,6 +9,7 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   'dollars': 'USD',
   'usd': 'USD',
   'усд': 'USD',
+  'дол': 'USD',
   'доллар': 'USD',
   'долларов': 'USD',
   'доллара': 'USD',
