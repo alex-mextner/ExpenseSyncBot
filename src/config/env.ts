@@ -14,6 +14,7 @@ interface EnvConfig {
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
+  GITHUB_TOKEN: string;
   NODE_ENV: 'development' | 'production';
 }
 
@@ -40,6 +41,7 @@ function validateEnv(): EnvConfig {
     ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
     AI_BASE_URL: getEnvVariable('AI_BASE_URL', false),
     AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-4.7',
+    GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
   };
 }

@@ -1,7 +1,7 @@
 /**
  * Git operations for the dev pipeline.
  *
- * Uses Bun.$ (Bun Shell) for all git/gh operations.
+ * Uses Bun.$ for git CLI and Octokit for GitHub API (PR create/merge).
  * IMPORTANT: Uses `git worktree` — never `git checkout` on the main worktree.
  * The bot runs from the main worktree, so we create separate worktrees
  * for each task to avoid disturbing the running process.
@@ -10,6 +10,8 @@
 import { $ } from 'bun';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { Octokit } from '@octokit/rest';
+import { env } from '../../config/env';
 
 /**
  * Get the root of the current git repository
@@ -139,7 +141,29 @@ export async function pushBranch(
 }
 
 /**
- * Create a pull request on GitHub using the `gh` CLI.
+ * Parse GitHub owner/repo from a git remote URL.
+ */
+function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } {
+  // Handle both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git)
+  const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+  if (!match) {
+    throw new Error(`Cannot parse GitHub owner/repo from remote URL: ${remoteUrl}`);
+  }
+  return { owner: match[1]!, repo: match[2]! };
+}
+
+/**
+ * Get a configured Octokit instance.
+ */
+function getOctokit(): Octokit {
+  if (!env.GITHUB_TOKEN) {
+    throw new Error('GITHUB_TOKEN is not set — required for PR operations');
+  }
+  return new Octokit({ auth: env.GITHUB_TOKEN });
+}
+
+/**
+ * Create a pull request on GitHub via Octokit API.
  *
  * @returns Object with PR number and URL
  */
@@ -149,34 +173,54 @@ export async function createPR(
   body: string,
   baseBranch: string = 'main'
 ): Promise<{ number: number; url: string }> {
-  const result = await $`gh pr create \
-    --title ${title} \
-    --body ${body} \
-    --base ${baseBranch} \
-    --repo $(git -C ${worktreePath} remote get-url origin) \
-    --head $(git -C ${worktreePath} rev-parse --abbrev-ref HEAD)`.text();
+  const remoteUrl = (await $`git -C ${worktreePath} remote get-url origin`.text()).trim();
+  const head = (await $`git -C ${worktreePath} rev-parse --abbrev-ref HEAD`.text()).trim();
+  const { owner, repo } = parseGitHubRepo(remoteUrl);
 
-  const url = result.trim();
+  const octokit = getOctokit();
+  const { data } = await octokit.pulls.create({
+    owner,
+    repo,
+    title,
+    body,
+    base: baseBranch,
+    head,
+  });
 
-  // Extract PR number from URL (last segment)
-  const prNumberMatch = url.match(/\/pull\/(\d+)/);
-  const prNumber = prNumberMatch?.[1] ? parseInt(prNumberMatch[1], 10) : 0;
-
-  console.log(`[GIT-OPS] Created PR #${prNumber}: ${url}`);
-
-  return { number: prNumber, url };
+  console.log(`[GIT-OPS] Created PR #${data.number}: ${data.html_url}`);
+  return { number: data.number, url: data.html_url };
 }
 
 /**
- * Merge a pull request on GitHub using the `gh` CLI.
+ * Merge a pull request on GitHub via Octokit API.
  *
- * Uses squash merge by default.
+ * Uses squash merge and deletes the branch after merge.
  *
  * @param prNumber - PR number to merge
  */
 export async function mergePR(prNumber: number): Promise<void> {
   const repoRoot = await getRepoRoot();
-  await $`gh pr merge ${prNumber} --squash --delete-branch --repo $(git -C ${repoRoot} remote get-url origin)`.quiet();
+  const remoteUrl = (await $`git -C ${repoRoot} remote get-url origin`.text()).trim();
+  const { owner, repo } = parseGitHubRepo(remoteUrl);
+
+  const octokit = getOctokit();
+
+  // Squash merge the PR
+  await octokit.pulls.merge({
+    owner,
+    repo,
+    pull_number: prNumber,
+    merge_method: 'squash',
+  });
+
+  // Delete the remote branch
+  const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
+  try {
+    await octokit.git.deleteRef({ owner, repo, ref: `heads/${pr.head.ref}` });
+  } catch {
+    // Branch may already be deleted — that's fine
+  }
+
   console.log(`[GIT-OPS] Merged PR #${prNumber}`);
 }
 
