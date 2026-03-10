@@ -47,11 +47,27 @@ export async function createWorktree(branchName: string): Promise<string> {
   const repoRoot = await getRepoRoot();
   const worktreePath = path.join(repoRoot, WORKTREE_BASE_DIR, branchName);
 
-  // Check if worktree already exists
+  // Check if worktree already exists and is valid
   if (existsSync(worktreePath)) {
-    console.log(`[GIT-OPS] Worktree already exists at ${worktreePath}`);
-    return worktreePath;
+    const gitFile = path.join(worktreePath, '.git');
+    if (existsSync(gitFile)) {
+      // Verify it's actually a working git worktree
+      const check = await $`git -C ${worktreePath} rev-parse --git-dir`.nothrow().quiet();
+      if (check.exitCode === 0) {
+        console.log(`[GIT-OPS] Worktree already exists at ${worktreePath}`);
+        return worktreePath;
+      }
+    }
+    // Directory exists but .git is broken — clean up and recreate
+    console.log(`[GIT-OPS] Broken worktree at ${worktreePath}, cleaning up...`);
+    await $`git worktree remove ${worktreePath} --force`.nothrow().quiet();
+    await $`rm -rf ${worktreePath}`.nothrow().quiet();
+    // Also prune stale worktree entries
+    await $`git worktree prune`.nothrow().quiet();
   }
+
+  // Delete stale local branch if it exists (from a previous failed run)
+  await $`git branch -D ${branchName}`.nothrow().quiet();
 
   // Create the worktree with a new branch from main
   await $`git worktree add -b ${branchName} ${worktreePath} main`.quiet();
@@ -144,7 +160,11 @@ export async function pushBranch(
   worktreePath: string,
   branchName: string
 ): Promise<void> {
-  await $`git -C ${worktreePath} push -u origin ${branchName}`.quiet();
+  const result = await $`git -C ${worktreePath} push -u origin ${branchName}`.nothrow().quiet();
+  if (result.exitCode !== 0) {
+    const stderr = result.stderr.toString().trim();
+    throw new Error(`git push failed (exit ${result.exitCode}): ${stderr}`);
+  }
   console.log(`[GIT-OPS] Pushed branch: ${branchName}`);
 }
 

@@ -414,7 +414,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     await this.notify(
       task.group_id,
       `💬 Dev task #${task.id} needs clarification:\n\n${questions}\n\n` +
-        `Reply with /dev answer ${task.id} <your answers>\n` +
+        `Reply with /dev answer ${task.id} &lt;your answers&gt;\n` +
         `Or /dev approve ${task.id} to skip and proceed with designing.`
     );
   }
