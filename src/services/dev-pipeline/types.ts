@@ -41,18 +41,18 @@ export enum DevTaskState {
  * Key = current state, value = array of allowed next states.
  */
 export const STATE_TRANSITIONS: Record<DevTaskState, DevTaskState[]> = {
-  [DevTaskState.PENDING]: [DevTaskState.CLARIFYING, DevTaskState.DESIGNING],
+  [DevTaskState.PENDING]: [DevTaskState.CLARIFYING, DevTaskState.DESIGNING, DevTaskState.REJECTED],
   [DevTaskState.CLARIFYING]: [DevTaskState.DESIGNING, DevTaskState.REJECTED],
-  [DevTaskState.DESIGNING]: [DevTaskState.APPROVAL, DevTaskState.FAILED],
+  [DevTaskState.DESIGNING]: [DevTaskState.APPROVAL, DevTaskState.FAILED, DevTaskState.REJECTED],
   [DevTaskState.APPROVAL]: [DevTaskState.IMPLEMENTING, DevTaskState.REJECTED, DevTaskState.DESIGNING],
-  [DevTaskState.IMPLEMENTING]: [DevTaskState.TESTING, DevTaskState.FAILED],
-  [DevTaskState.TESTING]: [DevTaskState.PULL_REQUEST, DevTaskState.IMPLEMENTING, DevTaskState.FAILED],
-  [DevTaskState.PULL_REQUEST]: [DevTaskState.REVIEWING, DevTaskState.FAILED],
-  [DevTaskState.REVIEWING]: [DevTaskState.UPDATING, DevTaskState.COMPLETED, DevTaskState.FAILED],
-  [DevTaskState.UPDATING]: [DevTaskState.TESTING, DevTaskState.FAILED],
+  [DevTaskState.IMPLEMENTING]: [DevTaskState.TESTING, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.TESTING]: [DevTaskState.PULL_REQUEST, DevTaskState.IMPLEMENTING, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.PULL_REQUEST]: [DevTaskState.REVIEWING, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.REVIEWING]: [DevTaskState.UPDATING, DevTaskState.COMPLETED, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.UPDATING]: [DevTaskState.TESTING, DevTaskState.FAILED, DevTaskState.REJECTED],
   [DevTaskState.COMPLETED]: [],
   [DevTaskState.REJECTED]: [],
-  [DevTaskState.FAILED]: [DevTaskState.PENDING], // Can retry from scratch
+  [DevTaskState.FAILED]: [DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING, DevTaskState.REJECTED],
 };
 
 /**

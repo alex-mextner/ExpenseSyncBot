@@ -1,19 +1,15 @@
 /**
  * State machine for dev task lifecycle.
  *
- * Validates transitions and logs state changes.
- * Keeps things boring and predictable — exactly what you want
- * from code that modifies its own codebase.
+ * Pure functions only — no database imports.
+ * The actual DB persistence happens in pipeline.ts via transition().
  */
 
 import {
   DevTaskState,
   STATE_TRANSITIONS,
   STATE_LABELS,
-  type DevTask,
-  type UpdateDevTaskData,
 } from './types';
-import { database } from '../../database';
 
 /**
  * Check if a state transition is allowed
@@ -36,40 +32,20 @@ export function getAllowedTransitions(
 }
 
 /**
- * Transition a task to a new state.
- * Throws if the transition is not allowed.
- *
- * @returns The updated task
+ * Validate a state transition, throw if not allowed.
  */
-export function transition(
-  task: DevTask,
-  newState: DevTaskState,
-  extra?: Partial<UpdateDevTaskData>
-): DevTask {
-  if (!isTransitionAllowed(task.state, newState)) {
-    const from = STATE_LABELS[task.state];
+export function validateTransition(
+  taskId: number,
+  currentState: DevTaskState,
+  newState: DevTaskState
+): void {
+  if (!isTransitionAllowed(currentState, newState)) {
+    const from = STATE_LABELS[currentState];
     const to = STATE_LABELS[newState];
     throw new Error(
-      `Invalid state transition: ${from} (${task.state}) -> ${to} (${newState}) for task #${task.id}`
+      `Invalid state transition: ${from} (${currentState}) -> ${to} (${newState}) for task #${taskId}`
     );
   }
-
-  const updateData: UpdateDevTaskData = {
-    ...extra,
-    state: newState,
-  };
-
-  console.log(
-    `[DEV-PIPELINE] Task #${task.id}: ${task.state} -> ${newState}`
-  );
-
-  const updated = database.devTasks.update(task.id, updateData);
-
-  if (!updated) {
-    throw new Error(`Failed to update task #${task.id}`);
-  }
-
-  return updated;
 }
 
 /**

@@ -1,48 +1,13 @@
-import { test, expect, describe, mock, beforeEach } from 'bun:test';
-import { DevTaskState, STATE_TRANSITIONS, type DevTask } from './types';
-
-// Mock the database module before importing state-machine
-const mockUpdate = mock(() => null as DevTask | null);
-
-mock.module('../../database', () => ({
-  database: {
-    devTasks: {
-      update: mockUpdate,
-    },
-  },
-}));
-
+import { test, expect, describe } from 'bun:test';
+import { DevTaskState, STATE_TRANSITIONS } from './types';
 import {
   isTransitionAllowed,
   isTerminalState,
   isWaitingForUser,
   isResumableState,
   getAllowedTransitions,
-  transition,
+  validateTransition,
 } from './state-machine';
-
-/** Helper: create a fake DevTask with given state */
-function makeTask(state: DevTaskState, id = 1): DevTask {
-  return {
-    id,
-    group_id: 100,
-    user_id: 200,
-    state,
-    title: 'Test task',
-    description: 'Do something',
-    branch_name: null,
-    worktree_path: null,
-    pr_number: null,
-    pr_url: null,
-    design: null,
-    plan: null,
-    code_review: null,
-    error_log: null,
-    retry_count: 0,
-    created_at: '2026-01-01',
-    updated_at: '2026-01-01',
-  };
-}
 
 // ─────────────────────────────────────────────
 // isTransitionAllowed
@@ -129,9 +94,19 @@ describe('isTransitionAllowed', () => {
   test('same state -> same state is not allowed for any state', () => {
     const allStates = Object.values(DevTaskState);
     for (const s of allStates) {
-      // Only allowed if explicitly in STATE_TRANSITIONS[s]
       const allowed = STATE_TRANSITIONS[s].includes(s);
       expect(isTransitionAllowed(s, s)).toBe(allowed);
+    }
+  });
+
+  test('any non-terminal state -> REJECTED is allowed (cancel)', () => {
+    const nonTerminal = [
+      DevTaskState.PENDING, DevTaskState.CLARIFYING, DevTaskState.DESIGNING,
+      DevTaskState.APPROVAL, DevTaskState.IMPLEMENTING, DevTaskState.TESTING,
+      DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING, DevTaskState.UPDATING,
+    ];
+    for (const s of nonTerminal) {
+      expect(isTransitionAllowed(s, DevTaskState.REJECTED)).toBe(true);
     }
   });
 });
@@ -144,6 +119,7 @@ describe('getAllowedTransitions', () => {
     expect(getAllowedTransitions(DevTaskState.PENDING)).toEqual([
       DevTaskState.CLARIFYING,
       DevTaskState.DESIGNING,
+      DevTaskState.REJECTED,
     ]);
   });
 
@@ -155,8 +131,13 @@ describe('getAllowedTransitions', () => {
     expect(getAllowedTransitions(DevTaskState.REJECTED)).toEqual([]);
   });
 
-  test('FAILED can only transition to PENDING', () => {
-    expect(getAllowedTransitions(DevTaskState.FAILED)).toEqual([DevTaskState.PENDING]);
+  test('FAILED can transition to PENDING, DESIGNING, IMPLEMENTING, or REJECTED', () => {
+    expect(getAllowedTransitions(DevTaskState.FAILED)).toEqual([
+      DevTaskState.PENDING,
+      DevTaskState.DESIGNING,
+      DevTaskState.IMPLEMENTING,
+      DevTaskState.REJECTED,
+    ]);
   });
 
   test('matches STATE_TRANSITIONS for every state', () => {
@@ -185,15 +166,9 @@ describe('isTerminalState', () => {
 
   test('non-terminal states return false', () => {
     const nonTerminal = [
-      DevTaskState.PENDING,
-      DevTaskState.CLARIFYING,
-      DevTaskState.DESIGNING,
-      DevTaskState.APPROVAL,
-      DevTaskState.IMPLEMENTING,
-      DevTaskState.TESTING,
-      DevTaskState.PULL_REQUEST,
-      DevTaskState.REVIEWING,
-      DevTaskState.UPDATING,
+      DevTaskState.PENDING, DevTaskState.CLARIFYING, DevTaskState.DESIGNING,
+      DevTaskState.APPROVAL, DevTaskState.IMPLEMENTING, DevTaskState.TESTING,
+      DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING, DevTaskState.UPDATING,
     ];
     for (const s of nonTerminal) {
       expect(isTerminalState(s)).toBe(false);
@@ -215,15 +190,9 @@ describe('isWaitingForUser', () => {
 
   test('automated states are not waiting for user', () => {
     const automated = [
-      DevTaskState.PENDING,
-      DevTaskState.DESIGNING,
-      DevTaskState.IMPLEMENTING,
-      DevTaskState.TESTING,
-      DevTaskState.PULL_REQUEST,
-      DevTaskState.REVIEWING,
-      DevTaskState.UPDATING,
-      DevTaskState.COMPLETED,
-      DevTaskState.REJECTED,
+      DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING,
+      DevTaskState.TESTING, DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING,
+      DevTaskState.UPDATING, DevTaskState.COMPLETED, DevTaskState.REJECTED,
       DevTaskState.FAILED,
     ];
     for (const s of automated) {
@@ -238,12 +207,8 @@ describe('isWaitingForUser', () => {
 describe('isResumableState', () => {
   test('resumable states return true', () => {
     const resumable = [
-      DevTaskState.PENDING,
-      DevTaskState.DESIGNING,
-      DevTaskState.IMPLEMENTING,
-      DevTaskState.TESTING,
-      DevTaskState.PULL_REQUEST,
-      DevTaskState.REVIEWING,
+      DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING,
+      DevTaskState.TESTING, DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING,
       DevTaskState.UPDATING,
     ];
     for (const s of resumable) {
@@ -253,11 +218,8 @@ describe('isResumableState', () => {
 
   test('non-resumable states return false', () => {
     const notResumable = [
-      DevTaskState.CLARIFYING,
-      DevTaskState.APPROVAL,
-      DevTaskState.COMPLETED,
-      DevTaskState.REJECTED,
-      DevTaskState.FAILED,
+      DevTaskState.CLARIFYING, DevTaskState.APPROVAL,
+      DevTaskState.COMPLETED, DevTaskState.REJECTED, DevTaskState.FAILED,
     ];
     for (const s of notResumable) {
       expect(isResumableState(s)).toBe(false);
@@ -266,69 +228,22 @@ describe('isResumableState', () => {
 });
 
 // ─────────────────────────────────────────────
-// transition
+// validateTransition
 // ─────────────────────────────────────────────
-describe('transition', () => {
-  beforeEach(() => {
-    mockUpdate.mockReset();
+describe('validateTransition', () => {
+  test('valid transition does not throw', () => {
+    expect(() => validateTransition(1, DevTaskState.PENDING, DevTaskState.DESIGNING)).not.toThrow();
   });
 
-  test('valid transition updates task state and returns updated task', () => {
-    const task = makeTask(DevTaskState.PENDING);
-    const updatedTask = { ...task, state: DevTaskState.DESIGNING, updated_at: '2026-01-02' };
-    mockUpdate.mockReturnValueOnce(updatedTask);
-
-    const result = transition(task, DevTaskState.DESIGNING);
-
-    expect(result).toEqual(updatedTask);
-    expect(mockUpdate).toHaveBeenCalledTimes(1);
-    expect(mockUpdate).toHaveBeenCalledWith(task.id, { state: DevTaskState.DESIGNING });
-  });
-
-  test('valid transition with extra data passes it to update', () => {
-    const task = makeTask(DevTaskState.DESIGNING);
-    const updatedTask = { ...task, state: DevTaskState.APPROVAL, design: 'Some design' };
-    mockUpdate.mockReturnValueOnce(updatedTask);
-
-    const result = transition(task, DevTaskState.APPROVAL, { design: 'Some design' });
-
-    expect(result).toEqual(updatedTask);
-    expect(mockUpdate).toHaveBeenCalledWith(task.id, {
-      state: DevTaskState.APPROVAL,
-      design: 'Some design',
-    });
-  });
-
-  test('invalid transition throws an error', () => {
-    const task = makeTask(DevTaskState.PENDING);
-
-    expect(() => transition(task, DevTaskState.COMPLETED)).toThrow('Invalid state transition');
-  });
-
-  test('invalid transition does not call database update', () => {
-    const task = makeTask(DevTaskState.PENDING);
-
-    try {
-      transition(task, DevTaskState.COMPLETED);
-    } catch {
-      // expected
-    }
-
-    expect(mockUpdate).not.toHaveBeenCalled();
-  });
-
-  test('throws when database update returns null', () => {
-    const task = makeTask(DevTaskState.PENDING);
-    mockUpdate.mockReturnValueOnce(null);
-
-    expect(() => transition(task, DevTaskState.DESIGNING)).toThrow(
-      `Failed to update task #${task.id}`
+  test('invalid transition throws with descriptive message', () => {
+    expect(() => validateTransition(1, DevTaskState.PENDING, DevTaskState.COMPLETED)).toThrow(
+      'Invalid state transition'
     );
   });
 
   test('transition from terminal state throws', () => {
-    const task = makeTask(DevTaskState.COMPLETED);
-
-    expect(() => transition(task, DevTaskState.PENDING)).toThrow('Invalid state transition');
+    expect(() => validateTransition(1, DevTaskState.COMPLETED, DevTaskState.PENDING)).toThrow(
+      'Invalid state transition'
+    );
   });
 });
