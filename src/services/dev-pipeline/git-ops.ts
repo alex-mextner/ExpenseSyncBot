@@ -356,3 +356,37 @@ export function generateBranchName(
 
   return `dev/${slug}-${taskId}`;
 }
+
+/** Validate package name to prevent shell injection */
+const VALID_PACKAGE_RE = /^(@[\w.-]+\/)?[\w.-]+(@[\w.*^~<>=|-]+)?$/;
+
+/** Install or remove packages in a worktree */
+export async function managePackages(
+  worktreePath: string,
+  action: 'add' | 'remove',
+  packages: string
+): Promise<string> {
+  const names = packages.split(/\s+/).filter(Boolean);
+  if (names.length === 0) {
+    throw new Error('No package names provided');
+  }
+
+  for (const name of names) {
+    if (!VALID_PACKAGE_RE.test(name)) {
+      throw new Error(`Invalid package name: ${name}`);
+    }
+  }
+
+  const result = action === 'add'
+    ? await $`cd ${worktreePath} && bun add ${names}`.nothrow().quiet()
+    : await $`cd ${worktreePath} && bun remove ${names}`.nothrow().quiet();
+
+  const output = result.text();
+
+  if (result.exitCode !== 0) {
+    throw new Error(`bun ${action} failed (exit ${result.exitCode}): ${output}`);
+  }
+
+  console.log(`[GIT-OPS] bun ${action} ${names.join(' ')} — success`);
+  return output || `${action === 'add' ? 'Installed' : 'Removed'}: ${names.join(', ')}`;
+}
