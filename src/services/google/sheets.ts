@@ -233,6 +233,17 @@ const BUDGET_SHEET_CONFIG = {
 };
 
 /**
+ * Normalize month string to YYYY-MM format with leading zero.
+ * Google Sheets may strip leading zeros (e.g., "2026-03" → "2026-3").
+ */
+function normalizeMonth(month: string): string {
+  const match = month.match(/^(\d{4})-(\d{1,2})$/);
+  if (!match) return month;
+  const [, year, m] = match;
+  return `${year}-${m!.padStart(2, '0')}`;
+}
+
+/**
  * Create empty Budget sheet with headers only
  */
 async function createEmptyBudgetSheet(
@@ -446,7 +457,7 @@ export async function readBudgetData(
 
         if (month && category && !Number.isNaN(limit)) {
           budgets.push({
-            month: month.trim(),
+            month: normalizeMonth(month.trim()),
             category: category.trim(),
             limit,
             currency: (currencyStr?.trim() || 'EUR') as CurrencyCode,
@@ -487,11 +498,12 @@ export async function writeBudgetRow(
   const rows = response.data.values || [];
   let rowIndex = -1;
 
-  // Find existing row for this month+category
+  // Find existing row for this month+category (normalize month for comparison)
+  const normalizedMonth = normalizeMonth(data.month);
   for (let i = 0; i < rows.length; i++) {
     const [month, category] = rows[i] ?? [];
     if (
-      month?.trim() === data.month &&
+      normalizeMonth(month?.trim() || '') === normalizedMonth &&
       category?.trim().toLowerCase() === data.category.toLowerCase()
     ) {
       rowIndex = i + 2; // +2 because: 1-indexed + header row
@@ -506,7 +518,7 @@ export async function writeBudgetRow(
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${BUDGET_SHEET_CONFIG.sheetName}!A${rowIndex}:D${rowIndex}`,
-      valueInputOption: 'USER_ENTERED',
+      valueInputOption: 'RAW',
       requestBody: {
         values: [row],
       },
@@ -516,7 +528,7 @@ export async function writeBudgetRow(
     await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${BUDGET_SHEET_CONFIG.sheetName}!A2:D`,
-      valueInputOption: 'USER_ENTERED',
+      valueInputOption: 'RAW',
       requestBody: {
         values: [row],
       },

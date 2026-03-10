@@ -19,14 +19,14 @@ export class BudgetRepository {
     );
 
     if (existing) {
-      // Update existing budget
-      const query = this.db.query<void, [number, number, string, string]>(`
+      // Update existing budget (including currency)
+      const query = this.db.query<void, [number, string, number, string, string]>(`
         UPDATE budgets
-        SET limit_amount = ?, updated_at = CURRENT_TIMESTAMP
+        SET limit_amount = ?, currency = ?, updated_at = CURRENT_TIMESTAMP
         WHERE group_id = ? AND category = ? AND month = ?
       `);
 
-      query.run(data.limit_amount, data.group_id, data.category, data.month);
+      query.run(data.limit_amount, currency, data.group_id, data.category, data.month);
 
       const updated = this.findById(existing.id);
       if (!updated) {
