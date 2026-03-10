@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun run --watch index.ts",
     "start": "bun run index.ts",
-    "type-check": "bunx tsc --noEmit"
+    "type-check": "bun x tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",

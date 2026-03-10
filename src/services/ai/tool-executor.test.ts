@@ -1,26 +1,27 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { AgentContext } from './types';
+import type { Expense, Budget, Category, Group } from '../../database/types';
 
 // ── Mock database ────────────────────────────────────────────────────
 
 const mockExpenses = {
-  findByDateRange: mock(() => []),
-  findById: mock(() => null),
+  findByDateRange: mock((): Expense[] => []),
+  findById: mock((): Expense | null => null),
   create: mock(() => ({ id: 42 })),
   delete: mock(() => true),
   deleteAllByGroupId: mock(() => 5),
 };
 
 const mockBudgets = {
-  getAllBudgetsForMonth: mock(() => []),
+  getAllBudgetsForMonth: mock((): Budget[] => []),
   setBudget: mock(() => ({})),
   deleteByGroupCategoryMonth: mock(() => true),
-  findByGroupCategoryMonth: mock(() => null),
+  findByGroupCategoryMonth: mock((): Budget | null => null),
 };
 
 const mockCategories = {
-  findByGroupId: mock(() => []),
-  findByName: mock(() => null),
+  findByGroupId: mock((): Category[] => []),
+  findByName: mock((): Category | null => null),
   getCategoryNames: mock(() => ['Food', 'Transport']),
   exists: mock(() => false),
   create: mock(() => ({ id: 1, group_id: 1, name: 'Food', created_at: '' })),
@@ -28,7 +29,7 @@ const mockCategories = {
 };
 
 const mockGroups = {
-  findById: mock(() => ({
+  findById: mock((): Group | null => ({
     id: 1,
     telegram_group_id: 456,
     google_refresh_token: null,

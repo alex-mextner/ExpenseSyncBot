@@ -43,43 +43,36 @@ import { DevAgent, AgentAbortedError } from './dev-agent';
 import { escapeHtml } from '../../bot/commands/ask';
 import { createDevApprovalKeyboard } from '../../bot/keyboards';
 
-/** Replace bun test markers (pass)/(fail) with emoji for Telegram */
-function prettifyTestOutput(raw: string): string {
-  return raw
-    .replace(/\(pass\)/g, '✅')
-    .replace(/\(fail\)/g, '❌');
-}
-
 /** Reorder test output: failures and errors first, then passing tests fill remaining space */
 function prioritizeFailures(raw: string, maxChars: number): string {
   const lines = raw.split('\n');
   const failLines: string[] = [];
-  const passLines: string[] = [];
   const otherLines: string[] = [];
 
   for (const line of lines) {
-    if (line.includes('(fail)') || line.includes('error:') || line.includes('Error:') ||
+    if (line.includes('error:') || line.includes('Error:') ||
         line.includes('✗') || line.includes('FAIL') || line.includes('# Unhandled')) {
       failLines.push(line);
-    } else if (line.includes('(pass)')) {
-      passLines.push(line);
     } else {
-      // Summary lines, stack traces, etc — keep with failures
       otherLines.push(line);
     }
   }
 
   // Failures + context first
-  let result = [...failLines, ...otherLines].join('\n');
-  if (result.length < maxChars && passLines.length > 0) {
-    const remaining = maxChars - result.length - 20;
-    if (remaining > 0) {
-      const passBlock = passLines.join('\n').slice(0, remaining);
-      result = result + '\n\n--- passed ---\n' + passBlock;
-    }
-  }
-
+  const result = [...failLines, ...otherLines].join('\n');
   return result.slice(0, maxChars);
+}
+
+/** Parse bun test summary counts from output (bun 1.3+: "N pass", "N fail", "N error") */
+function parseTestCounts(output: string): { pass: number; fail: number; error: number } {
+  const passMatch = output.match(/(\d+)\s+pass(?!\w)/);
+  const failMatch = output.match(/(\d+)\s+fail(?!\w)/);
+  const errorMatch = output.match(/(\d+)\s+error/);
+  return {
+    pass: passMatch ? parseInt(passMatch[1]!, 10) : 0,
+    fail: failMatch ? parseInt(failMatch[1]!, 10) : 0,
+    error: errorMatch ? parseInt(errorMatch[1]!, 10) : 0,
+  };
 }
 
 /** Take the last N characters of a string (errors are usually at the end of output) */
@@ -98,6 +91,21 @@ function extractTscErrors(output: string): string {
     }
   }
   return errors.join('\n') || output;
+}
+
+/** Filter tsc errors to only include errors in the given file list (relative paths) */
+function filterTscErrorsByFiles(output: string, changedFiles: string[]): string {
+  if (changedFiles.length === 0) return output;
+  const lines = output.split('\n');
+  const filtered: string[] = [];
+  for (const line of lines) {
+    if (!line.includes('error TS')) continue;
+    // tsc errors start with relative path: src/foo/bar.ts(10,5): error TS...
+    if (changedFiles.some(f => line.includes(f))) {
+      filtered.push(line.trim());
+    }
+  }
+  return filtered.join('\n');
 }
 
 /**
@@ -119,6 +127,13 @@ DEVELOPMENT RULES (follow strictly):
 - Keep functions small and focused. If a function does two things, split it.
 - Don't refactor code you're not changing. Stay focused on the task.
 - Protected paths (NEVER modify): src/services/dev-pipeline/, src/database/schema.ts, .github/
+
+TDD (Test-Driven Development) — MANDATORY:
+- Write tests FIRST, before writing implementation code.
+- For each piece of new functionality: write a failing test → implement minimal code to pass → refactor.
+- Every new function, method, or behavior MUST have a corresponding test.
+- Run tests after writing them to confirm they fail (red), then implement, then confirm they pass (green).
+- Test files go next to the source file: foo.ts → foo.test.ts
 
 TESTING RULES (Bun test):
 - NEVER use mock.module() — it is broken in Bun: leaks between test files, cannot be restored with mock.restore(), does not work transitively.
@@ -774,23 +789,30 @@ ${task.error_log ? `\nPREVIOUS FAILURE:\n${task.error_log}` : ''}
 
 Start by listing files and reading what's already there. Then fix/complete the implementation.`;
     } else {
-      // FIRST RUN: implement from design
+      // FIRST RUN: implement from design using TDD
       systemPrompt = `You are a senior TypeScript developer implementing a feature in a Telegram bot.
 
 IMPORTANT RULES:
 1. Use tools to read existing code BEFORE writing. Understand patterns first.
-2. Write complete files — no partial snippets or TODOs.
-3. Follow existing code style and patterns in the project.
-4. After writing all files, use the commit tool to save your work.
+2. Follow TDD: write tests FIRST (*.test.ts next to source), confirm they fail, then implement.
+3. Write complete files — no partial snippets or TODOs.
+4. Follow existing code style and patterns in the project.
+5. After writing all files, use the commit tool to save your work.
 ${DEV_RULES}
 ${techNotes}`;
 
-      userMessage = `Implement this task:
+      userMessage = `Implement this task using TDD:
 
 ${task.description}
 
 DESIGN PLAN:
-${task.design || 'No design provided. Analyze the codebase and implement directly.'}`;
+${task.design || 'No design provided. Analyze the codebase and implement directly.'}
+
+WORKFLOW:
+1. Read existing code to understand patterns
+2. Write test file(s) for the new functionality FIRST
+3. Implement the code to make tests pass
+4. Commit everything`;
     }
 
     await this.runAgent(task.id, agent, systemPrompt, userMessage);
@@ -835,7 +857,7 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
   /**
    * Handle TESTING state: run tests and type checks.
    *
-   * Runs `bun test` and `bunx tsc --noEmit` in the worktree.
+   * Runs `bun test` and `bun x tsc --noEmit` in the worktree.
    * On failure, retries up to MAX_RETRY_ATTEMPTS times.
    */
   private async handleTesting(task: DevTask): Promise<void> {
@@ -852,32 +874,42 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
     let typeCheckOutput = '';
     let testsOutput = '';
 
-    // Run type check — nothrow() to always get output
-    const typeCheckResult = await $`cd ${task.worktree_path} && bunx tsc --noEmit 2>&1`.nothrow().quiet();
+    // Run type check — tsc writes errors to stdout
+    // NOTE: Bun Shell does not support 2>&1 — always read both streams
+    const typeCheckResult = await $`cd ${task.worktree_path} && bun x tsc --noEmit`.nothrow().quiet();
     const typeCheckPassed = typeCheckResult.exitCode === 0;
-    typeCheckOutput = typeCheckResult.text().trim();
+    const tscStdout = typeCheckResult.text().trim();
+    const tscStderr = typeCheckResult.stderr.toString().trim();
+    typeCheckOutput = [tscStdout, tscStderr].filter(Boolean).join('\n');
 
-    // Run tests — nothrow() to always get output
-    const testsResult = await $`cd ${task.worktree_path} && bun test 2>&1`.nothrow().quiet();
-    testsOutput = testsResult.text().trim();
+    // Run tests — bun test writes header to stdout but results/errors to stderr
+    const testsResult = await $`cd ${task.worktree_path} && bun test`.nothrow().quiet();
+    const testsStdout = testsResult.text().trim();
+    const testsStderr = testsResult.stderr.toString().trim();
+    testsOutput = [testsStdout, testsStderr].filter(Boolean).join('\n');
     const testExitCode = testsResult.exitCode;
     const testsPassed = testExitCode === 0;
 
-    // Parse test counts from bun test output — inline markers + summary line
-    const passCount = (testsOutput.match(/\(pass\)/g) || []).length;
-    const inlineFailCount = (testsOutput.match(/\(fail\)/g) || []).length;
-    // bun test summary: " N fail", " N error"
-    const summaryFailMatch = testsOutput.match(/(\d+)\s+fail(?!\w)/);
-    const summaryErrorMatch = testsOutput.match(/(\d+)\s+error/);
-    const summaryFail = summaryFailMatch ? parseInt(summaryFailMatch[1]!, 10) : 0;
-    const summaryError = summaryErrorMatch ? parseInt(summaryErrorMatch[1]!, 10) : 0;
-    const failCount = inlineFailCount || summaryFail;
-    const errorCount = summaryError;
+    // Parse test counts from bun test summary (bun 1.3+: "N pass", "N fail", "N error")
+    const { pass: passCount, fail: failCount, error: errorCount } = parseTestCounts(testsOutput);
 
     // Build full output for error_log (raw, for the AI agent)
     fullOutput = `TYPE CHECK ${typeCheckPassed ? 'PASSED' : 'FAILED'}:\n${typeCheckOutput}\n\nTESTS ${testsPassed ? 'PASSED' : 'FAILED'} (exit code ${testExitCode}):\n${testsOutput}`;
 
     const allPassed = typeCheckPassed && testsPassed;
+
+    // Detect retry loops: if error_log is identical to previous attempt, stop early
+    if (!allPassed && task.error_log && task.error_log === fullOutput) {
+      transition(task, DevTaskState.FAILED, {
+        error_log: fullOutput,
+        retry_count: (task.retry_count || 0) + 1,
+      });
+      await this.notify(
+        task.group_id,
+        `💀 <b>Dev task #${task.id}:</b> одинаковые ошибки 2 раза подряд — агент зациклился. Остановлено.`
+      );
+      return;
+    }
 
     if (allPassed) {
       const updated = transition(task, DevTaskState.PULL_REQUEST);
@@ -907,7 +939,6 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
         } else {
           lines.push(`⚠️ <b>Тайпчекер:</b> failed (exit code ${typeCheckResult.exitCode})`);
         }
-        // Show extracted errors, or full output if no TS errors found
         const tscDisplay = tscErrors.trim() || typeCheckOutput.trim() || '(no output)';
         lines.push(`<blockquote expandable>${escapeHtml(tailSlice(tscDisplay, 3000))}</blockquote>`);
       }
@@ -919,10 +950,9 @@ ${task.design || 'No design provided. Analyze the codebase and implement directl
         if (passCount > 0) parts.push(`${passCount} ✅`);
         if (failCount > 0) parts.push(`${failCount} ❌`);
         if (errorCount > 0) parts.push(`${errorCount} 💥`);
-        // All green but exit code != 0 — unhandled error between tests, crash, etc.
         if (failCount === 0 && errorCount === 0) parts.push(`exit code ${testExitCode}`);
         lines.push(`${failCount > 0 || errorCount > 0 ? '❌' : '⚠️'} <b>Тесты:</b> ${parts.join(' / ')}`);
-        lines.push(`<blockquote expandable>${prettifyTestOutput(escapeHtml(prioritizeFailures(testsOutput, 3000)))}</blockquote>`);
+        lines.push(`<blockquote expandable>${escapeHtml(prioritizeFailures(testsOutput, 3000))}</blockquote>`);
       }
 
       if (retryCount >= MAX_RETRY_ATTEMPTS) {

@@ -1,12 +1,12 @@
 import { test, expect, describe, beforeEach, mock } from 'bun:test';
-import type { FinancialSnapshot, BudgetBurnRate, CategoryAnomaly, SpendingVelocity } from './types';
+import type { FinancialSnapshot, BudgetBurnRate, CategoryAnomaly, SpendingVelocity, AdviceLog } from './types';
 
 // ── Mock database ──────────────────────────────────────────────────────
 
 const mockAdviceLogs = {
   countToday: mock(() => 0),
   hasTopicThisMonth: mock(() => false),
-  getRecent: mock(() => []),
+  getRecent: mock(() => [] as AdviceLog[]),
 };
 
 const mockExpenses = {
@@ -273,7 +273,7 @@ describe('checkSmartTriggers', () => {
     // Velocity spike also checks getRecent, not hasTopicThisMonth,
     // so mock getRecent to return a recent velocity_spike entry.
     mockAdviceLogs.getRecent.mockImplementation(() => [
-      { topic: 'velocity_spike', created_at: new Date().toISOString() },
+      { topic: 'velocity_spike', created_at: new Date().toISOString() } as AdviceLog,
     ]);
 
     const result = checkSmartTriggers(9989, snapshot);

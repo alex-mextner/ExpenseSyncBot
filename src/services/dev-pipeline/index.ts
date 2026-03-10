@@ -19,7 +19,7 @@ export {
 export {
   isTransitionAllowed,
   getAllowedTransitions,
-  transition,
+  validateTransition,
   isTerminalState,
   isWaitingForUser,
   isResumableState,

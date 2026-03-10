@@ -114,7 +114,7 @@ describe('DevTaskRepository', () => {
 
       const group200Tasks = repo.findByGroupId(200);
       expect(group200Tasks).toHaveLength(1);
-      expect(group200Tasks[0].description).toBe('Task C');
+      expect(group200Tasks[0]!.description).toBe('Task C');
     });
 
     test('returns empty array for group with no tasks', () => {
@@ -157,7 +157,7 @@ describe('DevTaskRepository', () => {
 
       const active = repo.findActiveByGroupId(50);
       expect(active).toHaveLength(1);
-      expect(active[0].id).toBe(task1.id);
+      expect(active[0]!.id).toBe(task1.id);
     });
 
     test('excludes completed, rejected, and failed tasks', () => {
@@ -216,7 +216,7 @@ describe('DevTaskRepository', () => {
         design: 'Design doc here',
         plan: 'Step 1, Step 2',
         code_review: 'LGTM',
-        error_log: null,
+        error_log: undefined,
         retry_count: 2,
         title: 'Updated title',
       });
