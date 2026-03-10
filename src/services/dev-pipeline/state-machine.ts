@@ -65,7 +65,9 @@ export function isTerminalState(state: DevTaskState): boolean {
 export function isWaitingForUser(state: DevTaskState): boolean {
   return (
     state === DevTaskState.APPROVAL ||
-    state === DevTaskState.CLARIFYING
+    state === DevTaskState.CLARIFYING ||
+    state === DevTaskState.AWAITING_REVIEW ||
+    state === DevTaskState.AWAITING_MERGE
   );
 }
 

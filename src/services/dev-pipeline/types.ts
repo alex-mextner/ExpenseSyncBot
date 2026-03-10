@@ -26,8 +26,12 @@ export enum DevTaskState {
   PULL_REQUEST = 'pull_request',
   /** Code review (automated or manual) */
   REVIEWING = 'reviewing',
+  /** Waiting for user to accept or request changes after review */
+  AWAITING_REVIEW = 'awaiting_review',
   /** Addressing review feedback */
   UPDATING = 'updating',
+  /** Waiting for user to merge or request further changes */
+  AWAITING_MERGE = 'awaiting_merge',
   /** Task completed and merged */
   COMPLETED = 'completed',
   /** Task rejected by user */
@@ -46,10 +50,12 @@ export const STATE_TRANSITIONS: Record<DevTaskState, DevTaskState[]> = {
   [DevTaskState.DESIGNING]: [DevTaskState.APPROVAL, DevTaskState.FAILED, DevTaskState.REJECTED],
   [DevTaskState.APPROVAL]: [DevTaskState.IMPLEMENTING, DevTaskState.REJECTED, DevTaskState.DESIGNING],
   [DevTaskState.IMPLEMENTING]: [DevTaskState.TESTING, DevTaskState.FAILED, DevTaskState.REJECTED],
-  [DevTaskState.TESTING]: [DevTaskState.PULL_REQUEST, DevTaskState.IMPLEMENTING, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.TESTING]: [DevTaskState.PULL_REQUEST, DevTaskState.AWAITING_MERGE, DevTaskState.IMPLEMENTING, DevTaskState.FAILED, DevTaskState.REJECTED],
   [DevTaskState.PULL_REQUEST]: [DevTaskState.REVIEWING, DevTaskState.FAILED, DevTaskState.REJECTED],
-  [DevTaskState.REVIEWING]: [DevTaskState.UPDATING, DevTaskState.COMPLETED, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.REVIEWING]: [DevTaskState.AWAITING_REVIEW, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.AWAITING_REVIEW]: [DevTaskState.UPDATING, DevTaskState.REJECTED],
   [DevTaskState.UPDATING]: [DevTaskState.TESTING, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.AWAITING_MERGE]: [DevTaskState.COMPLETED, DevTaskState.UPDATING, DevTaskState.REJECTED],
   [DevTaskState.COMPLETED]: [],
   [DevTaskState.REJECTED]: [],
   [DevTaskState.FAILED]: [DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING, DevTaskState.REJECTED],
@@ -127,7 +133,9 @@ export const STATE_LABELS: Record<DevTaskState, string> = {
   [DevTaskState.TESTING]: 'Тестирование',
   [DevTaskState.PULL_REQUEST]: 'Создание PR',
   [DevTaskState.REVIEWING]: 'Код-ревью',
+  [DevTaskState.AWAITING_REVIEW]: 'Ожидание ревью',
   [DevTaskState.UPDATING]: 'Доработка',
+  [DevTaskState.AWAITING_MERGE]: 'Ожидание мержа',
   [DevTaskState.COMPLETED]: 'Завершено',
   [DevTaskState.REJECTED]: 'Отклонено',
   [DevTaskState.FAILED]: 'Ошибка',
@@ -145,7 +153,9 @@ export const STATE_EMOJI: Record<DevTaskState, string> = {
   [DevTaskState.TESTING]: '🧪',
   [DevTaskState.PULL_REQUEST]: '📤',
   [DevTaskState.REVIEWING]: '🔍',
+  [DevTaskState.AWAITING_REVIEW]: '👀',
   [DevTaskState.UPDATING]: '🔄',
+  [DevTaskState.AWAITING_MERGE]: '🚀',
   [DevTaskState.COMPLETED]: '✅',
   [DevTaskState.REJECTED]: '❌',
   [DevTaskState.FAILED]: '💥',
