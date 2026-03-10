@@ -9,6 +9,7 @@
  *   /dev cancel <id>        — cancel a task
  *   /dev continue <id> [msg] — resume a failed/stuck task
  *   /dev history            — show recent completed tasks
+ *   /dev logs prod|stage    — download PM2 logs
  */
 
 import type { Ctx } from '../types';
@@ -162,6 +163,10 @@ export async function handleDevCommand(ctx: Ctx['Command']): Promise<void> {
       await showHistory(ctx, group.id);
       break;
 
+    case 'logs':
+      await handleLogs(ctx, args, group.id);
+      break;
+
     default:
       // Everything after /dev is the task description
       await handleNewTask(ctx, args.join(' '), group.id, user.id);
@@ -183,7 +188,8 @@ async function showUsage(ctx: Ctx['Command']): Promise<void> {
       '/dev cancel &lt;id&gt; — cancel a task\n' +
       '/dev answer &lt;id&gt; &lt;text&gt; — answer clarifying questions\n' +
       '/dev continue &lt;id&gt; [msg] — resume a failed/stuck task\n' +
-      '/dev history — recent completed tasks',
+      '/dev history — recent completed tasks\n' +
+      '/dev logs prod|stage — download PM2 logs',
     { parse_mode: 'HTML' }
   );
 }
@@ -514,6 +520,81 @@ async function showHistory(
   }
 
   await ctx.send(message, { parse_mode: 'HTML' });
+}
+
+/** PM2 log file paths on the server */
+const PM2_LOG_DIR = '/var/www/.pm2/logs';
+const LOG_NAMES: Record<string, { out: string; error: string }> = {
+  prod: {
+    out: 'expensesyncbot-out.log',
+    error: 'expensesyncbot-error.log',
+  },
+  stage: {
+    out: 'expensesyncbot-stage-out.log',
+    error: 'expensesyncbot-stage-error.log',
+  },
+};
+
+/** Max bytes to read from each log file */
+const MAX_LOG_BYTES = 100 * 1024; // 100KB
+
+/**
+ * Send PM2 log files as Telegram documents
+ */
+async function handleLogs(
+  ctx: Ctx['Command'],
+  args: string[],
+  _groupId: number
+): Promise<void> {
+  const target = args[1]?.toLowerCase();
+
+  if (!target || !LOG_NAMES[target]) {
+    await ctx.send('Usage: /dev logs prod|stage');
+    return;
+  }
+
+  const logs = LOG_NAMES[target]!;
+  const outPath = `${PM2_LOG_DIR}/${logs.out}`;
+  const errorPath = `${PM2_LOG_DIR}/${logs.error}`;
+
+  const outFile = Bun.file(outPath);
+  const errorFile = Bun.file(errorPath);
+
+  const outExists = await outFile.exists();
+  const errorExists = await errorFile.exists();
+
+  if (!outExists && !errorExists) {
+    await ctx.send(`No log files found for ${target}. Is the bot running?`);
+    return;
+  }
+
+  // Read and send stdout log
+  if (outExists) {
+    const outSize = outFile.size;
+    const outStart = Math.max(0, outSize - MAX_LOG_BYTES);
+    const outContent = await outFile.slice(outStart, outSize).text();
+
+    await ctx.sendDocument(
+      new File([outContent], logs.out, { type: 'text/plain' }),
+      { caption: `📋 ${target} stdout (last ${Math.round(outContent.length / 1024)}KB)` }
+    );
+  }
+
+  // Read and send stderr log
+  if (errorExists) {
+    const errorSize = errorFile.size;
+    if (errorSize === 0) {
+      await ctx.send(`✅ ${target} error log is empty — no errors.`);
+    } else {
+      const errorStart = Math.max(0, errorSize - MAX_LOG_BYTES);
+      const errorContent = await errorFile.slice(errorStart, errorSize).text();
+
+      await ctx.sendDocument(
+        new File([errorContent], logs.error, { type: 'text/plain' }),
+        { caption: `⚠️ ${target} stderr (last ${Math.round(errorContent.length / 1024)}KB)` }
+      );
+    }
+  }
 }
 
 /**
