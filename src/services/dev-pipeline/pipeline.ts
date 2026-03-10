@@ -195,6 +195,7 @@ function transition(
 export class DevPipeline {
   private notify: NotifyCallback;
   private activeAgents = new Map<number, DevAgent>();
+  private processingTasks = new Set<number>();
 
   constructor(notify: NotifyCallback) {
     this.notify = notify;
@@ -272,6 +273,12 @@ export class DevPipeline {
    * Wraps processState in a try/catch and handles errors.
    */
   private async processStateAsync(task: DevTask): Promise<void> {
+    if (this.processingTasks.has(task.id)) {
+      console.log(`[DEV-PIPELINE] Task #${task.id} already being processed, skipping duplicate run`);
+      return;
+    }
+    this.processingTasks.add(task.id);
+
     try {
       await this.processState(task);
     } catch (error) {
@@ -306,6 +313,8 @@ export class DevPipeline {
         task.group_id,
         `💥 Dev task #${task.id} failed:\n${errorMsg}`
       );
+    } finally {
+      this.processingTasks.delete(task.id);
     }
   }
 
@@ -447,6 +456,10 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
    * Continue/resume a failed or stuck task with an optional message.
    */
   async continueTask(taskId: number, message: string): Promise<DevTask> {
+    if (this.processingTasks.has(taskId)) {
+      throw new Error(`Task #${taskId} is already being processed, wait for it to finish or cancel first`);
+    }
+
     const task = database.devTasks.findById(taskId);
     if (!task) {
       throw new Error(`Task #${taskId} not found`);
@@ -657,7 +670,13 @@ Keep the plan concise — 20-40 lines max.`;
     // Create worktree
     const worktreePath = await createWorktree(branchName);
 
-    const updated = transition(task, DevTaskState.IMPLEMENTING, {
+    // Re-read task after async operation to guard against concurrent approvals (TOCTOU)
+    const freshTask = database.devTasks.findById(taskId);
+    if (!freshTask || freshTask.state !== DevTaskState.APPROVAL) {
+      throw new Error(`Task #${taskId} state changed during worktree creation (now: ${freshTask?.state})`);
+    }
+
+    const updated = transition(freshTask, DevTaskState.IMPLEMENTING, {
       branch_name: branchName,
       worktree_path: worktreePath,
     });
@@ -667,7 +686,7 @@ Keep the plan concise — 20-40 lines max.`;
       `✅ Dev task #${task.id} approved! Starting implementation...`
     );
 
-    // Continue processing
+    // Continue processing (processStateAsync has its own duplicate-run guard)
     this.processStateAsync(updated);
 
     return updated;
