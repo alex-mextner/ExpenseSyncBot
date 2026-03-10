@@ -13,7 +13,8 @@
       "Bash(timeout 8 bun run:*)",
       "Bash(sqlite3:*)",
       "Bash(PATH=\"/Users/ultra/.bun/bin:$PATH\" bunx tsc:*)",
-      "Bash(PATH=\"/Users/ultra/.bun/bin:$PATH\" bun test:*)"
+      "Bash(PATH=\"/Users/ultra/.bun/bin:$PATH\" bun test:*)",
+      "Bash(/Users/ultra/.bun/bin/bunx tsc:*)"
     ],
     "deny": [],
     "ask": []
