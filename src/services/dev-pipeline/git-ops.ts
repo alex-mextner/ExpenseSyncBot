@@ -14,11 +14,19 @@ import { Octokit } from '@octokit/rest';
 import { env } from '../../config/env';
 
 /**
- * Get the root of the current git repository
+ * Get the root of the current git repository.
+ * Uses import.meta.dir as fallback cwd if the process cwd is not inside a git repo.
  */
 export async function getRepoRoot(): Promise<string> {
-  const result = await $`git rev-parse --show-toplevel`.text();
-  return result.trim();
+  try {
+    const result = await $`git rev-parse --show-toplevel`.text();
+    return result.trim();
+  } catch {
+    // Fallback: resolve from this file's location (src/services/dev-pipeline/)
+    const fallbackDir = path.resolve(import.meta.dir, '../../..');
+    const result = await $`git -C ${fallbackDir} rev-parse --show-toplevel`.text();
+    return result.trim();
+  }
 }
 
 /**

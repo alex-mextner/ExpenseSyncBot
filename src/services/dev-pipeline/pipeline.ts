@@ -288,15 +288,16 @@ export class DevPipeline {
       const errorMsg =
         error instanceof Error ? error.message : String(error);
 
-      // Task may already be in a terminal state (e.g. REJECTED by concurrent cancel)
-      if (!isTerminalState(task.state)) {
+      // Re-read task from DB to get the actual current state (task object may be stale)
+      const freshTask = database.devTasks.findById(task.id);
+      if (freshTask && !isTerminalState(freshTask.state)) {
         try {
-          transition(task, DevTaskState.FAILED, {
+          transition(freshTask, DevTaskState.FAILED, {
             error_log: errorMsg,
           });
         } catch {
           console.error(
-            `[DEV-PIPELINE] Cannot transition task #${task.id} to FAILED`
+            `[DEV-PIPELINE] Cannot transition task #${task.id} from ${freshTask.state} to FAILED`
           );
         }
       }
@@ -396,8 +397,8 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
     const questions = await this.runAgent(task.id, agent, systemPrompt, task.description);
 
-    // Save questions and notify user
-    const updated = transition(task, DevTaskState.CLARIFYING, {
+    // Save questions (task is already in CLARIFYING, no state transition needed)
+    database.devTasks.update(task.id, {
       design: `QUESTIONS:\n${questions}`,
     });
 

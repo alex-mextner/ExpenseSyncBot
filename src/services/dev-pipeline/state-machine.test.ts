@@ -128,6 +128,7 @@ describe('getAllowedTransitions', () => {
       DevTaskState.CLARIFYING,
       DevTaskState.DESIGNING,
       DevTaskState.REJECTED,
+      DevTaskState.FAILED,
     ]);
   });
 
