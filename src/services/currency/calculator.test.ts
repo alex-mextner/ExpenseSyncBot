@@ -97,12 +97,12 @@ describe('Calculator', () => {
       expect((result as CalculateResult).currency).toBe('USD');
     });
 
-    test('mixed currencies addition', () => {
+    test('mixed currencies addition (uses EUR as default)', () => {
       // 100 USD + 50 EUR in EUR
       // 100 USD ≈ 93 EUR, so 93 + 50 = 143 EUR
       const result = calculate('100USD+50EUR');
       expect(result.success).toBe(true);
-      expect((result as CalculateResult).currency).toBe('EUR'); // First non-numeric operand determines result currency
+      expect((result as CalculateResult).currency).toBe('EUR'); // Mixed currencies default to EUR
       // We need to check the actual conversion
       const expectedInEUR = 100 * 0.93 + 50; // Using fallback rates
       expect((result as CalculateResult).value).toBeCloseTo(expectedInEUR, 1);
@@ -186,6 +186,103 @@ describe('Calculator', () => {
       const result = calculate('100USD', 'EUR');
       expect(result.success).toBe(true);
       expect((result as CalculateResult).formatted).toMatch(/\d+\.\d{2} EUR/);
+    });
+  });
+
+  // NEW TESTS FOR CODE REVIEW ISSUES
+
+  describe('Pure numeric results (no currency)', () => {
+    test('pure numeric expression should have no currency in formatted output', () => {
+      const result = calculate('10+20');
+      expect(result.success).toBe(true);
+      expect((result as CalculateResult).value).toBe(30);
+      // BUG FIX: pure numeric should not have currency
+      expect((result as CalculateResult).currency).toBeNull();
+      expect((result as CalculateResult).formatted).toBe('30.00');
+    });
+
+    test('pure numeric with target currency should apply target currency', () => {
+      const result = calculate('10+20', 'EUR');
+      expect(result.success).toBe(true);
+      expect((result as CalculateResult).value).toBe(30);
+      expect((result as CalculateResult).currency).toBe('EUR');
+      expect((result as CalculateResult).formatted).toBe('30.00 EUR');
+    });
+
+    test('complex pure numeric expression - no currency', () => {
+      const result = calculate('(10+5)*2/3');
+      expect(result.success).toBe(true);
+      expect((result as CalculateResult).currency).toBeNull();
+      expect((result as CalculateResult).formatted).toBe('10.00');
+    });
+  });
+
+  describe('Currency division by same currency (dimensionless ratio)', () => {
+    test('same currency division should produce dimensionless result', () => {
+      const result = calculate('100USD/50USD');
+      expect(result.success).toBe(true);
+      // 100USD / 50USD = 2 (dimensionless ratio)
+      expect((result as CalculateResult).value).toBe(2);
+      expect((result as CalculateResult).currency).toBeNull();
+      expect((result as CalculateResult).formatted).toBe('2.00');
+    });
+
+    test('same currency division with target currency', () => {
+      const result = calculate('100USD/50USD', 'EUR');
+      expect(result.success).toBe(true);
+      expect((result as CalculateResult).value).toBe(2);
+      expect((result as CalculateResult).currency).toBe('EUR');
+      expect((result as CalculateResult).formatted).toBe('2.00 EUR');
+    });
+  });
+
+  describe('Malformed number inputs', () => {
+    test('rejects double decimal points', () => {
+      const result = calculate('1..2+3');
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('Invalid number');
+    });
+
+    test('rejects trailing decimal point with another decimal', () => {
+      const result = calculate('.1.+2');
+      expect(result.success).toBe(false);
+    });
+
+    test('rejects multiple decimals in number', () => {
+      const result = calculate('1.2.3+4');
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('Overflow/underflow protection', () => {
+    test('handles very large numbers', () => {
+      const result = calculate('1e308*10');
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toMatch(/too large|overflow|infinity/i);
+    });
+
+    test('handles multiplication overflow', () => {
+      const result = calculate('99999999999999999999*99999999999999999999');
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toMatch(/too large|overflow|infinity/i);
+    });
+
+    test('handles division resulting in infinity', () => {
+      const result = calculate('1e308/0.0000001');
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toMatch(/too large|overflow|infinity/i);
+    });
+  });
+
+  describe('convertCurrency error handling', () => {
+    // Note: These tests assume convertCurrency could throw for unavailable rates
+    // Since current implementation has fallback rates, these are defensive tests
+    test('currency operations should not crash on conversion errors', () => {
+      // This test ensures the calculator handles conversion errors gracefully
+      // In current implementation, fallback rates exist so this won't throw
+      // But the try-catch should be in place for future-proofing
+      const result = calculate('100USD+50EUR');
+      expect(result.success).toBe(true);
     });
   });
 });

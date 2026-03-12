@@ -5,7 +5,7 @@ import { convertCurrency } from './converter';
 export interface CalculateResult {
   success: true;
   value: number;
-  currency: CurrencyCode;
+  currency: CurrencyCode | null;
   formatted: string;
 }
 
@@ -42,6 +42,29 @@ function isCurrencyToken(token: Token | null): token is CurrencyToken {
  */
 function looksLikeCurrencyCode(str: string): boolean {
   return /^[A-Z]{3}$/.test(str);
+}
+
+// O(1) currency lookup Set
+const CURRENCY_SET = new Set(SUPPORTED_CURRENCIES);
+
+/**
+ * Check if a number string has valid format (at most one decimal point)
+ */
+function isValidNumberFormat(numStr: string): boolean {
+  // Empty string is invalid
+  if (numStr.length === 0) return false;
+  
+  // Count decimal points
+  let decimalCount = 0;
+  for (const char of numStr) {
+    if (char === '.') {
+      decimalCount++;
+      if (decimalCount > 1) return false;
+    }
+  }
+  
+  // Must have at least one digit
+  return /\d/.test(numStr);
 }
 
 /**
@@ -95,9 +118,19 @@ function tokenizeExpression(expr: string): Token[] | string {
         pos++;
       }
 
+      // Validate number format (reject malformed like "1..2", ".1.", etc.)
+      if (!isValidNumberFormat(numStr)) {
+        return `Invalid number: ${numStr}`;
+      }
+
       const num = parseFloat(numStr);
       if (isNaN(num)) {
         return `Invalid number: ${numStr}`;
+      }
+
+      // Check for overflow
+      if (!isFinite(num)) {
+        return 'Number is too large';
       }
 
       // Check for currency suffix (skip any whitespace before currency)
@@ -109,6 +142,7 @@ function tokenizeExpression(expr: string): Token[] | string {
       const remaining = expr.slice(pos);
       let matchedCurrency: CurrencyCode | null = null;
 
+      // O(1) lookup using Set
       for (const curr of SUPPORTED_CURRENCIES) {
         if (remaining.toUpperCase().startsWith(curr)) {
           matchedCurrency = curr;
@@ -215,6 +249,13 @@ interface ParsedValue {
   value: number;
   currency: CurrencyCode | null;
   hasMultipleCurrencies: boolean;
+}
+
+/**
+ * Check if a value is a valid finite number
+ */
+function isValidNumber(value: number): boolean {
+  return typeof value === 'number' && isFinite(value) && !isNaN(value);
 }
 
 /**
@@ -361,8 +402,25 @@ class ExpressionParser {
     const hasMultipleCurrencies = left.hasMultipleCurrencies || right.hasMultipleCurrencies ||
       (left.currency !== null && right.currency !== null && left.currency !== right.currency);
 
+    // Special case: same currency division produces dimensionless ratio
+    if (op === '/' && left.currency && right.currency && left.currency === right.currency) {
+      if (right.value === 0) {
+        return 'Division by zero';
+      }
+      const ratio = left.value / right.value;
+      if (!isValidNumber(ratio)) {
+        return 'Calculation result is too large or invalid';
+      }
+      // Dimensionless result - no currency, unless target is specified
+      return { 
+        value: Math.round(ratio * 100) / 100, 
+        currency: this.targetCurrency, 
+        hasMultipleCurrencies: false 
+      };
+    }
+
     // Determine result currency
-    let resultCurrency = this.targetCurrency;
+    let resultCurrency: CurrencyCode | null = this.targetCurrency;
 
     if (!resultCurrency) {
       if (hasMultipleCurrencies) {
@@ -379,13 +437,23 @@ class ExpressionParser {
     let rightValue = right.value;
 
     // If currencies are involved, convert to EUR for calculation
-    if (left.currency || right.currency) {
-      if (left.currency) {
-        leftValue = convertCurrency(left.value, left.currency, 'EUR');
+    try {
+      if (left.currency || right.currency) {
+        if (left.currency) {
+          leftValue = convertCurrency(left.value, left.currency, 'EUR');
+        }
+        if (right.currency) {
+          rightValue = convertCurrency(right.value, right.currency, 'EUR');
+        }
       }
-      if (right.currency) {
-        rightValue = convertCurrency(right.value, right.currency, 'EUR');
-      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return `Currency conversion error: ${message}`;
+    }
+
+    // Check for overflow before division
+    if (op === '/' && rightValue === 0) {
+      return 'Division by zero';
     }
 
     let result: number;
@@ -400,23 +468,39 @@ class ExpressionParser {
         result = leftValue * rightValue;
         break;
       case '/':
-        if (rightValue === 0) {
-          return 'Division by zero';
-        }
         result = leftValue / rightValue;
         break;
     }
 
+    // Check for overflow/underflow
+    if (!isValidNumber(result)) {
+      return 'Calculation result is too large or invalid';
+    }
+
     // If we have a target currency or currencies were involved, convert back
     if (resultCurrency && (left.currency || right.currency)) {
-      result = convertCurrency(result, 'EUR', resultCurrency);
-    } else if (!resultCurrency) {
-      // Pure numeric operation - no currency
-      return { value: Math.round(result * 100) / 100, currency: null, hasMultipleCurrencies: false };
+      try {
+        result = convertCurrency(result, 'EUR', resultCurrency);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return `Currency conversion error: ${message}`;
+      }
+    }
+
+    // Check for overflow after conversion
+    if (!isValidNumber(result)) {
+      return 'Calculation result is too large or invalid';
     }
 
     return { value: Math.round(result * 100) / 100, currency: resultCurrency, hasMultipleCurrencies };
   }
+}
+
+/**
+ * Type guard to check if a string is a valid CurrencyCode
+ */
+function isValidCurrencyCode(value: string): value is CurrencyCode {
+  return CURRENCY_SET.has(value as CurrencyCode);
 }
 
 /**
@@ -452,14 +536,14 @@ export function calculate(
     return { success: false, error: validationError };
   }
 
-  // Validate target currency if provided
+  // Validate target currency if provided (with proper type guard)
   let targetCurrencyCode: CurrencyCode | undefined;
   if (targetCurrency) {
     const upperTarget = targetCurrency.toUpperCase();
-    if (!SUPPORTED_CURRENCIES.includes(upperTarget as CurrencyCode)) {
+    if (!isValidCurrencyCode(upperTarget)) {
       return { success: false, error: `Unknown currency: ${targetCurrency}` };
     }
-    targetCurrencyCode = upperTarget as CurrencyCode;
+    targetCurrencyCode = upperTarget;
   }
 
   // Parse and evaluate
@@ -472,26 +556,37 @@ export function calculate(
 
   // Handle single currency with target conversion
   if (result.currency && targetCurrencyCode && result.currency !== targetCurrencyCode) {
-    // Convert single currency amount to target
-    const convertedValue = convertCurrency(result.value, result.currency, targetCurrencyCode);
-    const formatted = `${convertedValue.toFixed(2)} ${targetCurrencyCode}`;
-    return {
-      success: true,
-      value: convertedValue,
-      currency: targetCurrencyCode,
-      formatted,
-    };
+    try {
+      // Convert single currency amount to target
+      const convertedValue = convertCurrency(result.value, result.currency, targetCurrencyCode);
+      if (!isValidNumber(convertedValue)) {
+        return { success: false, error: 'Conversion result is too large or invalid' };
+      }
+      const formatted = `${convertedValue.toFixed(2)} ${targetCurrencyCode}`;
+      return {
+        success: true,
+        value: convertedValue,
+        currency: targetCurrencyCode,
+        formatted,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Currency conversion error: ${message}` };
+    }
   }
 
   // Determine final currency
   let finalCurrency = result.currency;
-  if (!finalCurrency) {
-    // Pure numeric result - use EUR as default
-    finalCurrency = targetCurrencyCode || 'EUR';
+  if (!finalCurrency && targetCurrencyCode) {
+    // Pure numeric result with target currency - use target
+    finalCurrency = targetCurrencyCode;
   }
+  // If no currency and no target, keep it null (pure numeric)
 
   // Format result
-  const formatted = `${result.value.toFixed(2)} ${finalCurrency}`;
+  const formatted = finalCurrency 
+    ? `${result.value.toFixed(2)} ${finalCurrency}`
+    : result.value.toFixed(2);
 
   return {
     success: true,

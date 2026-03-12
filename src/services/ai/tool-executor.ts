@@ -256,14 +256,19 @@ function executeGetExchangeRates(): ToolResult {
 // === Calculator tool ===
 
 function executeCalculate(input: Record<string, unknown>): ToolResult {
-  const expression = input.expression as string;
-  const targetCurrency = input.target_currency as string | undefined;
-
-  if (!expression) {
-    return { success: false, error: 'expression is required' };
+  // Runtime validation for expression
+  const expression = input.expression;
+  if (typeof expression !== 'string' || expression.trim().length === 0) {
+    return { success: false, error: 'expression is required and must be a non-empty string' };
   }
 
-  const result = calculate(expression, targetCurrency);
+  // Runtime validation for target_currency (optional)
+  const targetCurrency = input.target_currency;
+  if (targetCurrency !== undefined && typeof targetCurrency !== 'string') {
+    return { success: false, error: 'target_currency must be a string' };
+  }
+
+  const result = calculate(expression, targetCurrency as string | undefined);
 
   if (result.success) {
     return {
