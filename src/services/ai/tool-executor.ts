@@ -42,7 +42,7 @@ export async function executeTool(
       case 'get_exchange_rates':
         return executeGetExchangeRates();
       case 'calculate':
-        return executeCalculate(input);
+        return await executeCalculate(input);
       case 'set_budget':
         return await executeSetBudget(input, ctx);
       case 'delete_budget':
@@ -255,7 +255,7 @@ function executeGetExchangeRates(): ToolResult {
 
 // === Calculator tool ===
 
-function executeCalculate(input: Record<string, unknown>): ToolResult {
+async function executeCalculate(input: Record<string, unknown>): Promise<ToolResult> {
   // Runtime validation for expression
   const expression = input.expression;
   if (typeof expression !== 'string' || expression.trim().length === 0) {
