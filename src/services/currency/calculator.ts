@@ -48,18 +48,37 @@ function looksLikeCurrencyCode(str: string): boolean {
 const CURRENCY_SET = new Set(SUPPORTED_CURRENCIES);
 
 /**
- * Check if a number string has valid format (at most one decimal point)
+ * Check if a number string has valid format (at most one decimal point, valid exponent)
  */
 function isValidNumberFormat(numStr: string): boolean {
   // Empty string is invalid
   if (numStr.length === 0) return false;
   
-  // Count decimal points
+  // Count decimal points and check exponent format
   let decimalCount = 0;
-  for (const char of numStr) {
+  let hasExponent = false;
+  let justAfterExponent = false;
+  
+  for (let i = 0; i < numStr.length; i++) {
+    const char = numStr[i];
+    
     if (char === '.') {
+      if (hasExponent) return false; // No decimals in exponent part
       decimalCount++;
       if (decimalCount > 1) return false;
+    } else if (char === 'e' || char === 'E') {
+      if (hasExponent) return false; // Only one exponent allowed
+      if (i === 0) return false; // Can't start with e
+      hasExponent = true;
+      justAfterExponent = true;
+    } else if (char === '+' || char === '-') {
+      // Only allowed right after 'e' or 'E'
+      if (!justAfterExponent) return false;
+      justAfterExponent = false;
+    } else if (/\d/.test(char!)) {
+      justAfterExponent = false;
+    } else {
+      return false; // Invalid character
     }
   }
   
@@ -108,14 +127,23 @@ function tokenizeExpression(expr: string): Token[] | string {
       continue;
     }
 
-    // Numbers with optional currency suffix
+    // Numbers with optional currency suffix (including scientific notation)
     if (/\d/.test(char!) || char === '.') {
       let numStr = '';
 
-      // Read number (digits and decimal point)
-      while (pos < expr.length && (/\d/.test(expr[pos]!) || expr[pos] === '.')) {
-        numStr += expr[pos];
-        pos++;
+      // Read number (digits, decimal point, and scientific notation)
+      while (pos < expr.length) {
+        const c = expr[pos]!;
+        if (/\d/.test(c) || c === '.' || c === 'e' || c === 'E') {
+          numStr += c;
+          pos++;
+        } else if ((c === '+' || c === '-') && numStr.length > 0 && (numStr.endsWith('e') || numStr.endsWith('E'))) {
+          // Sign after exponent is part of number
+          numStr += c;
+          pos++;
+        } else {
+          break;
+        }
       }
 
       // Validate number format (reject malformed like "1..2", ".1.", etc.)
@@ -128,7 +156,7 @@ function tokenizeExpression(expr: string): Token[] | string {
         return `Invalid number: ${numStr}`;
       }
 
-      // Check for overflow
+      // Check for overflow (including numbers that parsed as Infinity)
       if (!isFinite(num)) {
         return 'Number is too large';
       }

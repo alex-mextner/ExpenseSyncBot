@@ -262,7 +262,8 @@ describe('Calculator', () => {
     });
 
     test('handles multiplication overflow', () => {
-      const result = calculate('99999999999999999999*99999999999999999999');
+      // 1e200 * 1e200 = 1e400 which is Infinity
+      const result = calculate('1e200*1e200');
       expect(result.success).toBe(false);
       expect((result as { error: string }).error).toMatch(/too large|overflow|infinity/i);
     });
