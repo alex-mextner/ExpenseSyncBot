@@ -16,12 +16,33 @@ export interface CalculateError {
 
 export type CalculatorResult = CalculateResult | CalculateError;
 
-type Token =
-  | { type: 'number'; value: number }
-  | { type: 'currency'; value: number; currency: CurrencyCode }
-  | { type: 'operator'; value: '+' | '-' | '*' | '/' }
-  | { type: 'lparen' }
-  | { type: 'rparen' };
+type OperatorToken = { type: 'operator'; value: '+' | '-' | '*' | '/' };
+type NumberToken = { type: 'number'; value: number };
+type CurrencyToken = { type: 'currency'; value: number; currency: CurrencyCode };
+type LParenToken = { type: 'lparen' };
+type RParenToken = { type: 'rparen' };
+
+type Token = OperatorToken | NumberToken | CurrencyToken | LParenToken | RParenToken;
+
+// Type guards for narrowing Token types
+function isOperatorToken(token: Token | null): token is OperatorToken {
+  return token !== null && token.type === 'operator';
+}
+
+function isNumberToken(token: Token | null): token is NumberToken {
+  return token !== null && token.type === 'number';
+}
+
+function isCurrencyToken(token: Token | null): token is CurrencyToken {
+  return token !== null && token.type === 'currency';
+}
+
+/**
+ * Check if a string looks like a currency code (3 uppercase letters)
+ */
+function looksLikeCurrencyCode(str: string): boolean {
+  return /^[A-Z]{3}$/.test(str);
+}
 
 /**
  * Tokenize expression into numbers, currencies, operators, and parentheses
@@ -87,6 +108,11 @@ function tokenizeExpression(expr: string): Token[] | string {
       if (matchedCurrency) {
         tokens.push({ type: 'currency', value: num, currency: matchedCurrency });
       } else {
+        // Check if it looks like a currency code but is unknown
+        const possibleCurrency = remaining.slice(0, 3).toUpperCase();
+        if (remaining.length >= 3 && looksLikeCurrencyCode(possibleCurrency)) {
+          return `Unknown currency: ${possibleCurrency}`;
+        }
         tokens.push({ type: 'number', value: num });
       }
       continue;
@@ -96,6 +122,60 @@ function tokenizeExpression(expr: string): Token[] | string {
   }
 
   return tokens;
+}
+
+/**
+ * Validate token sequence for syntax errors
+ */
+function validateTokens(tokens: Token[]): string | null {
+  let expectOperand = true; // Start expecting an operand (number, currency, or lparen)
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+
+    if (expectOperand) {
+      // Expecting: number, currency, lparen, or unary +/-
+      if (token.type === 'number' || token.type === 'currency') {
+        expectOperand = false;
+      } else if (token.type === 'lparen') {
+        // Still expecting operand after (
+      } else if (token.type === 'operator') {
+        // Only unary + or - is allowed when expecting operand
+        if (!isOperatorToken(token) || (token.value !== '+' && token.value !== '-')) {
+          return `Unexpected operator '${isOperatorToken(token) ? token.value : ''}' - expected number or currency`;
+        }
+        // After unary operator, still expect operand
+      } else if (token.type === 'rparen') {
+        return 'Unexpected closing parenthesis without matching opening';
+      }
+    } else {
+      // Expecting: operator or rparen
+      if (token.type === 'operator') {
+        expectOperand = true;
+      } else if (token.type === 'rparen') {
+        // After ), can have operator or another )
+        expectOperand = false;
+      } else {
+        // number, currency, or lparen after operand - missing operator
+        return 'Missing operator between values';
+      }
+    }
+  }
+
+  if (expectOperand) {
+    return 'Expression ends with operator - expected number or currency';
+  }
+
+  // Check parentheses balance
+  let depth = 0;
+  for (const token of tokens) {
+    if (token.type === 'lparen') depth++;
+    if (token.type === 'rparen') depth--;
+    if (depth < 0) return 'Unbalanced parentheses';
+  }
+  if (depth !== 0) return 'Unbalanced parentheses';
+
+  return null;
 }
 
 interface ParsedValue {
@@ -147,9 +227,9 @@ class ExpressionParser {
     let left = this.parseMulDiv();
     if (typeof left === 'string') return left;
 
-    while (this.current()?.type === 'operator' &&
-           (this.current()!.value === '+' || this.current()!.value === '-')) {
-      const op = this.current()!.value as '+' | '-';
+    const curr = this.current();
+    while (isOperatorToken(curr) && (curr.value === '+' || curr.value === '-')) {
+      const op = curr.value;
       this.advance();
 
       const right = this.parseMulDiv();
@@ -166,9 +246,9 @@ class ExpressionParser {
     let left = this.parseUnary();
     if (typeof left === 'string') return left;
 
-    while (this.current()?.type === 'operator' &&
-           (this.current()!.value === '*' || this.current()!.value === '/')) {
-      const op = this.current()!.value as '*' | '/';
+    const curr = this.current();
+    while (isOperatorToken(curr) && (curr.value === '*' || curr.value === '/')) {
+      const op = curr.value;
       this.advance();
 
       const right = this.parseUnary();
@@ -184,14 +264,14 @@ class ExpressionParser {
   private parseUnary(): ParsedValue | string {
     const token = this.current();
 
-    if (token?.type === 'operator' && token.value === '-') {
+    if (isOperatorToken(token) && token.value === '-') {
       this.advance();
       const operand = this.parsePrimary();
       if (typeof operand === 'string') return operand;
       return { value: -operand.value, currency: operand.currency, hasMultipleCurrencies: operand.hasMultipleCurrencies };
     }
 
-    if (token?.type === 'operator' && token.value === '+') {
+    if (isOperatorToken(token) && token.value === '+') {
       this.advance();
       return this.parsePrimary();
     }
@@ -220,13 +300,14 @@ class ExpressionParser {
       return result;
     }
 
-    // Number or currency
-    if (token.type === 'number') {
+    // Number
+    if (isNumberToken(token)) {
       this.advance();
       return { value: token.value, currency: null, hasMultipleCurrencies: false };
     }
 
-    if (token.type === 'currency') {
+    // Currency
+    if (isCurrencyToken(token)) {
       this.advance();
       return { value: token.value, currency: token.currency, hasMultipleCurrencies: false };
     }
@@ -324,6 +405,12 @@ export function calculate(
     return { success: false, error: tokens };
   }
 
+  // Validate token sequence
+  const validationError = validateTokens(tokens);
+  if (validationError) {
+    return { success: false, error: validationError };
+  }
+
   // Validate target currency if provided
   let targetCurrencyCode: CurrencyCode | undefined;
   if (targetCurrency) {
@@ -340,6 +427,19 @@ export function calculate(
 
   if (typeof result === 'string') {
     return { success: false, error: result };
+  }
+
+  // Handle single currency with target conversion
+  if (result.currency && targetCurrencyCode && result.currency !== targetCurrencyCode) {
+    // Convert single currency amount to target
+    const convertedValue = convertCurrency(result.value, result.currency, targetCurrencyCode);
+    const formatted = `${convertedValue.toFixed(2)} ${targetCurrencyCode}`;
+    return {
+      success: true,
+      value: convertedValue,
+      currency: targetCurrencyCode,
+      formatted,
+    };
   }
 
   // Determine final currency
