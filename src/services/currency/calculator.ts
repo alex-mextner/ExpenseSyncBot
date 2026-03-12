@@ -50,14 +50,21 @@ function looksLikeCurrencyCode(str: string): boolean {
 function tokenizeExpression(expr: string): Token[] | string {
   const tokens: Token[] = [];
   let pos = 0;
-  const trimmed = expr.replace(/\s+/g, '');
 
+  // Check for empty expression (after trimming whitespace)
+  const trimmed = expr.trim();
   if (trimmed.length === 0) {
     return 'Empty expression';
   }
 
-  while (pos < trimmed.length) {
-    const char = trimmed[pos];
+  while (pos < expr.length) {
+    const char = expr[pos];
+
+    // Skip whitespace
+    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+      pos++;
+      continue;
+    }
 
     // Operators
     if (char === '+' || char === '-' || char === '*' || char === '/') {
@@ -83,8 +90,8 @@ function tokenizeExpression(expr: string): Token[] | string {
       let numStr = '';
 
       // Read number (digits and decimal point)
-      while (pos < trimmed.length && (/\d/.test(trimmed[pos]!) || trimmed[pos] === '.')) {
-        numStr += trimmed[pos];
+      while (pos < expr.length && (/\d/.test(expr[pos]!) || expr[pos] === '.')) {
+        numStr += expr[pos];
         pos++;
       }
 
@@ -93,8 +100,13 @@ function tokenizeExpression(expr: string): Token[] | string {
         return `Invalid number: ${numStr}`;
       }
 
-      // Check for currency suffix
-      const remaining = trimmed.slice(pos);
+      // Check for currency suffix (skip any whitespace before currency)
+      const savedPos = pos;
+      while (pos < expr.length && (expr[pos] === ' ' || expr[pos] === '\t')) {
+        pos++;
+      }
+      
+      const remaining = expr.slice(pos);
       let matchedCurrency: CurrencyCode | null = null;
 
       for (const curr of SUPPORTED_CURRENCIES) {
@@ -108,6 +120,9 @@ function tokenizeExpression(expr: string): Token[] | string {
       if (matchedCurrency) {
         tokens.push({ type: 'currency', value: num, currency: matchedCurrency });
       } else {
+        // Restore position if no currency found (we consumed whitespace for nothing)
+        pos = savedPos;
+        
         // Check if it looks like a currency code but is unknown
         const possibleCurrency = remaining.slice(0, 3).toUpperCase();
         if (remaining.length >= 3 && looksLikeCurrencyCode(possibleCurrency)) {
@@ -128,6 +143,10 @@ function tokenizeExpression(expr: string): Token[] | string {
  * Validate token sequence for syntax errors
  */
 function validateTokens(tokens: Token[]): string | null {
+  if (tokens.length === 0) {
+    return 'Empty expression';
+  }
+  
   let expectOperand = true; // Start expecting an operand (number, currency, or lparen)
 
   for (let i = 0; i < tokens.length; i++) {
