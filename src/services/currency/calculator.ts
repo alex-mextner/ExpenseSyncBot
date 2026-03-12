@@ -147,6 +147,20 @@ function validateTokens(tokens: Token[]): string | null {
     return 'Empty expression';
   }
   
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    const prevToken = i > 0 ? tokens[i - 1] : null;
+
+    // Check for consecutive operators
+    if (token.type === 'operator' && prevToken?.type === 'operator') {
+      // Allow unary + or - only at start, after (, or after another operator
+      // But we already have prevToken as operator, so this is consecutive
+      // Only allow if current is + or - (unary) AND prev is binary context
+      // Actually, for simplicity: reject all consecutive operators
+      return 'Consecutive operators are not allowed';
+    }
+  }
+
   let expectOperand = true; // Start expecting an operand (number, currency, or lparen)
 
   for (let i = 0; i < tokens.length; i++) {
