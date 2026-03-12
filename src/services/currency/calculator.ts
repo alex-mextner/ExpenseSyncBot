@@ -83,6 +83,9 @@ function isValidNumberFormat(numStr: string): boolean {
   }
   
   // Must have at least one digit
+  // If exponent was started, must have exponent value (not ending with e/E/+/-)
+  if (justAfterExponent) return false;
+  
   return /\d/.test(numStr);
 }
 
@@ -134,9 +137,37 @@ function tokenizeExpression(expr: string): Token[] | string {
       // Read number (digits, decimal point, and scientific notation)
       while (pos < expr.length) {
         const c = expr[pos]!;
-        if (/\d/.test(c) || c === '.' || c === 'e' || c === 'E') {
+        if (/\d/.test(c) || c === '.') {
           numStr += c;
           pos++;
+        } else if ((c === 'e' || c === 'E') && numStr.length > 0) {
+          // Check if this looks like scientific notation
+          // Only consume 'e' if followed by digit or +/- and then digit
+          const nextPos = pos + 1;
+          if (nextPos < expr.length) {
+            const nextChar = expr[nextPos]!;
+            if (/\d/.test(nextChar)) {
+              // e followed by digit - valid scientific notation
+              numStr += c;
+              pos++;
+            } else if ((nextChar === '+' || nextChar === '-') && nextPos + 1 < expr.length) {
+              const afterSign = expr[nextPos + 1]!;
+              if (/\d/.test(afterSign)) {
+                // e+digit or e-digit - valid scientific notation
+                numStr += c;
+                pos++;
+              } else {
+                // e+ or e- not followed by digit - not scientific notation
+                break;
+              }
+            } else {
+              // e not followed by valid exponent - might be currency code like EUR
+              break;
+            }
+          } else {
+            // e at end of expression - not scientific notation
+            break;
+          }
         } else if ((c === '+' || c === '-') && numStr.length > 0 && (numStr.endsWith('e') || numStr.endsWith('E'))) {
           // Sign after exponent is part of number
           numStr += c;
