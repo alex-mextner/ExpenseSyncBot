@@ -77,6 +77,32 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
 
+  // === Calculator tool ===
+  {
+    name: 'calculate',
+    description:
+      'CRITICAL: ALWAYS use this tool for ANY arithmetic calculation, currency conversion, or math operation. NEVER calculate mentally or intuitively - ALWAYS call this tool. ' +
+      'Supports: basic arithmetic (+, -, *, /), parentheses for grouping, currency amounts (e.g., 100USD, 50EUR), mixed currency operations (converted via EUR), and currency conversion. ' +
+      'Examples: "10+20*3", "(10+5)*2", "100USD", "100USD+50EUR", "100USD+5000RUB", "100USD/3". ' +
+      'Use target_currency to convert result to a specific currency (e.g., "100USD" with target_currency="EUR" converts 100 USD to EUR).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        expression: {
+          type: 'string',
+          description:
+            'Expression with numbers and/or currency amounts, operators (+, -, *, /), and parentheses. Examples: "10+20*3", "100USD+50EUR", "(100+50)*2", "100USD". Currency format: <NUMBER><CURRENCY_CODE> (e.g., 100USD, 50EUR, 5000RUB).',
+        },
+        target_currency: {
+          type: 'string',
+          description:
+            'Optional currency code to convert the result to (e.g., "EUR", "USD", "RUB"). If not specified, result stays in the original currency or EUR for mixed currencies.',
+        },
+      },
+      required: ['expression'],
+    },
+  },
+
   // === Write tools ===
   {
     name: 'set_budget',
@@ -238,6 +264,7 @@ export const TOOL_LABELS: Record<string, string> = {
   get_categories: 'Загружаю категории',
   get_group_settings: 'Читаю настройки',
   get_exchange_rates: 'Загружаю курсы валют',
+  calculate: 'Считаю',
   set_budget: 'Устанавливаю бюджет',
   delete_budget: 'Удаляю бюджет',
   add_expense: 'Записываю расход',

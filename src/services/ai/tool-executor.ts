@@ -10,6 +10,7 @@ import {
   convertCurrency,
   formatExchangeRatesForAI,
 } from '../currency/converter';
+import { calculate } from '../currency/calculator';
 import {
   readExpensesFromSheet,
   appendExpenseRow,
@@ -40,6 +41,8 @@ export async function executeTool(
         return executeGetGroupSettings(ctx);
       case 'get_exchange_rates':
         return executeGetExchangeRates();
+      case 'calculate':
+        return executeCalculate(input);
       case 'set_budget':
         return await executeSetBudget(input, ctx);
       case 'delete_budget':
@@ -248,6 +251,31 @@ function executeGetGroupSettings(ctx: AgentContext): ToolResult {
 
 function executeGetExchangeRates(): ToolResult {
   return { success: true, output: formatExchangeRatesForAI() };
+}
+
+// === Calculator tool ===
+
+function executeCalculate(input: Record<string, unknown>): ToolResult {
+  const expression = input.expression as string;
+  const targetCurrency = input.target_currency as string | undefined;
+
+  if (!expression) {
+    return { success: false, error: 'expression is required' };
+  }
+
+  const result = calculate(expression, targetCurrency);
+
+  if (result.success) {
+    return {
+      success: true,
+      output: `Result: ${result.formatted}`,
+    };
+  } else {
+    return {
+      success: false,
+      error: result.error,
+    };
+  }
 }
 
 // === Write tools ===
