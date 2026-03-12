@@ -246,8 +246,12 @@ class ExpressionParser {
     let left = this.parseMulDiv();
     if (typeof left === 'string') return left;
 
-    const curr = this.current();
-    while (isOperatorToken(curr) && (curr.value === '+' || curr.value === '-')) {
+    while (true) {
+      const curr = this.current();
+      if (!isOperatorToken(curr) || (curr.value !== '+' && curr.value !== '-')) {
+        break;
+      }
+      
       const op = curr.value;
       this.advance();
 
@@ -265,8 +269,12 @@ class ExpressionParser {
     let left = this.parseUnary();
     if (typeof left === 'string') return left;
 
-    const curr = this.current();
-    while (isOperatorToken(curr) && (curr.value === '*' || curr.value === '/')) {
+    while (true) {
+      const curr = this.current();
+      if (!isOperatorToken(curr) || (curr.value !== '*' && curr.value !== '/')) {
+        break;
+      }
+      
       const op = curr.value;
       this.advance();
 

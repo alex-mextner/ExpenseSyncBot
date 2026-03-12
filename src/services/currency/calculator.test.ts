@@ -1,6 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import { calculate, type CalculateResult } from './calculator';
-import * as converter from './converter';
 
 describe('Calculator', () => {
   describe('Pure arithmetic (no currencies)', () => {
