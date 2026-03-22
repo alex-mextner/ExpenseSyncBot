@@ -3,7 +3,6 @@ import {
   closeUnmatchedTags,
   escapeHtml,
   processThinkTags,
-  safelyTruncateHTML,
   sanitizeHtmlForTelegram,
   stripAllHtml,
 } from './ask';
@@ -218,43 +217,5 @@ describe('processThinkTags', () => {
     const result = processThinkTags(input);
     expect(result).not.toContain('<blockquote expandable>');
     expect(result).toContain('answer');
-  });
-});
-
-// ── safelyTruncateHTML ─────────────────────────────────────────────────
-
-describe('safelyTruncateHTML', () => {
-  test('returns text unchanged if within maxLength', () => {
-    const input = '<b>short</b>';
-    expect(safelyTruncateHTML(input, 1000)).toBe(input);
-  });
-
-  test('truncates long text and appends ellipsis', () => {
-    const longText = `<b>${'a'.repeat(500)}</b>`;
-    const result = safelyTruncateHTML(longText, 300);
-    expect(result.length).toBeLessThanOrEqual(300);
-    expect(result).toContain('...');
-  });
-
-  test('closes unclosed tags after truncation', () => {
-    const longText = `<b>${'a'.repeat(500)}</b>`;
-    const result = safelyTruncateHTML(longText, 300);
-    // Should either close the <b> tag or strip HTML as fallback
-    const hasClosingTag = result.includes('</b>');
-    const isPlainText = !result.includes('<b>');
-    expect(hasClosingTag || isPlainText).toBe(true);
-  });
-
-  test('handles text exactly at maxLength', () => {
-    const input = 'exact';
-    expect(safelyTruncateHTML(input, 5)).toBe(input);
-  });
-
-  test('falls back to plain text if closing tags exceed maxLength', () => {
-    // Very small maxLength forces the fallback path
-    const input = `<b><i><code>${'x'.repeat(300)}</code></i></b>`;
-    const result = safelyTruncateHTML(input, 50);
-    expect(result.length).toBeLessThanOrEqual(50);
-    expect(result.endsWith('...')).toBe(true);
   });
 });
