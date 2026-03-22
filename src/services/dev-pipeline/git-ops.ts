@@ -97,7 +97,7 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
     await $`git worktree remove ${worktreePath} --force`.quiet();
     logger.info(`[GIT-OPS] Removed worktree: ${worktreePath}`);
   } catch (error) {
-    logger.error({ err: error }, '[GIT-OPS] Failed to remove worktree: ${worktreePath}');
+    logger.error({ err: error }, `[GIT-OPS] Failed to remove worktree: ${worktreePath}`);
   }
 }
 
