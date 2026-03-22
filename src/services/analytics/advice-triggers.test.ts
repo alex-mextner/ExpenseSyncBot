@@ -20,7 +20,12 @@ mock.module('../../database', () => ({
   },
 }));
 
+// Load real SpendingAnalytics with the mocked database so other test files
+// that run after this one can still get the real class from the module cache.
+const { SpendingAnalytics } = await import('./spending-analytics');
+
 mock.module('./spending-analytics', () => ({
+  SpendingAnalytics,
   spendingAnalytics: {
     getFinancialSnapshot: mock(() => buildNeutralSnapshot()),
   },
