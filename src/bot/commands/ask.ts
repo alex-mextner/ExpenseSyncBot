@@ -58,7 +58,7 @@ export async function handleAskQuestion(
   }
 
   // Check topic restriction
-  const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  const messageThreadId = ctx.update?.message?.message_thread_id;
   if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
     logger.info(
       `[ASK] Ignoring: question from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,

@@ -32,7 +32,7 @@ export async function handleTopicCommand(ctx: Ctx['Command']): Promise<void> {
   }
 
   // Get thread_id from message context
-  const threadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  const threadId = ctx.update?.message?.message_thread_id;
 
   // Get command argument
   const commandText = ctx.text || '';

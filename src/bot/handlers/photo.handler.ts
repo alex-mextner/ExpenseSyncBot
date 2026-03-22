@@ -13,7 +13,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   const photos = ctx.photo;
 
   // Get thread ID from payload (for forum topics)
-  const threadId = (ctx as any).payload?.message_thread_id;
+  const threadId = ctx.update?.message?.message_thread_id;
 
   logger.info(
     { data: { messageId, threadId, chatType: ctx.chat?.type } },

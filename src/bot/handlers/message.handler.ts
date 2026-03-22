@@ -5,6 +5,7 @@ import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
+import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { silentSyncBudgets } from '../commands/budget';
@@ -100,7 +101,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   }
 
   // Check topic restriction
-  const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  const messageThreadId = ctx.update?.message?.message_thread_id;
   if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
     logger.info(
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
@@ -624,7 +625,7 @@ async function handleBulkCorrectionInput(
   }
 
   // Build current summary (from AI summary if exists, otherwise from items)
-  let currentSummary: any;
+  let currentSummary: ReceiptSummary;
   if (queueItem.ai_summary) {
     try {
       currentSummary = JSON.parse(queueItem.ai_summary);

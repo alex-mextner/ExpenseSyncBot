@@ -2,6 +2,11 @@ import type { Database } from 'bun:sqlite';
 import type { CurrencyCode } from '../../config/constants';
 import type { CreateGroupData, Group, UpdateGroupData } from '../types';
 
+/** Raw row returned by SQLite — enabled_currencies is stored as a JSON string */
+interface GroupRow extends Omit<Group, 'enabled_currencies'> {
+  enabled_currencies: string;
+}
+
 export class GroupRepository {
   constructor(private db: Database) {}
 
@@ -9,7 +14,7 @@ export class GroupRepository {
    * Find group by Telegram group ID
    */
   findByTelegramGroupId(telegramGroupId: number): Group | null {
-    const query = this.db.query<Group, [number]>(`
+    const query = this.db.query<GroupRow, [number]>(`
       SELECT * FROM groups WHERE telegram_group_id = ?
     `);
 
@@ -20,9 +25,7 @@ export class GroupRepository {
     // Parse JSON fields
     return {
       ...result,
-      enabled_currencies: JSON.parse(
-        result.enabled_currencies as unknown as string,
-      ) as CurrencyCode[],
+      enabled_currencies: JSON.parse(result.enabled_currencies) as CurrencyCode[],
     };
   }
 
@@ -30,7 +33,7 @@ export class GroupRepository {
    * Find group by ID
    */
   findById(id: number): Group | null {
-    const query = this.db.query<Group, [number]>(`
+    const query = this.db.query<GroupRow, [number]>(`
       SELECT * FROM groups WHERE id = ?
     `);
 
@@ -40,9 +43,7 @@ export class GroupRepository {
 
     return {
       ...result,
-      enabled_currencies: JSON.parse(
-        result.enabled_currencies as unknown as string,
-      ) as CurrencyCode[],
+      enabled_currencies: JSON.parse(result.enabled_currencies) as CurrencyCode[],
     };
   }
 
@@ -131,10 +132,10 @@ export class GroupRepository {
    * Get all groups
    */
   getAll(): Group[] {
-    const query = this.db.query<Group, []>(`SELECT * FROM groups`);
+    const query = this.db.query<GroupRow, []>(`SELECT * FROM groups`);
     return query.all().map((row) => ({
       ...row,
-      enabled_currencies: JSON.parse(row.enabled_currencies as unknown as string) as CurrencyCode[],
+      enabled_currencies: JSON.parse(row.enabled_currencies) as CurrencyCode[],
     }));
   }
 

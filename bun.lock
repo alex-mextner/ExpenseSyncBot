@@ -21,6 +21,7 @@
       },
       "devDependencies": {
         "@biomejs/biome": "^2.4.8",
+        "@gramio/types": "9.2.3",
         "@types/bun": "latest",
         "@types/node": "^24.10.1",
         "@types/node-cron": "^3.0.11",
