@@ -120,16 +120,17 @@ describe('truncateForTelegram', () => {
     expect(result).not.toContain('...');
   });
 
-  test('removes incomplete tag before newline (mid-stream delta split)', () => {
-    // Simulates: model streams `</blockquote` then `\n` as one delta chunk
+  test('completes incomplete tag before newline (model omitted closing >)', () => {
+    // Model generated </blockquote without > before the newline
     const text =
       '<blockquote expandable>⚙️ <b>Инструменты</b></blockquote>\n\n<blockquote expandable>⚙️ <b>Инструменты</b></blockquote\nmore text';
     const result = truncate(text);
-    // Incomplete </blockquote (no >) must be removed
+    // Incomplete </blockquote must be completed to </blockquote>, not removed
     expect(result).not.toMatch(/<\/blockquote(?!>)/);
+    expect(result).toContain('</blockquote>');
     // Content after the newline must survive
     expect(result).toContain('more text');
-    // First valid blockquote must stay intact
+    // Valid blockquotes must stay intact
     expect(result).toContain('<blockquote expandable>');
   });
 

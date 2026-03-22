@@ -264,10 +264,10 @@ export class TelegramStreamWriter {
       wasTruncated = true;
     }
 
-    // Remove incomplete HTML tags — handles both hard truncation and mid-stream delta splits.
-    // Case 1: incomplete tag before a newline (e.g. model streams </blockquote then \n as one delta)
-    truncated = truncated.replace(/<[a-zA-Z/][^>\n]*(?=\n)/g, '');
-    // Case 2: incomplete tag at end of string (e.g. after truncation or stream paused mid-tag)
+    // Fix incomplete HTML tags — the model sometimes omits the closing > of a tag.
+    // Case 1: incomplete tag before a newline (e.g. </blockquote\n → </blockquote>\n)
+    truncated = truncated.replace(/<[a-zA-Z/][^>\n]*(?=\n)/g, '$&>');
+    // Case 2: incomplete tag at end of string — remove it (no content to preserve)
     const lastTagStart = truncated.lastIndexOf('<');
     const lastTagEnd = truncated.lastIndexOf('>');
     if (lastTagStart > lastTagEnd) {
