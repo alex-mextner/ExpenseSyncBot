@@ -8,6 +8,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
 import type { ChatMessage } from '../../database/types';
+import { AnthropicError, NetworkError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
@@ -207,6 +208,16 @@ export class ExpenseBotAgent {
         return errorMsg;
       }
 
+      // Wrap unknown errors in typed classes for callers to handle uniformly
+      const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
+      const errCode = (error as NodeJS.ErrnoException).code;
+      if (errCode && networkCodes.includes(errCode)) {
+        throw new NetworkError((error as Error).message, errCode, error);
+      }
+      const errStatus = (error as { status?: number }).status;
+      if (typeof errStatus === 'number') {
+        throw new AnthropicError((error as Error).message, `HTTP_${errStatus}`, error);
+      }
       throw error;
     } finally {
       clearTimeout(timeout);
