@@ -1,5 +1,5 @@
 /**
- * HTML utilities for sanitizing and processing text for Telegram HTML parse mode.
+ * HTML and Markdown utilities for sanitizing text for Telegram parse modes.
  */
 
 /**
@@ -153,6 +153,32 @@ export function stripAllHtml(text: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"');
+}
+
+// MarkdownV2 special chars per Telegram docs: _ * [ ] ( ) ~ ` > # + - = | { } . !
+// The backslash itself must also be escaped.
+const MDV2_SPECIAL_RE = /[_*[\]()~`>#+\-=|{}.!\\]/g;
+const MDV2_DECODE_RE = /\\([_*[\]()~`>#+\-=|{}.!\\])/g;
+
+/**
+ * Escape text for Telegram MarkdownV2 parse mode.
+ * Idempotent: decodes existing backslash escapes first, then re-escapes everything.
+ */
+export function escapeMarkdownV2(text: string): string {
+  return text.replace(MDV2_DECODE_RE, '$1').replace(MDV2_SPECIAL_RE, '\\$&');
+}
+
+// Legacy Markdown special chars per Telegram docs: _ * ` [ ]
+// Backslash itself must also be escaped.
+const MD_SPECIAL_RE = /[_*`[\]\\]/g;
+const MD_DECODE_RE = /\\([_*`[\]\\])/g;
+
+/**
+ * Escape text for Telegram legacy Markdown parse mode.
+ * Idempotent: decodes existing backslash escapes first, then re-escapes everything.
+ */
+export function escapeMarkdown(text: string): string {
+  return text.replace(MD_DECODE_RE, '$1').replace(MD_SPECIAL_RE, '\\$&');
 }
 
 /**

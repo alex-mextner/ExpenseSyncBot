@@ -6,7 +6,7 @@ type PreRequestCtx = { method: string; params: Record<string, unknown> };
 describe('sanitizeHtmlPreRequest', () => {
   const hook = sanitizeHtmlPreRequest;
 
-  // ── Only fires when parse_mode === 'HTML' ─────────────────────────
+  // ── No parse_mode: leave as-is ────────────────────────────────────
 
   test('leaves text untouched when parse_mode is absent', async () => {
     const ctx: PreRequestCtx = {
@@ -17,16 +17,7 @@ describe('sanitizeHtmlPreRequest', () => {
     expect((result.params as { text: string }).text).toBe('cats & dogs');
   });
 
-  test('leaves text untouched when parse_mode is MarkdownV2', async () => {
-    const ctx: PreRequestCtx = {
-      method: 'sendMessage',
-      params: { text: 'cats & dogs', parse_mode: 'MarkdownV2' },
-    };
-    const result = await hook(ctx as never);
-    expect((result.params as { text: string }).text).toBe('cats & dogs');
-  });
-
-  // ── sendMessage text sanitization ─────────────────────────────────
+  // ── HTML sanitization ─────────────────────────────────────────────
 
   test('escapes bare & in sendMessage text', async () => {
     const ctx: PreRequestCtx = {
@@ -58,8 +49,6 @@ describe('sanitizeHtmlPreRequest', () => {
     expect(text).toBe('<b>bold</b> and <i>italic</i>');
   });
 
-  // ── editMessageText text sanitization ─────────────────────────────
-
   test('sanitizes text in editMessageText', async () => {
     const ctx: PreRequestCtx = {
       method: 'editMessageText',
@@ -71,8 +60,6 @@ describe('sanitizeHtmlPreRequest', () => {
     expect(text).toContain('header');
     expect(text).toContain('&amp;');
   });
-
-  // ── caption sanitization (photos, documents) ──────────────────────
 
   test('sanitizes caption in sendPhoto', async () => {
     const ctx: PreRequestCtx = {
@@ -86,12 +73,137 @@ describe('sanitizeHtmlPreRequest', () => {
     expect(caption).toContain('&amp;');
   });
 
-  // ── idempotence: safe to call twice ───────────────────────────────
-
-  test('calling hook twice produces same result (no double-escaping)', async () => {
+  test('HTML hook is idempotent (no double-escaping)', async () => {
     const ctx: PreRequestCtx = {
       method: 'sendMessage',
       params: { text: 'Revenue & expenses: <b>€100</b>', parse_mode: 'HTML' },
+    };
+    const first = await hook(ctx as never);
+    const secondCtx = { method: 'sendMessage', params: { ...first.params } };
+    const second = await hook(secondCtx as never);
+    expect((first.params as { text: string }).text).toBe((second.params as { text: string }).text);
+  });
+
+  // ── MarkdownV2 escaping ───────────────────────────────────────────
+
+  test('escapes _ in MarkdownV2 text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'snake_case variable', parse_mode: 'MarkdownV2' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('snake\\_case variable');
+  });
+
+  test('escapes * in MarkdownV2 text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'price * 100', parse_mode: 'MarkdownV2' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('price \\* 100');
+  });
+
+  test('escapes . and ! in MarkdownV2 text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'Hello world. Done!', parse_mode: 'MarkdownV2' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('Hello world\\. Done\\!');
+  });
+
+  test('escapes [ ] ( ) ~ > # + - = | { } in MarkdownV2', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: '[a](b) ~x~ >q# +1 -1 =x |y {z}', parse_mode: 'MarkdownV2' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe(
+      '\\[a\\]\\(b\\) \\~x\\~ \\>q\\# \\+1 \\-1 \\=x \\|y \\{z\\}',
+    );
+  });
+
+  test('does not change & in MarkdownV2 (not a special char)', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'cats & dogs', parse_mode: 'MarkdownV2' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('cats & dogs');
+  });
+
+  test('MarkdownV2 hook is idempotent (no double-escaping)', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'total: 100.50 (EUR) — done!', parse_mode: 'MarkdownV2' },
+    };
+    const first = await hook(ctx as never);
+    const secondCtx = { method: 'sendMessage', params: { ...first.params } };
+    const second = await hook(secondCtx as never);
+    expect((first.params as { text: string }).text).toBe((second.params as { text: string }).text);
+  });
+
+  test('escapes caption in MarkdownV2', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendPhoto',
+      params: { caption: 'receipt: 100.50 (EUR)', parse_mode: 'MarkdownV2' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { caption: string }).caption).toBe('receipt: 100\\.50 \\(EUR\\)');
+  });
+
+  // ── legacy Markdown escaping ──────────────────────────────────────
+
+  test('escapes _ in legacy Markdown text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'snake_case', parse_mode: 'Markdown' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('snake\\_case');
+  });
+
+  test('escapes * in legacy Markdown text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: '2 * 3 = 6', parse_mode: 'Markdown' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('2 \\* 3 = 6');
+  });
+
+  test('escapes backtick in legacy Markdown text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'run `ls -la` now', parse_mode: 'Markdown' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('run \\`ls -la\\` now');
+  });
+
+  test('escapes [ ] in legacy Markdown text', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'see [docs] for details', parse_mode: 'Markdown' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('see \\[docs\\] for details');
+  });
+
+  test('does not escape . or ! in legacy Markdown (not special there)', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'Hello world. Done!', parse_mode: 'Markdown' },
+    };
+    const result = await hook(ctx as never);
+    expect((result.params as { text: string }).text).toBe('Hello world. Done!');
+  });
+
+  test('legacy Markdown hook is idempotent (no double-escaping)', async () => {
+    const ctx: PreRequestCtx = {
+      method: 'sendMessage',
+      params: { text: 'snake_case and 2 * 3', parse_mode: 'Markdown' },
     };
     const first = await hook(ctx as never);
     const secondCtx = { method: 'sendMessage', params: { ...first.params } };
