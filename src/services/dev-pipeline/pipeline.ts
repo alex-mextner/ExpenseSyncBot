@@ -72,9 +72,9 @@ function parseTestCounts(output: string): { pass: number; fail: number; error: n
   const failMatch = output.match(/(\d+)\s+fail(?!\w)/);
   const errorMatch = output.match(/(\d+)\s+error/);
   return {
-    pass: passMatch ? parseInt(passMatch[1]!, 10) : 0,
-    fail: failMatch ? parseInt(failMatch[1]!, 10) : 0,
-    error: errorMatch ? parseInt(errorMatch[1]!, 10) : 0,
+    pass: passMatch ? parseInt(passMatch[1] ?? '0', 10) : 0,
+    fail: failMatch ? parseInt(failMatch[1] ?? '0', 10) : 0,
+    error: errorMatch ? parseInt(errorMatch[1] ?? '0', 10) : 0,
   };
 }
 
@@ -1008,8 +1008,9 @@ WORKFLOW:
     if (allPassed) {
       if (task.pr_number) {
         // PR already exists — we're in the fix cycle, push and show merge keyboard
+        if (!task.branch_name) throw new Error(`Task #${task.id} has pr_number but no branch_name`);
         await commitChanges(task.worktree_path, `fix: address review feedback (task #${task.id})`);
-        await pushBranch(task.worktree_path, task.branch_name!);
+        await pushBranch(task.worktree_path, task.branch_name);
 
         const _updated = transition(task, DevTaskState.AWAITING_MERGE);
 

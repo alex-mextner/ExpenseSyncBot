@@ -74,7 +74,8 @@ export async function createExpenseSpreadsheet(
     },
   });
 
-  const spreadsheetId = response.data.spreadsheetId!;
+  const spreadsheetId = response.data.spreadsheetId;
+  if (!spreadsheetId) throw new Error('Spreadsheet creation did not return an ID');
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
 
   // Get real sheetId from response
@@ -595,9 +596,9 @@ export async function readExpensesFromSheet(
   logger.info({ data: headers }, `[SHEETS] Headers`);
 
   // Find column indices
-  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0]!); // Дата
-  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1]!); // Категория
-  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2]!); // Комментарий
+  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? ''); // Дата
+  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? ''); // Категория
+  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? ''); // Комментарий
   const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader); // EUR (calc)
 
   if (dateCol === -1 || categoryCol === -1 || commentCol === -1) {
@@ -618,7 +619,7 @@ export async function readExpensesFromSheet(
       // Extract currency code from "USD ($)" -> "USD"
       const match = header.match(/^([A-Z]{3})\s*\(/);
       if (match) {
-        currencyColumns.push({ index: i, currency: match[1]! });
+        currencyColumns.push({ index: i, currency: match[1] ?? '' });
       }
     }
   }

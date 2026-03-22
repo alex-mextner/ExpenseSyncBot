@@ -287,7 +287,7 @@ describe('evaluateMathExpression', () => {
   test('100/3 → ~33.333', () => {
     const result = evaluateMathExpression('100/3');
     expect(result).not.toBeNull();
-    expect(result!).toBeCloseTo(33.333, 2);
+    expect(result as number).toBeCloseTo(33.333, 2);
   });
 
   // Mixed decimal separators

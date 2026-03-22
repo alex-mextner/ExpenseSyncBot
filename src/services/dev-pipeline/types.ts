@@ -126,8 +126,9 @@ export interface CreateDevTaskData {
 export interface UpdateDevTaskData {
   state?: DevTaskState;
   title?: string;
+  description?: string;
   branch_name?: string;
-  worktree_path?: string;
+  worktree_path?: string | null;
   pr_number?: number;
   pr_url?: string;
   design?: string;

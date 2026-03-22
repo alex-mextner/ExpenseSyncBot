@@ -192,7 +192,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
             await bot.api.setMessageReaction({
               chat_id: group.telegram_group_id,
               message_id: queueItem.message_id,
-              reaction: [{ type: 'emoji', emoji: '🤷‍♂' as any }],
+              reaction: [{ type: 'emoji', emoji: '🤷‍♂' }],
             });
             logger.info(`[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`);
           } catch (error) {
@@ -468,7 +468,7 @@ export async function showNextItemForConfirmation(
   // Add all possible categories (including confirmed custom ones) with their indices
   if (allPossibleCategories.length > 0) {
     for (let i = 0; i < allPossibleCategories.length; i++) {
-      const category = allPossibleCategories[i]!;
+      const category = allPossibleCategories[i] ?? '';
       buttons.push([
         {
           text: category,

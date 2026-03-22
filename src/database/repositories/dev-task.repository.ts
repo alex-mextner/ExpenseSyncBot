@@ -117,6 +117,11 @@ export class DevTaskRepository {
       values.push(data.title);
     }
 
+    if (data.description !== undefined) {
+      fields.push('description = ?');
+      values.push(data.description);
+    }
+
     if (data.branch_name !== undefined) {
       fields.push('branch_name = ?');
       values.push(data.branch_name);

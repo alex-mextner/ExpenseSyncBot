@@ -81,7 +81,8 @@ function evaluateTokens(tokens: MathToken[]): number | null {
         continue;
       }
     }
-    addQueue.push(tokens[i]!);
+    const token = tokens[i];
+    if (token !== undefined) addQueue.push(token);
     i++;
   }
 
@@ -338,11 +339,11 @@ function parseRest(rest: string | undefined): {
 
   if (words.length === 1) {
     // Only category, no comment
-    return { category: normalizeCategory(words[0]!), comment: '' };
+    return { category: normalizeCategory(words[0] ?? ''), comment: '' };
   }
 
   // Category is first word, comment is the rest (also capitalized)
-  const category = normalizeCategory(words[0]!);
+  const category = normalizeCategory(words[0] ?? '');
   const commentWords = words.slice(1);
 
   if (commentWords.length === 0) {

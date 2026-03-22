@@ -115,7 +115,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     if (!categoryTotals[expense.category]) {
       categoryTotals[expense.category] = 0;
     }
-    categoryTotals[expense.category]! += expense.eur_amount;
+    categoryTotals[expense.category] = (categoryTotals[expense.category] ?? 0) + expense.eur_amount;
   }
 
   // Calculate category averages from previous months
@@ -144,7 +144,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     if (!categoryAverages[expense.category]) {
       categoryAverages[expense.category] = { sum: 0, count: 0 };
     }
-    categoryAverages[expense.category]!.sum += expense.eur_amount;
+    const avgEntry = categoryAverages[expense.category];
+    if (avgEntry) avgEntry.sum += expense.eur_amount;
   }
 
   // Calculate category differences

@@ -66,9 +66,15 @@ function makeFakeStream(
   };
 }
 
-function makeTerminalStream(chunks: string[] = ['Done.']) {
-  // A stream that has no tool calls — agent loop exits cleanly
-  return makeFakeStream(chunks);
+/** Extract the first call args from a spy as Anthropic stream params */
+function getCallArgs(spy: {
+  mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
+}): Anthropic.MessageStreamParams {
+  const call = spy.mock.calls.at(0);
+  if (!call) throw new Error('Expected spy to be called');
+  const args = call.at(0);
+  if (args === undefined) throw new Error('Expected spy call args');
+  return args as Anthropic.MessageStreamParams;
 }
 
 // Minimal bot stub with tracked calls
@@ -172,7 +178,7 @@ describe('ExpenseBotAgent', () => {
       );
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       expect(callArgs.max_tokens).toBe(4096);
       expect(typeof callArgs.model).toBe('string');
     });
@@ -184,10 +190,10 @@ describe('ExpenseBotAgent', () => {
       );
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
       expect(Array.isArray(systemBlocks)).toBe(true);
-      expect(systemBlocks[0]!.text).toContain('CURRENT DATE');
+      expect(systemBlocks.at(0)?.text).toContain('CURRENT DATE');
     });
 
     it('includes user message as last message in messages array', async () => {
@@ -199,8 +205,9 @@ describe('ExpenseBotAgent', () => {
       const question = 'What is my total?';
       await agent.run(question, [], mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
-      const lastMsg = callArgs.messages[callArgs.messages.length - 1]!;
+      const callArgs = getCallArgs(streamSpy);
+      const lastMsg = callArgs.messages.at(-1);
+      if (!lastMsg) throw new Error('No messages in callArgs');
       expect(lastMsg.role).toBe('user');
       expect(lastMsg.content).toBe(question);
     });
@@ -213,9 +220,9 @@ describe('ExpenseBotAgent', () => {
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       expect(Array.isArray(callArgs.tools)).toBe(true);
-      expect(callArgs.tools!.length).toBeGreaterThan(0);
+      expect((callArgs.tools ?? []).length).toBeGreaterThan(0);
     });
   });
 
@@ -259,7 +266,7 @@ describe('ExpenseBotAgent', () => {
       ];
       await agent.run('Thanks', history, mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       // history (2) + new user message (1) = 3
       expect(callArgs.messages.length).toBe(3);
     });
@@ -282,8 +289,8 @@ describe('ExpenseBotAgent', () => {
       ];
       await agent.run('question', history, mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
-      expect(callArgs.messages[0]!.role).toBe('user');
+      const callArgs = getCallArgs(streamSpy);
+      expect(callArgs.messages.at(0)?.role).toBe('user');
     });
 
     it('maps history role assistant correctly', async () => {
@@ -304,8 +311,8 @@ describe('ExpenseBotAgent', () => {
       ];
       await agent.run('question', history, mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
-      expect(callArgs.messages[0]!.role).toBe('assistant');
+      const callArgs = getCallArgs(streamSpy);
+      expect(callArgs.messages.at(0)?.role).toBe('assistant');
     });
 
     it('parses JSON array content from history', async () => {
@@ -327,9 +334,9 @@ describe('ExpenseBotAgent', () => {
       ];
       await agent.run('q', history, mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       // Content should be parsed as array
-      expect(Array.isArray(callArgs.messages[0]!.content)).toBe(true);
+      expect(Array.isArray(callArgs.messages.at(0)?.content)).toBe(true);
     });
 
     it('falls back to plain text when history content is invalid JSON', async () => {
@@ -350,8 +357,8 @@ describe('ExpenseBotAgent', () => {
       ];
       await agent.run('q', history, mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
-      expect(callArgs.messages[0]!.content).toBe('plain text');
+      const callArgs = getCallArgs(streamSpy);
+      expect(callArgs.messages.at(0)?.content).toBe('plain text');
     });
   });
 
@@ -367,9 +374,9 @@ describe('ExpenseBotAgent', () => {
 
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
-      expect(systemBlocks[0]!.text).toContain('@johndoe');
+      expect(systemBlocks.at(0)?.text).toContain('@johndoe');
     });
 
     it('includes custom prompt when set', async () => {
@@ -381,9 +388,9 @@ describe('ExpenseBotAgent', () => {
 
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
-      expect(systemBlocks[0]!.text).toContain('Only answer in English.');
+      expect(systemBlocks.at(0)?.text).toContain('Only answer in English.');
     });
 
     it('does not include custom prompt section when customPrompt is null', async () => {
@@ -395,9 +402,9 @@ describe('ExpenseBotAgent', () => {
 
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
-      expect(systemBlocks[0]!.text).not.toContain('CUSTOM GROUP INSTRUCTIONS');
+      expect(systemBlocks.at(0)?.text).not.toContain('CUSTOM GROUP INSTRUCTIONS');
     });
 
     it('system block has cache_control ephemeral', async () => {
@@ -408,12 +415,12 @@ describe('ExpenseBotAgent', () => {
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
-      const callArgs = streamSpy.mock.calls[0]![0]! as Anthropic.MessageStreamParams;
+      const callArgs = getCallArgs(streamSpy);
       const systemBlocks = callArgs.system as Array<{
         type: string;
         cache_control?: { type: string };
       }>;
-      expect(systemBlocks[0]!.cache_control?.type).toBe('ephemeral');
+      expect(systemBlocks.at(0)?.cache_control?.type).toBe('ephemeral');
     });
   });
 

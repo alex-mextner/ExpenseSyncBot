@@ -186,7 +186,7 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
 
   if (subcommand === 'set' && args.length >= 3) {
     // /budget set Category Amount
-    const category = args[1]!;
+    const category = args[1] ?? '';
     const amountStr = args.slice(2).join(' ');
 
     const parsed = parseBudgetAmount(amountStr, group.default_currency);

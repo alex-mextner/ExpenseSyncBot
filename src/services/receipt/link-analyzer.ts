@@ -3,6 +3,7 @@ import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
+import type { AIReceiptItem } from './ai-extractor';
 import { extractExpensesFromReceipt } from './ai-extractor';
 import { saveExtractedItems, showReceiptConfirmationOptions } from './photo-processor';
 import { fetchReceiptData } from './receipt-fetcher';
@@ -89,7 +90,7 @@ export async function processPaymentLinks(
 async function analyzeLink(
   url: string,
   groupId: number,
-): Promise<{ items: any[]; currency: CurrencyCode } | null> {
+): Promise<{ items: AIReceiptItem[]; currency: CurrencyCode } | null> {
   try {
     const content = await fetchReceiptData(url);
     if (content.length < 50) return null;

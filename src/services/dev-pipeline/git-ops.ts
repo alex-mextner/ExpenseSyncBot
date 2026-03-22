@@ -172,7 +172,7 @@ function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } {
   if (!match) {
     throw new Error(`Cannot parse GitHub owner/repo from remote URL: ${remoteUrl}`);
   }
-  return { owner: match[1]!, repo: match[2]! };
+  return { owner: match[1] ?? '', repo: match[2] ?? '' };
 }
 
 /**

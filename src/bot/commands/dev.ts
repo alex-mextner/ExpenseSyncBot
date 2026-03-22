@@ -518,7 +518,7 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
     return;
   }
 
-  const logs = LOG_PATHS[target]!;
+  const logs = LOG_PATHS[target];
   const outPath = logs.out;
   const errorPath = logs.error;
 
