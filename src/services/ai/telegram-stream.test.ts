@@ -154,6 +154,16 @@ describe('truncateForTelegram', () => {
     expect(result).not.toContain('</i');
   });
 
+  test('CRLF: completes incomplete tag before \\r\\n without producing </tag\\r> artefact', () => {
+    const text = '<b>hello</b\r\nworld';
+    const result = truncate(text);
+    // Must not produce </b\r> or any \r> sequence
+    expect(result).not.toContain('\r>');
+    // Incomplete </b should be completed
+    expect(result).toContain('</b>');
+    expect(result).toContain('world');
+  });
+
   test('does not remove valid closed tags before newlines', () => {
     // <blockquote expandable> ends with > — must NOT be removed
     const text = '<blockquote expandable>content</blockquote>\nNext line';
