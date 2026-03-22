@@ -314,6 +314,15 @@ export async function getChangedFilesFromMain(worktreePath: string): Promise<str
  * Revert a file in worktree to its main branch version.
  */
 export async function revertFileToMain(worktreePath: string, filePath: string): Promise<void> {
+  // Guard against path traversal: resolved path must stay inside the worktree
+  const absolutePath = path.resolve(worktreePath, filePath);
+  const worktreePrefix = worktreePath.endsWith(path.sep)
+    ? worktreePath
+    : `${worktreePath}${path.sep}`;
+  if (!absolutePath.startsWith(worktreePrefix)) {
+    throw new Error(`Path traversal detected in revertFileToMain: ${filePath}`);
+  }
+
   // Check if file exists on main
   const existsOnMain = await $`git -C ${worktreePath} cat-file -e main:${filePath}`
     .nothrow()
@@ -325,7 +334,6 @@ export async function revertFileToMain(worktreePath: string, filePath: string): 
     logger.info(`[GIT-OPS] Reverted to main: ${filePath}`);
   } else {
     // File doesn't exist on main — it was created by agent, delete it
-    const absolutePath = path.resolve(worktreePath, filePath);
     if (existsSync(absolutePath)) {
       await $`rm ${absolutePath}`.quiet();
       logger.info(`[GIT-OPS] Deleted (not on main): ${filePath}`);
