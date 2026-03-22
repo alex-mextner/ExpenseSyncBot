@@ -247,6 +247,68 @@ describe('executeGetExpenses', () => {
     expect(result.output).toContain('Showing 2 of 2 expenses');
   });
 
+  test('expense with no comment shows (no comment) in output', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-14',
+        category: 'Путешествия',
+        comment: '',
+        amount: 1149.47,
+        currency: 'EUR',
+        eur_amount: 1149.47,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool('get_expenses', {}, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('(no comment)');
+  });
+
+  test('expense with whitespace-only comment shows (no comment) in output', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-14',
+        category: 'Лена',
+        comment: '   ',
+        amount: 94.37,
+        currency: 'EUR',
+        eur_amount: 94.37,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool('get_expenses', {}, ctx);
+    expect(result.output).toContain('(no comment)');
+  });
+
+  test('expense with real comment shows the comment', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-14',
+        category: 'Еда',
+        comment: 'обед',
+        amount: 25,
+        currency: 'EUR',
+        eur_amount: 25,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool('get_expenses', {}, ctx);
+    expect(result.output).toContain('обед');
+    expect(result.output).not.toContain('(no comment)');
+  });
+
   test('respects category filter (case-insensitive)', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
       {
