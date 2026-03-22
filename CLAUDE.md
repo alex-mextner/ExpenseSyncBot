@@ -390,6 +390,7 @@ Follow this framework for ANY technical issue:
 - NEVER use `git add -A` without checking `git status` first
 - Commit frequently throughout development, even if high-level tasks are not yet done
 - NEVER skip, evade, or disable a pre-commit hook
+- **Before every commit**: after your own review, run `codex exec review --uncommitted` and address any issues it finds before committing. This 2-stage review is mandatory even if the user just says "commit" — that is not permission to skip it.
 
 ## MCP Tools
 
