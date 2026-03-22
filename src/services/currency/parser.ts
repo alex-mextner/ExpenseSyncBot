@@ -11,7 +11,7 @@ export interface ParsedExpense {
 
 // ── Math expression evaluator (no eval/Function) ──────────────────────
 
-type MathToken = number | '+' | '*' | '/';
+type MathToken = number | '+' | '-' | '*' | '/';
 
 /**
  * Tokenize a cleaned math expression into alternating numbers and operators.
@@ -19,7 +19,7 @@ type MathToken = number | '+' | '*' | '/';
  */
 function tokenize(expr: string): MathToken[] | null {
   const tokens: MathToken[] = [];
-  const regex = /(\d+(?:[.,]\d+)?)|([+*×/])/g;
+  const regex = /(\d+(?:[.,]\d+)?)|([+\-*×/])/g;
 
   for (const match of expr.matchAll(regex)) {
     if (match[1]) {
@@ -28,7 +28,7 @@ function tokenize(expr: string): MathToken[] | null {
         numStr = numStr.replace(',', '.');
       }
       const num = parseFloat(numStr);
-      if (isNaN(num)) return null;
+      if (Number.isNaN(num)) return null;
       tokens.push(num);
     } else if (match[2]) {
       const op = match[2] === '×' ? '*' : match[2];
@@ -81,7 +81,7 @@ function evaluateTokens(tokens: MathToken[]): number | null {
         continue;
       }
     }
-    addQueue.push(tokens[i]!);
+    addQueue.push(tokens[i] as MathToken);
     i++;
   }
 
@@ -91,6 +91,7 @@ function evaluateTokens(tokens: MathToken[]): number | null {
     const op = addQueue[j];
     const right = addQueue[j + 1] as number;
     if (op === '+') result += right;
+    else if (op === '-') result -= right;
   }
 
   return result;
@@ -98,8 +99,8 @@ function evaluateTokens(tokens: MathToken[]): number | null {
 
 /**
  * Evaluate a simple math expression (no eval, no Function).
- * Supports: +, *, ×, /
- * Does NOT support: -, parentheses
+ * Supports: +, -, *, ×, /
+ * Does NOT support: parentheses
  *
  * Returns null for invalid expressions, single numbers, overflow, or division by zero.
  *
@@ -114,7 +115,7 @@ export function evaluateMathExpression(expr: string): number | null {
 
   // Validate: only digits, dots, commas, and operators +*/×
   // Must have at least one operator (single numbers are not expressions)
-  if (!/^[\d.,]+([+*×/][\d.,]+)+$/.test(cleaned)) {
+  if (!/^[\d.,]+([+\-*×/][\d.,]+)+$/.test(cleaned)) {
     return null;
   }
 
@@ -275,7 +276,7 @@ function parseAmount(amountStr: string): number | null {
     let cleaned = amountStr.replace(/\s+/g, '');
 
     // Check if this is a math expression (contains operator)
-    if (/[+*×/]/.test(cleaned)) {
+    if (/[+\-*×/]/.test(cleaned)) {
       const result = evaluateMathExpression(cleaned);
       if (result === null || result <= 0) return null;
       // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
@@ -302,7 +303,7 @@ function parseAmount(amountStr: string): number | null {
     }
 
     return parsed.value;
-  } catch (err) {
+  } catch {
     return null;
   }
 }
@@ -338,11 +339,11 @@ function parseRest(rest: string | undefined): {
 
   if (words.length === 1) {
     // Only category, no comment
-    return { category: normalizeCategory(words[0]!), comment: '' };
+    return { category: normalizeCategory(words.at(0) ?? ''), comment: '' };
   }
 
   // Category is first word, comment is the rest (also capitalized)
-  const category = normalizeCategory(words[0]!);
+  const category = normalizeCategory(words.at(0) ?? '');
   const commentWords = words.slice(1);
 
   if (commentWords.length === 0) {

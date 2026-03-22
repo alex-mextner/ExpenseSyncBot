@@ -191,6 +191,29 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
 
+  // === Calculator tool ===
+  {
+    name: 'calculate',
+    description:
+      'Evaluate a math expression with optional currency amounts. Converts all currencies to the target currency using current exchange rates, then evaluates the expression. Use this for ANY arithmetic the user asks for — never calculate manually. Examples: "100$ - 70EUR" in USD, "1500 RSD + 50 EUR" in EUR, "100 * 3".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        expression: {
+          type: 'string',
+          description:
+            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /.',
+        },
+        target_currency: {
+          type: 'string',
+          description:
+            'Currency code to convert all amounts to before evaluating (e.g. "USD", "EUR", "RSD"). Default: group default currency.',
+        },
+      },
+      required: ['expression'],
+    },
+  },
+
   // === Settings tools ===
   {
     name: 'set_custom_prompt',
@@ -243,6 +266,7 @@ export const TOOL_LABELS: Record<string, string> = {
   delete_expense: 'Удаляю расход',
   sync_from_sheets: 'Синхронизирую из таблицы',
   sync_budgets: 'Синхронизирую бюджеты',
+  calculate: 'Считаю',
   set_custom_prompt: 'Обновляю промпт',
   manage_category: 'Управляю категориями',
 };

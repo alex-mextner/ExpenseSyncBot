@@ -3,9 +3,10 @@
  * Maps tool calls to database operations and services
  */
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
-import type { CurrencyCode } from '../../config/constants';
+import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
+import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, convertToEUR, formatExchangeRatesForAI } from '../currency/converter';
 import {
   appendExpenseRow,
@@ -55,6 +56,8 @@ export async function executeTool(
         return executeSetCustomPrompt(input, ctx);
       case 'manage_category':
         return executeManageCategory(input, ctx);
+      case 'calculate':
+        return executeCalculate(input, ctx);
       default:
         return { success: false, error: `Unknown tool: ${name}` };
     }
@@ -597,4 +600,27 @@ function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext
   }
 
   return { success: false, error: `Unknown action: ${action}` };
+}
+
+function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+  const expression = input.expression as string;
+  if (!expression) {
+    return { success: false, error: 'expression is required' };
+  }
+
+  const group = database.groups.findById(ctx.groupId);
+  const rawCurrency =
+    (input.target_currency as string | undefined) || group?.default_currency || 'EUR';
+  if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode)) {
+    return { success: false, error: `Unknown currency: "${rawCurrency}"` };
+  }
+  const targetCurrency = rawCurrency as CurrencyCode;
+
+  const result = evaluateCurrencyExpression(expression, targetCurrency);
+  if (result === null) {
+    return { success: false, error: `Cannot evaluate expression: "${expression}"` };
+  }
+
+  const rounded = Math.round(result * 100) / 100;
+  return { success: true, output: `${rounded} ${targetCurrency}` };
 }
