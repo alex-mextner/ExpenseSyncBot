@@ -275,6 +275,14 @@ describe('truncateForTelegram edge cases', () => {
     expect(result).toContain('</b>');
   });
 
+  test('void element <br> does not produce spurious </br> closing tag', () => {
+    const text = 'line1<br>\nline2';
+    const result = truncate(text);
+    expect(result).not.toContain('</br>');
+    expect(result).toContain('<br>');
+    expect(result).toContain('line2');
+  });
+
   test('does not produce "..." when short text has unclosed tags', () => {
     const text = 'Hello <b>world';
     const result = truncate(text);

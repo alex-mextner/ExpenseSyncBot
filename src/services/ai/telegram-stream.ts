@@ -275,7 +275,9 @@ export class TelegramStreamWriter {
       truncated = truncated.substring(0, lastTagStart);
     }
 
-    // Always close unclosed tags — stream may be mid-generation
+    // Always close unclosed tags — stream may be mid-generation.
+    // <br> is the only void element supported by Telegram HTML — skip it.
+    const VOID_TAGS = new Set(['br']);
     const openTags: string[] = [];
     const tagRegex = /<\/?([a-z]+)[^>]*>/gi;
     for (const match of truncated.matchAll(tagRegex)) {
@@ -285,7 +287,7 @@ export class TelegramStreamWriter {
       if (fullTag.startsWith('</')) {
         const lastIndex = openTags.lastIndexOf(tagName);
         if (lastIndex !== -1) openTags.splice(lastIndex, 1);
-      } else if (!fullTag.endsWith('/>')) {
+      } else if (!fullTag.endsWith('/>') && !VOID_TAGS.has(tagName.toLowerCase())) {
         openTags.push(tagName);
       }
     }
