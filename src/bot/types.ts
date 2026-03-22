@@ -19,7 +19,7 @@ type Require<T, K extends keyof T> = Omit<T, K> & {
 /**
  * Type alias for Bot instance
  */
-type BotInstance = Bot<ErrorDefinitions, DeriveDefinitions>;
+export type BotInstance = Bot<ErrorDefinitions, DeriveDefinitions>;
 
 /**
  * Context types for different update handlers

@@ -17,7 +17,7 @@ import { database } from '../../database';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
 import { DevTaskState, STATE_EMOJI, STATE_LABELS } from '../../services/dev-pipeline/types';
 import { createLogger } from '../../utils/logger.ts';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('dev');
 
@@ -45,7 +45,7 @@ export function consumePendingDesignEdit(chatId: number): number | null {
  *
  * Must be called once with a bot instance to enable notifications.
  */
-export function initDevPipeline(bot: any): DevPipeline {
+export function initDevPipeline(bot: BotInstance): DevPipeline {
   const notify: NotifyCallback = async (
     groupId: number,
     message: string,
@@ -568,7 +568,7 @@ export async function handleDevCallback(
   ctx: any,
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const [subAction, taskIdStr] = params;
   const messageId = ctx.message?.id;
@@ -661,7 +661,7 @@ export async function handleDevCallback(
         answered = true;
     }
   } catch (error) {
-    logger.error({ err: error }, '[DEV-CB] Error handling dev:${subAction}:${taskIdStr}');
+    logger.error({ err: error }, `[DEV-CB] Error handling dev:${subAction}:${taskIdStr}`);
     if (!answered) {
       try {
         await ctx.answerCallbackQuery({

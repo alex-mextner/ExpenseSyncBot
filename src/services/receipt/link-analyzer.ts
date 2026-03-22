@@ -1,3 +1,4 @@
+import type { BotInstance } from '../../bot/types';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
@@ -21,7 +22,7 @@ export function extractURLsFromText(text: string): string[] {
  * @returns true if any payment links were found and processed
  */
 export async function processPaymentLinks(
-  bot: any,
+  bot: BotInstance,
   chatId: number,
   messageId: number,
   urls: string[],

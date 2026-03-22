@@ -10,14 +10,14 @@ import { maybeSmartAdvice } from '../commands/ask';
 import { silentSyncBudgets } from '../commands/budget';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
 
 /**
  * Handle expense message
  */
-export async function handleExpenseMessage(ctx: Ctx['Message'], bot: any): Promise<void> {
+export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance): Promise<void> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
@@ -397,7 +397,7 @@ async function checkBudgetLimit(
   category: string,
   currentDate: string,
   telegramGroupId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const { startOfMonth, endOfMonth, format } = await import('date-fns');
   const { getCategoryEmoji } = await import('../../config/category-emojis');
@@ -457,7 +457,7 @@ async function checkBudgetLimit(
  */
 async function handleCategoryTextInput(
   ctx: Ctx['Message'],
-  bot: any,
+  bot: BotInstance,
   categoryText: string,
   waitingItem: ReceiptItem,
   groupId: number,
@@ -597,7 +597,7 @@ async function handleCategoryTextInput(
  */
 async function handleBulkCorrectionInput(
   ctx: Ctx['Message'],
-  bot: any,
+  bot: BotInstance,
   correctionText: string,
   queueItem: any,
   group: any,
