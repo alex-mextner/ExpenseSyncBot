@@ -12,9 +12,10 @@
       "Bash(bun --eval:*)",
       "Bash(timeout 8 bun run:*)",
       "Bash(sqlite3:*)",
-      "Bash(PATH=\"/Users/ultra/.bun/bin:$PATH\" bunx tsc:*)",
-      "Bash(PATH=\"/Users/ultra/.bun/bin:$PATH\" bun test:*)",
-      "Bash(/Users/ultra/.bun/bin/bunx tsc:*)"
+      "Bash(PATH=\"~/.bun/bin:$PATH\" bunx tsc:*)",
+      "Bash(PATH=\"~/.bun/bin:$PATH\" bun test:*)",
+      "Bash(~/.bun/bin/bunx tsc:*)",
+      "Bash(node_modules/.bin/biome check:*)"
     ],
     "deny": [],
     "ask": []
