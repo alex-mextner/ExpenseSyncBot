@@ -1,8 +1,8 @@
 // Tests for GroupRepository — CRUD, JSON fields, update, cascade
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { createTestDb, clearTestDb } from '../../test-utils/db';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { clearTestDb, createTestDb } from '../../test-utils/db';
 import { GroupRepository } from './group.repository';
 
 let db: Database;
@@ -77,8 +77,8 @@ describe('GroupRepository', () => {
       const created = repo.create({ telegram_group_id: 200 });
       const found = repo.findByTelegramGroupId(200);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
-      expect(found!.telegram_group_id).toBe(200);
+      expect(found?.id).toBe(created.id);
+      expect(found?.telegram_group_id).toBe(200);
     });
 
     test('returns null for non-existent telegram_group_id', () => {
@@ -88,7 +88,7 @@ describe('GroupRepository', () => {
     test('enabled_currencies is parsed as array', () => {
       repo.create({ telegram_group_id: 201 });
       const found = repo.findByTelegramGroupId(201);
-      expect(Array.isArray(found!.enabled_currencies)).toBe(true);
+      expect(Array.isArray(found?.enabled_currencies)).toBe(true);
     });
   });
 
@@ -97,7 +97,7 @@ describe('GroupRepository', () => {
       const created = repo.create({ telegram_group_id: 300 });
       const found = repo.findById(created.id);
       expect(found).not.toBeNull();
-      expect(found!.telegram_group_id).toBe(300);
+      expect(found?.telegram_group_id).toBe(300);
     });
 
     test('returns null for non-existent id', () => {
@@ -107,7 +107,7 @@ describe('GroupRepository', () => {
     test('enabled_currencies is parsed as array from JSON', () => {
       const created = repo.create({ telegram_group_id: 301 });
       const found = repo.findById(created.id);
-      expect(Array.isArray(found!.enabled_currencies)).toBe(true);
+      expect(Array.isArray(found?.enabled_currencies)).toBe(true);
     });
   });
 
@@ -115,51 +115,51 @@ describe('GroupRepository', () => {
     test('updates google_refresh_token', () => {
       repo.create({ telegram_group_id: 400 });
       const updated = repo.update(400, { google_refresh_token: 'token123' });
-      expect(updated!.google_refresh_token).toBe('token123');
+      expect(updated?.google_refresh_token).toBe('token123');
     });
 
     test('updates spreadsheet_id', () => {
       repo.create({ telegram_group_id: 401 });
       const updated = repo.update(401, { spreadsheet_id: 'sheet-abc' });
-      expect(updated!.spreadsheet_id).toBe('sheet-abc');
+      expect(updated?.spreadsheet_id).toBe('sheet-abc');
     });
 
     test('updates default_currency', () => {
       repo.create({ telegram_group_id: 402 });
       const updated = repo.update(402, { default_currency: 'EUR' });
-      expect(updated!.default_currency).toBe('EUR');
+      expect(updated?.default_currency).toBe('EUR');
     });
 
     test('updates enabled_currencies (array stored as JSON)', () => {
       repo.create({ telegram_group_id: 403 });
       const updated = repo.update(403, { enabled_currencies: ['EUR', 'USD', 'RSD'] });
-      expect(updated!.enabled_currencies).toEqual(['EUR', 'USD', 'RSD']);
+      expect(updated?.enabled_currencies).toEqual(['EUR', 'USD', 'RSD']);
     });
 
     test('updates custom_prompt', () => {
       repo.create({ telegram_group_id: 404 });
       const updated = repo.update(404, { custom_prompt: 'You are a helpful bot.' });
-      expect(updated!.custom_prompt).toBe('You are a helpful bot.');
+      expect(updated?.custom_prompt).toBe('You are a helpful bot.');
     });
 
     test('sets custom_prompt to null', () => {
       repo.create({ telegram_group_id: 405 });
       repo.update(405, { custom_prompt: 'some prompt' });
       const updated = repo.update(405, { custom_prompt: null });
-      expect(updated!.custom_prompt).toBeNull();
+      expect(updated?.custom_prompt).toBeNull();
     });
 
     test('updates active_topic_id', () => {
       repo.create({ telegram_group_id: 406 });
       const updated = repo.update(406, { active_topic_id: 42 });
-      expect(updated!.active_topic_id).toBe(42);
+      expect(updated?.active_topic_id).toBe(42);
     });
 
     test('sets active_topic_id to null', () => {
       repo.create({ telegram_group_id: 407 });
       repo.update(407, { active_topic_id: 10 });
       const updated = repo.update(407, { active_topic_id: null });
-      expect(updated!.active_topic_id).toBeNull();
+      expect(updated?.active_topic_id).toBeNull();
     });
 
     test('returns null for non-existent telegram_group_id', () => {
@@ -174,9 +174,9 @@ describe('GroupRepository', () => {
         spreadsheet_id: 'ss',
         default_currency: 'RSD',
       });
-      expect(updated!.google_refresh_token).toBe('rt');
-      expect(updated!.spreadsheet_id).toBe('ss');
-      expect(updated!.default_currency).toBe('RSD');
+      expect(updated?.google_refresh_token).toBe('rt');
+      expect(updated?.spreadsheet_id).toBe('ss');
+      expect(updated?.default_currency).toBe('RSD');
     });
   });
 
@@ -234,7 +234,11 @@ describe('GroupRepository', () => {
 
     test('returns false with token and spreadsheet but empty currencies', () => {
       repo.create({ telegram_group_id: 702 });
-      repo.update(702, { google_refresh_token: 'tok', spreadsheet_id: 'ss', enabled_currencies: [] });
+      repo.update(702, {
+        google_refresh_token: 'tok',
+        spreadsheet_id: 'ss',
+        enabled_currencies: [],
+      });
       expect(repo.hasCompletedSetup(702)).toBe(false);
     });
 

@@ -1,8 +1,8 @@
 // Tests for UserRepository — CRUD, group linking, FK behavior
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { createTestDb, clearTestDb } from '../../test-utils/db';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { clearTestDb, createTestDb } from '../../test-utils/db';
 import { GroupRepository } from './group.repository';
 import { UserRepository } from './user.repository';
 
@@ -66,7 +66,7 @@ describe('UserRepository', () => {
       const created = userRepo.create({ telegram_id: 10 });
       const found = userRepo.findByTelegramId(10);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
+      expect(found?.id).toBe(created.id);
     });
 
     test('returns null for non-existent telegram_id', () => {
@@ -79,7 +79,7 @@ describe('UserRepository', () => {
       const created = userRepo.create({ telegram_id: 20 });
       const found = userRepo.findById(created.id);
       expect(found).not.toBeNull();
-      expect(found!.telegram_id).toBe(20);
+      expect(found?.telegram_id).toBe(20);
     });
 
     test('returns null for non-existent id', () => {
@@ -92,7 +92,7 @@ describe('UserRepository', () => {
       const group = makeGroup(2000);
       userRepo.create({ telegram_id: 30 });
       const updated = userRepo.update(30, { group_id: group.id });
-      expect(updated!.group_id).toBe(group.id);
+      expect(updated?.group_id).toBe(group.id);
     });
 
     test('sets group_id to null', () => {
@@ -100,7 +100,7 @@ describe('UserRepository', () => {
       userRepo.create({ telegram_id: 31, group_id: group.id });
       const updated = userRepo.update(31, { group_id: undefined });
       // When undefined is passed, group_id field isn't updated
-      expect(updated!.group_id).toBe(group.id);
+      expect(updated?.group_id).toBe(group.id);
     });
 
     test('returns null for non-existent telegram_id', () => {
@@ -112,7 +112,7 @@ describe('UserRepository', () => {
       userRepo.create({ telegram_id: 32 });
       const updated = userRepo.update(32, {});
       expect(updated).not.toBeNull();
-      expect(updated!.telegram_id).toBe(32);
+      expect(updated?.telegram_id).toBe(32);
     });
   });
 
@@ -158,7 +158,7 @@ describe('UserRepository', () => {
 
       const g1Users = userRepo.findByGroupId(g1.id);
       expect(g1Users).toHaveLength(1);
-      expect(g1Users[0]!.telegram_id).toBe(60);
+      expect(g1Users[0]?.telegram_id).toBe(60);
     });
   });
 
@@ -171,7 +171,7 @@ describe('UserRepository', () => {
 
       const found = userRepo.findById(user.id);
       expect(found).not.toBeNull();
-      expect(found!.group_id).toBeNull();
+      expect(found?.group_id).toBeNull();
     });
   });
 });

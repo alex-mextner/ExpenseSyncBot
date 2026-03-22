@@ -1,10 +1,10 @@
 // Tests for CategoryRepository — CRUD, normalization, uniqueness, cascade
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { createTestDb, clearTestDb } from '../../test-utils/db';
-import { GroupRepository } from './group.repository';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { clearTestDb, createTestDb } from '../../test-utils/db';
 import { CategoryRepository } from './category.repository';
+import { GroupRepository } from './group.repository';
 
 let db: Database;
 let categoryRepo: CategoryRepository;
@@ -84,9 +84,9 @@ describe('CategoryRepository', () => {
 
       const cats = categoryRepo.findByGroupId(groupId);
       expect(cats).toHaveLength(3);
-      expect(cats[0]!.name).toBe('Food');
-      expect(cats[1]!.name).toBe('Rent');
-      expect(cats[2]!.name).toBe('Taxi');
+      expect(cats[0]?.name).toBe('Food');
+      expect(cats[1]?.name).toBe('Rent');
+      expect(cats[2]?.name).toBe('Taxi');
     });
 
     test('returns empty array for group with no categories', () => {
@@ -100,7 +100,7 @@ describe('CategoryRepository', () => {
 
       const cats = categoryRepo.findByGroupId(groupId);
       expect(cats).toHaveLength(1);
-      expect(cats[0]!.name).toBe('Food');
+      expect(cats[0]?.name).toBe('Food');
     });
   });
 
@@ -109,7 +109,7 @@ describe('CategoryRepository', () => {
       categoryRepo.create({ group_id: groupId, name: 'Food' });
       const found = categoryRepo.findByName(groupId, 'Food');
       expect(found).not.toBeNull();
-      expect(found!.name).toBe('Food');
+      expect(found?.name).toBe('Food');
     });
 
     test('case-insensitive lookup', () => {
@@ -136,7 +136,7 @@ describe('CategoryRepository', () => {
       const created = categoryRepo.create({ group_id: groupId, name: 'Utilities' });
       const found = categoryRepo.findById(created.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
+      expect(found?.id).toBe(created.id);
     });
 
     test('returns null for non-existent id', () => {
@@ -222,7 +222,7 @@ describe('CategoryRepository', () => {
       const cat = categoryRepo.create({ group_id: groupId, name: 'Food' });
       // Get the telegram_group_id of the group
       const group = groupRepo.findById(groupId);
-      groupRepo.delete(group!.telegram_group_id);
+      groupRepo.delete(group?.telegram_group_id);
       expect(categoryRepo.findById(cat.id)).toBeNull();
     });
   });

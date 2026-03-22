@@ -1,12 +1,12 @@
 // Tests for ExpenseRepository — CRUD, filters, aggregates, analytics
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { createTestDb, clearTestDb } from '../../test-utils/db';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { clearTestDb, createTestDb } from '../../test-utils/db';
+import type { CreateExpenseData } from '../types';
+import { ExpenseRepository } from './expense.repository';
 import { GroupRepository } from './group.repository';
 import { UserRepository } from './user.repository';
-import { ExpenseRepository } from './expense.repository';
-import type { CreateExpenseData } from '../types';
 
 let db: Database;
 let expenseRepo: ExpenseRepository;
@@ -86,7 +86,7 @@ describe('ExpenseRepository', () => {
       const created = expenseRepo.create(makeExpense());
       const found = expenseRepo.findById(created.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
+      expect(found?.id).toBe(created.id);
     });
 
     test('returns null for non-existent id', () => {
@@ -102,9 +102,9 @@ describe('ExpenseRepository', () => {
 
       const expenses = expenseRepo.findByGroupId(groupId);
       expect(expenses).toHaveLength(3);
-      expect(expenses[0]!.date).toBe('2024-03-01');
-      expect(expenses[1]!.date).toBe('2024-02-01');
-      expect(expenses[2]!.date).toBe('2024-01-01');
+      expect(expenses[0]?.date).toBe('2024-03-01');
+      expect(expenses[1]?.date).toBe('2024-02-01');
+      expect(expenses[2]?.date).toBe('2024-01-01');
     });
 
     test('respects limit parameter', () => {
@@ -164,7 +164,9 @@ describe('ExpenseRepository', () => {
     test('scoped to group', () => {
       const group2 = groupRepo.create({ telegram_group_id: Date.now() + 2 });
       const user2 = userRepo.create({ telegram_id: Date.now() + 2, group_id: group2.id });
-      expenseRepo.create(makeExpense({ date: '2024-01-10', group_id: group2.id, user_id: user2.id }));
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-10', group_id: group2.id, user_id: user2.id }),
+      );
 
       expect(expenseRepo.findByDateRange(groupId, '2024-01-01', '2024-01-31')).toEqual([]);
     });
@@ -244,8 +246,8 @@ describe('ExpenseRepository', () => {
       expenseRepo.create(makeExpense({ currency: 'USD', amount: 50 }));
 
       const totals = expenseRepo.getTotalsByCurrency(groupId);
-      expect(totals['EUR']).toBe(30);
-      expect(totals['USD']).toBe(50);
+      expect(totals.EUR).toBe(30);
+      expect(totals.USD).toBe(50);
     });
 
     test('returns empty object for group with no expenses', () => {
@@ -280,10 +282,10 @@ describe('ExpenseRepository', () => {
       const rent = totals.find((t) => t.category === 'Rent');
 
       expect(food).toBeDefined();
-      expect(food!.total).toBeCloseTo(50);
-      expect(food!.tx_count).toBe(2);
+      expect(food?.total).toBeCloseTo(50);
+      expect(food?.tx_count).toBe(2);
       expect(rent).toBeDefined();
-      expect(rent!.total).toBeCloseTo(500);
+      expect(rent?.total).toBeCloseTo(500);
     });
 
     test('returns empty array for range with no data', () => {
@@ -299,10 +301,10 @@ describe('ExpenseRepository', () => {
 
       const daily = expenseRepo.getDailyTotals(groupId, '2024-01-01', '2024-01-03');
       expect(daily).toHaveLength(2);
-      expect(daily[0]!.date).toBe('2024-01-01');
-      expect(daily[0]!.total).toBeCloseTo(15);
-      expect(daily[1]!.date).toBe('2024-01-03');
-      expect(daily[1]!.total).toBeCloseTo(20);
+      expect(daily[0]?.date).toBe('2024-01-01');
+      expect(daily[0]?.total).toBeCloseTo(15);
+      expect(daily[1]?.date).toBe('2024-01-03');
+      expect(daily[1]?.total).toBeCloseTo(20);
     });
 
     test('returns empty array for range with no expenses', () => {
@@ -352,8 +354,8 @@ describe('ExpenseRepository', () => {
 
       const monday = stats.find((s) => s.dow === 1);
       expect(monday).toBeDefined();
-      expect(monday!.total).toBeCloseTo(30);
-      expect(monday!.tx_count).toBe(2);
+      expect(monday?.total).toBeCloseTo(30);
+      expect(monday?.tx_count).toBe(2);
     });
   });
 
@@ -361,10 +363,10 @@ describe('ExpenseRepository', () => {
     test('returns current and previous week periods', () => {
       // Insert some expenses in the past 13 days
       expenseRepo.create(makeExpense({ date: '2024-01-14', eur_amount: 100 })); // current week
-      expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount: 50 }));  // previous week
+      expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount: 50 })); // previous week
 
       const data = expenseRepo.getWeekOverWeekData(groupId, '2024-01-20');
-      const periods = data.map((d) => d.period);
+      const _periods = data.map((d) => d.period);
       // At least one period should be present
       expect(data.length).toBeGreaterThanOrEqual(0);
       for (const row of data) {
@@ -384,9 +386,9 @@ describe('ExpenseRepository', () => {
       const feb = history.find((r) => r.category === 'Food' && r.month === '2024-02');
 
       expect(jan).toBeDefined();
-      expect(jan!.monthly_total).toBeCloseTo(150);
+      expect(jan?.monthly_total).toBeCloseTo(150);
       expect(feb).toBeDefined();
-      expect(feb!.monthly_total).toBeCloseTo(80);
+      expect(feb?.monthly_total).toBeCloseTo(80);
     });
   });
 

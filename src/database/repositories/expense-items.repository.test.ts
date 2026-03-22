@@ -1,13 +1,13 @@
 // Tests for ExpenseItemsRepository — CRUD, bulk create, cascade delete
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { createTestDb, clearTestDb } from '../../test-utils/db';
-import { GroupRepository } from './group.repository';
-import { UserRepository } from './user.repository';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { clearTestDb, createTestDb } from '../../test-utils/db';
+import type { CreateExpenseItemData } from '../types';
 import { ExpenseRepository } from './expense.repository';
 import { ExpenseItemsRepository } from './expense-items.repository';
-import type { CreateExpenseItemData } from '../types';
+import { GroupRepository } from './group.repository';
+import { UserRepository } from './user.repository';
 
 let db: Database;
 let itemsRepo: ExpenseItemsRepository;
@@ -65,13 +65,15 @@ describe('ExpenseItemsRepository', () => {
     });
 
     test('all fields stored correctly', () => {
-      const item = itemsRepo.create(makeItem({
-        name_ru: 'Хлеб',
-        name_original: 'Bread',
-        quantity: 2,
-        price: 0.99,
-        total: 1.98,
-      }));
+      const item = itemsRepo.create(
+        makeItem({
+          name_ru: 'Хлеб',
+          name_original: 'Bread',
+          quantity: 2,
+          price: 0.99,
+          total: 1.98,
+        }),
+      );
       expect(item.expense_id).toBe(expenseId);
       expect(item.name_ru).toBe('Хлеб');
       expect(item.name_original).toBe('Bread');
@@ -101,7 +103,7 @@ describe('ExpenseItemsRepository', () => {
       const created = itemsRepo.create(makeItem());
       const found = itemsRepo.findById(created.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
+      expect(found?.id).toBe(created.id);
     });
 
     test('returns null for non-existent id', () => {
@@ -117,7 +119,7 @@ describe('ExpenseItemsRepository', () => {
 
       const items = itemsRepo.findByExpenseId(expenseId);
       expect(items).toHaveLength(3);
-      expect(items[0]!.name_ru).toBe('Первый');
+      expect(items[0]?.name_ru).toBe('Первый');
     });
 
     test('returns empty array for expense with no items', () => {
@@ -153,9 +155,9 @@ describe('ExpenseItemsRepository', () => {
 
       const created = itemsRepo.createMany(items);
       expect(created).toHaveLength(3);
-      expect(created[0]!.name_ru).toBe('Item A');
-      expect(created[1]!.name_ru).toBe('Item B');
-      expect(created[2]!.name_ru).toBe('Item C');
+      expect(created[0]?.name_ru).toBe('Item A');
+      expect(created[1]?.name_ru).toBe('Item B');
+      expect(created[2]?.name_ru).toBe('Item C');
     });
 
     test('returns empty array for empty input', () => {
