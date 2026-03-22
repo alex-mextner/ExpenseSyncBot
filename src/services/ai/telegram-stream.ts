@@ -212,7 +212,7 @@ export class TelegramStreamWriter {
       finalText = response || '⚠️ AI did not produce a response.';
     }
 
-    finalText = finalText.replace(/\n{3,}/g, '\n\n').trim();
+    finalText = this.sanitizeHtml(finalText.replace(/\n{3,}/g, '\n\n').trim());
     this.finalDisplayText = finalText;
 
     await this.sendOrEdit(this.truncateForTelegram(finalText));
@@ -293,16 +293,58 @@ export class TelegramStreamWriter {
   }
 
   /**
+   * Telegram HTML allowlist (parse_mode=HTML).
+   * Any tag not in this set is stripped; its inner text is kept.
+   * Dangerous tags (script, style, iframe) are stripped WITH their content.
+   */
+  private static readonly TELEGRAM_ALLOWED_TAGS = new Set([
+    'b',
+    'strong',
+    'i',
+    'em',
+    'u',
+    'ins',
+    's',
+    'strike',
+    'del',
+    'span',
+    'tg-spoiler',
+    'a',
+    'code',
+    'pre',
+    'blockquote',
+    'br',
+  ]);
+
+  /**
+   * Strip unsupported HTML tags and escape bare `&` so Telegram's HTML
+   * parser doesn't return 400 "Can't parse entities".
+   * Idempotent — safe to call multiple times on the same string.
+   */
+  private sanitizeHtml(text: string): string {
+    // Strip dangerous tags WITH their content
+    let result = text.replace(/<(script|style|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+    // Strip unsupported tags but keep inner text
+    result = result.replace(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi, (match, tagName: string) => {
+      if (TelegramStreamWriter.TELEGRAM_ALLOWED_TAGS.has(tagName.toLowerCase())) return match;
+      return '';
+    });
+    // Escape bare & not already part of an HTML entity (&amp; &#123; &#xAB; etc.)
+    result = result.replace(/&(?!(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;');
+    return result;
+  }
+
+  /**
    * Truncate text to fit Telegram message limit and close any unclosed HTML tags.
    * Unclosed tags must always be fixed — not only on truncation — because
    * intermediate stream flushes can cut mid-tag while the AI is still generating.
    */
   private truncateForTelegram(text: string): string {
-    let truncated = text;
+    let truncated = this.sanitizeHtml(text);
     let wasTruncated = false;
 
-    if (text.length > MAX_MESSAGE_LENGTH) {
-      truncated = text.substring(0, MAX_MESSAGE_LENGTH);
+    if (truncated.length > MAX_MESSAGE_LENGTH) {
+      truncated = truncated.substring(0, MAX_MESSAGE_LENGTH);
       wasTruncated = true;
     }
 
