@@ -248,7 +248,7 @@ function normalizeMonth(month: string): string {
   const match = month.match(/^(\d{4})-(\d{1,2})$/);
   if (!match) return month;
   const [, year, m] = match;
-  return `${year}-${m?.padStart(2, '0')}`;
+  return `${year}-${(m ?? '').padStart(2, '0')}`;
 }
 
 /**

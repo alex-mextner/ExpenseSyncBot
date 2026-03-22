@@ -121,9 +121,6 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
   // Calculate category averages from previous months
   const categoryAverages: Record<string, { sum: number; count: number }> = {};
   for (const expense of expenses) {
-    const monthKey = expense.date.substring(0, 7);
-    const _key = `${expense.category}:${monthKey}`;
-
     if (!categoryAverages[expense.category]) {
       categoryAverages[expense.category] = { sum: 0, count: 0 };
     }

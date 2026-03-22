@@ -169,10 +169,10 @@ export async function pushBranch(worktreePath: string, branchName: string): Prom
 function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } {
   // Handle both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git)
   const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-  if (!match) {
+  if (!match || !match[1] || !match[2]) {
     throw new Error(`Cannot parse GitHub owner/repo from remote URL: ${remoteUrl}`);
   }
-  return { owner: match[1] ?? '', repo: match[2] ?? '' };
+  return { owner: match[1], repo: match[2] };
 }
 
 /**

@@ -11,7 +11,7 @@ export interface ParsedExpense {
 
 // ── Math expression evaluator (no eval/Function) ──────────────────────
 
-type MathToken = number | '+' | '*' | '/';
+type MathToken = number | '+' | '-' | '*' | '/';
 
 /**
  * Tokenize a cleaned math expression into alternating numbers and operators.
@@ -19,7 +19,7 @@ type MathToken = number | '+' | '*' | '/';
  */
 function tokenize(expr: string): MathToken[] | null {
   const tokens: MathToken[] = [];
-  const regex = /(\d+(?:[.,]\d+)?)|([+*×/])/g;
+  const regex = /(\d+(?:[.,]\d+)?)|([+\-*×/])/g;
 
   for (const match of expr.matchAll(regex)) {
     if (match[1]) {
@@ -92,6 +92,7 @@ function evaluateTokens(tokens: MathToken[]): number | null {
     const op = addQueue[j];
     const right = addQueue[j + 1] as number;
     if (op === '+') result += right;
+    else if (op === '-') result -= right;
   }
 
   return result;
@@ -99,12 +100,12 @@ function evaluateTokens(tokens: MathToken[]): number | null {
 
 /**
  * Evaluate a simple math expression (no eval, no Function).
- * Supports: +, *, ×, /
- * Does NOT support: -, parentheses
+ * Supports: +, -, *, ×, /
+ * Does NOT support: parentheses
  *
  * Returns null for invalid expressions, single numbers, overflow, or division by zero.
  *
- * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35
+ * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35, "100-70" → 30
  */
 export function evaluateMathExpression(expr: string): number | null {
   // Remove spaces
@@ -115,7 +116,7 @@ export function evaluateMathExpression(expr: string): number | null {
 
   // Validate: only digits, dots, commas, and operators +*/×
   // Must have at least one operator (single numbers are not expressions)
-  if (!/^[\d.,]+([+*×/][\d.,]+)+$/.test(cleaned)) {
+  if (!/^[\d.,]+([+\-*×/][\d.,]+)+$/.test(cleaned)) {
     return null;
   }
 
@@ -276,7 +277,7 @@ function parseAmount(amountStr: string): number | null {
     let cleaned = amountStr.replace(/\s+/g, '');
 
     // Check if this is a math expression (contains operator)
-    if (/[+*×/]/.test(cleaned)) {
+    if (/[+\-*×/]/.test(cleaned)) {
       const result = evaluateMathExpression(cleaned);
       if (result === null || result <= 0) return null;
       // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
@@ -303,7 +304,7 @@ function parseAmount(amountStr: string): number | null {
     }
 
     return parsed.value;
-  } catch (_err) {
+  } catch {
     return null;
   }
 }

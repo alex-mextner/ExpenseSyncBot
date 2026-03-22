@@ -83,7 +83,7 @@ export async function handleCallbackQuery(
         break;
 
       case 'confirm':
-        await handleConfirmAction(ctx, params, telegramId, bot);
+        await handleConfirmAction(ctx, params, bot);
         break;
 
       case 'budget':
@@ -95,7 +95,7 @@ export async function handleCallbackQuery(
         break;
 
       case 'receipt_item_other':
-        await handleReceiptItemOther(ctx, params, telegramId, bot);
+        await handleReceiptItemOther(ctx, params, bot);
         break;
 
       case 'skip_receipt_item':
@@ -260,10 +260,9 @@ async function handleCategoryAction(
 async function handleConfirmAction(
   ctx: Ctx['CallbackQuery'],
   params: string[],
-  _telegramId: number,
   bot: BotInstance,
 ): Promise<void> {
-  const [_action, answer] = params;
+  const answer = params[1] ?? '';
 
   if (answer === 'yes') {
     await ctx.answerCallbackQuery({ text: '✅ Подтверждено' });
@@ -576,7 +575,6 @@ async function handleReceiptItemConfirm(
 async function handleReceiptItemOther(
   ctx: Ctx['CallbackQuery'],
   params: string[],
-  _telegramId: number,
   bot: BotInstance,
 ): Promise<void> {
   const itemIdStr = params[0];
@@ -740,9 +738,6 @@ export async function saveReceiptExpenses(
 
   // Delete all processed receipt items (confirmed + skipped)
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
-
-  // Get thread ID from queue item
-  const _queueItem = database.photoQueue.findById(photoQueueId);
 
   // Notify user
   const totalItems = confirmedItems.length;

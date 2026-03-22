@@ -96,21 +96,6 @@ function extractTscErrors(output: string): string {
   return errors.join('\n') || output;
 }
 
-/** Filter tsc errors to only include errors in the given file list (relative paths) */
-function _filterTscErrorsByFiles(output: string, changedFiles: string[]): string {
-  if (changedFiles.length === 0) return output;
-  const lines = output.split('\n');
-  const filtered: string[] = [];
-  for (const line of lines) {
-    if (!line.includes('error TS')) continue;
-    // tsc errors start with relative path: src/foo/bar.ts(10,5): error TS...
-    if (changedFiles.some((f) => line.includes(f))) {
-      filtered.push(line.trim());
-    }
-  }
-  return filtered.join('\n');
-}
-
 /**
  * Shared development rules injected into all DevAgent prompts.
  * Based on obra's development philosophy — keeps the AI focused.
@@ -656,7 +641,7 @@ Keep the plan concise — 20-40 lines max.`;
     const titleMatch = design.match(/TITLE:\s*(.+)/);
     const title = titleMatch?.[1]?.trim() || task.description.slice(0, 70);
 
-    const _updated = transition(task, DevTaskState.APPROVAL, { design, title });
+    transition(task, DevTaskState.APPROVAL, { design, title });
 
     await this.notify(
       task.group_id,
@@ -1012,7 +997,7 @@ WORKFLOW:
         await commitChanges(task.worktree_path, `fix: address review feedback (task #${task.id})`);
         await pushBranch(task.worktree_path, task.branch_name);
 
-        const _updated = transition(task, DevTaskState.AWAITING_MERGE);
+        transition(task, DevTaskState.AWAITING_MERGE);
 
         const testSummary = `${passCount} ✅`;
         await this.notify(
@@ -1150,7 +1135,7 @@ WORKFLOW:
     const diff = await getDiffFromMain(task.worktree_path);
     const review = await runCodexReview(diff);
 
-    const _updated = transition(task, DevTaskState.AWAITING_REVIEW, { code_review: review });
+    transition(task, DevTaskState.AWAITING_REVIEW, { code_review: review });
 
     await this.notify(
       task.group_id,

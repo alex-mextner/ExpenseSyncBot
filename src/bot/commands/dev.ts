@@ -229,7 +229,7 @@ async function handleNewTask(
   }
 
   try {
-    const _task = await pl.startTask(groupId, userId, description);
+    await pl.startTask(groupId, userId, description);
     // The pipeline sends its own notifications, so no need to reply here
   } catch (error) {
     logger.error({ err: error }, '[DEV-CMD] Failed to start task');

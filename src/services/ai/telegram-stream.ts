@@ -237,7 +237,7 @@ export class TelegramStreamWriter {
       this.lastSentText = textToSend;
       this.lastUpdateTime = Date.now();
     } catch (err) {
-      const tgErr = err as { payload?: { error_code?: number; description?: string } };
+      const tgErr = err as unknown as { payload?: { error_code?: number; description?: string } };
       if (tgErr?.payload?.error_code === 429) {
         logger.error('[STREAM] Rate limited, cooling down');
         this.lastErrorTime = Date.now();
