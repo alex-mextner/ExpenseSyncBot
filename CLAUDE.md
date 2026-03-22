@@ -270,6 +270,21 @@ Required in `.env` (see [.env.example](.env.example)):
 
 See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 
+### Диагностика на сервере
+
+При любой жалобе на поведение бота — **сначала смотри логи**, не гадай:
+
+```bash
+# Последние 100 строк (out + error вместе):
+ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 logs expensesyncbot --lines 100 --nostream'
+
+# Только ошибки:
+ssh www-data@104.248.84.190 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
+
+# Состояние процессов:
+ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
+```
+
 ## Common Gotchas
 
 1. **Bun auto-loads .env** - don't use dotenv package

@@ -262,13 +262,16 @@ export class TelegramStreamWriter {
     if (text.length > MAX_MESSAGE_LENGTH) {
       truncated = text.substring(0, MAX_MESSAGE_LENGTH);
       wasTruncated = true;
+    }
 
-      // Don't cut in the middle of an HTML tag
-      const lastTagStart = truncated.lastIndexOf('<');
-      const lastTagEnd = truncated.lastIndexOf('>');
-      if (lastTagStart > lastTagEnd) {
-        truncated = truncated.substring(0, lastTagStart);
-      }
+    // Remove incomplete HTML tags — handles both hard truncation and mid-stream delta splits.
+    // Case 1: incomplete tag before a newline (e.g. model streams </blockquote then \n as one delta)
+    truncated = truncated.replace(/<[a-zA-Z/][^>\n]*(?=\n)/g, '');
+    // Case 2: incomplete tag at end of string (e.g. after truncation or stream paused mid-tag)
+    const lastTagStart = truncated.lastIndexOf('<');
+    const lastTagEnd = truncated.lastIndexOf('>');
+    if (lastTagStart > lastTagEnd) {
+      truncated = truncated.substring(0, lastTagStart);
     }
 
     // Always close unclosed tags — stream may be mid-generation

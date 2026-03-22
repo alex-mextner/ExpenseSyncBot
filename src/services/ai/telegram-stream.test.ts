@@ -119,6 +119,37 @@ describe('truncateForTelegram', () => {
     expect(result).toBe('Hello <i>world</i>');
     expect(result).not.toContain('...');
   });
+
+  test('removes incomplete tag before newline (mid-stream delta split)', () => {
+    // Simulates: model streams `</blockquote` then `\n` as one delta chunk
+    const text =
+      '<blockquote expandable>⚙️ <b>Инструменты</b></blockquote>\n\n<blockquote expandable>⚙️ <b>Инструменты</b></blockquote\nmore text';
+    const result = truncate(text);
+    // Incomplete </blockquote (no >) must be removed
+    expect(result).not.toMatch(/<\/blockquote(?!>)/);
+    // Content after the newline must survive
+    expect(result).toContain('more text');
+    // First valid blockquote must stay intact
+    expect(result).toContain('<blockquote expandable>');
+  });
+
+  test('removes incomplete tag at end of string when text is short', () => {
+    // Mid-stream flush where last delta ends with an incomplete tag
+    const text = 'Ответ<i>курсив</blockquote';
+    const result = truncate(text);
+    expect(result).not.toContain('<blockquote');
+    // Should not throw and should produce valid-enough output
+    expect(result).toContain('Ответ');
+  });
+
+  test('does not remove valid closed tags before newlines', () => {
+    // <blockquote expandable> ends with > — must NOT be removed
+    const text = '<blockquote expandable>content</blockquote>\nNext line';
+    const result = truncate(text);
+    expect(result).toContain('<blockquote expandable>');
+    expect(result).toContain('</blockquote>');
+    expect(result).toContain('Next line');
+  });
 });
 
 // ── getText / historyText ─────────────────────────────────────────────
