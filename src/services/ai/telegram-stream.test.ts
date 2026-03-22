@@ -275,12 +275,29 @@ describe('truncateForTelegram edge cases', () => {
     expect(result).toContain('</b>');
   });
 
-  test('void element <br> does not produce spurious </br> closing tag', () => {
-    const text = 'line1<br>\nline2';
-    const result = truncate(text);
+  test('<br> is converted to newline (not supported by Telegram HTML)', () => {
+    const result = truncate('line1<br>line2');
+    expect(result).not.toContain('<br>');
     expect(result).not.toContain('</br>');
-    expect(result).toContain('<br>');
-    expect(result).toContain('line2');
+    expect(result).toBe('line1\nline2');
+  });
+
+  test('<br/> is converted to newline', () => {
+    const result = truncate('line1<br/>line2');
+    expect(result).not.toContain('<br');
+    expect(result).toBe('line1\nline2');
+  });
+
+  test('<br /> (with space) is converted to newline', () => {
+    const result = truncate('line1<br />line2');
+    expect(result).not.toContain('<br');
+    expect(result).toBe('line1\nline2');
+  });
+
+  test('<BR> (uppercase) is converted to newline', () => {
+    const result = truncate('line1<BR>line2');
+    expect(result).not.toContain('<BR');
+    expect(result).toBe('line1\nline2');
   });
 
   test('does not produce "..." when short text has unclosed tags', () => {
