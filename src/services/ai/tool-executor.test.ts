@@ -745,7 +745,7 @@ describe('calculate tool', () => {
     expect(result.success).toBe(true);
     // 100 USD converted to EUR minus 70 EUR — result is a number in EUR
     expect(result.output).toContain('EUR');
-    const value = parseFloat(result.output!);
+    const value = parseFloat(result.output ?? '');
     expect(value).toBeGreaterThan(-200);
     expect(value).toBeLessThan(200);
   });
