@@ -7,11 +7,14 @@
  * for each task to avoid disturbing the running process.
  */
 
-import { $ } from 'bun';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { Octokit } from '@octokit/rest';
+import { $ } from 'bun';
 import { env } from '../../config/env';
+import { createLogger } from '../../utils/logger.ts';
+
+const logger = createLogger('git-ops');
 
 /**
  * Get the root of the current git repository.
@@ -54,12 +57,12 @@ export async function createWorktree(branchName: string): Promise<string> {
       // Verify it's actually a working git worktree
       const check = await $`git -C ${worktreePath} rev-parse --git-dir`.nothrow().quiet();
       if (check.exitCode === 0) {
-        console.log(`[GIT-OPS] Worktree already exists at ${worktreePath}`);
+        logger.info(`[GIT-OPS] Worktree already exists at ${worktreePath}`);
         return worktreePath;
       }
     }
     // Directory exists but .git is broken — clean up and recreate
-    console.log(`[GIT-OPS] Broken worktree at ${worktreePath}, cleaning up...`);
+    logger.info(`[GIT-OPS] Broken worktree at ${worktreePath}, cleaning up...`);
     await $`git worktree remove ${worktreePath} --force`.nothrow().quiet();
     await $`rm -rf ${worktreePath}`.nothrow().quiet();
     // Also prune stale worktree entries
@@ -75,9 +78,7 @@ export async function createWorktree(branchName: string): Promise<string> {
   // Create data/ dir for SQLite (DATABASE_PATH is relative)
   await $`mkdir -p ${path.join(worktreePath, 'data')}`.quiet().nothrow();
 
-  console.log(
-    `[GIT-OPS] Created worktree: ${worktreePath} (branch: ${branchName})`
-  );
+  logger.info(`[GIT-OPS] Created worktree: ${worktreePath} (branch: ${branchName})`);
   return worktreePath;
 }
 
@@ -88,15 +89,15 @@ export async function createWorktree(branchName: string): Promise<string> {
  */
 export async function removeWorktree(worktreePath: string): Promise<void> {
   if (!existsSync(worktreePath)) {
-    console.log(`[GIT-OPS] Worktree not found at ${worktreePath}, skipping`);
+    logger.info(`[GIT-OPS] Worktree not found at ${worktreePath}, skipping`);
     return;
   }
 
   try {
     await $`git worktree remove ${worktreePath} --force`.quiet();
-    console.log(`[GIT-OPS] Removed worktree: ${worktreePath}`);
+    logger.info(`[GIT-OPS] Removed worktree: ${worktreePath}`);
   } catch (error) {
-    console.error(`[GIT-OPS] Failed to remove worktree: ${worktreePath}`, error);
+    logger.error({ err: error }, '[GIT-OPS] Failed to remove worktree: ${worktreePath}');
   }
 }
 
@@ -110,10 +111,10 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
 export async function deleteLocalBranch(branchName: string): Promise<void> {
   try {
     await $`git branch -D ${branchName}`.quiet();
-    console.log(`[GIT-OPS] Deleted local branch: ${branchName}`);
+    logger.info(`[GIT-OPS] Deleted local branch: ${branchName}`);
   } catch {
     // Branch may not exist or already deleted — that's fine
-    console.log(`[GIT-OPS] Branch ${branchName} not found or already deleted`);
+    logger.info(`[GIT-OPS] Branch ${branchName} not found or already deleted`);
   }
 }
 
@@ -130,10 +131,7 @@ export function worktreeExists(worktreePath: string): boolean {
  * @param worktreePath - Absolute path to the worktree
  * @param message - Commit message
  */
-export async function commitChanges(
-  worktreePath: string,
-  message: string
-): Promise<void> {
+export async function commitChanges(worktreePath: string, message: string): Promise<void> {
   // Stage all changes
   await $`git -C ${worktreePath} add -A`.quiet();
 
@@ -141,13 +139,13 @@ export async function commitChanges(
   const status = await $`git -C ${worktreePath} status --porcelain`.text();
 
   if (!status.trim()) {
-    console.log('[GIT-OPS] Nothing to commit');
+    logger.info('[GIT-OPS] Nothing to commit');
     return;
   }
 
   // Commit
   await $`git -C ${worktreePath} commit -m ${message}`.quiet();
-  console.log(`[GIT-OPS] Committed: ${message}`);
+  logger.info(`[GIT-OPS] Committed: ${message}`);
 }
 
 /**
@@ -156,16 +154,13 @@ export async function commitChanges(
  * @param worktreePath - Absolute path to the worktree
  * @param branchName - Branch name to push
  */
-export async function pushBranch(
-  worktreePath: string,
-  branchName: string
-): Promise<void> {
+export async function pushBranch(worktreePath: string, branchName: string): Promise<void> {
   const result = await $`git -C ${worktreePath} push -u origin ${branchName}`.nothrow().quiet();
   if (result.exitCode !== 0) {
     const stderr = result.stderr.toString().trim();
     throw new Error(`git push failed (exit ${result.exitCode}): ${stderr}`);
   }
-  console.log(`[GIT-OPS] Pushed branch: ${branchName}`);
+  logger.info(`[GIT-OPS] Pushed branch: ${branchName}`);
 }
 
 /**
@@ -199,7 +194,7 @@ export async function createPR(
   worktreePath: string,
   title: string,
   body: string,
-  baseBranch: string = 'main'
+  baseBranch: string = 'main',
 ): Promise<{ number: number; url: string }> {
   const remoteUrl = (await $`git -C ${worktreePath} remote get-url origin`.text()).trim();
   const head = (await $`git -C ${worktreePath} rev-parse --abbrev-ref HEAD`.text()).trim();
@@ -215,7 +210,7 @@ export async function createPR(
     head,
   });
 
-  console.log(`[GIT-OPS] Created PR #${data.number}: ${data.html_url}`);
+  logger.info(`[GIT-OPS] Created PR #${data.number}: ${data.html_url}`);
   return { number: data.number, url: data.html_url };
 }
 
@@ -249,7 +244,7 @@ export async function mergePR(prNumber: number): Promise<void> {
     // Branch may already be deleted — that's fine
   }
 
-  console.log(`[GIT-OPS] Merged PR #${prNumber}`);
+  logger.info(`[GIT-OPS] Merged PR #${prNumber}`);
 }
 
 /**
@@ -259,13 +254,11 @@ export async function mergePR(prNumber: number): Promise<void> {
  */
 export async function getCurrentDiff(worktreePath: string): Promise<string> {
   // Get both staged and unstaged changes
-  const staged =
-    await $`git -C ${worktreePath} diff --cached`.text();
+  const staged = await $`git -C ${worktreePath} diff --cached`.text();
   const unstaged = await $`git -C ${worktreePath} diff`.text();
 
   // Also get untracked files
-  const untracked =
-    await $`git -C ${worktreePath} ls-files --others --exclude-standard`.text();
+  const untracked = await $`git -C ${worktreePath} ls-files --others --exclude-standard`.text();
 
   let result = '';
 
@@ -290,8 +283,7 @@ export async function getCurrentDiff(worktreePath: string): Promise<string> {
  * @returns The diff as a string
  */
 export async function getDiffFromMain(worktreePath: string): Promise<string> {
-  const diff =
-    await $`git -C ${worktreePath} diff main...HEAD`.text();
+  const diff = await $`git -C ${worktreePath} diff main...HEAD`.text();
   return diff;
 }
 
@@ -303,14 +295,17 @@ export async function getChangedFilesFromMain(worktreePath: string): Promise<str
   const committed = await $`git -C ${worktreePath} diff main --name-only`.nothrow().quiet().text();
   // Uncommitted changes (staged + unstaged + untracked)
   const unstaged = await $`git -C ${worktreePath} diff --name-only`.nothrow().quiet().text();
-  const untracked = await $`git -C ${worktreePath} ls-files --others --exclude-standard`.nothrow().quiet().text();
+  const untracked = await $`git -C ${worktreePath} ls-files --others --exclude-standard`
+    .nothrow()
+    .quiet()
+    .text();
 
   const all = new Set(
     [committed, unstaged, untracked]
       .join('\n')
       .split('\n')
-      .map(f => f.trim())
-      .filter(Boolean)
+      .map((f) => f.trim())
+      .filter(Boolean),
   );
   return [...all];
 }
@@ -320,18 +315,20 @@ export async function getChangedFilesFromMain(worktreePath: string): Promise<str
  */
 export async function revertFileToMain(worktreePath: string, filePath: string): Promise<void> {
   // Check if file exists on main
-  const existsOnMain = await $`git -C ${worktreePath} cat-file -e main:${filePath}`.nothrow().quiet();
+  const existsOnMain = await $`git -C ${worktreePath} cat-file -e main:${filePath}`
+    .nothrow()
+    .quiet();
 
   if (existsOnMain.exitCode === 0) {
     // File exists on main — restore it
     await $`git -C ${worktreePath} checkout main -- ${filePath}`.quiet();
-    console.log(`[GIT-OPS] Reverted to main: ${filePath}`);
+    logger.info(`[GIT-OPS] Reverted to main: ${filePath}`);
   } else {
     // File doesn't exist on main — it was created by agent, delete it
     const absolutePath = path.resolve(worktreePath, filePath);
     if (existsSync(absolutePath)) {
       await $`rm ${absolutePath}`.quiet();
-      console.log(`[GIT-OPS] Deleted (not on main): ${filePath}`);
+      logger.info(`[GIT-OPS] Deleted (not on main): ${filePath}`);
     }
   }
 }
@@ -343,10 +340,7 @@ export async function revertFileToMain(worktreePath: string, filePath: string): 
  * @param description - The task description
  * @returns A sanitized branch name like "dev/add-weekly-summary-42"
  */
-export function generateBranchName(
-  taskId: number,
-  description: string
-): string {
+export function generateBranchName(taskId: number, description: string): string {
   const slug = description
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
@@ -364,7 +358,7 @@ const VALID_PACKAGE_RE = /^(@[\w.-]+\/)?[\w.-]+(@[\w.*^~<>=|-]+)?$/;
 export async function managePackages(
   worktreePath: string,
   action: 'add' | 'remove',
-  packages: string
+  packages: string,
 ): Promise<string> {
   const names = packages.split(/\s+/).filter(Boolean);
   if (names.length === 0) {
@@ -377,9 +371,10 @@ export async function managePackages(
     }
   }
 
-  const result = action === 'add'
-    ? await $`cd ${worktreePath} && bun add ${names}`.nothrow().quiet()
-    : await $`cd ${worktreePath} && bun remove ${names}`.nothrow().quiet();
+  const result =
+    action === 'add'
+      ? await $`cd ${worktreePath} && bun add ${names}`.nothrow().quiet()
+      : await $`cd ${worktreePath} && bun remove ${names}`.nothrow().quiet();
 
   const output = result.text();
 
@@ -387,6 +382,6 @@ export async function managePackages(
     throw new Error(`bun ${action} failed (exit ${result.exitCode}): ${output}`);
   }
 
-  console.log(`[GIT-OPS] bun ${action} ${names.join(' ')} — success`);
+  logger.info(`[GIT-OPS] bun ${action} ${names.join(' ')} — success`);
   return output || `${action === 'add' ? 'Installed' : 'Removed'}: ${names.join(', ')}`;
 }

@@ -1,14 +1,14 @@
-import { test, expect, describe } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { computeOverallSeverity, formatSnapshotForPrompt } from './formatters';
 import type {
-  FinancialSnapshot,
   BudgetBurnRate,
-  SpendingTrend,
-  CategoryAnomaly,
-  MonthlyProjection,
-  SpendingVelocity,
-  SpendingStreak,
   BudgetUtilization,
+  CategoryAnomaly,
+  FinancialSnapshot,
+  MonthlyProjection,
+  SpendingStreak,
+  SpendingTrend,
+  SpendingVelocity,
 } from './types';
 
 // === Helpers to build test data ===
@@ -148,16 +148,18 @@ describe('computeOverallSeverity', () => {
 describe('formatSnapshotForPrompt — burn rates section', () => {
   test('includes category, spent/limit, percentage', () => {
     const snapshot = makeSnapshot({
-      burnRates: [makeBurnRate({
-        category: 'food',
-        spent: 350,
-        budget_limit: 500,
-        currency: 'EUR',
-        daily_burn_rate: 23.33,
-        projected_total: 700,
-        runway_days: 6,
-        status: 'warning',
-      })],
+      burnRates: [
+        makeBurnRate({
+          category: 'food',
+          spent: 350,
+          budget_limit: 500,
+          currency: 'EUR',
+          daily_burn_rate: 23.33,
+          projected_total: 700,
+          runway_days: 6,
+          status: 'warning',
+        }),
+      ],
     });
     const output = formatSnapshotForPrompt(snapshot);
 
@@ -245,7 +247,7 @@ describe('formatSnapshotForPrompt — projection section', () => {
   test('contains projected total', () => {
     const snapshot = makeSnapshot({
       projection: makeProjection({
-        projected_total: 1850.50,
+        projected_total: 1850.5,
         current_total: 920,
         days_elapsed: 15,
         days_in_month: 31,

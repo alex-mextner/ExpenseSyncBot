@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { ReceiptItem, CreateReceiptItemData, UpdateReceiptItemData } from '../types';
+import type { CreateReceiptItemData, ReceiptItem, UpdateReceiptItemData } from '../types';
 
 export class ReceiptItemsRepository {
   constructor(private db: Database) {}
@@ -8,7 +8,10 @@ export class ReceiptItemsRepository {
    * Find receipt item by ID
    */
   findById(id: number): ReceiptItem | null {
-    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, [number]>(`
+    const query = this.db.query<
+      Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string },
+      [number]
+    >(`
       SELECT * FROM receipt_items WHERE id = ?
     `);
 
@@ -28,7 +31,10 @@ export class ReceiptItemsRepository {
    * Find all pending items (status = 'pending')
    */
   findPending(): ReceiptItem[] {
-    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, []>(`
+    const query = this.db.query<
+      Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string },
+      []
+    >(`
       SELECT * FROM receipt_items
       WHERE status = 'pending'
       ORDER BY created_at ASC
@@ -46,7 +52,10 @@ export class ReceiptItemsRepository {
    * Find by photo queue ID
    */
   findByPhotoQueueId(photoQueueId: number): ReceiptItem[] {
-    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, [number]>(`
+    const query = this.db.query<
+      Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string },
+      [number]
+    >(`
       SELECT * FROM receipt_items
       WHERE photo_queue_id = ?
       ORDER BY created_at ASC
@@ -64,7 +73,10 @@ export class ReceiptItemsRepository {
    * Find next pending item (for confirmation flow)
    */
   findNextPending(): ReceiptItem | null {
-    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, []>(`
+    const query = this.db.query<
+      Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string },
+      []
+    >(`
       SELECT * FROM receipt_items
       WHERE status = 'pending'
       ORDER BY created_at ASC
@@ -87,7 +99,10 @@ export class ReceiptItemsRepository {
    * Create new receipt item
    */
   create(data: CreateReceiptItemData): ReceiptItem {
-    const query = this.db.query<{ id: number }, [number, string, string | null, number, number, number, string, string, string, string]>(`
+    const query = this.db.query<
+      { id: number },
+      [number, string, string | null, number, number, number, string, string, string, string]
+    >(`
       INSERT INTO receipt_items (
         photo_queue_id,
         name_ru,
@@ -114,7 +129,7 @@ export class ReceiptItemsRepository {
       data.currency,
       data.suggested_category,
       JSON.stringify(data.possible_categories),
-      data.status
+      data.status,
     );
 
     if (!result) {
@@ -184,7 +199,10 @@ export class ReceiptItemsRepository {
    * Find receipt item waiting for category text input from user
    */
   findWaitingForCategoryInput(groupId: number): ReceiptItem | null {
-    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, [number]>(`
+    const query = this.db.query<
+      Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string },
+      [number]
+    >(`
       SELECT ri.* FROM receipt_items ri
       JOIN photo_processing_queue ppq ON ri.photo_queue_id = ppq.id
       WHERE ppq.group_id = ? AND ri.waiting_for_category_input = 1
@@ -264,7 +282,10 @@ export class ReceiptItemsRepository {
    * Get all confirmed items by photo queue ID
    */
   findConfirmedByPhotoQueueId(photoQueueId: number): ReceiptItem[] {
-    const query = this.db.query<Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string }, [number]>(`
+    const query = this.db.query<
+      Omit<ReceiptItem, 'possible_categories'> & { possible_categories: string },
+      [number]
+    >(`
       SELECT * FROM receipt_items
       WHERE photo_queue_id = ? AND status = 'confirmed'
       ORDER BY created_at ASC

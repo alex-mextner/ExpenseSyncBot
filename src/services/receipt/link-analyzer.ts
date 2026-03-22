@@ -1,15 +1,18 @@
-import type { CurrencyCode } from "../../config/constants";
-import type { Group, User } from "../../database/types";
-import { database } from "../../database";
-import { fetchReceiptData } from "./receipt-fetcher";
-import { extractExpensesFromReceipt } from "./ai-extractor";
-import { saveExtractedItems, showReceiptConfirmationOptions } from "./photo-processor";
+import type { CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
+import type { Group, User } from '../../database/types';
+import { createLogger } from '../../utils/logger.ts';
+import { extractExpensesFromReceipt } from './ai-extractor';
+import { saveExtractedItems, showReceiptConfirmationOptions } from './photo-processor';
+import { fetchReceiptData } from './receipt-fetcher';
+
+const logger = createLogger('link-analyzer');
 
 /**
  * Extract URLs from text message
  */
 export function extractURLsFromText(text: string): string[] {
-  const urlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
+  const urlRegex = /https?:\/\/[^\s<>"{}|\\^`[\]]+/gi;
   return text.match(urlRegex) || [];
 }
 
@@ -23,19 +26,19 @@ export async function processPaymentLinks(
   messageId: number,
   urls: string[],
   group: Group,
-  user: User
+  user: User,
 ): Promise<boolean> {
   let found = false;
 
   for (const url of urls) {
-    console.log(`[LINK] Analyzing: ${url}`);
+    logger.info(`[LINK] Analyzing: ${url}`);
 
     // Set 👀 reaction
     try {
       await bot.api.setMessageReaction({
         chat_id: chatId,
         message_id: messageId,
-        reaction: [{ type: "emoji", emoji: "👀" }],
+        reaction: [{ type: 'emoji', emoji: '👀' }],
       });
     } catch {}
 
@@ -43,11 +46,11 @@ export async function processPaymentLinks(
     const result = await analyzeLink(url, group.id);
 
     if (!result) {
-      console.log(`[LINK] Not a payment link: ${url}`);
+      logger.info(`[LINK] Not a payment link: ${url}`);
       continue;
     }
 
-    console.log(`[LINK] Payment! ${result.items.length} items`);
+    logger.info(`[LINK] Payment! ${result.items.length} items`);
     found = true;
 
     // Create queue entry
@@ -84,24 +87,27 @@ export async function processPaymentLinks(
  */
 async function analyzeLink(
   url: string,
-  groupId: number
+  groupId: number,
 ): Promise<{ items: any[]; currency: CurrencyCode } | null> {
   try {
     const content = await fetchReceiptData(url);
     if (content.length < 50) return null;
 
     const categories = database.categories.findByGroupId(groupId);
-    const result = await extractExpensesFromReceipt(content, categories.map(c => c.name));
+    const result = await extractExpensesFromReceipt(
+      content,
+      categories.map((c) => c.name),
+    );
 
     if (!result.items?.length) return null;
 
     const group = database.groups.findById(groupId);
     return {
       items: result.items,
-      currency: result.currency || group?.default_currency || "EUR",
+      currency: result.currency || group?.default_currency || 'EUR',
     };
   } catch (error) {
-    console.error(`[LINK] Error: ${error}`);
+    logger.error(`[LINK] Error: ${error}`);
     return null;
   }
 }

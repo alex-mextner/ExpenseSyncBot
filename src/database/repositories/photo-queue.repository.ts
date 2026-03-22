@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { PhotoQueueItem, CreatePhotoQueueData, UpdatePhotoQueueData } from '../types';
+import type { CreatePhotoQueueData, PhotoQueueItem, UpdatePhotoQueueData } from '../types';
 
 export class PhotoQueueRepository {
   constructor(private db: Database) {}
@@ -45,7 +45,10 @@ export class PhotoQueueRepository {
    * Create new photo queue item
    */
   create(data: CreatePhotoQueueData): PhotoQueueItem {
-    const query = this.db.query<{ id: number }, [number, number, number, number | null, string, string]>(`
+    const query = this.db.query<
+      { id: number },
+      [number, number, number, number | null, string, string]
+    >(`
       INSERT INTO photo_processing_queue (
         group_id,
         user_id,
@@ -64,7 +67,7 @@ export class PhotoQueueRepository {
       data.message_id,
       data.message_thread_id ?? null,
       data.file_id,
-      data.status
+      data.status,
     );
 
     if (!result) {

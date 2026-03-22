@@ -1,23 +1,16 @@
-import { MESSAGES, type CurrencyCode } from "../../config/constants";
-import { database } from "../../database";
-import {
-  handleCurrencyCallback,
-  handleDefaultCurrencyCallback,
-} from "../commands/connect";
-import { normalizeCurrency, getCurrencySymbol } from "../commands/budget";
-import {
-  createCategoriesListKeyboard,
-  createBudgetPromptKeyboard,
-} from "../keyboards";
-import type { Ctx } from "../types";
-import { saveExpenseToSheet } from "./message.handler";
-import { format } from "date-fns";
-import {
-  writeBudgetRow,
-  hasBudgetSheet,
-  createBudgetSheet,
-} from "../../services/google/sheets";
-import { handleDevCallback } from "../commands/dev";
+import { format } from 'date-fns';
+import { type CurrencyCode, MESSAGES } from '../../config/constants';
+import { database } from '../../database';
+import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
+import { createLogger } from '../../utils/logger.ts';
+import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
+import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
+import { handleDevCallback } from '../commands/dev';
+import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
+import type { Ctx } from '../types';
+import { saveExpenseToSheet } from './message.handler';
+
+const logger = createLogger('callback.handler');
 
 /**
  * Ensure user exists and is linked to group from chat
@@ -47,10 +40,7 @@ function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
 /**
  * Handle callback queries from inline keyboards
  */
-export async function handleCallbackQuery(
-  ctx: Ctx["CallbackQuery"],
-  bot: any
-): Promise<void> {
+export async function handleCallbackQuery(ctx: Ctx['CallbackQuery'], bot: any): Promise<void> {
   const data = ctx.data;
   const telegramId = ctx.from.id;
   const chatId = ctx.message?.chat?.id;
@@ -59,76 +49,76 @@ export async function handleCallbackQuery(
     return;
   }
 
-  const [action, ...params] = data.split(":");
+  const [action, ...params] = data.split(':');
 
   try {
     switch (action) {
-      case "currency": {
+      case 'currency': {
         const currencyAction = params[0];
         if (!currencyAction || !chatId) {
-          await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+          await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
           return;
         }
         await handleCurrencyCallback(ctx, currencyAction, chatId);
         break;
       }
 
-      case "default": {
+      case 'default': {
         // Step 2: Default currency selection
         const currency = params[0];
         if (!currency || !chatId) {
-          await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+          await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
           return;
         }
         await handleDefaultCurrencyCallback(ctx, currency, chatId);
         break;
       }
 
-      case "category":
+      case 'category':
         await handleCategoryAction(ctx, params, telegramId, bot);
         break;
 
-      case "confirm":
+      case 'confirm':
         await handleConfirmAction(ctx, params, telegramId, bot);
         break;
 
-      case "budget":
+      case 'budget':
         await handleBudgetAction(ctx, params, telegramId, bot);
         break;
 
-      case "confirm_receipt_item":
+      case 'confirm_receipt_item':
         await handleReceiptItemConfirm(ctx, params, telegramId, bot);
         break;
 
-      case "receipt_item_other":
+      case 'receipt_item_other':
         await handleReceiptItemOther(ctx, params, telegramId, bot);
         break;
 
-      case "skip_receipt_item":
+      case 'skip_receipt_item':
         await handleSkipReceiptItem(ctx, params, telegramId, bot);
         break;
 
-      case "use_found_category":
+      case 'use_found_category':
         await handleUseFoundCategory(ctx, params, telegramId, bot);
         break;
 
-      case "create_new_category":
+      case 'create_new_category':
         await handleCreateNewCategory(ctx, params, telegramId, bot);
         break;
 
-      case "receipt":
+      case 'receipt':
         await handleReceiptSummaryAction(ctx, params, telegramId, bot);
         break;
 
-      case "dev":
+      case 'dev':
         await handleDevCallback(ctx, params, telegramId, bot);
         break;
 
       default:
-        await ctx.answerCallbackQuery({ text: "Unknown action" });
+        await ctx.answerCallbackQuery({ text: 'Unknown action' });
     }
   } catch (error) {
-    console.error(`[CALLBACK] Unhandled error for action "${data}":`, error);
+    logger.error({ err: error }, '[CALLBACK] Unhandled error for action "${data}"');
     try {
       await ctx.answerCallbackQuery({ text: 'Internal error' });
     } catch {}
@@ -139,30 +129,30 @@ export async function handleCallbackQuery(
  * Handle category-related callbacks
  */
 async function handleCategoryAction(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const [subAction, ...rest] = params;
   const chatId = ctx.message?.chat?.id;
   const result = ensureUserInGroup(telegramId, chatId);
 
   if (!result) {
-    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не настроена' });
     return;
   }
 
   const { user, group } = result;
 
   switch (subAction) {
-    case "add": {
+    case 'add': {
       // Add new category
-      const categoryName = rest.join(":");
+      const categoryName = rest.join(':');
       database.categories.create({ group_id: group.id, name: categoryName });
 
       await ctx.answerCallbackQuery({
-        text: MESSAGES.categoryAdded.replace("{category}", categoryName),
+        text: MESSAGES.categoryAdded.replace('{category}', categoryName),
       });
 
       // Delete the button message
@@ -175,44 +165,33 @@ async function handleCategoryAction(
       // Find and save pending expense
       const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
       const pending = pendingExpenses.find(
-        (p) =>
-          p.detected_category === categoryName &&
-          p.status === "pending_category"
+        (p) => p.detected_category === categoryName && p.status === 'pending_category',
       );
 
       if (pending) {
-        database.pendingExpenses.update(pending.id, { status: "confirmed" });
-        await saveExpenseToSheet(
-          user.id,
-          group.id,
-          pending.id,
-          chatId || undefined,
-          bot
-        );
+        database.pendingExpenses.update(pending.id, { status: 'confirmed' });
+        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
       }
 
       // Prompt for budget setup
       if (chatId) {
-        const keyboard = createBudgetPromptKeyboard(
-          categoryName,
-          group.default_currency
-        );
+        const keyboard = createBudgetPromptKeyboard(categoryName, group.default_currency);
         await bot.api.sendMessage({
           chat_id: chatId,
           text: `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
-          reply_markup: keyboard.build()
+          reply_markup: keyboard.build(),
         });
       }
 
       break;
     }
 
-    case "select": {
+    case 'select': {
       // Show existing categories
       const categories = database.categories.getCategoryNames(group.id);
 
       if (categories.length === 0) {
-        await ctx.answerCallbackQuery({ text: "Нет сохраненных категорий" });
+        await ctx.answerCallbackQuery({ text: 'Нет сохраненных категорий' });
         return;
       }
 
@@ -220,29 +199,27 @@ async function handleCategoryAction(
       await ctx.editReplyMarkup({
         inline_keyboard: keyboard.build().inline_keyboard,
       });
-      await ctx.answerCallbackQuery({ text: "Выбери категорию" });
+      await ctx.answerCallbackQuery({ text: 'Выбери категорию' });
       break;
     }
 
-    case "choose": {
+    case 'choose': {
       // Choose existing category
-      const categoryName = rest.join(":");
+      const categoryName = rest.join(':');
 
       // Find pending expense for this user
       const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
-      const pending = pendingExpenses.find(
-        (p) => p.status === "pending_category"
-      );
+      const pending = pendingExpenses.find((p) => p.status === 'pending_category');
 
       if (!pending) {
-        await ctx.answerCallbackQuery({ text: "Расход не найден" });
+        await ctx.answerCallbackQuery({ text: 'Расход не найден' });
         return;
       }
 
       // Update category
       database.pendingExpenses.update(pending.id, {
         detected_category: categoryName,
-        status: "confirmed",
+        status: 'confirmed',
       });
 
       await ctx.answerCallbackQuery({ text: `Категория: ${categoryName}` });
@@ -255,18 +232,12 @@ async function handleCategoryAction(
       }
 
       // Save expense
-      await saveExpenseToSheet(
-        user.id,
-        group.id,
-        pending.id,
-        chatId || undefined,
-        bot
-      );
+      await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
       break;
     }
 
-    case "cancel": {
-      await ctx.answerCallbackQuery({ text: "Отменено" });
+    case 'cancel': {
+      await ctx.answerCallbackQuery({ text: 'Отменено' });
 
       // Delete the button message
       const messageId = ctx.message?.id;
@@ -283,18 +254,18 @@ async function handleCategoryAction(
  * Handle confirmation callbacks
  */
 async function handleConfirmAction(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const [action, answer] = params;
 
-  if (answer === "yes") {
-    await ctx.answerCallbackQuery({ text: "✅ Подтверждено" });
+  if (answer === 'yes') {
+    await ctx.answerCallbackQuery({ text: '✅ Подтверждено' });
     // Handle specific confirmation actions here
   } else {
-    await ctx.answerCallbackQuery({ text: "❌ Отменено" });
+    await ctx.answerCallbackQuery({ text: '❌ Отменено' });
 
     // Delete the button message
     const messageId = ctx.message?.id;
@@ -309,10 +280,10 @@ async function handleConfirmAction(
  * Handle budget-related callbacks
  */
 async function handleBudgetAction(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const [subAction, category, ...rest] = params;
   const chatId = ctx.message?.chat?.id;
@@ -320,14 +291,14 @@ async function handleBudgetAction(
   const result = ensureUserInGroup(telegramId, chatId);
 
   if (!result) {
-    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не настроена' });
     return;
   }
 
   const { group } = result;
 
   switch (subAction) {
-    case "set": {
+    case 'set': {
       // Set budget for category
       const amountStr = rest[0];
       const currencyStr = rest[1];
@@ -337,12 +308,12 @@ async function handleBudgetAction(
         : group.default_currency;
 
       if (Number.isNaN(amount) || amount <= 0) {
-        await ctx.answerCallbackQuery({ text: "❌ Неверная сумма" });
+        await ctx.answerCallbackQuery({ text: '❌ Неверная сумма' });
         return;
       }
 
       const now = new Date();
-      const currentMonth = format(now, "yyyy-MM");
+      const currentMonth = format(now, 'yyyy-MM');
 
       // Save to database
       database.budgets.setBudget({
@@ -356,10 +327,7 @@ async function handleBudgetAction(
       // Ensure Budget sheet exists and write to Google Sheets
       if (group.google_refresh_token && group.spreadsheet_id) {
         try {
-          const hasSheet = await hasBudgetSheet(
-            group.google_refresh_token,
-            group.spreadsheet_id
-          );
+          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
 
           if (!hasSheet) {
             const categories = database.categories.getCategoryNames(group.id);
@@ -368,22 +336,18 @@ async function handleBudgetAction(
               group.spreadsheet_id,
               categories,
               100,
-              currency
+              currency,
             );
           }
 
-          await writeBudgetRow(
-            group.google_refresh_token,
-            group.spreadsheet_id,
-            {
-              month: currentMonth,
-              category: category ?? '',
-              limit: amount,
-              currency: currency,
-            }
-          );
+          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
+            month: currentMonth,
+            category: category ?? '',
+            limit: amount,
+            currency: currency,
+          });
         } catch (err) {
-          console.error("[BUDGET] Failed to write to Google Sheets:", err);
+          logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
         }
       }
 
@@ -400,7 +364,7 @@ async function handleBudgetAction(
       break;
     }
 
-    case "add-category": {
+    case 'add-category': {
       // Add new category and set budget
       const amountStr = rest[0];
       const currencyStr = rest[1];
@@ -410,7 +374,7 @@ async function handleBudgetAction(
         : group.default_currency;
 
       if (Number.isNaN(amount) || amount <= 0) {
-        await ctx.answerCallbackQuery({ text: "❌ Неверная сумма" });
+        await ctx.answerCallbackQuery({ text: '❌ Неверная сумма' });
         return;
       }
 
@@ -418,7 +382,7 @@ async function handleBudgetAction(
       database.categories.create({ group_id: group.id, name: category ?? '' });
 
       const now = new Date();
-      const currentMonth = format(now, "yyyy-MM");
+      const currentMonth = format(now, 'yyyy-MM');
 
       // Set budget
       database.budgets.setBudget({
@@ -432,10 +396,7 @@ async function handleBudgetAction(
       // Ensure Budget sheet exists and write to Google Sheets
       if (group.google_refresh_token && group.spreadsheet_id) {
         try {
-          const hasSheet = await hasBudgetSheet(
-            group.google_refresh_token,
-            group.spreadsheet_id
-          );
+          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
 
           if (!hasSheet) {
             const categories = database.categories.getCategoryNames(group.id);
@@ -444,22 +405,18 @@ async function handleBudgetAction(
               group.spreadsheet_id,
               categories,
               100,
-              currency
+              currency,
             );
           }
 
-          await writeBudgetRow(
-            group.google_refresh_token,
-            group.spreadsheet_id,
-            {
-              month: currentMonth,
-              category: category ?? '',
-              limit: amount,
-              currency,
-            }
-          );
+          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
+            month: currentMonth,
+            category: category ?? '',
+            limit: amount,
+            currency,
+          });
         } catch (err) {
-          console.error("[BUDGET] Failed to write to Google Sheets:", err);
+          logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
         }
       }
 
@@ -477,8 +434,8 @@ async function handleBudgetAction(
       break;
     }
 
-    case "skip": {
-      await ctx.answerCallbackQuery({ text: "⏭️ Пропущено" });
+    case 'skip': {
+      await ctx.answerCallbackQuery({ text: '⏭️ Пропущено' });
 
       // Delete the button message
       if (messageId && chatId) {
@@ -488,8 +445,8 @@ async function handleBudgetAction(
       break;
     }
 
-    case "cancel": {
-      await ctx.answerCallbackQuery({ text: "❌ Отменено" });
+    case 'cancel': {
+      await ctx.answerCallbackQuery({ text: '❌ Отменено' });
 
       // Delete the button message
       if (messageId && chatId) {
@@ -500,7 +457,7 @@ async function handleBudgetAction(
     }
 
     default:
-      await ctx.answerCallbackQuery({ text: "Unknown budget action" });
+      await ctx.answerCallbackQuery({ text: 'Unknown budget action' });
   }
 }
 
@@ -508,10 +465,10 @@ async function handleBudgetAction(
  * Handle receipt item confirmation
  */
 async function handleReceiptItemConfirm(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const itemIdStr = params[0];
   const categoryIndexStr = params[1];
@@ -519,7 +476,7 @@ async function handleReceiptItemConfirm(
   const chatId = ctx.message?.chat?.id;
 
   if (!itemIdStr || categoryIndexStr === undefined) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
@@ -527,14 +484,14 @@ async function handleReceiptItemConfirm(
   const categoryIndex = parseInt(categoryIndexStr, 10);
 
   if (Number.isNaN(itemId) || Number.isNaN(categoryIndex)) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const result = ensureUserInGroup(telegramId, chatId);
 
   if (!result) {
-    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не настроена' });
     return;
   }
 
@@ -544,22 +501,19 @@ async function handleReceiptItemConfirm(
   const item = database.receiptItems.findById(itemId);
 
   if (!item || item.status !== 'pending') {
-    await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
+    await ctx.answerCallbackQuery({ text: 'Товар не найден или уже обработан' });
     return;
   }
 
   // Collect all confirmed categories from this receipt (custom categories from user)
   const allItemsFromReceipt = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
   const confirmedCategories = allItemsFromReceipt
-    .map(i => i.status === 'confirmed' ? i.confirmed_category : null)
+    .map((i) => (i.status === 'confirmed' ? i.confirmed_category : null))
     .filter((cat): cat is string => cat !== null);
 
   // Merge with possible_categories to create the same array as in showNextItemForConfirmation
-  const allPossibleCategories = [
-    ...item.possible_categories,
-    ...confirmedCategories
-  ].filter((cat, index, self) =>
-    cat !== item.suggested_category && self.indexOf(cat) === index
+  const allPossibleCategories = [...item.possible_categories, ...confirmedCategories].filter(
+    (cat, index, self) => cat !== item.suggested_category && self.indexOf(cat) === index,
   );
 
   // Determine category based on index
@@ -571,7 +525,7 @@ async function handleReceiptItemConfirm(
     // Use category from dynamic allPossibleCategories array
     const selectedCategory = allPossibleCategories[categoryIndex];
     if (categoryIndex < 0 || categoryIndex >= allPossibleCategories.length || !selectedCategory) {
-      await ctx.answerCallbackQuery({ text: "Некорректный индекс категории" });
+      await ctx.answerCallbackQuery({ text: 'Некорректный индекс категории' });
       return;
     }
     category = selectedCategory;
@@ -616,24 +570,24 @@ async function handleReceiptItemConfirm(
  * Handle "Other category" button
  */
 async function handleReceiptItemOther(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   _telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const itemIdStr = params[0];
   const messageId = ctx.message?.id;
   const chatId = ctx.message?.chat?.id;
 
   if (!itemIdStr) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const itemId = parseInt(itemIdStr, 10);
 
   if (Number.isNaN(itemId)) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
@@ -641,7 +595,7 @@ async function handleReceiptItemOther(
   const item = database.receiptItems.findById(itemId);
 
   if (!item || item.status !== 'pending') {
-    await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
+    await ctx.answerCallbackQuery({ text: 'Товар не найден или уже обработан' });
     return;
   }
 
@@ -651,7 +605,7 @@ async function handleReceiptItemOther(
   });
 
   await ctx.answerCallbackQuery({
-    text: "✏️ Напишите название категории",
+    text: '✏️ Напишите название категории',
   });
 
   // Delete confirmation message with buttons
@@ -676,7 +630,7 @@ export async function saveReceiptExpenses(
   photoQueueId: number,
   groupId: number,
   userId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const confirmedItems = database.receiptItems.findConfirmedByPhotoQueueId(photoQueueId);
 
@@ -687,7 +641,7 @@ export async function saveReceiptExpenses(
   const group = database.groups.findById(groupId);
 
   if (!group || !group.spreadsheet_id || !group.google_refresh_token) {
-    console.error('[RECEIPT] Group not configured for Google Sheets');
+    logger.error('[RECEIPT] Group not configured for Google Sheets');
     return;
   }
 
@@ -751,7 +705,7 @@ export async function saveReceiptExpenses(
         eurAmount,
       });
     } catch (error) {
-      console.error('[RECEIPT] Failed to write to Google Sheet:', error);
+      logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet');
       continue;
     }
 
@@ -796,17 +750,17 @@ export async function saveReceiptExpenses(
     parse_mode: 'HTML',
   });
 
-  console.log(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
+  logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
 }
 
 /**
  * Handle "use found category" button
  */
 async function handleUseFoundCategory(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const itemIdStr = params[0];
   const category = params[1];
@@ -814,21 +768,21 @@ async function handleUseFoundCategory(
   const chatId = ctx.message?.chat?.id;
 
   if (!itemIdStr || !category) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const itemId = parseInt(itemIdStr, 10);
 
   if (Number.isNaN(itemId)) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const result = ensureUserInGroup(telegramId, chatId);
 
   if (!result) {
-    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не настроена' });
     return;
   }
 
@@ -837,7 +791,7 @@ async function handleUseFoundCategory(
   const item = database.receiptItems.findById(itemId);
 
   if (!item) {
-    await ctx.answerCallbackQuery({ text: "Товар не найден" });
+    await ctx.answerCallbackQuery({ text: 'Товар не найден' });
     return;
   }
 
@@ -881,31 +835,31 @@ async function handleUseFoundCategory(
  * Handle "skip receipt item" button
  */
 async function handleSkipReceiptItem(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const itemIdStr = params[0];
   const messageId = ctx.message?.id;
   const chatId = ctx.message?.chat?.id;
 
   if (!itemIdStr) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const itemId = parseInt(itemIdStr, 10);
 
   if (Number.isNaN(itemId)) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const result = ensureUserInGroup(telegramId, chatId);
 
   if (!result) {
-    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не настроена' });
     return;
   }
 
@@ -915,7 +869,7 @@ async function handleSkipReceiptItem(
   const item = database.receiptItems.findById(itemId);
 
   if (!item || item.status !== 'pending') {
-    await ctx.answerCallbackQuery({ text: "Товар не найден или уже обработан" });
+    await ctx.answerCallbackQuery({ text: 'Товар не найден или уже обработан' });
     return;
   }
 
@@ -924,7 +878,7 @@ async function handleSkipReceiptItem(
     status: 'skipped',
   });
 
-  await ctx.answerCallbackQuery({ text: "⏭️ Товар пропущен" });
+  await ctx.answerCallbackQuery({ text: '⏭️ Товар пропущен' });
 
   // Delete confirmation message
   if (messageId && chatId) {
@@ -933,7 +887,7 @@ async function handleSkipReceiptItem(
 
   // Check if all items from this receipt are processed (confirmed or skipped)
   const allItems = database.receiptItems.findByPhotoQueueId(item.photo_queue_id);
-  const allPending = allItems.filter(i => i.status === 'pending');
+  const allPending = allItems.filter((i) => i.status === 'pending');
 
   if (allPending.length === 0) {
     // No more pending items - save all confirmed items
@@ -949,10 +903,10 @@ async function handleSkipReceiptItem(
  * Handle "create new category" button
  */
 async function handleCreateNewCategory(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const itemIdStr = params[0];
   const category = params[1];
@@ -960,21 +914,21 @@ async function handleCreateNewCategory(
   const chatId = ctx.message?.chat?.id;
 
   if (!itemIdStr || !category) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const itemId = parseInt(itemIdStr, 10);
 
   if (Number.isNaN(itemId)) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const result = ensureUserInGroup(telegramId, chatId);
 
   if (!result) {
-    await ctx.answerCallbackQuery({ text: "Группа не настроена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не настроена' });
     return;
   }
 
@@ -983,7 +937,7 @@ async function handleCreateNewCategory(
   const item = database.receiptItems.findById(itemId);
 
   if (!item) {
-    await ctx.answerCallbackQuery({ text: "Товар не найден" });
+    await ctx.answerCallbackQuery({ text: 'Товар не найден' });
     return;
   }
 
@@ -1033,31 +987,31 @@ async function handleCreateNewCategory(
  * Handle receipt summary actions (accept_all, bulk_edit, itemwise, accept_bulk, cancel)
  */
 async function handleReceiptSummaryAction(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const [subAction, queueIdStr] = params;
   const messageId = ctx.message?.id;
   const chatId = ctx.message?.chat?.id;
 
   if (!subAction || !queueIdStr) {
-    await ctx.answerCallbackQuery({ text: "Invalid parameters" });
+    await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
     return;
   }
 
   const queueId = parseInt(queueIdStr, 10);
 
   if (Number.isNaN(queueId)) {
-    await ctx.answerCallbackQuery({ text: "Invalid queue ID" });
+    await ctx.answerCallbackQuery({ text: 'Invalid queue ID' });
     return;
   }
 
   const queueItem = database.photoQueue.findById(queueId);
 
   if (!queueItem) {
-    await ctx.answerCallbackQuery({ text: "Чек не найден" });
+    await ctx.answerCallbackQuery({ text: 'Чек не найден' });
     return;
   }
 
@@ -1065,7 +1019,7 @@ async function handleReceiptSummaryAction(
   const group = database.groups.findById(queueItem.group_id);
 
   if (!group) {
-    await ctx.answerCallbackQuery({ text: "Группа не найдена" });
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
     return;
   }
 
@@ -1074,33 +1028,33 @@ async function handleReceiptSummaryAction(
   const user = result?.user ?? database.users.findByTelegramId(telegramId);
 
   if (!user) {
-    await ctx.answerCallbackQuery({ text: "Пользователь не найден" });
+    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
     return;
   }
 
   switch (subAction) {
-    case "accept_all":
+    case 'accept_all':
       await handleReceiptAcceptAll(ctx, queueItem, group, user, bot, messageId, chatId);
       break;
 
-    case "bulk_edit":
+    case 'bulk_edit':
       await handleReceiptBulkEdit(ctx, queueItem, group, bot, messageId, chatId);
       break;
 
-    case "itemwise":
+    case 'itemwise':
       await handleReceiptItemwise(ctx, queueItem, group, bot, messageId, chatId);
       break;
 
-    case "accept_bulk":
+    case 'accept_bulk':
       await handleReceiptAcceptBulk(ctx, queueItem, group, user, bot, messageId, chatId);
       break;
 
-    case "cancel":
+    case 'cancel':
       await handleReceiptCancel(ctx, queueItem, group, bot, messageId, chatId);
       break;
 
     default:
-      await ctx.answerCallbackQuery({ text: "Unknown receipt action" });
+      await ctx.answerCallbackQuery({ text: 'Unknown receipt action' });
   }
 }
 
@@ -1108,13 +1062,13 @@ async function handleReceiptSummaryAction(
  * Accept all items as-is (using suggested categories)
  */
 async function handleReceiptAcceptAll(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   queueItem: any,
   group: any,
   user: any,
   bot: any,
   messageId?: number,
-  chatId?: number
+  chatId?: number,
 ): Promise<void> {
   const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
 
@@ -1136,7 +1090,7 @@ async function handleReceiptAcceptAll(
     }
   }
 
-  await ctx.answerCallbackQuery({ text: "✅ Принято!" });
+  await ctx.answerCallbackQuery({ text: '✅ Принято!' });
 
   // Delete summary message
   if (messageId && chatId) {
@@ -1153,12 +1107,12 @@ async function handleReceiptAcceptAll(
  * Enter bulk edit mode (AI correction)
  */
 async function handleReceiptBulkEdit(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   queueItem: any,
   group: any,
   bot: any,
   messageId?: number,
-  chatId?: number
+  chatId?: number,
 ): Promise<void> {
   // Set waiting for bulk correction flag
   database.photoQueue.update(queueItem.id, {
@@ -1167,12 +1121,14 @@ async function handleReceiptBulkEdit(
     summary_message_id: messageId || null,
   });
 
-  await ctx.answerCallbackQuery({ text: "🎨 Напишите корректировку" });
+  await ctx.answerCallbackQuery({ text: '🎨 Напишите корректировку' });
 
   // Update message to show instruction (no buttons - user just types correction text)
   if (messageId && chatId) {
     const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
-    const { buildSummaryFromItems, formatSummaryMessage } = await import('../../services/receipt/receipt-summarizer');
+    const { buildSummaryFromItems, formatSummaryMessage } = await import(
+      '../../services/receipt/receipt-summarizer'
+    );
 
     const summary = buildSummaryFromItems(items);
     const summaryText = formatSummaryMessage(summary, items.length);
@@ -1187,7 +1143,7 @@ async function handleReceiptBulkEdit(
         parse_mode: 'HTML',
       });
     } catch (error) {
-      console.error('[RECEIPT] Failed to edit message:', error);
+      logger.error({ err: error }, '[RECEIPT] Failed to edit message');
     }
   }
 }
@@ -1196,12 +1152,12 @@ async function handleReceiptBulkEdit(
  * Switch to item-by-item mode
  */
 async function handleReceiptItemwise(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   queueItem: any,
   group: any,
   bot: any,
   messageId?: number,
-  chatId?: number
+  chatId?: number,
 ): Promise<void> {
   // Reset summary mode flags
   database.photoQueue.update(queueItem.id, {
@@ -1211,7 +1167,7 @@ async function handleReceiptItemwise(
     correction_history: null,
   });
 
-  await ctx.answerCallbackQuery({ text: "📦 По одной позиции" });
+  await ctx.answerCallbackQuery({ text: '📦 По одной позиции' });
 
   // Delete summary message
   if (messageId && chatId) {
@@ -1229,13 +1185,13 @@ async function handleReceiptItemwise(
  * Accept bulk edit result
  */
 async function handleReceiptAcceptBulk(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   queueItem: any,
   group: any,
   user: any,
   bot: any,
   messageId?: number,
-  chatId?: number
+  chatId?: number,
 ): Promise<void> {
   const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
 
@@ -1266,7 +1222,7 @@ async function handleReceiptAcceptBulk(
         }
       }
     } catch (error) {
-      console.error('[RECEIPT] Failed to parse AI summary:', error);
+      logger.error({ err: error }, '[RECEIPT] Failed to parse AI summary');
       // Fall back to suggested categories
       for (const item of items) {
         if (item.status === 'pending') {
@@ -1302,7 +1258,7 @@ async function handleReceiptAcceptBulk(
     waiting_for_bulk_correction: 0,
   });
 
-  await ctx.answerCallbackQuery({ text: "✅ Принято!" });
+  await ctx.answerCallbackQuery({ text: '✅ Принято!' });
 
   // Delete message
   if (messageId && chatId) {
@@ -1319,12 +1275,12 @@ async function handleReceiptAcceptBulk(
  * Cancel receipt processing
  */
 async function handleReceiptCancel(
-  ctx: Ctx["CallbackQuery"],
+  ctx: Ctx['CallbackQuery'],
   queueItem: any,
   group: any,
   bot: any,
   messageId?: number,
-  chatId?: number
+  chatId?: number,
 ): Promise<void> {
   // Delete all receipt items
   database.receiptItems.deleteProcessedByPhotoQueueId(queueItem.id);
@@ -1338,7 +1294,7 @@ async function handleReceiptCancel(
     correction_history: null,
   });
 
-  await ctx.answerCallbackQuery({ text: "❌ Отменено" });
+  await ctx.answerCallbackQuery({ text: '❌ Отменено' });
 
   // Delete message
   if (messageId && chatId) {
@@ -1350,7 +1306,7 @@ async function handleReceiptCancel(
   // Send cancellation notification
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    text: "❌ Обработка чека отменена",
+    text: '❌ Обработка чека отменена',
     parse_mode: 'HTML',
   });
 }

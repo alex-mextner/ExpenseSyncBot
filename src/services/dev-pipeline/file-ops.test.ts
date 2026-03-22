@@ -1,4 +1,4 @@
-import { test, expect, describe } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { validateFilePath } from './file-ops';
 
 const WORKTREE = '/tmp/fake-worktree';
@@ -8,27 +8,27 @@ describe('validateFilePath', () => {
 
   describe('protected files/directories', () => {
     test('rejects pipeline code (src/services/dev-pipeline/)', () => {
-      expect(() =>
-        validateFilePath(WORKTREE, 'src/services/dev-pipeline/pipeline.ts')
-      ).toThrow('Cannot modify protected file/directory');
+      expect(() => validateFilePath(WORKTREE, 'src/services/dev-pipeline/pipeline.ts')).toThrow(
+        'Cannot modify protected file/directory',
+      );
     });
 
     test('rejects database schema', () => {
-      expect(() =>
-        validateFilePath(WORKTREE, 'src/database/schema.ts')
-      ).toThrow('Cannot modify protected file/directory');
+      expect(() => validateFilePath(WORKTREE, 'src/database/schema.ts')).toThrow(
+        'Cannot modify protected file/directory',
+      );
     });
 
     test('rejects CI config (.github/workflows/deploy.yml)', () => {
-      expect(() =>
-        validateFilePath(WORKTREE, '.github/workflows/deploy.yml')
-      ).toThrow('Cannot modify protected file/directory');
+      expect(() => validateFilePath(WORKTREE, '.github/workflows/deploy.yml')).toThrow(
+        'Cannot modify protected file/directory',
+      );
     });
 
     test('rejects any file inside .github/', () => {
-      expect(() =>
-        validateFilePath(WORKTREE, '.github/CODEOWNERS')
-      ).toThrow('Cannot modify protected file/directory');
+      expect(() => validateFilePath(WORKTREE, '.github/CODEOWNERS')).toThrow(
+        'Cannot modify protected file/directory',
+      );
     });
   });
 
@@ -41,10 +41,7 @@ describe('validateFilePath', () => {
     });
 
     test('allows service files outside dev-pipeline', () => {
-      const result = validateFilePath(
-        WORKTREE,
-        'src/services/currency/parser.ts'
-      );
+      const result = validateFilePath(WORKTREE, 'src/services/currency/parser.ts');
       expect(result).toBe(`${WORKTREE}/src/services/currency/parser.ts`);
     });
   });
@@ -53,16 +50,16 @@ describe('validateFilePath', () => {
 
   describe('path traversal protection', () => {
     test('rejects ../../../etc/passwd', () => {
-      expect(() =>
-        validateFilePath(WORKTREE, '../../../etc/passwd')
-      ).toThrow('Path traversal detected');
+      expect(() => validateFilePath(WORKTREE, '../../../etc/passwd')).toThrow(
+        'Path traversal detected',
+      );
     });
 
     test('rejects sneaky traversal to protected dir (src/../.github/...)', () => {
       // path.normalize strips the .., but the result still hits .github/ protection
-      expect(() =>
-        validateFilePath(WORKTREE, 'src/../.github/workflows/deploy.yml')
-      ).toThrow('Cannot modify protected file/directory');
+      expect(() => validateFilePath(WORKTREE, 'src/../.github/workflows/deploy.yml')).toThrow(
+        'Cannot modify protected file/directory',
+      );
     });
   });
 
@@ -75,10 +72,7 @@ describe('validateFilePath', () => {
     });
 
     test('handles paths with redundant slashes', () => {
-      const result = validateFilePath(
-        WORKTREE,
-        'src///bot///commands///ask.ts'
-      );
+      const result = validateFilePath(WORKTREE, 'src///bot///commands///ask.ts');
       expect(result).toBe(`${WORKTREE}/src/bot/commands/ask.ts`);
     });
   });

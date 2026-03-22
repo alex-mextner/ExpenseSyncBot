@@ -1,6 +1,6 @@
-import { test, expect, describe, beforeAll, afterAll, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { format, subDays, subMonths, startOfMonth, getDaysInMonth } from 'date-fns';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
 
 // --- Setup in-memory database and mock the singleton ---
 
@@ -95,9 +95,9 @@ db.exec(`
   CREATE INDEX idx_budgets_group_month ON budgets(group_id, month);
 `);
 
+import { BudgetRepository } from '../../database/repositories/budget.repository';
 // Instantiate real repositories backed by in-memory DB
 import { ExpenseRepository } from '../../database/repositories/expense.repository';
-import { BudgetRepository } from '../../database/repositories/budget.repository';
 
 const expenseRepo = new ExpenseRepository(db);
 const budgetRepo = new BudgetRepository(db);
@@ -125,9 +125,18 @@ const yesterday = format(subDays(now, 1), 'yyyy-MM-dd');
 const sevenDaysAgo = format(subDays(now, 7), 'yyyy-MM-dd');
 const fourteenDaysAgo = format(subDays(now, 14), 'yyyy-MM-dd');
 const lastMonth = subMonths(now, 1);
-const lastMonthDate = format(new Date(lastMonth.getFullYear(), lastMonth.getMonth(), 15), 'yyyy-MM-dd');
-const twoMonthsAgoDate = format(new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 15), 'yyyy-MM-dd');
-const threeMonthsAgoDate = format(new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 15), 'yyyy-MM-dd');
+const lastMonthDate = format(
+  new Date(lastMonth.getFullYear(), lastMonth.getMonth(), 15),
+  'yyyy-MM-dd',
+);
+const twoMonthsAgoDate = format(
+  new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 15),
+  'yyyy-MM-dd',
+);
+const threeMonthsAgoDate = format(
+  new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 15),
+  'yyyy-MM-dd',
+);
 const currentMonth = format(now, 'yyyy-MM');
 
 function insertExpense(date: string, category: string, eurAmount: number) {
@@ -148,10 +157,11 @@ beforeAll(() => {
   );
 
   // Insert user
-  db.run(
-    `INSERT INTO users (id, telegram_id, group_id) VALUES (?, ?, ?)`,
-    [USER_ID, 99999, GROUP_ID],
-  );
+  db.run(`INSERT INTO users (id, telegram_id, group_id) VALUES (?, ?, ?)`, [
+    USER_ID,
+    99999,
+    GROUP_ID,
+  ]);
 
   // -- Expenses --
 
@@ -365,7 +375,13 @@ describe('computeWeekOverWeek', () => {
 describe('computeProjection', () => {
   test('linear projection to end of month', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const projection = (analytics as any).computeProjection(GROUP_ID, now, currentMonth, monthStart, today);
+    const projection = (analytics as any).computeProjection(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     // Should not be null since we have expenses this month
     if (now.getDate() < 3) {
@@ -380,7 +396,13 @@ describe('computeProjection', () => {
 
   test('projection is based on daily rate * total days', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const projection = (analytics as any).computeProjection(GROUP_ID, now, currentMonth, monthStart, today);
+    const projection = (analytics as any).computeProjection(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     if (projection) {
       const dailyRate = projection.current_total / projection.days_elapsed;
@@ -391,7 +413,13 @@ describe('computeProjection', () => {
 
   test('confidence is low when days_elapsed < 7', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const projection = (analytics as any).computeProjection(GROUP_ID, now, currentMonth, monthStart, today);
+    const projection = (analytics as any).computeProjection(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     if (projection && now.getDate() < 7) {
       expect(projection.confidence).toBe('low');
@@ -406,7 +434,13 @@ describe('computeProjection', () => {
 describe('computeBurnRates', () => {
   test('budget utilization percentage computed for each category', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(GROUP_ID, now, currentMonth, monthStart, today);
+    const burnRates = (analytics as any).computeBurnRates(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     expect(burnRates.length).toBe(2); // Food and Transport
     for (const br of burnRates) {
@@ -419,7 +453,13 @@ describe('computeBurnRates', () => {
 
   test('status is one of on_track/warning/critical/exceeded', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(GROUP_ID, now, currentMonth, monthStart, today);
+    const burnRates = (analytics as any).computeBurnRates(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     for (const br of burnRates) {
       expect(['on_track', 'warning', 'critical', 'exceeded']).toContain(br.status);
@@ -428,7 +468,13 @@ describe('computeBurnRates', () => {
 
   test('runway days calculation', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(GROUP_ID, now, currentMonth, monthStart, today);
+    const burnRates = (analytics as any).computeBurnRates(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     for (const br of burnRates) {
       expect(typeof br.runway_days).toBe('number');
@@ -446,7 +492,13 @@ describe('computeBurnRates', () => {
 
   test('days_elapsed and days_remaining add up to days in month', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(GROUP_ID, now, currentMonth, monthStart, today);
+    const burnRates = (analytics as any).computeBurnRates(
+      GROUP_ID,
+      now,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     for (const br of burnRates) {
       expect(br.days_elapsed + br.days_remaining).toBe(getDaysInMonth(now));
@@ -471,9 +523,18 @@ describe('computeAnomalies', () => {
     const m2 = format(subMonths(startOfMonth(now), 2), 'yyyy-MM-dd');
     const m3 = format(subMonths(startOfMonth(now), 3), 'yyyy-MM-dd');
     // Spread across different days within each month
-    const m1mid = format(new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10), 'yyyy-MM-dd');
-    const m2mid = format(new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10), 'yyyy-MM-dd');
-    const m3mid = format(new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10), 'yyyy-MM-dd');
+    const m1mid = format(
+      new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m2mid = format(
+      new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m3mid = format(
+      new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
 
     db.run(
       `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
@@ -508,9 +569,18 @@ describe('computeAnomalies', () => {
       [4, 44444, 'EUR', '["EUR"]'],
     );
 
-    const m1mid = format(new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10), 'yyyy-MM-dd');
-    const m2mid = format(new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10), 'yyyy-MM-dd');
-    const m3mid = format(new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10), 'yyyy-MM-dd');
+    const m1mid = format(
+      new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m2mid = format(
+      new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m3mid = format(
+      new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
 
     // History: 100 EUR each month
     db.run(
@@ -546,9 +616,18 @@ describe('computeAnomalies', () => {
       [5, 55555, 'EUR', '["EUR"]'],
     );
 
-    const m1mid = format(new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10), 'yyyy-MM-dd');
-    const m2mid = format(new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10), 'yyyy-MM-dd');
-    const m3mid = format(new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10), 'yyyy-MM-dd');
+    const m1mid = format(
+      new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m2mid = format(
+      new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m3mid = format(
+      new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
 
     db.run(
       `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -581,7 +660,12 @@ describe('computeAnomalies', () => {
 describe('computeBudgetUtilization', () => {
   test('percentage of budget used is calculated', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const util = (analytics as any).computeBudgetUtilization(GROUP_ID, currentMonth, monthStart, today);
+    const util = (analytics as any).computeBudgetUtilization(
+      GROUP_ID,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     expect(util).not.toBeNull();
     expect(typeof util.total_budget).toBe('number');
@@ -593,7 +677,12 @@ describe('computeBudgetUtilization', () => {
 
   test('remaining = total_budget - total_spent', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const util = (analytics as any).computeBudgetUtilization(GROUP_ID, currentMonth, monthStart, today);
+    const util = (analytics as any).computeBudgetUtilization(
+      GROUP_ID,
+      currentMonth,
+      monthStart,
+      today,
+    );
 
     if (util) {
       expect(util.remaining).toBe(Math.round((util.total_budget - util.total_spent) * 100) / 100);
@@ -649,7 +738,9 @@ describe('getFinancialSnapshot', () => {
     const snapshot = analytics.getFinancialSnapshot(GROUP_ID);
 
     expect(typeof snapshot.streak.current_streak_days).toBe('number');
-    expect(['above_average', 'below_average', 'no_spending']).toContain(snapshot.streak.streak_type);
+    expect(['above_average', 'below_average', 'no_spending']).toContain(
+      snapshot.streak.streak_type,
+    );
     expect(typeof snapshot.streak.avg_daily_during_streak).toBe('number');
     expect(typeof snapshot.streak.overall_daily_average).toBe('number');
   });

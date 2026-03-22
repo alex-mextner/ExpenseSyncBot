@@ -1,10 +1,10 @@
-import type { Ctx } from '../types';
 import { database } from '../../database';
+import type { Ctx } from '../types';
 
 /**
  * /categories command handler
  */
-export async function handleCategoriesCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleCategoriesCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -31,7 +31,9 @@ export async function handleCategoriesCommand(ctx: Ctx["Command"]): Promise<void
   const categories = database.categories.findByGroupId(group.id);
 
   if (categories.length === 0) {
-    await ctx.send('📋 Категории пока не созданы.\n\nОни будут создаваться автоматически из ваших расходов.');
+    await ctx.send(
+      '📋 Категории пока не созданы.\n\nОни будут создаваться автоматически из ваших расходов.',
+    );
     return;
   }
 

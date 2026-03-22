@@ -1,6 +1,6 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import type { Budget, Category, Expense, Group } from '../../database/types';
 import type { AgentContext } from './types';
-import type { Expense, Budget, Category, Group } from '../../database/types';
 
 // ── Mock database ────────────────────────────────────────────────────
 
@@ -155,7 +155,9 @@ describe('executeTool routing', () => {
   });
 
   test('routes get_categories to correct handler', async () => {
-    mockCategories.findByGroupId.mockReturnValue([{ id: 1, group_id: 1, name: 'Food', created_at: '' }]);
+    mockCategories.findByGroupId.mockReturnValue([
+      { id: 1, group_id: 1, name: 'Food', created_at: '' },
+    ]);
     const result = await executeTool('get_categories', {}, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('Food');
@@ -248,14 +250,28 @@ describe('executeGetExpenses', () => {
   test('respects category filter (case-insensitive)', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
       {
-        id: 1, group_id: 1, user_id: 123,
-        date: '2026-03-01', category: 'Food', comment: 'pizza',
-        amount: 10, currency: 'EUR', eur_amount: 10, created_at: '',
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Food',
+        comment: 'pizza',
+        amount: 10,
+        currency: 'EUR',
+        eur_amount: 10,
+        created_at: '',
       },
       {
-        id: 2, group_id: 1, user_id: 123,
-        date: '2026-03-02', category: 'Transport', comment: 'taxi',
-        amount: 20, currency: 'EUR', eur_amount: 20, created_at: '',
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-02',
+        category: 'Transport',
+        comment: 'taxi',
+        amount: 20,
+        currency: 'EUR',
+        eur_amount: 20,
+        created_at: '',
       },
     ]);
 
@@ -281,16 +297,29 @@ describe('executeGetBudgets', () => {
   test('returns budget list for current month', async () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
       {
-        id: 1, group_id: 1, category: 'Food', month: '2026-03',
-        limit_amount: 500, currency: 'EUR', created_at: '', updated_at: '',
+        id: 1,
+        group_id: 1,
+        category: 'Food',
+        month: '2026-03',
+        limit_amount: 500,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
       },
     ]);
     // Expenses for spending calculation
     mockExpenses.findByDateRange.mockReturnValue([
       {
-        id: 1, group_id: 1, user_id: 123,
-        date: '2026-03-05', category: 'Food', comment: '',
-        amount: 100, currency: 'EUR', eur_amount: 100, created_at: '',
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-05',
+        category: 'Food',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+        created_at: '',
       },
     ]);
 
@@ -318,8 +347,8 @@ describe('executeAddExpense', () => {
 
     const result = await executeTool(
       'add_expense',
-      { amount: 25.50, category: 'Food', comment: 'lunch', date: '2026-03-09' },
-      ctx
+      { amount: 25.5, category: 'Food', comment: 'lunch', date: '2026-03-09' },
+      ctx,
     );
 
     expect(result.success).toBe(true);
@@ -330,9 +359,9 @@ describe('executeAddExpense', () => {
         date: '2026-03-09',
         category: 'Food',
         comment: 'lunch',
-        amount: 25.50,
+        amount: 25.5,
         currency: 'EUR',
-      })
+      }),
     );
   });
 
@@ -342,7 +371,7 @@ describe('executeAddExpense', () => {
     const result = await executeTool(
       'add_expense',
       { amount: 50, category: 'Transport', currency: 'USD' },
-      ctx
+      ctx,
     );
 
     expect(result.success).toBe(true);
@@ -352,21 +381,13 @@ describe('executeAddExpense', () => {
   });
 
   test('rejects invalid amount', async () => {
-    const result = await executeTool(
-      'add_expense',
-      { amount: 0, category: 'Food' },
-      ctx
-    );
+    const result = await executeTool('add_expense', { amount: 0, category: 'Food' }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid');
   });
 
   test('rejects missing category', async () => {
-    const result = await executeTool(
-      'add_expense',
-      { amount: 100 },
-      ctx
-    );
+    const result = await executeTool('add_expense', { amount: 100 }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid');
   });
@@ -377,9 +398,16 @@ describe('executeDeleteExpense', () => {
 
   test('deletes expense belonging to this group', async () => {
     mockExpenses.findById.mockReturnValue({
-      id: 10, group_id: 1, user_id: 123,
-      date: '2026-03-01', category: 'Food', comment: 'pizza',
-      amount: 12, currency: 'EUR', eur_amount: 12, created_at: '',
+      id: 10,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: 'pizza',
+      amount: 12,
+      currency: 'EUR',
+      eur_amount: 12,
+      created_at: '',
     });
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
@@ -390,9 +418,16 @@ describe('executeDeleteExpense', () => {
 
   test('rejects deletion of expense from different group', async () => {
     mockExpenses.findById.mockReturnValue({
-      id: 10, group_id: 999, user_id: 456,
-      date: '2026-03-01', category: 'Food', comment: '',
-      amount: 12, currency: 'EUR', eur_amount: 12, created_at: '',
+      id: 10,
+      group_id: 999,
+      user_id: 456,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: '',
+      amount: 12,
+      currency: 'EUR',
+      eur_amount: 12,
+      created_at: '',
     });
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
@@ -417,7 +452,7 @@ describe('executeSetBudget', () => {
     const result = await executeTool(
       'set_budget',
       { category: 'Food', amount: 500, currency: 'USD', month: '2026-03' },
-      ctx
+      ctx,
     );
 
     expect(result.success).toBe(true);
@@ -431,16 +466,12 @@ describe('executeSetBudget', () => {
         month: '2026-03',
         limit_amount: 500,
         currency: 'USD',
-      })
+      }),
     );
   });
 
   test('rejects invalid amount', async () => {
-    const result = await executeTool(
-      'set_budget',
-      { category: 'Food', amount: -10 },
-      ctx
-    );
+    const result = await executeTool('set_budget', { category: 'Food', amount: -10 }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid');
   });
@@ -527,34 +558,27 @@ describe('executeManageCategory', () => {
     mockCategories.findByName.mockReturnValue(null);
     mockCategories.create.mockReturnValue({ id: 5, group_id: 1, name: 'Coffee', created_at: '' });
 
-    const result = await executeTool(
-      'manage_category',
-      { action: 'create', name: 'Coffee' },
-      ctx
-    );
+    const result = await executeTool('manage_category', { action: 'create', name: 'Coffee' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('Coffee');
     expect(result.output).toContain('created');
   });
 
   test('reports already existing category', async () => {
-    mockCategories.findByName.mockReturnValue({ id: 5, group_id: 1, name: 'Coffee', created_at: '' });
+    mockCategories.findByName.mockReturnValue({
+      id: 5,
+      group_id: 1,
+      name: 'Coffee',
+      created_at: '',
+    });
 
-    const result = await executeTool(
-      'manage_category',
-      { action: 'create', name: 'Coffee' },
-      ctx
-    );
+    const result = await executeTool('manage_category', { action: 'create', name: 'Coffee' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('already exists');
   });
 
   test('rejects unknown action', async () => {
-    const result = await executeTool(
-      'manage_category',
-      { action: 'rename', name: 'Coffee' },
-      ctx
-    );
+    const result = await executeTool('manage_category', { action: 'rename', name: 'Coffee' }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Unknown action');
   });
@@ -564,11 +588,7 @@ describe('executeDeleteBudget', () => {
   beforeEach(resetAllMocks);
 
   test('deletes budget for category/month', async () => {
-    const result = await executeTool(
-      'delete_budget',
-      { category: 'Food', month: '2026-03' },
-      ctx
-    );
+    const result = await executeTool('delete_budget', { category: 'Food', month: '2026-03' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('Budget deleted');
     expect(result.output).toContain('Food');
@@ -589,19 +609,17 @@ describe('executeSetCustomPrompt', () => {
     const result = await executeTool(
       'set_custom_prompt',
       { prompt: 'Always respond in Russian' },
-      ctx
+      ctx,
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain('Custom prompt set');
-    expect(mockGroups.update).toHaveBeenCalledWith(456, { custom_prompt: 'Always respond in Russian' });
+    expect(mockGroups.update).toHaveBeenCalledWith(456, {
+      custom_prompt: 'Always respond in Russian',
+    });
   });
 
   test('clears prompt when empty string', async () => {
-    const result = await executeTool(
-      'set_custom_prompt',
-      { prompt: '' },
-      ctx
-    );
+    const result = await executeTool('set_custom_prompt', { prompt: '' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('Custom prompt cleared');
     expect(mockGroups.update).toHaveBeenCalledWith(456, { custom_prompt: null });

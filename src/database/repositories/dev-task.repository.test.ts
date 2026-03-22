@@ -1,7 +1,7 @@
-import { test, expect, describe, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { DevTaskRepository } from './dev-task.repository';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { DevTaskState } from '../../services/dev-pipeline/types';
+import { DevTaskRepository } from './dev-task.repository';
 
 let db: Database;
 let repo: DevTaskRepository;
@@ -126,7 +126,11 @@ describe('DevTaskRepository', () => {
   describe('findActive', () => {
     test('returns only non-terminal tasks', () => {
       const pending = repo.create({ group_id: 1, user_id: 1, description: 'pending task' });
-      const implementing = repo.create({ group_id: 1, user_id: 1, description: 'implementing task' });
+      const implementing = repo.create({
+        group_id: 1,
+        user_id: 1,
+        description: 'implementing task',
+      });
       const completed = repo.create({ group_id: 1, user_id: 1, description: 'completed task' });
       const rejected = repo.create({ group_id: 1, user_id: 1, description: 'rejected task' });
       const failed = repo.create({ group_id: 1, user_id: 1, description: 'failed task' });

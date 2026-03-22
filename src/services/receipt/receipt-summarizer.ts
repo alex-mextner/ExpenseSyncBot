@@ -1,6 +1,9 @@
-import { InferenceClient } from "@huggingface/inference";
-import { env } from "../../config/env";
-import type { ReceiptItem } from "../../database/types";
+import { InferenceClient } from '@huggingface/inference';
+import { env } from '../../config/env';
+import type { ReceiptItem } from '../../database/types';
+import { createLogger } from '../../utils/logger.ts';
+
+const logger = createLogger('receipt-summarizer');
 
 const client = new InferenceClient(env.HF_TOKEN);
 
@@ -41,16 +44,16 @@ export interface CorrectionEntry {
  * Category emoji map
  */
 const CATEGORY_EMOJIS: Record<string, string> = {
-  'Еда': '🍔',
-  'Продукты': '🍔',
-  'Дом': '🏠',
-  'Хозтовары': '🧹',
-  'Транспорт': '🚗',
-  'Здоровье': '💊',
-  'Развлечения': '🎬',
-  'Одежда': '👕',
-  'Техника': '📱',
-  'Разное': '🛒',
+  Еда: '🍔',
+  Продукты: '🍔',
+  Дом: '🏠',
+  Хозтовары: '🧹',
+  Транспорт: '🚗',
+  Здоровье: '💊',
+  Развлечения: '🎬',
+  Одежда: '👕',
+  Техника: '📱',
+  Разное: '🛒',
 };
 
 /**
@@ -89,10 +92,10 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
   return {
     categories: Array.from(byCategory.entries()).map(([name, catItems]) => ({
       name,
-      items: catItems.map(i => ({ name: i.name_ru, total: i.total }))
+      items: catItems.map((i) => ({ name: i.name_ru, total: i.total })),
     })),
     totalAmount: items.reduce((sum, i) => sum + i.total, 0),
-    currency: items[0]?.currency || 'EUR'
+    currency: items[0]?.currency || 'EUR',
   };
 }
 
@@ -104,7 +107,7 @@ export function formatSummaryMessage(summary: ReceiptSummary, itemCount: number)
 
   for (const category of summary.categories) {
     const emoji = getCategoryEmoji(category.name);
-    const itemNames = category.items.map(i => i.name);
+    const itemNames = category.items.map((i) => i.name);
 
     // Show max 3 items, then "и еще X позиций"
     const maxShow = 3;
@@ -141,8 +144,9 @@ function escapeHtml(text: string): string {
  * Validate that summary totals match original (within 1%)
  */
 export function validateSummaryTotals(newSummary: ReceiptSummary, originalTotal: number): boolean {
-  const newTotal = newSummary.categories.reduce((sum, cat) =>
-    sum + cat.items.reduce((s, item) => s + item.total, 0), 0
+  const newTotal = newSummary.categories.reduce(
+    (sum, cat) => sum + cat.items.reduce((s, item) => s + item.total, 0),
+    0,
   );
 
   if (originalTotal === 0) return newTotal === 0;
@@ -158,11 +162,12 @@ export async function applyCorrectionWithAI(
   currentSummary: ReceiptSummary,
   userCorrection: string,
   availableCategories: string[],
-  correctionHistory: CorrectionEntry[]
+  correctionHistory: CorrectionEntry[],
 ): Promise<ReceiptSummary> {
-  const historyText = correctionHistory.length > 0
-    ? correctionHistory.map(e => `- Пользователь: "${e.user}" → ${e.result}`).join('\n')
-    : 'Нет предыдущих корректировок';
+  const historyText =
+    correctionHistory.length > 0
+      ? correctionHistory.map((e) => `- Пользователь: "${e.user}" → ${e.result}`).join('\n')
+      : 'Нет предыдущих корректировок';
 
   const prompt = `Ты обрабатываешь корректировку пользователя для сводки расходов из чека.
 
@@ -197,18 +202,19 @@ ${historyText}
   "currency": "${currentSummary.currency}"
 }`;
 
-  console.log(`[RECEIPT_SUMMARIZER] Sending correction to AI: "${userCorrection}"`);
+  logger.info(`[RECEIPT_SUMMARIZER] Sending correction to AI: "${userCorrection}"`);
 
   const response = await client.chatCompletion({
-    provider: "novita",
-    model: "deepseek-ai/DeepSeek-R1-0528",
+    provider: 'novita',
+    model: 'deepseek-ai/DeepSeek-R1-0528',
     messages: [
       {
-        role: "system",
-        content: "You are a JSON processor. Apply user corrections to receipt summaries. Return only valid JSON, no explanations.",
+        role: 'system',
+        content:
+          'You are a JSON processor. Apply user corrections to receipt summaries. Return only valid JSON, no explanations.',
       },
       {
-        role: "user",
+        role: 'user',
         content: prompt,
       },
     ],
@@ -219,27 +225,28 @@ ${historyText}
   const responseText = response.choices[0]?.message?.content?.trim();
 
   if (!responseText) {
-    throw new Error("Empty response from AI");
+    throw new Error('Empty response from AI');
   }
 
   // Remove thinking tags
   const cleanedResponse = responseText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
-  console.log(`[RECEIPT_SUMMARIZER] AI response: ${cleanedResponse.substring(0, 200)}...`);
+  logger.info(`[RECEIPT_SUMMARIZER] AI response: ${cleanedResponse.substring(0, 200)}...`);
 
   // Extract JSON
-  const jsonMatch = cleanedResponse.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/) ||
+  const jsonMatch =
+    cleanedResponse.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/) ||
     cleanedResponse.match(/(\{[\s\S]*\})/);
 
   if (!jsonMatch || !jsonMatch[1]) {
-    throw new Error("No valid JSON in AI response");
+    throw new Error('No valid JSON in AI response');
   }
 
   const parsed = JSON.parse(jsonMatch[1]) as ReceiptSummary;
 
   // Validate structure
   if (!parsed.categories || !Array.isArray(parsed.categories)) {
-    throw new Error("Invalid summary structure: missing categories array");
+    throw new Error('Invalid summary structure: missing categories array');
   }
 
   // Ensure totalAmount and currency are preserved

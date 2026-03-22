@@ -1,4 +1,7 @@
-import type { CurrencyCode } from "../../config/constants";
+import type { CurrencyCode } from '../../config/constants';
+import { createLogger } from '../../utils/logger.ts';
+
+const logger = createLogger('converter');
 
 /**
  * Fallback exchange rates (to EUR)
@@ -39,26 +42,23 @@ interface ExchangeRateAPIResponse {
  * Fetch exchange rates from API
  * Using exchangerate-api.com (free, no API key required)
  */
-async function fetchExchangeRates(): Promise<Record<
-  CurrencyCode,
-  number
-> | null> {
+async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null> {
   try {
-    console.log("[CURRENCY] Fetching exchange rates from API...");
+    logger.info('[CURRENCY] Fetching exchange rates from API...');
 
-    const response = await fetch("https://open.er-api.com/v6/latest/EUR", {
-      headers: { Accept: "application/json" },
+    const response = await fetch('https://open.er-api.com/v6/latest/EUR', {
+      headers: { Accept: 'application/json' },
     });
 
     if (!response.ok) {
-      console.error(`[CURRENCY] API returned status ${response.status}`);
+      logger.error(`[CURRENCY] API returned status ${response.status}`);
       return null;
     }
 
     const data = (await response.json()) as ExchangeRateAPIResponse;
 
-    if (data.result !== "success" || !data.rates) {
-      console.error("[CURRENCY] Invalid API response format");
+    if (data.result !== 'success' || !data.rates) {
+      logger.error('[CURRENCY] Invalid API response format');
       return null;
     }
 
@@ -78,23 +78,23 @@ async function fetchExchangeRates(): Promise<Record<
       AED: 1 / (data.rates.AED || 1),
     };
 
-    console.log("[CURRENCY] ✅ Successfully fetched exchange rates from API");
-    console.log("[CURRENCY] Exchange rates (to EUR):");
-    console.log(`  /1 USD = €${(1 / rates.USD).toFixed(4)}`);
-    console.log(`  /1 RSD = €${(1 / rates.RSD).toFixed(6)}`);
-    console.log(`  /1 RUB = €${(1 / rates.RUB).toFixed(6)}`);
-    console.log(`  /1 GBP = €${(1 / rates.GBP).toFixed(4)}`);
-    console.log(`  /1 BYN = €${(1 / rates.BYN).toFixed(4)}`);
-    console.log(`  /1 CHF = €${(1 / rates.CHF).toFixed(4)}`);
-    console.log(`  /1 JPY = €${(1 / rates.JPY).toFixed(6)}`);
-    console.log(`  /1 CNY = €${(1 / rates.CNY).toFixed(4)}`);
-    console.log(`  /1 INR = €${(1 / rates.INR).toFixed(6)}`);
-    console.log(`  /1 LKR = €${(1 / rates.LKR).toFixed(6)}`);
-    console.log(`  /1 AED = €${(1 / rates.AED).toFixed(4)}`);
+    logger.info('[CURRENCY] ✅ Successfully fetched exchange rates from API');
+    logger.info('[CURRENCY] Exchange rates (to EUR):');
+    logger.info(`  /1 USD = €${(1 / rates.USD).toFixed(4)}`);
+    logger.info(`  /1 RSD = €${(1 / rates.RSD).toFixed(6)}`);
+    logger.info(`  /1 RUB = €${(1 / rates.RUB).toFixed(6)}`);
+    logger.info(`  /1 GBP = €${(1 / rates.GBP).toFixed(4)}`);
+    logger.info(`  /1 BYN = €${(1 / rates.BYN).toFixed(4)}`);
+    logger.info(`  /1 CHF = €${(1 / rates.CHF).toFixed(4)}`);
+    logger.info(`  /1 JPY = €${(1 / rates.JPY).toFixed(6)}`);
+    logger.info(`  /1 CNY = €${(1 / rates.CNY).toFixed(4)}`);
+    logger.info(`  /1 INR = €${(1 / rates.INR).toFixed(6)}`);
+    logger.info(`  /1 LKR = €${(1 / rates.LKR).toFixed(6)}`);
+    logger.info(`  /1 AED = €${(1 / rates.AED).toFixed(4)}`);
 
     return rates;
   } catch (error) {
-    console.error("[CURRENCY] Failed to fetch exchange rates:", error);
+    logger.error({ err: error }, '[CURRENCY] Failed to fetch exchange rates');
     return null;
   }
 }
@@ -107,7 +107,7 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
 
   // Check if cache is still valid
   if (cachedRates && now - cacheTimestamp < CACHE_DURATION) {
-    console.log("[CURRENCY] Using cached exchange rates");
+    logger.info('[CURRENCY] Using cached exchange rates');
     return cachedRates;
   }
 
@@ -121,18 +121,15 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
   }
 
   // Fallback to hardcoded rates
-  console.log("[CURRENCY] Using fallback exchange rates");
+  logger.info('[CURRENCY] Using fallback exchange rates');
   return FALLBACK_RATES;
 }
 
 /**
  * Convert amount to EUR
  */
-export function convertToEUR(
-  amount: number,
-  fromCurrency: CurrencyCode
-): number {
-  if (fromCurrency === "EUR") {
+export function convertToEUR(amount: number, fromCurrency: CurrencyCode): number {
+  if (fromCurrency === 'EUR') {
     return amount;
   }
 
@@ -154,7 +151,7 @@ export function convertToEUR(
 export function convertCurrency(
   amount: number,
   fromCurrency: CurrencyCode,
-  toCurrency: CurrencyCode
+  toCurrency: CurrencyCode,
 ): number {
   if (fromCurrency === toCurrency) {
     return amount;
@@ -209,9 +206,7 @@ export function getAllExchangeRates(): Record<CurrencyCode, number> {
  */
 export function formatExchangeRatesForAI(): string {
   const rates = getAllExchangeRates();
-  const lines = [
-    "АКТУАЛЬНЫЕ КУРСЫ ВАЛЮТ (к EUR, источник: exchangerate-api.com):",
-  ];
+  const lines = ['АКТУАЛЬНЫЕ КУРСЫ ВАЛЮТ (к EUR, источник: exchangerate-api.com):'];
 
   const formatRate = (currency: CurrencyCode): string => {
     const rate = rates[currency];
@@ -221,13 +216,13 @@ export function formatExchangeRatesForAI(): string {
   };
 
   for (const currency of Object.keys(rates) as CurrencyCode[]) {
-    if (currency !== "EUR") {
+    if (currency !== 'EUR') {
       lines.push(formatRate(currency));
     }
   }
 
-  lines.push("");
-  lines.push("Используй эти курсы для конвертации. НЕ пиши что курс \"ориентировочный\".");
+  lines.push('');
+  lines.push('Используй эти курсы для конвертации. НЕ пиши что курс "ориентировочный".');
 
-  return lines.join("\n");
+  return lines.join('\n');
 }

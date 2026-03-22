@@ -1,6 +1,9 @@
 import { env } from '../config/env';
-import { getTokensFromCode } from '../services/google/oauth';
 import { database } from '../database';
+import { getTokensFromCode } from '../services/google/oauth';
+import { createLogger } from '../utils/logger.ts';
+
+const logger = createLogger('oauth-callback');
 
 /**
  * Pending OAuth states (groupId -> resolve/reject functions)
@@ -19,7 +22,7 @@ const pendingOAuthStates = new Map<
 export function registerOAuthState(
   groupId: number,
   resolve: (refreshToken: string) => void,
-  reject: (error: Error) => void
+  reject: (error: Error) => void,
 ): void {
   pendingOAuthStates.set(groupId.toString(), { resolve, reject });
 }
@@ -57,7 +60,7 @@ export function startOAuthServer(): void {
     },
   });
 
-  console.log(`✓ OAuth server running on http://localhost:${server.port}`);
+  logger.info(`✓ OAuth server running on http://localhost:${server.port}`);
 }
 
 /**
@@ -71,7 +74,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
   // Handle OAuth error
   if (error) {
     const errorDescription = url.searchParams.get('error_description') || 'Unknown error';
-    console.error('OAuth error:', error, errorDescription);
+    logger.error(`OAuth error: ${error} ${errorDescription}`);
 
     if (state) {
       const pending = pendingOAuthStates.get(state);
@@ -121,7 +124,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       {
         status: 400,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      }
+      },
     );
   }
 
@@ -152,10 +155,10 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       pending.resolve(tokens.refresh_token);
       pendingOAuthStates.delete(state);
     } else {
-      console.log(`[OAuth] ⚠️ No pending state for group ${state} (token saved to DB anyway)`);
+      logger.info(`[OAuth] ⚠️ No pending state for group ${state} (token saved to DB anyway)`);
     }
 
-    console.log(`✓ OAuth successful for group ${groupId}`);
+    logger.info(`✓ OAuth successful for group ${groupId}`);
 
     return new Response(
       `
@@ -197,10 +200,10 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      }
+      },
     );
   } catch (err) {
-    console.error('Error handling OAuth callback:', err);
+    logger.error({ err: err }, 'Error handling OAuth callback');
 
     const pending = pendingOAuthStates.get(state);
     if (pending) {
@@ -248,7 +251,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       {
         status: 500,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      }
+      },
     );
   }
 }
@@ -281,7 +284,7 @@ async function handleTempImage(url: URL): Promise<Response> {
       },
     });
   } catch (error) {
-    console.error('[TEMP_IMAGE] Error serving image:', error);
+    logger.error({ err: error }, '[TEMP_IMAGE] Error serving image');
     return new Response('Internal Server Error', { status: 500 });
   }
 }

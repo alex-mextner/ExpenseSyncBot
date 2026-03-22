@@ -1,10 +1,10 @@
-import type { Ctx } from '../types';
 import { database } from '../../database';
+import type { Ctx } from '../types';
 
 /**
  * /start command handler
  */
-export async function handleStartCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
@@ -24,26 +24,25 @@ export async function handleStartCommand(ctx: Ctx["Command"]): Promise<void> {
     if (group && database.groups.hasCompletedSetup(chatId)) {
       await ctx.send(
         `👋 Привет! Бот уже настроен.\n\n` +
-        `Отправьте расход в формате:\n` +
-        `190 евро Алекс кулёма\n` +
-        `100$ еда обед\n\n` +
-        `Команды:\n` +
-        `/spreadsheet - ссылка на таблицу\n` +
-        `/stats - статистика\n` +
-        `/categories - категории\n` +
-        `/connect - переподключить`
+          `Отправьте расход в формате:\n` +
+          `190 евро Алекс кулёма\n` +
+          `100$ еда обед\n\n` +
+          `Команды:\n` +
+          `/spreadsheet - ссылка на таблицу\n` +
+          `/stats - статистика\n` +
+          `/categories - категории\n` +
+          `/connect - переподключить`,
       );
     } else {
       await ctx.send(
-        `👋 Привет! Я помогу вести учет расходов группы.\n\n` +
-        `Для начала используй /connect`
+        `👋 Привет! Я помогу вести учет расходов группы.\n\n` + `Для начала используй /connect`,
       );
     }
   } else {
     // Private chat
     await ctx.send(
       `👋 Привет! Я работаю только в группах.\n\n` +
-      `Добавь меня в группу и используй /connect для настройки.`
+        `Добавь меня в группу и используй /connect для настройки.`,
     );
   }
 }

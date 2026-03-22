@@ -1,18 +1,24 @@
-import { InferenceClient } from "@huggingface/inference";
-import Anthropic from "@anthropic-ai/sdk";
-import type { Bot } from "gramio";
-import { format } from "date-fns";
-import { env } from "../../config/env";
-import { database } from "../../database";
-import { formatExchangeRatesForAI, convertCurrency } from "../../services/currency/converter";
-import type { CurrencyCode } from "../../config/constants";
-import type { Ctx } from "../types";
-import { ExpenseBotAgent, AI_MODEL, AI_BASE_URL } from "../../services/ai/agent";
-import type { AgentContext } from "../../services/ai/types";
-import { spendingAnalytics } from "../../services/analytics/spending-analytics";
-import { formatSnapshotForPrompt, computeOverallSeverity } from "../../services/analytics/formatters";
-import { checkSmartTriggers, recordAdviceSent } from "../../services/analytics/advice-triggers";
-import type { AdviceTier, TriggerResult, FinancialSnapshot } from "../../services/analytics/types";
+import Anthropic from '@anthropic-ai/sdk';
+import { InferenceClient } from '@huggingface/inference';
+import { format } from 'date-fns';
+import type { Bot } from 'gramio';
+import type { CurrencyCode } from '../../config/constants';
+import { env } from '../../config/env';
+import { database } from '../../database';
+import { AI_BASE_URL, AI_MODEL, ExpenseBotAgent } from '../../services/ai/agent';
+import type { AgentContext } from '../../services/ai/types';
+import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
+import {
+  computeOverallSeverity,
+  formatSnapshotForPrompt,
+} from '../../services/analytics/formatters';
+import { spendingAnalytics } from '../../services/analytics/spending-analytics';
+import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
+import { convertCurrency, formatExchangeRatesForAI } from '../../services/currency/converter';
+import { createLogger } from '../../utils/logger.ts';
+import type { Ctx } from '../types';
+
+const logger = createLogger('ask');
 
 const hfClient = env.HF_TOKEN ? new InferenceClient(env.HF_TOKEN) : null;
 
@@ -23,37 +29,39 @@ const useAnthropic = !!env.ANTHROPIC_API_KEY;
  * Handle questions to the bot via @botname question
  */
 export async function handleAskQuestion(
-  ctx: Ctx["Message"],
+  ctx: Ctx['Message'],
   question: string,
-  bot: Bot
+  bot: Bot,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
   if (!chatId) {
-    await ctx.send("Error: Unable to identify chat");
+    await ctx.send('Error: Unable to identify chat');
     return;
   }
 
   // Only allow in groups
-  const isGroup = chatType === "group" || chatType === "supergroup";
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!isGroup) {
-    await ctx.send("❌ Эта команда работает только в группах.");
+    await ctx.send('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
 
   if (!group) {
-    await ctx.send("❌ Группа не настроена. Используй /connect");
+    await ctx.send('❌ Группа не настроена. Используй /connect');
     return;
   }
 
   // Check topic restriction
   const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
   if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
-    console.log(`[ASK] Ignoring: question from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`);
+    logger.info(
+      `[ASK] Ignoring: question from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
+    );
     return;
   }
 
@@ -68,16 +76,16 @@ export async function handleAskQuestion(
   }
 
   // Get user info
-  const userName = ctx.from.username || ctx.from.firstName || "User";
-  const userFirstName = ctx.from.firstName || "";
-  const userLastName = ctx.from.lastName || "";
-  const userFullName = [userFirstName, userLastName].filter(Boolean).join(" ");
+  const userName = ctx.from.username || ctx.from.firstName || 'User';
+  const userFirstName = ctx.from.firstName || '';
+  const userLastName = ctx.from.lastName || '';
+  const userFullName = [userFirstName, userLastName].filter(Boolean).join(' ');
 
   // Save user question to chat history
   database.chatMessages.create({
     group_id: group.id,
     user_id: user.id,
-    role: "user",
+    role: 'user',
     content: `${userName}: ${question}`,
   });
 
@@ -93,7 +101,7 @@ export async function handleAskQuestion(
  * Handle question using Anthropic Claude agent with tool calling
  */
 async function handleAskWithAnthropic(
-  ctx: Ctx["Message"],
+  ctx: Ctx['Message'],
   question: string,
   bot: Bot,
   group: any,
@@ -127,17 +135,13 @@ async function handleAskWithAnthropic(
 
     const agent = new ExpenseBotAgent(env.ANTHROPIC_API_KEY, agentCtx);
 
-    const finalResponse = await agent.run(
-      `${userName}: ${question}`,
-      historyMessages,
-      bot,
-    );
+    const finalResponse = await agent.run(`${userName}: ${question}`, historyMessages, bot);
 
     // Save only the final text response to chat history (not tool_use rounds)
     database.chatMessages.create({
       group_id: group.id,
       user_id: user.id,
-      role: "assistant",
+      role: 'assistant',
       content: finalResponse,
     });
 
@@ -147,8 +151,8 @@ async function handleAskWithAnthropic(
     // Maybe send daily advice (20% probability)
     await maybeSmartAdvice(ctx, group.id);
   } catch (error) {
-    console.error("[ASK] Anthropic agent error:", error);
-    await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
+    logger.error({ err: error }, '[ASK] Anthropic agent error');
+    await ctx.send('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
   }
 }
 
@@ -156,22 +160,22 @@ async function handleAskWithAnthropic(
  * Handle question using HuggingFace Inference (legacy fallback)
  */
 async function handleAskWithHuggingFace(
-  ctx: Ctx["Message"],
+  ctx: Ctx['Message'],
   question: string,
   bot: Bot,
   group: any,
   user: any,
   userName: string,
   userFullName: string,
-  chatId: number
+  chatId: number,
 ): Promise<void> {
   if (!hfClient) {
-    await ctx.send("❌ AI не настроен. Нужен HF_TOKEN или ANTHROPIC_API_KEY.");
+    await ctx.send('❌ AI не настроен. Нужен HF_TOKEN или ANTHROPIC_API_KEY.');
     return;
   }
 
-  const userFirstName = ctx.from.firstName || "";
-  const userLastName = ctx.from.lastName || "";
+  const userFirstName = ctx.from.firstName || '';
+  const userLastName = ctx.from.lastName || '';
 
   // Get recent chat history (last 5 messages)
   const recentMessages = database.chatMessages.getRecentMessages(group.id, 10); // 5 pairs
@@ -180,7 +184,7 @@ async function handleAskWithHuggingFace(
   const allExpenses = database.expenses.findByGroupId(group.id, 100000);
 
   // Get budgets for current month (with fallback to latest available)
-  const currentMonthForBudgets = format(new Date(), "yyyy-MM");
+  const currentMonthForBudgets = format(new Date(), 'yyyy-MM');
   const allBudgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonthForBudgets);
 
   // Build context from expenses and budgets
@@ -188,23 +192,18 @@ async function handleAskWithHuggingFace(
   const budgetsContext = buildBudgetsContext(allBudgets, allExpenses, currentMonthForBudgets);
 
   // Get unique categories from expenses
-  const uniqueCategories = Array.from(
-    new Set(allExpenses.map((e) => e.category))
-  ).sort();
+  const uniqueCategories = Array.from(new Set(allExpenses.map((e) => e.category))).sort();
 
   // Get current date info
   const now = new Date();
   const currentMonth = now.toISOString().substring(0, 7); // YYYY-MM
-  const currentDate = now.toISOString().split("T")[0]; // YYYY-MM-DD
+  const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
 
   // Build current month category summary
-  const currentMonthExpenses = allExpenses.filter((e) =>
-    e.date.startsWith(currentMonth)
-  );
+  const currentMonthExpenses = allExpenses.filter((e) => e.date.startsWith(currentMonth));
   const categoryTotals: Record<string, number> = {};
   for (const expense of currentMonthExpenses) {
-    categoryTotals[expense.category] =
-      (categoryTotals[expense.category] || 0) + expense.eur_amount;
+    categoryTotals[expense.category] = (categoryTotals[expense.category] || 0) + expense.eur_amount;
   }
   const sortedCategories = Object.entries(categoryTotals)
     .sort((a, b) => b[1] - a[1])
@@ -212,16 +211,13 @@ async function handleAskWithHuggingFace(
 
   let currentMonthSummary = `\nТРАТЫ ЗА ТЕКУЩИЙ МЕСЯЦ (${currentMonth}) ПО КАТЕГОРИЯМ:\n`;
   if (sortedCategories.length > 0) {
-    const totalMonth = sortedCategories.reduce(
-      (sum, [_, amount]) => sum + amount,
-      0
-    );
+    const totalMonth = sortedCategories.reduce((sum, [_, amount]) => sum + amount, 0);
     currentMonthSummary += `Всего потрачено: €${totalMonth.toFixed(2)}\n`;
     for (const [category, amount] of sortedCategories) {
       currentMonthSummary += `- ${category}: €${amount.toFixed(2)}\n`;
     }
   } else {
-    currentMonthSummary += "Нет трат за текущий месяц.\n";
+    currentMonthSummary += 'Нет трат за текущий месяц.\n';
   }
 
   const ratesContext = formatExchangeRatesForAI();
@@ -232,7 +228,7 @@ async function handleAskWithHuggingFace(
     const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
     financialSnapshotContext = formatSnapshotForPrompt(snapshot);
   } catch (err) {
-    console.error('[ASK] Failed to compute financial snapshot:', err);
+    logger.error({ err: err }, '[ASK] Failed to compute financial snapshot');
   }
 
   let systemPrompt = `Ты - ассистент для анализа финансов.
@@ -244,10 +240,10 @@ ${currentMonthSummary}
 ${ratesContext}
 ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ:
 - Username: @${userName}
-- Полное имя: ${userFullName || "не указано"}
+- Полное имя: ${userFullName || 'не указано'}
 
 ДОСТУПНЫЕ КАТЕГОРИИ РАСХОДОВ (${uniqueCategories.length} категорий):
-${uniqueCategories.map((cat) => `- ${cat}`).join("\n")}
+${uniqueCategories.map((cat) => `- ${cat}`).join('\n')}
 
 ВАЖНО: Если пользователь спрашивает про СВОИ расходы (например "мои расходы", "я потратил", "на что я тратил"),
 отвечай только про расходы в категории с именем этого пользователя.
@@ -282,7 +278,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
 
   // Build messages array with history
   const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: systemPrompt },
+    { role: 'system', content: systemPrompt },
   ];
 
   // Add recent chat history (excluding current question)
@@ -295,24 +291,24 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
 
   // Add current question with username (for context)
   messages.push({
-    role: "user",
+    role: 'user',
     content: `${userName}: ${question}`,
   });
 
-  console.log("[ASK] System prompt:", systemPrompt);
+  logger.info(`[ASK] System prompt: ${systemPrompt}`);
 
   try {
     // Create streaming response
     const stream = hfClient.chatCompletionStream({
-      provider: "novita",
-      model: "deepseek-ai/DeepSeek-R1-0528",
+      provider: 'novita',
+      model: 'deepseek-ai/DeepSeek-R1-0528',
       messages: messages as any,
       max_tokens: 4000,
       temperature: 0.7,
     });
 
-    let fullResponse = "";
-    let lastMessageText = "";
+    let fullResponse = '';
+    let lastMessageText = '';
     let sentMessageId: number | null = null;
     let lastUpdateTime = 0;
     let lastErrorTime = 0;
@@ -343,10 +339,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
             let isTruncated = false;
 
             if (textToSend.length > MAX_INTERMEDIATE_LENGTH) {
-              textToSend = safelyTruncateHTML(
-                textToSend,
-                MAX_INTERMEDIATE_LENGTH
-              );
+              textToSend = safelyTruncateHTML(textToSend, MAX_INTERMEDIATE_LENGTH);
               isTruncated = true;
             }
 
@@ -361,30 +354,27 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                   chat_id: chatId,
                   message_id: sentMessageId,
                   text: textToSend,
-                  parse_mode: "HTML",
+                  parse_mode: 'HTML',
                 });
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
               } catch (err: any) {
                 // If rate limited, wait longer
                 if (err?.code === 429) {
-                  console.error("[ASK] Rate limited, waiting...");
+                  logger.error('[ASK] Rate limited, waiting...');
                   lastErrorTime = now;
                   // Wait the cooldown period
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, ERROR_COOLDOWN_MS)
-                  );
-                } else if (
-                  err?.message?.includes("message is not modified")
-                ) {
+                  await new Promise((resolve) => setTimeout(resolve, ERROR_COOLDOWN_MS));
+                } else if (err?.message?.includes('message is not modified')) {
                   // Shouldn't happen after the check above, but just in case
-                  console.log("[ASK] Message not modified (unexpected)");
+                  logger.info('[ASK] Message not modified (unexpected)');
                   lastMessageText = textToSend;
                   lastUpdateTime = now;
-                } else if (
-                  err?.message?.includes("can't parse entities")
-                ) {
-                  console.error("[ASK] HTML parse error in edit, falling back to plain text:", err.message);
+                } else if (err?.message?.includes("can't parse entities")) {
+                  logger.error(
+                    { err: err },
+                    '[ASK] HTML parse error in edit, falling back to plain text',
+                  );
                   try {
                     await bot.api.editMessageText({
                       chat_id: chatId,
@@ -394,33 +384,35 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                     lastMessageText = textToSend;
                     lastUpdateTime = now;
                   } catch (innerErr) {
-                    console.error("[ASK] Failed even plain text edit:", innerErr);
+                    logger.error({ err: innerErr }, '[ASK] Failed even plain text edit');
                   }
                 } else {
-                  console.error("[ASK] Failed to edit message:", err);
+                  logger.error({ err: err }, '[ASK] Failed to edit message');
                 }
               }
             } else if (!isTruncated) {
               // Send initial message only if not truncated
               // (if truncated, wait for final version)
               try {
-                const sent = await ctx.send(textToSend, { parse_mode: "HTML" });
+                const sent = await ctx.send(textToSend, { parse_mode: 'HTML' });
                 sentMessageId = sent.id;
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
               } catch (err: any) {
                 if (err?.message?.includes("can't parse entities")) {
-                  console.error("[ASK] HTML parse error in initial send, falling back to plain text");
+                  logger.error(
+                    '[ASK] HTML parse error in initial send, falling back to plain text',
+                  );
                   try {
                     const sent = await ctx.send(stripAllHtml(textToSend));
                     sentMessageId = sent.id;
                     lastMessageText = textToSend;
                     lastUpdateTime = now;
                   } catch (innerErr) {
-                    console.error("[ASK] Failed even plain text send:", innerErr);
+                    logger.error({ err: innerErr }, '[ASK] Failed even plain text send');
                   }
                 } else {
-                  console.error("[ASK] Failed to send message:", err);
+                  logger.error({ err: err }, '[ASK] Failed to send message');
                 }
               }
             }
@@ -434,7 +426,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
       // No intermediate messages were sent, send final
       const chunks = splitIntoChunks(fullResponse, 4000);
       for (const chunk of chunks) {
-        await safeSend(ctx, chunk, { parse_mode: "HTML" });
+        await safeSend(ctx, chunk, { parse_mode: 'HTML' });
       }
     } else if (sentMessageId) {
       // Update with final response
@@ -447,14 +439,14 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
             chat_id: chatId,
             message_id: sentMessageId,
             text: chunks[0],
-            parse_mode: "HTML",
+            parse_mode: 'HTML',
           });
         } catch (err: any) {
-          if (err?.message?.includes("message is not modified")) {
+          if (err?.message?.includes('message is not modified')) {
             // Shouldn't happen after the check above, but just in case
-            console.log("[ASK] Final message not modified (unexpected)");
+            logger.info('[ASK] Final message not modified (unexpected)');
           } else if (err?.message?.includes("can't parse entities")) {
-            console.error("[ASK] HTML parse error in final edit, falling back to plain text");
+            logger.error('[ASK] HTML parse error in final edit, falling back to plain text');
             try {
               await bot.api.editMessageText({
                 chat_id: chatId,
@@ -462,12 +454,12 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                 text: stripAllHtml(chunks[0]),
               });
             } catch (innerErr) {
-              console.error("[ASK] Failed even plain text final edit:", innerErr);
+              logger.error({ err: innerErr }, '[ASK] Failed even plain text final edit');
             }
           } else {
-            console.error("[ASK] Failed to edit final message:", err);
+            logger.error({ err: err }, '[ASK] Failed to edit final message');
             // If edit failed for other reason, send as new message with fallback
-            await safeSend(ctx, chunks[0], { parse_mode: "HTML" });
+            await safeSend(ctx, chunks[0], { parse_mode: 'HTML' });
           }
         }
       }
@@ -476,7 +468,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
       for (let i = 1; i < chunks.length; i++) {
         const chunk = chunks[i];
         if (chunk) {
-          await safeSend(ctx, chunk, { parse_mode: "HTML" });
+          await safeSend(ctx, chunk, { parse_mode: 'HTML' });
         }
       }
     }
@@ -485,7 +477,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
     database.chatMessages.create({
       group_id: group.id,
       user_id: user.id,
-      role: "assistant",
+      role: 'assistant',
       content: fullResponse,
     });
 
@@ -495,8 +487,8 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
     // Check smart triggers for advice
     await maybeSmartAdvice(ctx, group.id);
   } catch (error) {
-    console.error("[ASK] Error:", error);
-    await ctx.send("❌ Ошибка при обработке вопроса. Попробуй еще раз.");
+    logger.error({ err: error }, '[ASK] Error');
+    await ctx.send('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
   }
 }
 
@@ -504,18 +496,29 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
  * Escape HTML entities to prevent parsing errors
  */
 export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
  * Telegram-allowed HTML tags whitelist
  */
 const ALLOWED_TAGS = [
-  "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
-  "code", "pre", "a", "blockquote", "tg-spoiler", "tg-emoji", "span",
+  'b',
+  'strong',
+  'i',
+  'em',
+  'u',
+  'ins',
+  's',
+  'strike',
+  'del',
+  'code',
+  'pre',
+  'a',
+  'blockquote',
+  'tg-spoiler',
+  'tg-emoji',
+  'span',
 ];
 
 /**
@@ -523,55 +526,46 @@ const ALLOWED_TAGS = [
  * Everything else is stripped.
  */
 function restoreAllowedAttributes(tag: string, escapedAttrs: string): string {
-  if (!escapedAttrs) return "";
+  if (!escapedAttrs) return '';
 
   // Unescape to parse attributes
-  const attrs = escapedAttrs
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+  const attrs = escapedAttrs.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 
   const t = tag.toLowerCase();
 
-  if (t === "a") {
+  if (t === 'a') {
     const hrefMatch = attrs.match(/href=["']([^"']*)["']/i);
     if (hrefMatch) {
-      const safeHref = (hrefMatch[1] || "")
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;");
+      const safeHref = (hrefMatch[1] || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
       return ` href="${safeHref}"`;
     }
-    return "";
+    return '';
   }
-  if (t === "blockquote") {
-    if (attrs.includes("expandable")) return " expandable";
-    return "";
+  if (t === 'blockquote') {
+    if (attrs.includes('expandable')) return ' expandable';
+    return '';
   }
-  if (t === "pre" || t === "code") {
+  if (t === 'pre' || t === 'code') {
     const classMatch = attrs.match(/class=["']([^"']*)["']/i);
     if (classMatch) {
-      const safeClass = (classMatch[1] || "")
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;");
+      const safeClass = (classMatch[1] || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
       return ` class="${safeClass}"`;
     }
-    return "";
+    return '';
   }
-  if (t === "span") {
-    if (attrs.includes("tg-spoiler")) return ' class="tg-spoiler"';
-    return "";
+  if (t === 'span') {
+    if (attrs.includes('tg-spoiler')) return ' class="tg-spoiler"';
+    return '';
   }
-  if (t === "tg-emoji") {
+  if (t === 'tg-emoji') {
     const idMatch = attrs.match(/emoji-id=["']([^"']*)["']/i);
     if (idMatch) {
-      const safeId = (idMatch[1] || "")
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;");
+      const safeId = (idMatch[1] || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
       return ` emoji-id="${safeId}"`;
     }
-    return "";
+    return '';
   }
-  return "";
+  return '';
 }
 
 /**
@@ -585,15 +579,15 @@ export function closeUnmatchedTags(html: string): string {
   // biome-ignore lint/suspicious/noAssignInExpressions: needed for regex iteration
   while ((match = tagRegex.exec(html)) !== null) {
     const fullTag = match[0];
-    const tagName = (match[1] || "").toLowerCase();
+    const tagName = (match[1] || '').toLowerCase();
     if (!tagName) continue;
 
-    if (fullTag.startsWith("</")) {
+    if (fullTag.startsWith('</')) {
       const lastIndex = openTags.lastIndexOf(tagName);
       if (lastIndex !== -1) {
         openTags.splice(lastIndex, 1);
       }
-    } else if (!fullTag.endsWith("/>")) {
+    } else if (!fullTag.endsWith('/>')) {
       openTags.push(tagName);
     }
   }
@@ -613,25 +607,19 @@ export function closeUnmatchedTags(html: string): string {
  */
 export function sanitizeHtmlForTelegram(text: string): string {
   // Step 1: Escape ALL special characters
-  let result = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  let result = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // Step 2: Restore whitelisted tags
   for (const tag of ALLOWED_TAGS) {
     // Opening tags with optional attributes
-    const openRegex = new RegExp(
-      `&lt;(${tag})((?:\\s|&amp;).*?)?&gt;`,
-      "gi"
-    );
+    const openRegex = new RegExp(`&lt;(${tag})((?:\\s|&amp;).*?)?&gt;`, 'gi');
     result = result.replace(openRegex, (_, tagName, attrs) => {
-      const safeAttrs = restoreAllowedAttributes(tagName, attrs || "");
+      const safeAttrs = restoreAllowedAttributes(tagName, attrs || '');
       return `<${tagName}${safeAttrs}>`;
     });
 
     // Closing tags
-    const closeRegex = new RegExp(`&lt;/${tag}&gt;`, "gi");
+    const closeRegex = new RegExp(`&lt;/${tag}&gt;`, 'gi');
     result = result.replace(closeRegex, `</${tag}>`);
   }
 
@@ -647,10 +635,10 @@ export function sanitizeHtmlForTelegram(text: string): string {
  */
 export function stripAllHtml(text: string): string {
   return text
-    .replace(/<[^>]*>/g, "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"');
 }
 
@@ -658,21 +646,21 @@ export function stripAllHtml(text: string): string {
  * Send a message with automatic fallback to plain text if HTML parsing fails.
  */
 async function safeSend(
-  ctx: Ctx["Message"],
+  ctx: Ctx['Message'],
   text: string,
-  options?: { parse_mode?: "HTML" | "MarkdownV2" | "Markdown" }
+  options?: { parse_mode?: 'HTML' | 'MarkdownV2' | 'Markdown' },
 ): Promise<any> {
   try {
     return await ctx.send(text, options);
   } catch (err: any) {
     if (err?.message?.includes("can't parse entities")) {
-      console.error("[ASK] HTML error in safeSend, falling back to plain text");
+      logger.error('[ASK] HTML error in safeSend, falling back to plain text');
       return await ctx.send(stripAllHtml(text));
     }
-    if (err?.message?.includes("message is too long")) {
-      console.error("[ASK] Message too long in safeSend, truncating");
+    if (err?.message?.includes('message is too long')) {
+      logger.error('[ASK] Message too long in safeSend, truncating');
       const plainText = stripAllHtml(text);
-      const truncated = plainText.substring(0, 4000) + "...";
+      const truncated = plainText.substring(0, 4000) + '...';
       return await ctx.send(truncated);
     }
     throw err;
@@ -705,11 +693,11 @@ export function processThinkTags(text: string): string {
  */
 function processThinkTagsForAdvice(text: string): string {
   // Replace entire <think>...</think> blocks with "Бот думает..."
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, "<i>Бот думает...</i>\n\n");
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, '<i>Бот думает...</i>\n\n');
   // Remove unclosed <think> blocks (streaming leftovers)
-  text = text.replace(/<think>[\s\S]*$/, "");
+  text = text.replace(/<think>[\s\S]*$/, '');
   // Clean up extra newlines
-  text = text.replace(/\n{3,}/g, "\n\n");
+  text = text.replace(/\n{3,}/g, '\n\n');
   return text.trim();
 }
 
@@ -728,8 +716,8 @@ export function safelyTruncateHTML(text: string, maxLength: number): string {
 
   // Find last complete character (not in middle of tag)
   // If we're inside a tag, backtrack to before the tag started
-  const lastTagStart = truncated.lastIndexOf("<");
-  const lastTagEnd = truncated.lastIndexOf(">");
+  const lastTagStart = truncated.lastIndexOf('<');
+  const lastTagEnd = truncated.lastIndexOf('>');
 
   if (lastTagStart > lastTagEnd) {
     // We're in the middle of a tag, cut before it
@@ -741,7 +729,7 @@ export function safelyTruncateHTML(text: string, maxLength: number): string {
 
   // Final safety: if somehow still too long, strip HTML and hard-truncate
   if (truncated.length > maxLength - 3) {
-    return stripAllHtml(text).substring(0, maxLength - 3) + "...";
+    return stripAllHtml(text).substring(0, maxLength - 3) + '...';
   }
 
   return `${truncated}...`;
@@ -760,16 +748,16 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
   }
 
   const chunks: string[] = [];
-  let currentChunk = "";
+  let currentChunk = '';
 
   // Split by paragraphs first
-  const paragraphs = text.split("\n\n");
+  const paragraphs = text.split('\n\n');
 
   for (const paragraph of paragraphs) {
     if ((currentChunk + paragraph).length > maxLength) {
       if (currentChunk) {
         chunks.push(currentChunk.trim());
-        currentChunk = "";
+        currentChunk = '';
       }
 
       // If single paragraph is too long, split by sentences
@@ -782,13 +770,13 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
               currentChunk = sentence;
             } else {
               // Single sentence too long, split by words
-              const words = sentence.split(" ");
+              const words = sentence.split(' ');
               for (const word of words) {
-                if ((currentChunk + " " + word).length > maxLength) {
+                if ((currentChunk + ' ' + word).length > maxLength) {
                   chunks.push(currentChunk.trim());
                   currentChunk = word;
                 } else {
-                  currentChunk += " " + word;
+                  currentChunk += ' ' + word;
                 }
               }
             }
@@ -800,7 +788,7 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
         currentChunk = paragraph;
       }
     } else {
-      currentChunk += (currentChunk ? "\n\n" : "") + paragraph;
+      currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
     }
   }
 
@@ -823,10 +811,10 @@ function buildExpensesContext(
     currency: string;
     eur_amount: number;
     comment: string;
-  }>
+  }>,
 ): string {
   if (expenses.length === 0) {
-    return "РАСХОДЫ: Нет данных о расходах.";
+    return 'РАСХОДЫ: Нет данных о расходах.';
   }
 
   // Group by month
@@ -839,7 +827,7 @@ function buildExpensesContext(
     byMonth[month].push(expense);
   }
 
-  let context = "РАСХОДЫ:\n\n";
+  let context = 'РАСХОДЫ:\n\n';
 
   // Sort months descending
   const months = Object.keys(byMonth).sort().reverse();
@@ -855,8 +843,7 @@ function buildExpensesContext(
     // Group by category
     const byCategory: Record<string, number> = {};
     for (const expense of monthExpenses) {
-      byCategory[expense.category] =
-        (byCategory[expense.category] || 0) + expense.eur_amount;
+      byCategory[expense.category] = (byCategory[expense.category] || 0) + expense.eur_amount;
     }
 
     // Sort categories by amount
@@ -867,19 +854,17 @@ function buildExpensesContext(
     for (const [category, amount] of categories) {
       context += `  - ${category}: €${amount.toFixed(2)}\n`;
     }
-    context += "\n";
+    context += '\n';
   }
 
   // Add ALL expenses with details (not just last 20!)
   context += `\nВсе операции (всего: ${expenses.length}):\n`;
   for (const expense of expenses) {
-    context += `- ${expense.date}: ${
-      expense.category
-    } €${expense.eur_amount.toFixed(2)}`;
+    context += `- ${expense.date}: ${expense.category} €${expense.eur_amount.toFixed(2)}`;
     if (expense.comment) {
       context += ` (${expense.comment})`;
     }
-    context += "\n";
+    context += '\n';
   }
 
   return context;
@@ -902,10 +887,10 @@ function buildBudgetsContext(
     category: string;
     eur_amount: number;
   }>,
-  currentMonth: string
+  currentMonth: string,
 ): string {
   if (budgets.length === 0) {
-    return "БЮДЖЕТЫ: Бюджеты не установлены.";
+    return 'БЮДЖЕТЫ: Бюджеты не установлены.';
   }
 
   // Calculate expenses by category for current month (in EUR)
@@ -917,7 +902,7 @@ function buildBudgetsContext(
     }
   }
 
-  let context = "\n\nБЮДЖЕТЫ И ОСТАТКИ:\n\n";
+  let context = '\n\nБЮДЖЕТЫ И ОСТАТКИ:\n\n';
   context += `${currentMonth} (ТЕКУЩИЙ МЕСЯЦ):\n\n`;
 
   // Group budgets by currency for totals
@@ -928,16 +913,16 @@ function buildBudgetsContext(
     const currency = budget.currency as CurrencyCode;
     const spentEur = monthExpensesEur[budget.category] || 0;
     // Convert EUR spent to budget currency
-    const spentInCurrency = convertCurrency(spentEur, "EUR", currency);
+    const spentInCurrency = convertCurrency(spentEur, 'EUR', currency);
     const remaining = budget.limit_amount - spentInCurrency;
-    const percent = budget.limit_amount > 0
-      ? ((spentInCurrency / budget.limit_amount) * 100).toFixed(0)
-      : "0";
-    const status = remaining < 0
-      ? "⚠️ ПРЕВЫШЕН"
-      : remaining < budget.limit_amount * 0.1
-        ? "⚠️ почти исчерпан"
-        : "";
+    const percent =
+      budget.limit_amount > 0 ? ((spentInCurrency / budget.limit_amount) * 100).toFixed(0) : '0';
+    const status =
+      remaining < 0
+        ? '⚠️ ПРЕВЫШЕН'
+        : remaining < budget.limit_amount * 0.1
+          ? '⚠️ почти исчерпан'
+          : '';
 
     context += `  - ${budget.category}: лимит ${budget.limit_amount.toFixed(2)} ${currency}, потрачено ${spentInCurrency.toFixed(2)} ${currency} (${percent}%), остаток ${remaining.toFixed(2)} ${currency} ${status}\n`;
 
@@ -953,38 +938,38 @@ function buildBudgetsContext(
   context += `\n  Итого по валютам:\n`;
   for (const [currency, totals] of Object.entries(byCurrency)) {
     const remaining = totals.limit - totals.spent;
-    const percent = totals.limit > 0 ? ((totals.spent / totals.limit) * 100).toFixed(1) : "0";
+    const percent = totals.limit > 0 ? ((totals.spent / totals.limit) * 100).toFixed(1) : '0';
     context += `  - ${currency}: бюджет ${totals.limit.toFixed(2)}, потрачено ${totals.spent.toFixed(2)} (${percent}%), остаток ${remaining.toFixed(2)}\n`;
   }
 
-  context += "\n";
+  context += '\n';
   return context;
 }
 
 /**
  * /advice command handler - request deep financial analysis (Tier 3)
  */
-export async function handleAdviceCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleAdviceCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
   if (!chatId) {
-    await ctx.send("Error: Unable to identify chat");
+    await ctx.send('Error: Unable to identify chat');
     return;
   }
 
   // Only allow in groups
-  const isGroup = chatType === "group" || chatType === "supergroup";
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!isGroup) {
-    await ctx.send("❌ Эта команда работает только в группах.");
+    await ctx.send('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
 
   if (!group) {
-    await ctx.send("❌ Группа не настроена. Используй /connect");
+    await ctx.send('❌ Группа не настроена. Используй /connect');
     return;
   }
 
@@ -1004,20 +989,19 @@ export async function handleAdviceCommand(ctx: Ctx["Command"]): Promise<void> {
  * Check smart triggers and maybe send advice
  * Replaces the old maybeSendDailyAdvice() with event-driven logic
  */
-export async function maybeSmartAdvice(
-  ctx: Ctx["Message"],
-  groupId: number
-): Promise<void> {
+export async function maybeSmartAdvice(ctx: Ctx['Message'], groupId: number): Promise<void> {
   try {
     const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
     const trigger = checkSmartTriggers(groupId, snapshot);
 
     if (!trigger) return;
 
-    console.log(`[ADVICE] Smart trigger fired: ${trigger.type} (tier: ${trigger.tier}) for group ${groupId}`);
+    logger.info(
+      `[ADVICE] Smart trigger fired: ${trigger.type} (tier: ${trigger.tier}) for group ${groupId}`,
+    );
     await sendSmartAdvice(ctx, groupId, trigger, snapshot);
   } catch (error) {
-    console.error("[ADVICE] Error in smart advice check:", error);
+    logger.error({ err: error }, '[ADVICE] Error in smart advice check');
   }
 }
 
@@ -1028,7 +1012,7 @@ export async function maybeSmartAdvice(
  *   Tier 3 (deep):  3000 max_tokens, temp 0.6, comprehensive analysis
  */
 async function sendSmartAdvice(
-  ctx: Ctx["Message"],
+  ctx: Ctx['Message'],
   groupId: number,
   trigger: TriggerResult,
   snapshot: FinancialSnapshot,
@@ -1056,9 +1040,9 @@ async function sendSmartAdvice(
     // Tier-specific parameters
     const tierConfig = TIER_CONFIGS[tier];
 
-    console.log(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
+    logger.info(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
 
-    let advice = "";
+    let advice = '';
 
     if (useAnthropic) {
       const anthropic = new Anthropic({
@@ -1068,22 +1052,22 @@ async function sendSmartAdvice(
       const response = await anthropic.messages.create({
         model: AI_MODEL,
         max_tokens: tierConfig.max_tokens,
-        messages: [{ role: "user", content: fullPrompt }],
+        messages: [{ role: 'user', content: fullPrompt }],
       });
       for (const block of response.content) {
-        if (block.type === "text") advice += block.text;
+        if (block.type === 'text') advice += block.text;
       }
     } else if (hfClient) {
       const response = await hfClient.chatCompletion({
-        provider: "novita",
-        model: "deepseek-ai/DeepSeek-R1-0528",
-        messages: [{ role: "user", content: fullPrompt }],
+        provider: 'novita',
+        model: 'deepseek-ai/DeepSeek-R1-0528',
+        messages: [{ role: 'user', content: fullPrompt }],
         max_tokens: tierConfig.max_tokens,
         temperature: tierConfig.temperature,
       });
-      advice = response.choices[0]?.message?.content || "";
+      advice = response.choices[0]?.message?.content || '';
     } else {
-      console.log("[ADVICE] No AI client available, skipping advice");
+      logger.info('[ADVICE] No AI client available, skipping advice');
       return;
     }
     if (!advice) return;
@@ -1094,15 +1078,17 @@ async function sendSmartAdvice(
     if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
 
     // Send with tier-appropriate header
-    const header = tierConfig.emoji + " " + tierConfig.title;
+    const header = tierConfig.emoji + ' ' + tierConfig.title;
     const message = `\n\n${header}\n\n${sanitizedAdvice}`;
 
     try {
-      await ctx.send(message, { parse_mode: "HTML" });
+      await ctx.send(message, { parse_mode: 'HTML' });
     } catch (sendErr: any) {
       if (sendErr?.message?.includes("can't parse entities")) {
-        console.error("[ADVICE] HTML parse error, falling back to plain text");
-        await ctx.send(`${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`);
+        logger.error('[ADVICE] HTML parse error, falling back to plain text');
+        await ctx.send(
+          `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
+        );
       } else {
         throw sendErr;
       }
@@ -1119,14 +1105,17 @@ async function sendSmartAdvice(
       advice_text: cleanAdvice,
     });
 
-    console.log(`[ADVICE] Sent ${tier} advice for group ${groupId}, topic: ${trigger.topic}`);
+    logger.info(`[ADVICE] Sent ${tier} advice for group ${groupId}, topic: ${trigger.topic}`);
   } catch (error) {
-    console.error("[ADVICE] Failed to generate smart advice:", error);
+    logger.error({ err: error }, '[ADVICE] Failed to generate smart advice');
     // Silently fail - advice is not critical
   }
 }
 
-const TIER_CONFIGS: Record<AdviceTier, { max_tokens: number; temperature: number; emoji: string; title: string }> = {
+const TIER_CONFIGS: Record<
+  AdviceTier,
+  { max_tokens: number; temperature: number; emoji: string; title: string }
+> = {
   quick: { max_tokens: 500, temperature: 0.5, emoji: '💡', title: '<b>Инсайт</b>' },
   alert: { max_tokens: 1000, temperature: 0.5, emoji: '⚠️', title: '<b>Финансовый алерт</b>' },
   deep: { max_tokens: 3000, temperature: 0.6, emoji: '📊', title: '<b>Финансовый обзор</b>' },
@@ -1142,9 +1131,10 @@ function buildTieredPrompt(
   recentTopics: string[],
   trigger: TriggerResult,
 ): string {
-  const antiRepetition = recentTopics.length > 0
-    ? `\nПоследние ${recentTopics.length} советов были на темы: ${JSON.stringify(recentTopics)}\nНЕ повторяй эти темы. Найди новый ракурс.\n`
-    : '';
+  const antiRepetition =
+    recentTopics.length > 0
+      ? `\nПоследние ${recentTopics.length} советов были на темы: ${JSON.stringify(recentTopics)}\nНЕ повторяй эти темы. Найди новый ракурс.\n`
+      : '';
 
   const htmlRules = `
 Используй ТОЛЬКО HTML теги для форматирования: <b>, <i>, <code>, <blockquote>.

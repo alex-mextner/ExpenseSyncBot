@@ -11,38 +11,41 @@
  */
 
 import { $ } from 'bun';
+import { escapeHtml } from '../../bot/commands/ask';
+import {
+  createDevApprovalKeyboard,
+  createDevMergeKeyboard,
+  createDevReviewKeyboard,
+} from '../../bot/keyboards';
 import { database } from '../../database';
+import { createLogger } from '../../utils/logger.ts';
+import { runCodexReview } from './codex-integration';
+import { AgentAbortedError, DevAgent } from './dev-agent';
 import {
-  DevTaskState,
-  MAX_RETRY_ATTEMPTS,
-  type DevTask,
-  type CreateDevTaskData,
-  type UpdateDevTaskData,
-} from './types';
-import {
-  validateTransition,
-  isTerminalState,
-  isResumableState,
-} from './state-machine';
-import {
-  createWorktree,
-  removeWorktree,
-  deleteLocalBranch,
-  worktreeExists,
-  getRepoRoot,
   commitChanges,
-  pushBranch,
   createPR,
-  mergePR,
+  createWorktree,
+  deleteLocalBranch,
+  generateBranchName,
+  getChangedFilesFromMain,
   getCurrentDiff,
   getDiffFromMain,
-  getChangedFilesFromMain,
-  generateBranchName,
+  getRepoRoot,
+  mergePR,
+  pushBranch,
+  removeWorktree,
+  worktreeExists,
 } from './git-ops';
-import { runCodexReview } from './codex-integration';
-import { DevAgent, AgentAbortedError } from './dev-agent';
-import { escapeHtml } from '../../bot/commands/ask';
-import { createDevApprovalKeyboard, createDevReviewKeyboard, createDevMergeKeyboard } from '../../bot/keyboards';
+import { isResumableState, isTerminalState, validateTransition } from './state-machine';
+import {
+  type CreateDevTaskData,
+  type DevTask,
+  DevTaskState,
+  MAX_RETRY_ATTEMPTS,
+  type UpdateDevTaskData,
+} from './types';
+
+const logger = createLogger('pipeline');
 
 /** Reorder test output: failures and errors first, then passing tests fill remaining space */
 function prioritizeFailures(raw: string, maxChars: number): string {
@@ -51,8 +54,13 @@ function prioritizeFailures(raw: string, maxChars: number): string {
   const otherLines: string[] = [];
 
   for (const line of lines) {
-    if (line.includes('error:') || line.includes('Error:') ||
-        line.includes('✗') || line.includes('FAIL') || line.includes('# Unhandled')) {
+    if (
+      line.includes('error:') ||
+      line.includes('Error:') ||
+      line.includes('✗') ||
+      line.includes('FAIL') ||
+      line.includes('# Unhandled')
+    ) {
       failLines.push(line);
     } else {
       otherLines.push(line);
@@ -102,7 +110,7 @@ function filterTscErrorsByFiles(output: string, changedFiles: string[]): string 
   for (const line of lines) {
     if (!line.includes('error TS')) continue;
     // tsc errors start with relative path: src/foo/bar.ts(10,5): error TS...
-    if (changedFiles.some(f => line.includes(f))) {
+    if (changedFiles.some((f) => line.includes(f))) {
       filtered.push(line.trim());
     }
   }
@@ -158,7 +166,7 @@ TOPIC-AWARE MESSAGING:
 export type NotifyCallback = (
   groupId: number,
   message: string,
-  options?: { reply_markup?: any }
+  options?: { reply_markup?: any },
 ) => Promise<void>;
 
 /**
@@ -167,7 +175,7 @@ export type NotifyCallback = (
 function transition(
   task: DevTask,
   newState: DevTaskState,
-  extra?: Partial<UpdateDevTaskData>
+  extra?: Partial<UpdateDevTaskData>,
 ): DevTask {
   validateTransition(task.id, task.state, newState);
 
@@ -176,9 +184,7 @@ function transition(
     state: newState,
   };
 
-  console.log(
-    `[DEV-PIPELINE] Task #${task.id}: ${task.state} -> ${newState}`
-  );
+  logger.info(`[DEV-PIPELINE] Task #${task.id}: ${task.state} -> ${newState}`);
 
   const updated = database.devTasks.update(task.id, updateData);
 
@@ -204,7 +210,12 @@ export class DevPipeline {
   /**
    * Run an agent for a task, tracking it for cancellation.
    */
-  private async runAgent(taskId: number, agent: DevAgent, systemPrompt: string, userMessage: string): Promise<string> {
+  private async runAgent(
+    taskId: number,
+    agent: DevAgent,
+    systemPrompt: string,
+    userMessage: string,
+  ): Promise<string> {
     this.activeAgents.set(taskId, agent);
     try {
       return await agent.run(systemPrompt, userMessage);
@@ -245,11 +256,7 @@ export class DevPipeline {
    *
    * Creates a record in the database and begins processing.
    */
-  async startTask(
-    groupId: number,
-    userId: number,
-    description: string
-  ): Promise<DevTask> {
+  async startTask(groupId: number, userId: number, description: string): Promise<DevTask> {
     // Create task record
     const task = database.devTasks.create({
       group_id: groupId,
@@ -257,10 +264,7 @@ export class DevPipeline {
       description,
     });
 
-    await this.notify(
-      groupId,
-      `🔵 Dev task #${task.id} created:\n${description}`
-    );
+    await this.notify(groupId, `🔵 Dev task #${task.id} created:\n${description}`);
 
     // Start processing asynchronously (don't block the command)
     this.processStateAsync(task);
@@ -274,7 +278,9 @@ export class DevPipeline {
    */
   private async processStateAsync(task: DevTask): Promise<void> {
     if (this.processingTasks.has(task.id)) {
-      console.log(`[DEV-PIPELINE] Task #${task.id} already being processed, skipping duplicate run`);
+      logger.info(
+        `[DEV-PIPELINE] Task #${task.id} already being processed, skipping duplicate run`,
+      );
       return;
     }
     this.processingTasks.add(task.id);
@@ -284,16 +290,12 @@ export class DevPipeline {
     } catch (error) {
       // Agent was aborted because user cancelled — task is already REJECTED, nothing to do
       if (error instanceof AgentAbortedError) {
-        console.log(`[DEV-PIPELINE] Task #${task.id} agent aborted (cancelled by user)`);
+        logger.info(`[DEV-PIPELINE] Task #${task.id} agent aborted (cancelled by user)`);
         return;
       }
 
-      console.error(
-        `[DEV-PIPELINE] Error processing task #${task.id}:`,
-        error
-      );
-      const errorMsg =
-        error instanceof Error ? error.message : String(error);
+      logger.error({ err: error }, `[DEV-PIPELINE] Error processing task #${task.id}`);
+      const errorMsg = error instanceof Error ? error.message : String(error);
 
       // Re-read task from DB to get the actual current state (task object may be stale)
       const freshTask = database.devTasks.findById(task.id);
@@ -304,16 +306,13 @@ export class DevPipeline {
             failed_at_state: freshTask.state,
           });
         } catch {
-          console.error(
-            `[DEV-PIPELINE] Cannot transition task #${task.id} from ${freshTask.state} to FAILED`
+          logger.error(
+            `[DEV-PIPELINE] Cannot transition task #${task.id} from ${freshTask.state} to FAILED`,
           );
         }
       }
 
-      await this.notify(
-        task.group_id,
-        `💥 Dev task #${task.id} failed:\n${errorMsg}`
-      );
+      await this.notify(task.group_id, `💥 Dev task #${task.id} failed:\n${errorMsg}`);
     } finally {
       this.processingTasks.delete(task.id);
     }
@@ -377,11 +376,11 @@ export class DevPipeline {
   private async handlePending(task: DevTask): Promise<void> {
     // Short clear descriptions → design directly, ambiguous → clarify
     if (task.description.length < 100) {
-      console.log(`[DEV-PIPELINE] Task #${task.id}: short description, going to DESIGNING`);
+      logger.info(`[DEV-PIPELINE] Task #${task.id}: short description, going to DESIGNING`);
       const updated = transition(task, DevTaskState.DESIGNING);
       await this.processState(updated);
     } else {
-      console.log(`[DEV-PIPELINE] Task #${task.id}: long description, going to CLARIFYING`);
+      logger.info(`[DEV-PIPELINE] Task #${task.id}: long description, going to CLARIFYING`);
       const updated = transition(task, DevTaskState.CLARIFYING);
       await this.processState(updated);
     }
@@ -391,10 +390,7 @@ export class DevPipeline {
    * Handle CLARIFYING state: AI generates questions, waits for user answer.
    */
   private async handleClarifying(task: DevTask): Promise<void> {
-    await this.notify(
-      task.group_id,
-      `💬 Dev task #${task.id}: analyzing requirements...`
-    );
+    await this.notify(task.group_id, `💬 Dev task #${task.id}: analyzing requirements...`);
 
     const agent = new DevAgent(await getRepoRoot());
 
@@ -416,7 +412,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       task.group_id,
       `💬 Dev task #${task.id} needs clarification:\n\n${questions}\n\n` +
         `Reply with /dev answer ${task.id} &lt;your answers&gt;\n` +
-        `Or /dev approve ${task.id} to skip and proceed with designing.`
+        `Or /dev approve ${task.id} to skip and proceed with designing.`,
     );
   }
 
@@ -430,7 +426,9 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     }
 
     if (task.state !== DevTaskState.CLARIFYING) {
-      throw new Error(`Task #${taskId} is not waiting for clarification (current state: ${task.state})`);
+      throw new Error(
+        `Task #${taskId} is not waiting for clarification (current state: ${task.state})`,
+      );
     }
 
     // Append answers to description for context
@@ -446,7 +444,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
     await this.notify(
       task.group_id,
-      `💬 Dev task #${task.id}: answers received, proceeding to design...`
+      `💬 Dev task #${task.id}: answers received, proceeding to design...`,
     );
 
     this.processStateAsync(updated);
@@ -458,7 +456,9 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
    */
   async continueTask(taskId: number, message: string): Promise<DevTask> {
     if (this.processingTasks.has(taskId)) {
-      throw new Error(`Task #${taskId} is already being processed, wait for it to finish or cancel first`);
+      throw new Error(
+        `Task #${taskId} is already being processed, wait for it to finish or cancel first`,
+      );
     }
 
     const task = database.devTasks.findById(taskId);
@@ -471,9 +471,10 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     }
 
     if (task.state === DevTaskState.FAILED) {
-      const enrichedDescription = message !== 'Продолжай'
-        ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
-        : task.description;
+      const enrichedDescription =
+        message !== 'Продолжай'
+          ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
+          : task.description;
 
       database.devTasks.update(taskId, { description: enrichedDescription } as any);
 
@@ -493,7 +494,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
           `🔍 <b>Dev task #${task.id}:</b> resuming — review already done\n\n` +
             `<blockquote expandable>${escapeHtml(task.code_review.slice(0, 1500))}</blockquote>\n\n` +
             `PR: ${task.pr_url}`,
-          { reply_markup: createDevReviewKeyboard(task.id) }
+          { reply_markup: createDevReviewKeyboard(task.id) },
         );
 
         return updated;
@@ -509,7 +510,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
         await this.notify(
           task.group_id,
-          `▶️ Dev task #${task.id}: resuming — PR exists, running code review...`
+          `▶️ Dev task #${task.id}: resuming — PR exists, running code review...`,
         );
 
         this.processStateAsync(updated);
@@ -531,7 +532,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
         await this.notify(
           task.group_id,
-          `▶️ Dev task #${task.id}: resuming — tests passed, creating PR...`
+          `▶️ Dev task #${task.id}: resuming — tests passed, creating PR...`,
         );
 
         this.processStateAsync(updated);
@@ -549,7 +550,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
         await this.notify(
           task.group_id,
-          `▶️ Dev task #${task.id}: resuming implementation (design and worktree preserved)...`
+          `▶️ Dev task #${task.id}: resuming implementation (design and worktree preserved)...`,
         );
 
         this.processStateAsync(updated);
@@ -572,7 +573,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
         await this.notify(
           task.group_id,
-          `▶️ Dev task #${task.id}: resuming implementation (recreated worktree, design preserved)...`
+          `▶️ Dev task #${task.id}: resuming implementation (recreated worktree, design preserved)...`,
         );
 
         this.processStateAsync(updated);
@@ -589,7 +590,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
       await this.notify(
         task.group_id,
-        `🔄 Dev task #${task.id}: restarting from scratch (no design found)...`
+        `🔄 Dev task #${task.id}: restarting from scratch (no design found)...`,
       );
 
       this.processStateAsync(updated);
@@ -613,10 +614,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     }
 
     // For any other active state — re-trigger processing
-    await this.notify(
-      task.group_id,
-      `▶️ Dev task #${task.id}: resuming from ${task.state}...`
-    );
+    await this.notify(task.group_id, `▶️ Dev task #${task.id}: resuming from ${task.state}...`);
 
     this.processStateAsync(task);
     return task;
@@ -626,10 +624,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
    * Handle DESIGNING state: create a design/plan for the task.
    */
   private async handleDesigning(task: DevTask): Promise<void> {
-    await this.notify(
-      task.group_id,
-      `📐 Dev task #${task.id}: designing solution...`
-    );
+    await this.notify(task.group_id, `📐 Dev task #${task.id}: designing solution...`);
 
     const agent = new DevAgent(await getRepoRoot());
 
@@ -672,7 +667,7 @@ Keep the plan concise — 20-40 lines max.`;
     await this.notify(
       task.group_id,
       `📐 Dev task #${task.id} design ready:\n\n<pre>${escapeHtml(design.slice(0, 2000))}</pre>`,
-      { reply_markup: createDevApprovalKeyboard(task.id) }
+      { reply_markup: createDevApprovalKeyboard(task.id) },
     );
   }
 
@@ -696,10 +691,7 @@ Keep the plan concise — 20-40 lines max.`;
     database.devTasks.update(taskId, { description: enrichedDescription } as any);
     updated.description = enrichedDescription;
 
-    await this.notify(
-      task.group_id,
-      `✏️ Dev task #${task.id}: redesigning with your feedback...`
-    );
+    await this.notify(task.group_id, `✏️ Dev task #${task.id}: redesigning with your feedback...`);
 
     this.processStateAsync(updated);
     return updated;
@@ -717,15 +709,16 @@ Keep the plan concise — 20-40 lines max.`;
     // Allow approve from CLARIFYING (skip questions) or APPROVAL
     if (task.state === DevTaskState.CLARIFYING) {
       const updated = transition(task, DevTaskState.DESIGNING);
-      await this.notify(task.group_id, `⏩ Dev task #${taskId}: skipping clarification, proceeding to design...`);
+      await this.notify(
+        task.group_id,
+        `⏩ Dev task #${taskId}: skipping clarification, proceeding to design...`,
+      );
       this.processStateAsync(updated);
       return updated;
     }
 
     if (task.state !== DevTaskState.APPROVAL) {
-      throw new Error(
-        `Task #${taskId} is not waiting for approval (current state: ${task.state})`
-      );
+      throw new Error(`Task #${taskId} is not waiting for approval (current state: ${task.state})`);
     }
 
     // Generate branch name
@@ -737,7 +730,9 @@ Keep the plan concise — 20-40 lines max.`;
     // Re-read task after async operation to guard against concurrent approvals (TOCTOU)
     const freshTask = database.devTasks.findById(taskId);
     if (!freshTask || freshTask.state !== DevTaskState.APPROVAL) {
-      throw new Error(`Task #${taskId} state changed during worktree creation (now: ${freshTask?.state})`);
+      throw new Error(
+        `Task #${taskId} state changed during worktree creation (now: ${freshTask?.state})`,
+      );
     }
 
     const updated = transition(freshTask, DevTaskState.IMPLEMENTING, {
@@ -747,7 +742,7 @@ Keep the plan concise — 20-40 lines max.`;
 
     await this.notify(
       task.group_id,
-      `✅ Dev task #${task.id} approved! Starting implementation...`
+      `✅ Dev task #${task.id} approved! Starting implementation...`,
     );
 
     // Continue processing (processStateAsync has its own duplicate-run guard)
@@ -812,7 +807,7 @@ Keep the plan concise — 20-40 lines max.`;
       task.group_id,
       isRetry
         ? `🔧 Dev task #${task.id}: fixing test failures (attempt ${task.retry_count}/${MAX_RETRY_ATTEMPTS})...`
-        : `🔨 Dev task #${task.id}: implementing in branch ${task.branch_name}...`
+        : `🔨 Dev task #${task.id}: implementing in branch ${task.branch_name}...`,
     );
 
     const agent = new DevAgent(task.worktree_path);
@@ -834,9 +829,8 @@ Keep the plan concise — 20-40 lines max.`;
     if (isRetry && task.error_log) {
       // RETRY MODE: focused fix after test failure
       const changedFiles = await getChangedFilesFromMain(task.worktree_path);
-      const changedFilesList = changedFiles.length > 0
-        ? changedFiles.join('\n')
-        : '(no files changed yet)';
+      const changedFilesList =
+        changedFiles.length > 0 ? changedFiles.join('\n') : '(no files changed yet)';
 
       systemPrompt = `You are a senior TypeScript developer FIXING test/type-check failures in a Telegram bot.
 
@@ -968,10 +962,7 @@ WORKFLOW:
       throw new Error(`Task #${task.id} missing worktree_path`);
     }
 
-    await this.notify(
-      task.group_id,
-      `🧪 Dev task #${task.id}: running tests...`
-    );
+    await this.notify(task.group_id, `🧪 Dev task #${task.id}: running tests...`);
 
     let fullOutput = '';
     let typeCheckOutput = '';
@@ -979,7 +970,9 @@ WORKFLOW:
 
     // Run type check — tsc writes errors to stdout
     // NOTE: Bun Shell does not support 2>&1 — always read both streams
-    const typeCheckResult = await $`cd ${task.worktree_path} && bun x tsc --noEmit`.nothrow().quiet();
+    const typeCheckResult = await $`cd ${task.worktree_path} && bun x tsc --noEmit`
+      .nothrow()
+      .quiet();
     const typeCheckExitCode = typeCheckResult.exitCode;
     const tscOOM = typeCheckExitCode === 137;
     const typeCheckPassed = typeCheckExitCode === 0 || tscOOM; // OOM is not a type error
@@ -1013,7 +1006,7 @@ WORKFLOW:
       });
       await this.notify(
         task.group_id,
-        `💀 <b>Dev task #${task.id}:</b> одинаковые ошибки 2 раза подряд — агент зациклился. Остановлено.`
+        `💀 <b>Dev task #${task.id}:</b> одинаковые ошибки 2 раза подряд — агент зациклился. Остановлено.`,
       );
       return;
     }
@@ -1033,7 +1026,7 @@ WORKFLOW:
             `${tscOOM ? '⚠️' : '✅'} <b>Тайпчекер:</b> ${tscOOM ? 'OOM (skipped)' : 'OK'}\n` +
             `✅ <b>Тесты:</b> ${testSummary}\n\n` +
             `PR: ${task.pr_url}`,
-          { reply_markup: createDevMergeKeyboard(task.id) }
+          { reply_markup: createDevMergeKeyboard(task.id) },
         );
       } else {
         // First run — create PR (existing flow)
@@ -1044,7 +1037,7 @@ WORKFLOW:
           task.group_id,
           `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
             `${tscOOM ? '⚠️' : '✅'} <b>Тайпчекер:</b> ${tscOOM ? 'OOM (skipped)' : 'OK'}\n` +
-            `✅ <b>Тесты:</b> ${testSummary}`
+            `✅ <b>Тесты:</b> ${testSummary}`,
         );
         await this.processState(updated);
       }
@@ -1053,7 +1046,9 @@ WORKFLOW:
 
       // Build pretty notification
       const lines: string[] = [];
-      lines.push(`🧪 <b>Dev task #${task.id}</b> — результаты (попытка ${retryCount}/${MAX_RETRY_ATTEMPTS})\n`);
+      lines.push(
+        `🧪 <b>Dev task #${task.id}</b> — результаты (попытка ${retryCount}/${MAX_RETRY_ATTEMPTS})\n`,
+      );
 
       if (typeCheckPassed) {
         lines.push(`✅ <b>Тайпчекер:</b> OK`);
@@ -1061,12 +1056,16 @@ WORKFLOW:
         const tscErrors = extractTscErrors(typeCheckOutput);
         const tscErrorCount = (typeCheckOutput.match(/error TS\d+/g) || []).length;
         if (tscErrorCount > 0) {
-          lines.push(`❌ <b>Тайпчекер:</b> ${tscErrorCount} ${tscErrorCount === 1 ? 'ошибка' : 'ошибок'}`);
+          lines.push(
+            `❌ <b>Тайпчекер:</b> ${tscErrorCount} ${tscErrorCount === 1 ? 'ошибка' : 'ошибок'}`,
+          );
         } else {
           lines.push(`⚠️ <b>Тайпчекер:</b> failed (exit code ${typeCheckResult.exitCode})`);
         }
         const tscDisplay = tscErrors.trim() || typeCheckOutput.trim() || '(no output)';
-        lines.push(`<blockquote expandable>${escapeHtml(tailSlice(tscDisplay, 3000))}</blockquote>`);
+        lines.push(
+          `<blockquote expandable>${escapeHtml(tailSlice(tscDisplay, 3000))}</blockquote>`,
+        );
       }
 
       if (testsPassed) {
@@ -1077,8 +1076,12 @@ WORKFLOW:
         if (failCount > 0) parts.push(`${failCount} ❌`);
         if (errorCount > 0) parts.push(`${errorCount} 💥`);
         if (failCount === 0 && errorCount === 0) parts.push(`exit code ${testExitCode}`);
-        lines.push(`${failCount > 0 || errorCount > 0 ? '❌' : '⚠️'} <b>Тесты:</b> ${parts.join(' / ')}`);
-        lines.push(`<blockquote expandable>${escapeHtml(prioritizeFailures(testsOutput, 3000))}</blockquote>`);
+        lines.push(
+          `${failCount > 0 || errorCount > 0 ? '❌' : '⚠️'} <b>Тесты:</b> ${parts.join(' / ')}`,
+        );
+        lines.push(
+          `<blockquote expandable>${escapeHtml(prioritizeFailures(testsOutput, 3000))}</blockquote>`,
+        );
       }
 
       if (retryCount >= MAX_RETRY_ATTEMPTS) {
@@ -1105,21 +1108,13 @@ WORKFLOW:
    */
   private async handlePullRequest(task: DevTask): Promise<void> {
     if (!task.worktree_path || !task.branch_name) {
-      throw new Error(
-        `Task #${task.id} missing worktree_path or branch_name`
-      );
+      throw new Error(`Task #${task.id} missing worktree_path or branch_name`);
     }
 
-    await this.notify(
-      task.group_id,
-      `📤 Dev task #${task.id}: creating pull request...`
-    );
+    await this.notify(task.group_id, `📤 Dev task #${task.id}: creating pull request...`);
 
     // Commit any uncommitted changes
-    await commitChanges(
-      task.worktree_path,
-      `feat: ${task.title || task.description}`
-    );
+    await commitChanges(task.worktree_path, `feat: ${task.title || task.description}`);
 
     // Push branch
     await pushBranch(task.worktree_path, task.branch_name);
@@ -1139,10 +1134,7 @@ WORKFLOW:
       pr_url: pr.url,
     });
 
-    await this.notify(
-      task.group_id,
-      `📤 Dev task #${task.id}: PR created!\n${pr.url}`
-    );
+    await this.notify(task.group_id, `📤 Dev task #${task.id}: PR created!\n${pr.url}`);
 
     await this.processState(updated);
   }
@@ -1170,7 +1162,7 @@ WORKFLOW:
       `🔍 <b>Dev task #${task.id}:</b> code review done\n\n` +
         `<blockquote expandable>${escapeHtml(review.slice(0, 1500))}</blockquote>\n\n` +
         `PR: ${task.pr_url}`,
-      { reply_markup: createDevReviewKeyboard(task.id) }
+      { reply_markup: createDevReviewKeyboard(task.id) },
     );
   }
 
@@ -1186,10 +1178,7 @@ WORKFLOW:
 
     const updated = transition(task, DevTaskState.UPDATING);
 
-    await this.notify(
-      task.group_id,
-      `🔄 Dev task #${task.id}: fixing review issues...`
-    );
+    await this.notify(task.group_id, `🔄 Dev task #${task.id}: fixing review issues...`);
 
     this.processStateAsync(updated);
     return updated;
@@ -1218,7 +1207,7 @@ WORKFLOW:
 
     await this.notify(
       task.group_id,
-      `✅ Dev task #${task.id} merged and completed!\n\nPR: ${task.pr_url}`
+      `✅ Dev task #${task.id} merged and completed!\n\nPR: ${task.pr_url}`,
     );
 
     return updated;
@@ -1239,10 +1228,7 @@ WORKFLOW:
       code_review: `USER FEEDBACK:\n${feedback}`,
     });
 
-    await this.notify(
-      task.group_id,
-      `✏️ Dev task #${task.id}: applying your changes...`
-    );
+    await this.notify(task.group_id, `✏️ Dev task #${task.id}: applying your changes...`);
 
     this.processStateAsync(updated);
     return updated;
@@ -1258,10 +1244,7 @@ WORKFLOW:
       throw new Error(`Task #${task.id} missing worktree_path`);
     }
 
-    await this.notify(
-      task.group_id,
-      `🔄 Dev task #${task.id}: addressing review feedback...`
-    );
+    await this.notify(task.group_id, `🔄 Dev task #${task.id}: addressing review feedback...`);
 
     const agent = new DevAgent(task.worktree_path);
 
@@ -1295,13 +1278,11 @@ Original task: ${task.description}`;
     const activeTasks = database.devTasks.findActive();
 
     if (activeTasks.length === 0) {
-      console.log('[DEV-PIPELINE] No incomplete tasks to resume');
+      logger.info('[DEV-PIPELINE] No incomplete tasks to resume');
       return;
     }
 
-    console.log(
-      `[DEV-PIPELINE] Found ${activeTasks.length} incomplete task(s) to resume`
-    );
+    logger.info(`[DEV-PIPELINE] Found ${activeTasks.length} incomplete task(s) to resume`);
 
     for (const task of activeTasks) {
       if (!isResumableState(task.state)) {
@@ -1311,18 +1292,14 @@ Original task: ${task.description}`;
 
       // Check worktree existence
       if (task.worktree_path && !worktreeExists(task.worktree_path)) {
-        console.log(
-          `[DEV-PIPELINE] Task #${task.id}: worktree gone, marking as failed`
-        );
+        logger.info(`[DEV-PIPELINE] Task #${task.id}: worktree gone, marking as failed`);
         transition(task, DevTaskState.FAILED, {
           error_log: 'Worktree not found after restart',
         });
         continue;
       }
 
-      console.log(
-        `[DEV-PIPELINE] Resuming task #${task.id} from state: ${task.state}`
-      );
+      logger.info(`[DEV-PIPELINE] Resuming task #${task.id} from state: ${task.state}`);
       this.processStateAsync(task);
     }
   }

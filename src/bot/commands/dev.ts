@@ -12,15 +12,14 @@
  *   /dev logs prod|stage    — download PM2 logs
  */
 
-import type { Ctx } from '../types';
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
-import {
-  DevTaskState,
-  STATE_LABELS,
-  STATE_EMOJI,
-} from '../../services/dev-pipeline/types';
+import { DevTaskState, STATE_EMOJI, STATE_LABELS } from '../../services/dev-pipeline/types';
+import { createLogger } from '../../utils/logger.ts';
+import type { Ctx } from '../types';
+
+const logger = createLogger('dev');
 
 /** Singleton pipeline instance — initialized lazily */
 let pipeline: DevPipeline | null = null;
@@ -47,7 +46,11 @@ export function consumePendingDesignEdit(chatId: number): number | null {
  * Must be called once with a bot instance to enable notifications.
  */
 export function initDevPipeline(bot: any): DevPipeline {
-  const notify: NotifyCallback = async (groupId: number, message: string, options?: { reply_markup?: any }) => {
+  const notify: NotifyCallback = async (
+    groupId: number,
+    message: string,
+    options?: { reply_markup?: any },
+  ) => {
     const group = database.groups.findById(groupId);
     if (!group) return;
 
@@ -60,7 +63,7 @@ export function initDevPipeline(bot: any): DevPipeline {
         ...options,
       });
     } catch (error) {
-      console.error('[DEV-CMD] Failed to send notification:', error);
+      logger.error({ err: error }, '[DEV-CMD] Failed to send notification');
     }
   };
 
@@ -191,7 +194,7 @@ async function showUsage(ctx: Ctx['Command']): Promise<void> {
       '/dev continue &lt;id&gt; [msg] — resume a failed/stuck task\n' +
       '/dev history — recent completed tasks\n' +
       '/dev logs prod|stage — download PM2 logs',
-    { parse_mode: 'HTML' }
+    { parse_mode: 'HTML' },
   );
 }
 
@@ -202,7 +205,7 @@ async function handleNewTask(
   ctx: Ctx['Command'],
   description: string,
   groupId: number,
-  userId: number
+  userId: number,
 ): Promise<void> {
   const pl = getPipeline();
 
@@ -220,7 +223,7 @@ async function handleNewTask(
   const activeCount = database.devTasks.countActive(groupId);
   if (activeCount >= 3) {
     await ctx.send(
-      `Too many active tasks (${activeCount}). Wait for some to finish or cancel them.`
+      `Too many active tasks (${activeCount}). Wait for some to finish or cancel them.`,
     );
     return;
   }
@@ -229,9 +232,9 @@ async function handleNewTask(
     const task = await pl.startTask(groupId, userId, description);
     // The pipeline sends its own notifications, so no need to reply here
   } catch (error) {
-    console.error('[DEV-CMD] Failed to start task:', error);
+    logger.error({ err: error }, '[DEV-CMD] Failed to start task');
     await ctx.send(
-      `Failed to start task: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to start task: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -239,10 +242,7 @@ async function handleNewTask(
 /**
  * Show active dev tasks
  */
-async function showStatus(
-  ctx: Ctx['Command'],
-  groupId: number
-): Promise<void> {
+async function showStatus(ctx: Ctx['Command'], groupId: number): Promise<void> {
   const tasks = database.devTasks.findActiveByGroupId(groupId);
 
   if (tasks.length === 0) {
@@ -276,11 +276,7 @@ async function showStatus(
 /**
  * Approve a task's design
  */
-async function handleApprove(
-  ctx: Ctx['Command'],
-  args: string[],
-  groupId: number
-): Promise<void> {
+async function handleApprove(ctx: Ctx['Command'], args: string[], groupId: number): Promise<void> {
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
@@ -311,20 +307,14 @@ async function handleApprove(
     await pl.approveTask(taskId);
     // Pipeline sends its own notification
   } catch (error) {
-    await ctx.send(
-      `Failed to approve: ${error instanceof Error ? error.message : String(error)}`
-    );
+    await ctx.send(`Failed to approve: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
  * Cancel (or reject) a task
  */
-async function handleCancel(
-  ctx: Ctx['Command'],
-  args: string[],
-  groupId: number
-): Promise<void> {
+async function handleCancel(ctx: Ctx['Command'], args: string[], groupId: number): Promise<void> {
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
@@ -354,20 +344,14 @@ async function handleCancel(
 
     await pl.cancelTask(taskId);
   } catch (error) {
-    await ctx.send(
-      `Failed to cancel: ${error instanceof Error ? error.message : String(error)}`
-    );
+    await ctx.send(`Failed to cancel: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
  * Show the design plan for a task
  */
-async function handlePlan(
-  ctx: Ctx['Command'],
-  args: string[],
-  groupId: number
-): Promise<void> {
+async function handlePlan(ctx: Ctx['Command'], args: string[], groupId: number): Promise<void> {
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
@@ -398,18 +382,14 @@ async function handlePlan(
   await ctx.send(
     `📐 <b>Dev task #${taskId}:</b> ${escapeHtml(task.title || 'plan')}\n\n` +
       `<pre>${escapeHtml(task.design.slice(0, 3500))}</pre>`,
-    { parse_mode: 'HTML', reply_markup: keyboard }
+    { parse_mode: 'HTML', reply_markup: keyboard },
   );
 }
 
 /**
  * Answer clarifying questions for a task
  */
-async function handleAnswer(
-  ctx: Ctx['Command'],
-  args: string[],
-  groupId: number
-): Promise<void> {
+async function handleAnswer(ctx: Ctx['Command'], args: string[], groupId: number): Promise<void> {
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
@@ -442,20 +422,14 @@ async function handleAnswer(
 
     await pl.answerTask(taskId, answer);
   } catch (error) {
-    await ctx.send(
-      `Failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
  * Continue/resume a failed or stuck task
  */
-async function handleContinue(
-  ctx: Ctx['Command'],
-  args: string[],
-  groupId: number
-): Promise<void> {
+async function handleContinue(ctx: Ctx['Command'], args: string[], groupId: number): Promise<void> {
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
@@ -484,19 +458,14 @@ async function handleContinue(
 
     await pl.continueTask(taskId, message);
   } catch (error) {
-    await ctx.send(
-      `Failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
  * Show recently completed tasks
  */
-async function showHistory(
-  ctx: Ctx['Command'],
-  groupId: number
-): Promise<void> {
+async function showHistory(ctx: Ctx['Command'], groupId: number): Promise<void> {
   const tasks = database.devTasks.findByGroupId(groupId, 10);
 
   if (tasks.length === 0) {
@@ -541,11 +510,7 @@ const MAX_LOG_BYTES = 100 * 1024; // 100KB
 /**
  * Send PM2 log files as Telegram documents
  */
-async function handleLogs(
-  ctx: Ctx['Command'],
-  args: string[],
-  _groupId: number
-): Promise<void> {
+async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number): Promise<void> {
   const target = args[1]?.toLowerCase();
 
   if (!target || !LOG_PATHS[target]) {
@@ -574,10 +539,9 @@ async function handleLogs(
     const outStart = Math.max(0, outSize - MAX_LOG_BYTES);
     const outContent = await outFile.slice(outStart, outSize).text();
 
-    await ctx.sendDocument(
-      new File([outContent], `${target}-out.log`, { type: 'text/plain' }),
-      { caption: `📋 ${target} stdout (last ${Math.round(outContent.length / 1024)}KB)` }
-    );
+    await ctx.sendDocument(new File([outContent], `${target}-out.log`, { type: 'text/plain' }), {
+      caption: `📋 ${target} stdout (last ${Math.round(outContent.length / 1024)}KB)`,
+    });
   }
 
   // Read and send stderr log
@@ -591,7 +555,7 @@ async function handleLogs(
 
       await ctx.sendDocument(
         new File([errorContent], `${target}-error.log`, { type: 'text/plain' }),
-        { caption: `⚠️ ${target} stderr (last ${Math.round(errorContent.length / 1024)}KB)` }
+        { caption: `⚠️ ${target} stderr (last ${Math.round(errorContent.length / 1024)}KB)` },
       );
     }
   }
@@ -604,13 +568,15 @@ export async function handleDevCallback(
   ctx: any,
   params: string[],
   telegramId: number,
-  bot: any
+  bot: any,
 ): Promise<void> {
   const [subAction, taskIdStr] = params;
   const messageId = ctx.message?.id;
   const chatId = ctx.message?.chat?.id;
 
-  console.log(`[DEV-CB] Callback: dev:${subAction}:${taskIdStr} from user ${telegramId}, chat ${chatId}`);
+  logger.info(
+    `[DEV-CB] Callback: dev:${subAction}:${taskIdStr} from user ${telegramId}, chat ${chatId}`,
+  );
 
   if (!subAction || !taskIdStr) {
     await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
@@ -671,7 +637,7 @@ export async function handleDevCallback(
 
       case 'edit': {
         const editTask = database.devTasks.findById(taskId);
-        console.log(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
+        logger.info(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
         pendingDesignEdits.set(chatId!, taskId);
         await ctx.answerCallbackQuery({ text: 'Опишите правки' });
         answered = true;
@@ -686,7 +652,7 @@ export async function handleDevCallback(
           text: promptText,
           reply_markup: { force_reply: true, selective: true },
         });
-        console.log(`[DEV-CB] Edit force_reply sent for task #${taskId}`);
+        logger.info(`[DEV-CB] Edit force_reply sent for task #${taskId}`);
         return; // Don't delete the button message
       }
 
@@ -695,7 +661,7 @@ export async function handleDevCallback(
         answered = true;
     }
   } catch (error) {
-    console.error(`[DEV-CB] Error handling dev:${subAction}:${taskIdStr}:`, error);
+    logger.error({ err: error }, '[DEV-CB] Error handling dev:${subAction}:${taskIdStr}');
     if (!answered) {
       try {
         await ctx.answerCallbackQuery({

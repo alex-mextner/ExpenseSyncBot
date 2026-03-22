@@ -1,0 +1,13 @@
+pre-commit:
+  parallel: true
+  commands:
+    typecheck:
+      run: bun run type-check
+    lint:
+      run: node_modules/.bin/biome check --no-errors-on-unmatched {staged_files}
+      glob: "*.{ts,tsx}"
+
+pre-push:
+  commands:
+    tests:
+      run: bun test

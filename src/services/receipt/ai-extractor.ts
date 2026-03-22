@@ -1,21 +1,24 @@
-import { InferenceClient } from "@huggingface/inference";
-import { env } from "../../config/env";
-import type { CurrencyCode } from "../../config/constants";
-import { extractTextFromHTML } from "./receipt-fetcher";
+import { InferenceClient } from '@huggingface/inference';
+import type { CurrencyCode } from '../../config/constants';
+import { env } from '../../config/env';
+import { createLogger } from '../../utils/logger.ts';
+import { extractTextFromHTML } from './receipt-fetcher';
+
+const logger = createLogger('ai-extractor');
 
 const client = new InferenceClient(env.HF_TOKEN);
 
 // Models to try in order (reasoning model first, then fallback to non-reasoning)
 const MODELS = [
   {
-    provider: "fireworks-ai",
-    model: "deepseek-ai/DeepSeek-R1-0528",
-    name: "DeepSeek-R1",
+    provider: 'fireworks-ai',
+    model: 'deepseek-ai/DeepSeek-R1-0528',
+    name: 'DeepSeek-R1',
   },
   {
-    provider: "fireworks-ai",
-    model: "deepseek-ai/DeepSeek-V3.2",
-    name: "DeepSeek-V3",
+    provider: 'fireworks-ai',
+    model: 'deepseek-ai/DeepSeek-V3.2',
+    name: 'DeepSeek-V3',
   },
 ] as const;
 
@@ -51,18 +54,17 @@ export interface AIExtractionResult {
 export async function extractExpensesFromReceipt(
   receiptData: string,
   existingCategories: string[],
-  maxRetries: number = 3
+  maxRetries: number = 3,
 ): Promise<AIExtractionResult> {
   let lastError: Error | null = null;
 
   // Extract text from HTML once (reuse for all attempts)
-  const isHTML =
-    receiptData.includes("<html") || receiptData.includes("<!DOCTYPE");
+  const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
   const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
 
   if (isHTML) {
-    console.log(
-      `[AI_EXTRACTOR] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`
+    logger.info(
+      `[AI_EXTRACTOR] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`,
     );
   }
 
@@ -71,12 +73,12 @@ export async function extractExpensesFromReceipt(
 
   // Try each model in order
   for (const modelConfig of MODELS) {
-    console.log(`[AI_EXTRACTOR] Trying model: ${modelConfig.name}`);
+    logger.info(`[AI_EXTRACTOR] Trying model: ${modelConfig.name}`);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(
-          `[AI_EXTRACTOR] Sending ${text.length} chars to ${modelConfig.name} (attempt ${attempt}/${maxRetries})`
+        logger.info(
+          `[AI_EXTRACTOR] Sending ${text.length} chars to ${modelConfig.name} (attempt ${attempt}/${maxRetries})`,
         );
 
         // Call AI model
@@ -85,12 +87,12 @@ export async function extractExpensesFromReceipt(
           model: modelConfig.model,
           messages: [
             {
-              role: "system",
+              role: 'system',
               content:
-                "You are a receipt parser. Extract items from receipts and return valid JSON only.",
+                'You are a receipt parser. Extract items from receipts and return valid JSON only.',
             },
             {
-              role: "user",
+              role: 'user',
               content: prompt,
             },
           ],
@@ -102,20 +104,18 @@ export async function extractExpensesFromReceipt(
         const responseText = response.choices[0]?.message?.content?.trim();
 
         if (!responseText) {
-          throw new Error("Empty response from AI");
+          throw new Error('Empty response from AI');
         }
 
         // Remove thinking tags from response (for reasoning models)
         // Using greedy * to capture until the LAST </think>
-        const cleanedResponse = responseText
-          .replace(/<think>[\s\S]*<\/think>/gi, "")
-          .trim();
+        const cleanedResponse = responseText.replace(/<think>[\s\S]*<\/think>/gi, '').trim();
 
         // Log raw AI response for debugging
-        console.log(
-          `[AI_EXTRACTOR] Raw AI response (${responseText.length} chars)`
+        logger.info(`[AI_EXTRACTOR] Raw AI response (${responseText.length} chars)`);
+        logger.info(
+          `[AI_EXTRACTOR] Cleaned response (${cleanedResponse.length} chars):\n${cleanedResponse}`,
         );
-        console.log(`[AI_EXTRACTOR] Cleaned response (${cleanedResponse.length} chars):\n${cleanedResponse}`);
 
         // Extract JSON from response
         let jsonStr = cleanedResponse;
@@ -127,7 +127,7 @@ export async function extractExpensesFromReceipt(
         }
 
         // Step 2: Fix decimal separator (399,99 -> 399.99)
-        jsonStr = jsonStr.replace(/(\d),(\d)/g, "$1.$2");
+        jsonStr = jsonStr.replace(/(\d),(\d)/g, '$1.$2');
 
         // Step 3: Try direct JSON.parse, fallback to finding {"items"...}
         let result: AIExtractionResult;
@@ -140,86 +140,68 @@ export async function extractExpensesFromReceipt(
 
           if (itemsPos >= 0 && lastBrace > itemsPos) {
             jsonStr = jsonStr.substring(itemsPos, lastBrace + 1);
-            console.log(
-              `[AI_EXTRACTOR] Fallback: extracted {"items"...} (${jsonStr.length} chars)`
+            logger.info(
+              `[AI_EXTRACTOR] Fallback: extracted {"items"...} (${jsonStr.length} chars)`,
             );
             result = JSON.parse(jsonStr) as AIExtractionResult;
           } else {
-            console.error(
-              `[AI_EXTRACTOR] Failed to parse JSON. Cleaned response:\n${cleanedResponse.substring(0, 1000)}`
+            logger.error(
+              `[AI_EXTRACTOR] Failed to parse JSON. Cleaned response:\n${cleanedResponse.substring(0, 1000)}`,
             );
-            throw new Error("No valid JSON found in AI response");
+            throw new Error('No valid JSON found in AI response');
           }
         }
 
-        console.log(
-          `[AI_EXTRACTOR] Parsed JSON with ${result.items?.length || 0} items`
-        );
+        logger.info(`[AI_EXTRACTOR] Parsed JSON with ${result.items?.length || 0} items`);
 
         // Validate result
-        if (
-          !result.items ||
-          !Array.isArray(result.items) ||
-          result.items.length === 0
-        ) {
-          throw new Error("Invalid result: items array is missing or empty");
+        if (!result.items || !Array.isArray(result.items) || result.items.length === 0) {
+          throw new Error('Invalid result: items array is missing or empty');
         }
 
         // Validate and normalize each item
         for (const item of result.items) {
           if (
             !item.name_ru ||
-            typeof item.quantity !== "number" ||
-            typeof item.price !== "number" ||
-            typeof item.total !== "number" ||
+            typeof item.quantity !== 'number' ||
+            typeof item.price !== 'number' ||
+            typeof item.total !== 'number' ||
             !item.category
           ) {
             throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
           }
 
           // Ensure possible_categories exists and is an array
-          if (
-            !item.possible_categories ||
-            !Array.isArray(item.possible_categories)
-          ) {
-            console.warn(
-              `[AI_EXTRACTOR] Item "${item.name_ru}" missing possible_categories, initializing empty array`
+          if (!item.possible_categories || !Array.isArray(item.possible_categories)) {
+            logger.warn(
+              `[AI_EXTRACTOR] Item "${item.name_ru}" missing possible_categories, initializing empty array`,
             );
             item.possible_categories = [];
           }
 
           // If existing categories provided, validate that AI used only those
           if (existingCategories.length > 0) {
-            const { findBestCategoryMatch } = await import(
-              "../../utils/fuzzy-search"
-            );
+            const { findBestCategoryMatch } = await import('../../utils/fuzzy-search');
 
             // Check if suggested category exists
             if (!existingCategories.includes(item.category)) {
-              console.warn(
-                `[AI_EXTRACTOR] AI suggested non-existing category "${item.category}" for item "${item.name_ru}"`
+              logger.warn(
+                `[AI_EXTRACTOR] AI suggested non-existing category "${item.category}" for item "${item.name_ru}"`,
               );
 
               // Try to find closest match
-              const closestMatch = findBestCategoryMatch(
-                item.category,
-                existingCategories
-              );
+              const closestMatch = findBestCategoryMatch(item.category, existingCategories);
 
               if (closestMatch) {
-                console.log(
-                  `[AI_EXTRACTOR] Replacing with closest match: "${closestMatch}"`
-                );
+                logger.info(`[AI_EXTRACTOR] Replacing with closest match: "${closestMatch}"`);
                 item.category = closestMatch;
               } else {
                 // Fallback to first available category or "Разное"
                 const fallback =
-                  existingCategories.find((c) => c === "Разное") ||
+                  existingCategories.find((c) => c === 'Разное') ||
                   existingCategories[0] ||
-                  "Разное";
-                console.log(
-                  `[AI_EXTRACTOR] Using fallback category: "${fallback}"`
-                );
+                  'Разное';
+                logger.info(`[AI_EXTRACTOR] Using fallback category: "${fallback}"`);
                 item.category = fallback;
               }
             }
@@ -227,15 +209,14 @@ export async function extractExpensesFromReceipt(
             // Validate possible_categories - filter out non-existing ones
             if (item.possible_categories.length > 0) {
               const validAlternatives = item.possible_categories.filter((cat) =>
-                existingCategories.includes(cat)
+                existingCategories.includes(cat),
               );
 
               if (validAlternatives.length < item.possible_categories.length) {
-                console.warn(
+                logger.warn(
                   `[AI_EXTRACTOR] Filtered out ${
                     item.possible_categories.length - validAlternatives.length
-                  } ` +
-                    `non-existing categories from possible_categories for "${item.name_ru}"`
+                  } ` + `non-existing categories from possible_categories for "${item.name_ru}"`,
                 );
                 item.possible_categories = validAlternatives;
               }
@@ -243,26 +224,21 @@ export async function extractExpensesFromReceipt(
           }
         }
 
-        console.log(
-          `[AI_EXTRACTOR] Successfully extracted ${result.items.length} items using ${modelConfig.name}`
+        logger.info(
+          `[AI_EXTRACTOR] Successfully extracted ${result.items.length} items using ${modelConfig.name}`,
         );
         return result;
       } catch (error) {
-        lastError =
-          error instanceof Error
-            ? error
-            : new Error("Unknown error during extraction");
+        lastError = error instanceof Error ? error : new Error('Unknown error during extraction');
 
         // Log detailed error info
         if (error instanceof SyntaxError) {
-          console.error(
-            `[AI_EXTRACTOR] JSON Parse error on attempt ${attempt}/${maxRetries} (${modelConfig.name}):`,
-            lastError.message
+          logger.error(
+            `[AI_EXTRACTOR] JSON Parse error on attempt ${attempt}/${maxRetries} (${modelConfig.name}): ${lastError.message}`,
           );
         } else {
-          console.error(
-            `[AI_EXTRACTOR] Extraction failed on attempt ${attempt}/${maxRetries} (${modelConfig.name}):`,
-            lastError.message
+          logger.error(
+            `[AI_EXTRACTOR] Extraction failed on attempt ${attempt}/${maxRetries} (${modelConfig.name}): ${lastError.message}`,
           );
 
           // Log additional error details for network errors (HuggingFace InferenceClientProviderApiError)
@@ -277,33 +253,27 @@ export async function extractExpensesFromReceipt(
           };
 
           if (err.httpResponse) {
-            console.error(
+            logger.error(
               `[AI_EXTRACTOR] HTTP Response: ${err.httpResponse.status} ${
-                err.httpResponse.statusText || ""
-              }`
+                err.httpResponse.statusText || ''
+              }`,
             );
             if (err.httpResponse.body) {
-              console.error(
-                `[AI_EXTRACTOR] Response body:`,
-                typeof err.httpResponse.body === "string"
-                  ? err.httpResponse.body.substring(0, 1000)
-                  : JSON.stringify(err.httpResponse.body, null, 2).substring(
-                      0,
-                      1000
-                    )
+              logger.error(
+                `[AI_EXTRACTOR] Response body: ${typeof err.httpResponse.body === 'string' ? err.httpResponse.body.substring(0, 1000) : JSON.stringify(err.httpResponse.body, null, 2).substring(0, 1000)}`,
               );
             }
           }
           if (err.httpRequest) {
-            console.error(
-              `[AI_EXTRACTOR] Request: ${err.httpRequest.method} ${err.httpRequest.url}`
+            logger.error(
+              `[AI_EXTRACTOR] Request: ${err.httpRequest.method} ${err.httpRequest.url}`,
             );
           }
           if (err.cause) {
-            console.error(`[AI_EXTRACTOR] Cause:`, err.cause);
+            logger.error({ err: err.cause }, '[AI_EXTRACTOR] Cause');
           }
           if (lastError.stack) {
-            console.error(`[AI_EXTRACTOR] Stack:`, lastError.stack);
+            logger.error({ err: lastError.stack }, '[AI_EXTRACTOR] Stack');
           }
         }
 
@@ -314,23 +284,18 @@ export async function extractExpensesFromReceipt(
       }
     }
 
-    console.log(
-      `[AI_EXTRACTOR] ${modelConfig.name} failed after ${maxRetries} attempts, trying next model...`
+    logger.info(
+      `[AI_EXTRACTOR] ${modelConfig.name} failed after ${maxRetries} attempts, trying next model...`,
     );
   }
 
-  throw new Error(
-    `Failed to extract receipt data after trying all models: ${lastError?.message}`
-  );
+  throw new Error(`Failed to extract receipt data after trying all models: ${lastError?.message}`);
 }
 
 /**
  * Build extraction prompt for AI
  */
-function buildExtractionPrompt(
-  receiptText: string,
-  existingCategories: string[]
-): string {
+function buildExtractionPrompt(receiptText: string, existingCategories: string[]): string {
   const hasExistingCategories = existingCategories.length > 0;
 
   return `Extract all items from this receipt and return a JSON object with the following structure:
@@ -361,7 +326,7 @@ CATEGORY SELECTION (MOST IMPORTANT):
 ${
   hasExistingCategories
     ? `This group has existing categories. You MUST use ONLY these categories:
-${existingCategories.map((cat) => `- ${cat}`).join("\n")}
+${existingCategories.map((cat) => `- ${cat}`).join('\n')}
 
 STRICT Rules:
 - You MUST choose "category" from the list above - NO exceptions!

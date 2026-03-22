@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
-import type { Group, CreateGroupData, UpdateGroupData } from '../types';
 import type { CurrencyCode } from '../../config/constants';
+import type { CreateGroupData, Group, UpdateGroupData } from '../types';
 
 export class GroupRepository {
   constructor(private db: Database) {}
@@ -20,7 +20,9 @@ export class GroupRepository {
     // Parse JSON fields
     return {
       ...result,
-      enabled_currencies: JSON.parse(result.enabled_currencies as unknown as string) as CurrencyCode[],
+      enabled_currencies: JSON.parse(
+        result.enabled_currencies as unknown as string,
+      ) as CurrencyCode[],
     };
   }
 
@@ -38,7 +40,9 @@ export class GroupRepository {
 
     return {
       ...result,
-      enabled_currencies: JSON.parse(result.enabled_currencies as unknown as string) as CurrencyCode[],
+      enabled_currencies: JSON.parse(
+        result.enabled_currencies as unknown as string,
+      ) as CurrencyCode[],
     };
   }
 

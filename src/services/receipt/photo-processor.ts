@@ -1,16 +1,19 @@
-import type { Bot } from "gramio";
-import { database } from "../../database";
-import { scanQRFromImage } from "./qr-scanner";
-import { fetchReceiptData } from "./receipt-fetcher";
+import type { Bot } from 'gramio';
+import { createReceiptSummaryKeyboard } from '../../bot/keyboards';
+import type { CurrencyCode } from '../../config/constants';
+import { env } from '../../config/env';
+import { database } from '../../database';
+import { createLogger } from '../../utils/logger.ts';
 import {
-  extractExpensesFromReceipt,
   type AIExtractionResult,
   type AIReceiptItem,
-} from "./ai-extractor";
-import { env } from "../../config/env";
-import type { CurrencyCode } from "../../config/constants";
-import { createReceiptSummaryKeyboard } from "../../bot/keyboards";
-import { buildSummaryFromItems, formatSummaryMessage } from "./receipt-summarizer";
+  extractExpensesFromReceipt,
+} from './ai-extractor';
+import { scanQRFromImage } from './qr-scanner';
+import { fetchReceiptData } from './receipt-fetcher';
+import { buildSummaryFromItems, formatSummaryMessage } from './receipt-summarizer';
+
+const logger = createLogger('photo-processor');
 
 let isProcessing = false;
 
@@ -30,7 +33,7 @@ function escapeHtml(text: string): string {
  * Processes photos from the queue and extracts receipt data
  */
 export async function startPhotoProcessor(bot: Bot): Promise<void> {
-  console.log("[PHOTO_PROCESSOR] Starting background photo processor");
+  logger.info('[PHOTO_PROCESSOR] Starting background photo processor');
 
   // Process queue every 5 seconds
   setInterval(async () => {
@@ -43,7 +46,7 @@ export async function startPhotoProcessor(bot: Bot): Promise<void> {
     try {
       await processQueue(bot);
     } catch (error) {
-      console.error("[PHOTO_PROCESSOR] Error in processor:", error);
+      logger.error({ err: error }, '[PHOTO_PROCESSOR] Error in processor');
     } finally {
       isProcessing = false;
     }
@@ -60,18 +63,13 @@ async function processQueue(bot: Bot): Promise<void> {
     return;
   }
 
-  console.log(
-    `[PHOTO_PROCESSOR] Processing ${pendingItems.length} pending item(s)`
-  );
+  logger.info(`[PHOTO_PROCESSOR] Processing ${pendingItems.length} pending item(s)`);
 
   for (const item of pendingItems) {
     try {
       await processPhotoQueueItem(bot, item.id);
     } catch (error) {
-      console.error(
-        `[PHOTO_PROCESSOR] Error processing item ${item.id}:`,
-        error
-      );
+      logger.error({ err: error }, `[PHOTO_PROCESSOR] Error processing item ${item.id}`);
     }
   }
 }
@@ -83,7 +81,7 @@ async function processQueue(bot: Bot): Promise<void> {
 export function saveExtractedItems(
   photoQueueId: number,
   items: AIReceiptItem[],
-  currency: CurrencyCode
+  currency: CurrencyCode,
 ): void {
   for (const item of items) {
     database.receiptItems.create({
@@ -96,34 +94,29 @@ export function saveExtractedItems(
       currency,
       suggested_category: item.category,
       possible_categories: item.possible_categories || [],
-      status: "pending",
+      status: 'pending',
     });
   }
 
-  database.photoQueue.update(photoQueueId, { status: "done" });
+  database.photoQueue.update(photoQueueId, { status: 'done' });
 
-  console.log(
-    `[PHOTO_PROCESSOR] Saved ${items.length} items for queue #${photoQueueId}`
-  );
+  logger.info(`[PHOTO_PROCESSOR] Saved ${items.length} items for queue #${photoQueueId}`);
 }
 
 /**
  * Process a single photo queue item
  */
-async function processPhotoQueueItem(
-  bot: Bot,
-  queueItemId: number
-): Promise<void> {
+async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<void> {
   const queueItem = database.photoQueue.findById(queueItemId);
 
-  if (!queueItem || queueItem.status !== "pending") {
+  if (!queueItem || queueItem.status !== 'pending') {
     return;
   }
 
-  console.log(`[PHOTO_PROCESSOR] Processing queue item #${queueItemId}`);
+  logger.info(`[PHOTO_PROCESSOR] Processing queue item #${queueItemId}`);
 
   // Update status to processing
-  database.photoQueue.update(queueItemId, { status: "processing" });
+  database.photoQueue.update(queueItemId, { status: 'processing' });
 
   // Get telegram group ID and set 👀 reaction to indicate processing started
   const group = database.groups.findById(queueItem.group_id);
@@ -132,11 +125,11 @@ async function processPhotoQueueItem(
       await bot.api.setMessageReaction({
         chat_id: group.telegram_group_id,
         message_id: queueItem.message_id,
-        reaction: [{ type: "emoji", emoji: "👀" }],
+        reaction: [{ type: 'emoji', emoji: '👀' }],
       });
-      console.log(`[PHOTO_PROCESSOR] Set 👀 reaction for message - processing started`);
+      logger.info(`[PHOTO_PROCESSOR] Set 👀 reaction for message - processing started`);
     } catch (error) {
-      console.error(`[PHOTO_PROCESSOR] Failed to set reaction:`, error);
+      logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to set reaction');
     }
   }
 
@@ -146,31 +139,28 @@ async function processPhotoQueueItem(
 
     // Save processed image to disk for debugging
     try {
-      const sharp = (await import("sharp")).default;
-      const fs = await import("fs/promises");
-      const path = await import("path");
+      const sharp = (await import('sharp')).default;
+      const fs = await import('fs/promises');
+      const path = await import('path');
 
       const processedBuffer = await sharp(photoBuffer)
-        .resize(1280, 1280, { fit: "inside", withoutEnlargement: true })
+        .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality: 90 })
         .toBuffer();
 
       // Create debug directory if doesn't exist
-      const debugDir = path.join(process.cwd(), "debug-images");
+      const debugDir = path.join(process.cwd(), 'debug-images');
       await fs.mkdir(debugDir, { recursive: true });
 
       // Save with timestamp
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = `qr-${queueItemId}-${timestamp}.jpg`;
       const filepath = path.join(debugDir, filename);
 
       await fs.writeFile(filepath, processedBuffer);
-      console.log(`[PHOTO_PROCESSOR] 🔍 Debug image saved: ${filepath}`);
+      logger.info(`[PHOTO_PROCESSOR] 🔍 Debug image saved: ${filepath}`);
     } catch (debugError) {
-      console.error(
-        "[PHOTO_PROCESSOR] Failed to save debug image:",
-        debugError
-      );
+      logger.error({ err: debugError }, '[PHOTO_PROCESSOR] Failed to save debug image');
     }
 
     // Scan QR code
@@ -180,24 +170,20 @@ async function processPhotoQueueItem(
 
     if (!qrData) {
       // No QR code found - try OCR fallback
-      console.log(
-        `[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}, trying OCR fallback`
+      logger.info(
+        `[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}, trying OCR fallback`,
       );
 
       try {
         const { extractTextFromImage } = await import('./ocr-extractor');
         receiptData = await extractTextFromImage(photoBuffer);
-        console.log(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
+        logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
       } catch (ocrError) {
-        const ocrErrorMessage =
-          ocrError instanceof Error ? ocrError.message : "Unknown error";
-        console.error(
-          `[PHOTO_PROCESSOR] OCR also failed:`,
-          ocrErrorMessage
-        );
+        const ocrErrorMessage = ocrError instanceof Error ? ocrError.message : 'Unknown error';
+        logger.error(`[PHOTO_PROCESSOR] OCR also failed: ${ocrErrorMessage}`);
 
         // Both QR and OCR failed - mark as done and set reaction
-        database.photoQueue.update(queueItemId, { status: "done" });
+        database.photoQueue.update(queueItemId, { status: 'done' });
 
         // Get telegram group ID and set reaction
         const group = database.groups.findById(queueItem.group_id);
@@ -206,48 +192,40 @@ async function processPhotoQueueItem(
             await bot.api.setMessageReaction({
               chat_id: group.telegram_group_id,
               message_id: queueItem.message_id,
-              reaction: [{ type: "emoji", emoji: "🤷‍♂" as any }],
+              reaction: [{ type: 'emoji', emoji: '🤷‍♂' as any }],
             });
-            console.log(`[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`);
+            logger.info(`[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`);
           } catch (error) {
-            console.error(`[PHOTO_PROCESSOR] Failed to set reaction:`, error);
+            logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to set reaction');
           }
         }
 
         return;
       }
     } else {
-      console.log(
-        `[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`
-      );
+      logger.info(`[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`);
 
       // Fetch receipt data from QR
       try {
         receiptData = await fetchReceiptData(qrData);
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : "Unknown error";
-        console.error(
-          `[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback:`,
-          errorMessage
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        logger.error(
+          `[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback: ${errorMessage}`,
         );
 
         // Try OCR as fallback when QR fetch fails
         try {
           const { extractTextFromImage } = await import('./ocr-extractor');
           receiptData = await extractTextFromImage(photoBuffer);
-          console.log(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
+          logger.info(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
         } catch (ocrError) {
           // Both QR fetch and OCR failed
-          const ocrErrorMessage =
-            ocrError instanceof Error ? ocrError.message : "Unknown error";
-          console.error(
-            `[PHOTO_PROCESSOR] OCR also failed:`,
-            ocrErrorMessage
-          );
+          const ocrErrorMessage = ocrError instanceof Error ? ocrError.message : 'Unknown error';
+          logger.error(`[PHOTO_PROCESSOR] OCR also failed: ${ocrErrorMessage}`);
 
           database.photoQueue.update(queueItemId, {
-            status: "error",
+            status: 'error',
             error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
           });
 
@@ -256,7 +234,7 @@ async function processPhotoQueueItem(
             bot,
             queueItem.group_id,
             `❌ Не удалось загрузить чек: ${errorMessage}`,
-            queueItem.message_thread_id
+            queueItem.message_thread_id,
           );
           return;
         }
@@ -270,19 +248,12 @@ async function processPhotoQueueItem(
     // Extract expenses using AI
     let extractionResult: AIExtractionResult;
     try {
-      extractionResult = await extractExpensesFromReceipt(
-        receiptData,
-        categoryNames
-      );
+      extractionResult = await extractExpensesFromReceipt(receiptData, categoryNames);
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      console.error(
-        `[PHOTO_PROCESSOR] Failed to extract expenses:`,
-        errorMessage
-      );
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(`[PHOTO_PROCESSOR] Failed to extract expenses: ${errorMessage}`);
       database.photoQueue.update(queueItemId, {
-        status: "error",
+        status: 'error',
         error_message: `❌ AI не распознал чек: ${errorMessage}`,
       });
 
@@ -291,31 +262,30 @@ async function processPhotoQueueItem(
         bot,
         queueItem.group_id,
         `❌ AI не распознал чек: ${errorMessage}`,
-        queueItem.message_thread_id
+        queueItem.message_thread_id,
       );
       return;
     }
 
     if (!extractionResult.items || extractionResult.items.length === 0) {
       database.photoQueue.update(queueItemId, {
-        status: "error",
-        error_message: "❌ В чеке не найдены расходы",
+        status: 'error',
+        error_message: '❌ В чеке не найдены расходы',
       });
 
       // Notify user
       await notifyUser(
         bot,
         queueItem.group_id,
-        "❌ В чеке не найдены расходы",
-        queueItem.message_thread_id
+        '❌ В чеке не найдены расходы',
+        queueItem.message_thread_id,
       );
       return;
     }
 
     // Get group default currency if AI didn't detect it
     const group = database.groups.findById(queueItem.group_id);
-    const currency =
-      extractionResult.currency || group?.default_currency || "EUR";
+    const currency = extractionResult.currency || group?.default_currency || 'EUR';
 
     // Save receipt items to database
     saveExtractedItems(queueItemId, extractionResult.items, currency);
@@ -323,12 +293,11 @@ async function processPhotoQueueItem(
     // Show confirmation options (summary for >5 items, item-by-item otherwise)
     await showReceiptConfirmationOptions(bot, queueItem.group_id, queueItemId);
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
-    console.error(`[PHOTO_PROCESSOR] Unexpected error:`, errorMessage);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error({ err: errorMessage }, '[PHOTO_PROCESSOR] Unexpected error');
 
     database.photoQueue.update(queueItemId, {
-      status: "error",
+      status: 'error',
       error_message: `❌ Ошибка обработки: ${errorMessage}`,
     });
 
@@ -337,7 +306,7 @@ async function processPhotoQueueItem(
       bot,
       queueItem.group_id,
       `❌ Ошибка обработки: ${errorMessage}`,
-      queueItem.message_thread_id
+      queueItem.message_thread_id,
     );
   }
 }
@@ -350,7 +319,7 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
   const file = await bot.api.getFile({ file_id: fileId });
 
   if (!file.file_path) {
-    throw new Error("File path not found");
+    throw new Error('File path not found');
   }
 
   // Download file
@@ -373,13 +342,13 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
 export async function showReceiptConfirmationOptions(
   bot: Bot,
   groupId: number,
-  photoQueueId: number
+  photoQueueId: number,
 ): Promise<void> {
   const items = database.receiptItems.findByPhotoQueueId(photoQueueId);
-  const pendingItems = items.filter(item => item.status === 'pending');
+  const pendingItems = items.filter((item) => item.status === 'pending');
 
   if (pendingItems.length === 0) {
-    console.log("[PHOTO_PROCESSOR] No pending items to confirm");
+    logger.info('[PHOTO_PROCESSOR] No pending items to confirm');
     return;
   }
 
@@ -392,7 +361,7 @@ export async function showReceiptConfirmationOptions(
   // More than 5 items - show summary with options
   const group = database.groups.findById(groupId);
   if (!group) {
-    console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    logger.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
     return;
   }
 
@@ -414,7 +383,7 @@ export async function showReceiptConfirmationOptions(
     chat_id: group.telegram_group_id,
     ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
     text: summaryMessage,
-    parse_mode: "HTML",
+    parse_mode: 'HTML',
     reply_markup: createReceiptSummaryKeyboard(photoQueueId).toJSON(),
   });
 
@@ -423,7 +392,9 @@ export async function showReceiptConfirmationOptions(
     summary_message_id: sentMessage.message_id,
   });
 
-  console.log(`[PHOTO_PROCESSOR] Showed receipt summary for ${pendingItems.length} items, queue #${photoQueueId}`);
+  logger.info(
+    `[PHOTO_PROCESSOR] Showed receipt summary for ${pendingItems.length} items, queue #${photoQueueId}`,
+  );
 }
 
 /**
@@ -432,45 +403,44 @@ export async function showReceiptConfirmationOptions(
 export async function showNextItemForConfirmation(
   bot: Bot,
   groupId: number,
-  photoQueueId?: number
+  photoQueueId?: number,
 ): Promise<void> {
   // If photo_queue_id provided, find next pending item from that receipt only
   let nextItem: ReturnType<typeof database.receiptItems.findNextPending> = null;
 
   if (photoQueueId) {
     const allItems = database.receiptItems.findByPhotoQueueId(photoQueueId);
-    nextItem = allItems.find(item => item.status === 'pending') || null;
+    nextItem = allItems.find((item) => item.status === 'pending') || null;
   } else {
     nextItem = database.receiptItems.findNextPending();
   }
 
   if (!nextItem) {
-    console.log("[PHOTO_PROCESSOR] No more pending items to confirm");
+    logger.info('[PHOTO_PROCESSOR] No more pending items to confirm');
     return;
   }
 
   const group = database.groups.findById(groupId);
 
   if (!group) {
-    console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    logger.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
     return;
   }
 
   // Collect all confirmed categories from this receipt (custom categories from user)
   const allItemsFromReceipt = database.receiptItems.findByPhotoQueueId(nextItem.photo_queue_id);
   const confirmedCategories = allItemsFromReceipt
-    .map(item => item.status === 'confirmed' ? item.confirmed_category : null)
+    .map((item) => (item.status === 'confirmed' ? item.confirmed_category : null))
     .filter((cat): cat is string => cat !== null);
 
   // Merge with possible_categories, ensuring no duplicates
-  const allPossibleCategories = [
-    ...nextItem.possible_categories,
-    ...confirmedCategories
-  ].filter((cat, index, self) =>
-    cat !== nextItem.suggested_category && self.indexOf(cat) === index
+  const allPossibleCategories = [...nextItem.possible_categories, ...confirmedCategories].filter(
+    (cat, index, self) => cat !== nextItem.suggested_category && self.indexOf(cat) === index,
   );
 
-  console.log(`[PHOTO_PROCESSOR] Item ${nextItem.id}: suggested="${nextItem.suggested_category}", possible=${JSON.stringify(allPossibleCategories)}, confirmed from receipt=${JSON.stringify(confirmedCategories)}`);
+  logger.info(
+    `[PHOTO_PROCESSOR] Item ${nextItem.id}: suggested="${nextItem.suggested_category}", possible=${JSON.stringify(allPossibleCategories)}, confirmed from receipt=${JSON.stringify(confirmedCategories)}`,
+  );
 
   // Build confirmation message (escape HTML special characters)
   let message = `🧾 <b>Подтвердите товар из чека:</b>\n\n`;
@@ -511,7 +481,7 @@ export async function showNextItemForConfirmation(
   // Add "Other category" button
   buttons.push([
     {
-      text: "✏️ Другая категория (напишите текстом)",
+      text: '✏️ Другая категория (напишите текстом)',
       callback_data: `receipt_item_other:${nextItem.id}`,
     },
   ]);
@@ -519,7 +489,7 @@ export async function showNextItemForConfirmation(
   // Add "Skip" button
   buttons.push([
     {
-      text: "⏭️ Пропустить товар",
+      text: '⏭️ Пропустить товар',
       callback_data: `skip_receipt_item:${nextItem.id}`,
     },
   ]);
@@ -527,19 +497,24 @@ export async function showNextItemForConfirmation(
   // Get thread ID from current item's photo queue
   const queueItem = database.photoQueue.findById(nextItem.photo_queue_id);
 
-  console.log('[PHOTO_PROCESSOR] Sending confirmation:', {
-    photoQueueId: nextItem.photo_queue_id,
-    queueItem,
-    messageThreadId: queueItem?.message_thread_id,
-    willIncludeThreadId: !!(queueItem?.message_thread_id),
-  });
+  logger.info(
+    {
+      data: {
+        photoQueueId: nextItem.photo_queue_id,
+        queueItem,
+        messageThreadId: queueItem?.message_thread_id,
+        willIncludeThreadId: !!queueItem?.message_thread_id,
+      },
+    },
+    '[PHOTO_PROCESSOR] Sending confirmation',
+  );
 
   // Send message to group
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
     ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
     text: message,
-    parse_mode: "HTML",
+    parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: buttons,
     },
@@ -553,12 +528,12 @@ async function notifyUser(
   bot: Bot,
   groupId: number,
   message: string,
-  messageThreadId?: number | null
+  messageThreadId?: number | null,
 ): Promise<void> {
   const group = database.groups.findById(groupId);
 
   if (!group) {
-    console.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    logger.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
     return;
   }
 
@@ -566,6 +541,6 @@ async function notifyUser(
     chat_id: group.telegram_group_id,
     ...(messageThreadId && { message_thread_id: messageThreadId }),
     text: message,
-    parse_mode: "HTML",
+    parse_mode: 'HTML',
   });
 }

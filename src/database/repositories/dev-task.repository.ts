@@ -4,10 +4,10 @@
 
 import type { Database } from 'bun:sqlite';
 import type {
-  DevTask,
   CreateDevTaskData,
-  UpdateDevTaskData,
+  DevTask,
   DevTaskState,
+  UpdateDevTaskData,
 } from '../../services/dev-pipeline/types';
 
 export class DevTaskRepository {
@@ -23,12 +23,7 @@ export class DevTaskRepository {
       RETURNING id
     `);
 
-    const result = query.get(
-      data.group_id,
-      data.user_id,
-      data.description,
-      data.title || null
-    );
+    const result = query.get(data.group_id, data.user_id, data.description, data.title || null);
 
     if (!result) {
       throw new Error('Failed to create dev task');

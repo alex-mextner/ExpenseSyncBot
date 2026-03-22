@@ -1,5 +1,5 @@
-import currency from "currency.js";
-import { CURRENCY_ALIASES, type CurrencyCode } from "../../config/constants";
+import currency from 'currency.js';
+import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 
 export interface ParsedExpense {
   amount: number;
@@ -11,7 +11,7 @@ export interface ParsedExpense {
 
 // ── Math expression evaluator (no eval/Function) ──────────────────────
 
-type MathToken = number | "+" | "*" | "/";
+type MathToken = number | '+' | '*' | '/';
 
 /**
  * Tokenize a cleaned math expression into alternating numbers and operators.
@@ -20,19 +20,18 @@ type MathToken = number | "+" | "*" | "/";
 function tokenize(expr: string): MathToken[] | null {
   const tokens: MathToken[] = [];
   const regex = /(\d+(?:[.,]\d+)?)|([+*×/])/g;
-  let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(expr)) !== null) {
+  for (const match of expr.matchAll(regex)) {
     if (match[1]) {
       let numStr = match[1];
-      if (numStr.includes(",")) {
-        numStr = numStr.replace(",", ".");
+      if (numStr.includes(',')) {
+        numStr = numStr.replace(',', '.');
       }
       const num = parseFloat(numStr);
       if (isNaN(num)) return null;
       tokens.push(num);
     } else if (match[2]) {
-      const op = match[2] === "×" ? "*" : match[2];
+      const op = match[2] === '×' ? '*' : match[2];
       tokens.push(op as MathToken);
     }
   }
@@ -42,8 +41,8 @@ function tokenize(expr: string): MathToken[] | null {
 
   for (let i = 0; i < tokens.length; i++) {
     const isNumber = i % 2 === 0;
-    if (isNumber && typeof tokens[i] !== "number") return null;
-    if (!isNumber && typeof tokens[i] !== "string") return null;
+    if (isNumber && typeof tokens[i] !== 'number') return null;
+    if (!isNumber && typeof tokens[i] !== 'string') return null;
   }
 
   return tokens;
@@ -63,16 +62,13 @@ function evaluateTokens(tokens: MathToken[]): number | null {
   while (i < tokens.length) {
     if (i + 2 <= tokens.length) {
       const op = tokens[i + 1];
-      if (op === "*" || op === "/") {
+      if (op === '*' || op === '/') {
         let left = tokens[i] as number;
         // Consume all consecutive * and /
-        while (
-          i + 2 < tokens.length &&
-          (tokens[i + 1] === "*" || tokens[i + 1] === "/")
-        ) {
+        while (i + 2 < tokens.length && (tokens[i + 1] === '*' || tokens[i + 1] === '/')) {
           const operator = tokens[i + 1] as string;
           const right = tokens[i + 2] as number;
-          if (operator === "*") {
+          if (operator === '*') {
             left *= right;
           } else {
             if (right === 0) return null;
@@ -94,7 +90,7 @@ function evaluateTokens(tokens: MathToken[]): number | null {
   for (let j = 1; j < addQueue.length; j += 2) {
     const op = addQueue[j];
     const right = addQueue[j + 1] as number;
-    if (op === "+") result += right;
+    if (op === '+') result += right;
   }
 
   return result;
@@ -111,7 +107,7 @@ function evaluateTokens(tokens: MathToken[]): number | null {
  */
 export function evaluateMathExpression(expr: string): number | null {
   // Remove spaces
-  const cleaned = expr.replace(/\s+/g, "");
+  const cleaned = expr.replace(/\s+/g, '');
 
   // Safety: reject overly long expressions
   if (cleaned.length > 50) return null;
@@ -127,7 +123,7 @@ export function evaluateMathExpression(expr: string): number | null {
   if (!tokens) return null;
 
   // Safety: max 10 operators
-  const opCount = tokens.filter((t) => typeof t === "string").length;
+  const opCount = tokens.filter((t) => typeof t === 'string').length;
   if (opCount > 10) return null;
 
   // Evaluate with operator precedence (* / before +)
@@ -168,7 +164,7 @@ function normalizeCurrency(currencyStr: string): CurrencyCode | null {
  */
 export function parseExpenseMessage(
   text: string,
-  defaultCurrency: CurrencyCode
+  defaultCurrency: CurrencyCode,
 ): ParsedExpense | null {
   const trimmed = text.trim();
 
@@ -177,7 +173,7 @@ export function parseExpenseMessage(
   }
 
   // Pattern 1: Currency symbol before amount ($190, €100, ₽500, $10*3)
-  const pattern1 = /^([\$€£₽¥])\s*([\d\s,.+*×/]+)\s*(.+)?$/;
+  const pattern1 = /^([$€£₽¥])\s*([\d\s,.+*×/]+)\s*(.+)?$/;
   const match1 = trimmed.match(pattern1);
 
   if (match1) {
@@ -188,7 +184,7 @@ export function parseExpenseMessage(
     if (normalizedCurrency) {
       const amount = parseAmount(amountStr);
       if (amount !== null) {
-        const { category, comment } = parseRest(rest || "");
+        const { category, comment } = parseRest(rest || '');
         return {
           amount,
           currency: normalizedCurrency,
@@ -276,7 +272,7 @@ export function parseExpenseMessage(
 function parseAmount(amountStr: string): number | null {
   try {
     // Remove spaces
-    let cleaned = amountStr.replace(/\s+/g, "");
+    let cleaned = amountStr.replace(/\s+/g, '');
 
     // Check if this is a math expression (contains operator)
     if (/[+*×/]/.test(cleaned)) {
@@ -288,18 +284,18 @@ function parseAmount(amountStr: string): number | null {
 
     // Handle European format (1.234,56 -> 1234.56)
     if (cleaned.match(/\d+\.\d{3},\d{2}$/)) {
-      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+      cleaned = cleaned.replace(/\./g, '').replace(',', '.');
     }
     // Handle US format with comma thousands separator (1,234.56)
     else if (cleaned.match(/\d+,\d{3}(\.\d+)?$/)) {
-      cleaned = cleaned.replace(/,/g, "");
+      cleaned = cleaned.replace(/,/g, '');
     }
     // Handle just comma as decimal separator (1234,56 -> 1234.56)
     else if (cleaned.match(/^\d+,\d{1,2}$/)) {
-      cleaned = cleaned.replace(",", ".");
+      cleaned = cleaned.replace(',', '.');
     }
 
-    const parsed = currency(cleaned, { separator: "", decimal: "." });
+    const parsed = currency(cleaned, { separator: '', decimal: '.' });
 
     if (parsed.value <= 0) {
       return null;
@@ -328,10 +324,10 @@ function parseRest(rest: string | undefined): {
   category: string | null;
   comment: string;
 } {
-  const trimmedRest = (rest || "").trim();
+  const trimmedRest = (rest || '').trim();
 
   if (!trimmedRest) {
-    return { category: null, comment: "" };
+    return { category: null, comment: '' };
   }
 
   const words = trimmedRest.split(/\s+/).filter((w) => w);
@@ -342,7 +338,7 @@ function parseRest(rest: string | undefined): {
 
   if (words.length === 1) {
     // Only category, no comment
-    return { category: normalizeCategory(words[0]!), comment: "" };
+    return { category: normalizeCategory(words[0]!), comment: '' };
   }
 
   // Category is first word, comment is the rest (also capitalized)
@@ -350,19 +346,20 @@ function parseRest(rest: string | undefined): {
   const commentWords = words.slice(1);
 
   if (commentWords.length === 0) {
-    return { category, comment: "" };
+    return { category, comment: '' };
   }
 
   // Capitalize first word of comment, keep rest as-is
   const firstCommentWord = commentWords[0];
   if (!firstCommentWord) {
-    return { category, comment: "" };
+    return { category, comment: '' };
   }
 
   const normalizedFirst = normalizeCategory(firstCommentWord);
-  const comment = commentWords.length > 1
-    ? `${normalizedFirst} ${commentWords.slice(1).join(" ")}`
-    : normalizedFirst;
+  const comment =
+    commentWords.length > 1
+      ? `${normalizedFirst} ${commentWords.slice(1).join(' ')}`
+      : normalizedFirst;
 
   return { category, comment };
 }
@@ -376,9 +373,7 @@ function parseRest(rest: string | undefined): {
  * - Category is required
  * - Comment is optional
  */
-export function validateParsedExpense(
-  parsed: ParsedExpense | null
-): parsed is ParsedExpense {
+export function validateParsedExpense(parsed: ParsedExpense | null): parsed is ParsedExpense {
   if (!parsed) {
     return false;
   }
@@ -392,7 +387,7 @@ export function validateParsedExpense(
   }
 
   // Category is required
-  const hasCategory = parsed.category !== null && parsed.category.trim() !== "";
+  const hasCategory = parsed.category !== null && parsed.category.trim() !== '';
 
   if (!hasCategory) {
     return false;

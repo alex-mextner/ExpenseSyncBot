@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { PendingExpense, CreatePendingExpenseData, UpdatePendingExpenseData } from '../types';
+import type { CreatePendingExpenseData, PendingExpense, UpdatePendingExpenseData } from '../types';
 
 export class PendingExpenseRepository {
   constructor(private db: Database) {}
@@ -43,7 +43,10 @@ export class PendingExpenseRepository {
    * Create new pending expense
    */
   create(data: CreatePendingExpenseData): PendingExpense {
-    const query = this.db.query<{ id: number }, [number, number, number, string, string | null, string, string]>(`
+    const query = this.db.query<
+      { id: number },
+      [number, number, number, string, string | null, string, string]
+    >(`
       INSERT INTO pending_expenses (
         user_id,
         message_id,
@@ -64,7 +67,7 @@ export class PendingExpenseRepository {
       data.parsed_currency,
       data.detected_category,
       data.comment,
-      data.status
+      data.status,
     );
 
     if (!result) {

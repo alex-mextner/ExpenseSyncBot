@@ -1,12 +1,12 @@
-import type { Ctx } from '../types';
-import { database } from '../../database';
 import { CURRENCY_SYMBOLS } from '../../config/constants';
+import { database } from '../../database';
+import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
 /**
  * /stats command handler
  */
-export async function handleStatsCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleStatsCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -48,7 +48,8 @@ export async function handleStatsCommand(ctx: Ctx["Command"]): Promise<void> {
 
   message += `\n**Последние ${recentExpenses.length} расходов:**\n`;
   for (const expense of recentExpenses) {
-    const symbol = CURRENCY_SYMBOLS[expense.currency as keyof typeof CURRENCY_SYMBOLS] || expense.currency;
+    const symbol =
+      CURRENCY_SYMBOLS[expense.currency as keyof typeof CURRENCY_SYMBOLS] || expense.currency;
     message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;
   }
 

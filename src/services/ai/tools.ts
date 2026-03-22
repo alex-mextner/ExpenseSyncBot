@@ -184,8 +184,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: 'sync_budgets',
-    description:
-      'Sync budget data from Google Sheets Budget tab to local database.',
+    description: 'Sync budget data from Google Sheets Budget tab to local database.',
     input_schema: {
       type: 'object' as const,
       properties: {},

@@ -1,17 +1,17 @@
 import type { Database } from 'bun:sqlite';
-import { setupDatabase } from './schema';
-import { GroupRepository } from './repositories/group.repository';
-import { UserRepository } from './repositories/user.repository';
-import { CategoryRepository } from './repositories/category.repository';
-import { PendingExpenseRepository } from './repositories/pending-expense.repository';
-import { ExpenseRepository } from './repositories/expense.repository';
+import { AdviceLogRepository } from './repositories/advice-log.repository';
 import { BudgetRepository } from './repositories/budget.repository';
+import { CategoryRepository } from './repositories/category.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
+import { DevTaskRepository } from './repositories/dev-task.repository';
+import { ExpenseRepository } from './repositories/expense.repository';
+import { ExpenseItemsRepository } from './repositories/expense-items.repository';
+import { GroupRepository } from './repositories/group.repository';
+import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
-import { ExpenseItemsRepository } from './repositories/expense-items.repository';
-import { AdviceLogRepository } from './repositories/advice-log.repository';
-import { DevTaskRepository } from './repositories/dev-task.repository';
+import { UserRepository } from './repositories/user.repository';
+import { setupDatabase } from './schema';
 
 /**
  * Database instance and repositories

@@ -1,5 +1,11 @@
-import { test, expect, describe, beforeEach, mock } from 'bun:test';
-import type { FinancialSnapshot, BudgetBurnRate, CategoryAnomaly, SpendingVelocity, AdviceLog } from './types';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import type {
+  AdviceLog,
+  BudgetBurnRate,
+  CategoryAnomaly,
+  FinancialSnapshot,
+  SpendingVelocity,
+} from './types';
 
 // ── Mock database ──────────────────────────────────────────────────────
 
@@ -146,7 +152,15 @@ describe('checkSmartTriggers', () => {
 
   test('budget exceeded triggers alert', () => {
     const snapshot = buildNeutralSnapshot({
-      burnRates: [buildBurnRate({ status: 'exceeded', category: 'Food', spent: 600, budget_limit: 500, currency: 'EUR' })],
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Food',
+          spent: 600,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
     });
 
     const result = checkSmartTriggers(9997, snapshot);
@@ -162,7 +176,15 @@ describe('checkSmartTriggers', () => {
 
   test('budget warning triggers alert with projected data', () => {
     const snapshot = buildNeutralSnapshot({
-      burnRates: [buildBurnRate({ status: 'warning', category: 'Transport', projected_total: 700, budget_limit: 500, currency: 'EUR' })],
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Transport',
+          projected_total: 700,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
     });
 
     const result = checkSmartTriggers(9996, snapshot);
@@ -175,7 +197,15 @@ describe('checkSmartTriggers', () => {
 
   test('budget critical triggers alert', () => {
     const snapshot = buildNeutralSnapshot({
-      burnRates: [buildBurnRate({ status: 'critical', category: 'Rent', projected_total: 1200, budget_limit: 1000, currency: 'USD' })],
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Rent',
+          projected_total: 1200,
+          budget_limit: 1000,
+          currency: 'USD',
+        }),
+      ],
     });
 
     const result = checkSmartTriggers(9995, snapshot);
@@ -188,7 +218,15 @@ describe('checkSmartTriggers', () => {
 
   test('significant category anomaly triggers alert', () => {
     const snapshot = buildNeutralSnapshot({
-      anomalies: [buildAnomaly({ category: 'Entertainment', severity: 'significant', current_month_total: 300, avg_3_month: 100, deviation_ratio: 3.0 })],
+      anomalies: [
+        buildAnomaly({
+          category: 'Entertainment',
+          severity: 'significant',
+          current_month_total: 300,
+          avg_3_month: 100,
+          deviation_ratio: 3.0,
+        }),
+      ],
     });
 
     const result = checkSmartTriggers(9994, snapshot);

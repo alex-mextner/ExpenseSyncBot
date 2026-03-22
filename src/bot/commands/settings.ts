@@ -1,11 +1,11 @@
-import type { Ctx } from '../types';
 import { database } from '../../database';
+import type { Ctx } from '../types';
 import { handleConnectCommand } from './connect';
 
 /**
  * /settings command handler
  */
-export async function handleSettingsCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleSettingsCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -40,6 +40,6 @@ export async function handleSettingsCommand(ctx: Ctx["Command"]): Promise<void> 
 /**
  * /reconnect command handler - reconnect Google account
  */
-export async function handleReconnectCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void> {
   await handleConnectCommand(ctx);
 }

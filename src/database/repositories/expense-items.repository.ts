@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { ExpenseItem, CreateExpenseItemData } from '../types';
+import type { CreateExpenseItemData, ExpenseItem } from '../types';
 
 export class ExpenseItemsRepository {
   constructor(private db: Database) {}
@@ -32,7 +32,10 @@ export class ExpenseItemsRepository {
    * Create new expense item
    */
   create(data: CreateExpenseItemData): ExpenseItem {
-    const query = this.db.query<{ id: number }, [number, string, string | null, number, number, number]>(`
+    const query = this.db.query<
+      { id: number },
+      [number, string, string | null, number, number, number]
+    >(`
       INSERT INTO expense_items (
         expense_id,
         name_ru,
@@ -51,7 +54,7 @@ export class ExpenseItemsRepository {
       data.name_original || null,
       data.quantity,
       data.price,
-      data.total
+      data.total,
     );
 
     if (!result) {

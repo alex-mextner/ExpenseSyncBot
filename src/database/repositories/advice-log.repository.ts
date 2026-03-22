@@ -8,7 +8,10 @@ export class AdviceLogRepository {
    * Record a generated advice entry
    */
   create(data: CreateAdviceLogData): AdviceLog {
-    const query = this.db.query<{ id: number }, [number, string, string, string | null, string | null, string]>(`
+    const query = this.db.query<
+      { id: number },
+      [number, string, string, string | null, string | null, string]
+    >(`
       INSERT INTO advice_log (group_id, tier, trigger_type, trigger_data, topic, advice_text)
       VALUES (?, ?, ?, ?, ?, ?)
       RETURNING id
@@ -52,7 +55,7 @@ export class AdviceLogRepository {
       LIMIT ?
     `);
 
-    return query.all(groupId, limit).map(r => r.topic);
+    return query.all(groupId, limit).map((r) => r.topic);
   }
 
   /**

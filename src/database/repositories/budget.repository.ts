@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
-import type { Budget, CreateBudgetData, UpdateBudgetData, BudgetProgress } from '../types';
 import type { CurrencyCode } from '../../config/constants';
+import type { Budget, BudgetProgress, CreateBudgetData, UpdateBudgetData } from '../types';
 
 export class BudgetRepository {
   constructor(private db: Database) {}
@@ -12,11 +12,7 @@ export class BudgetRepository {
     const currency = data.currency || 'EUR';
 
     // Check if budget already exists
-    const existing = this.findByGroupCategoryMonth(
-      data.group_id,
-      data.category,
-      data.month
-    );
+    const existing = this.findByGroupCategoryMonth(data.group_id, data.category, data.month);
 
     if (existing) {
       // Update existing budget (including currency)
@@ -214,7 +210,7 @@ export class BudgetRepository {
     groupId: number,
     category: string,
     month: string,
-    spentAmount: number
+    spentAmount: number,
   ): BudgetProgress | null {
     const budget = this.getBudgetForMonth(groupId, category, month);
 
@@ -222,9 +218,8 @@ export class BudgetRepository {
       return null;
     }
 
-    const percentage = budget.limit_amount > 0
-      ? Math.round((spentAmount / budget.limit_amount) * 100)
-      : 0;
+    const percentage =
+      budget.limit_amount > 0 ? Math.round((spentAmount / budget.limit_amount) * 100) : 0;
 
     return {
       category,

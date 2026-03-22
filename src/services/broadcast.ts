@@ -1,6 +1,9 @@
-import cron from "node-cron";
-import type { Bot } from "gramio";
-import { database } from "../database";
+import type { Bot } from 'gramio';
+import cron from 'node-cron';
+import { database } from '../database';
+import { createLogger } from '../utils/logger.ts';
+
+const logger = createLogger('broadcast');
 
 const NEWS_MESSAGE = `
 🆕 <b>Что нового в боте</b>
@@ -39,12 +42,12 @@ let alreadySent = false;
  */
 async function broadcastToAllGroups(bot: Bot): Promise<void> {
   if (alreadySent) {
-    console.log("[BROADCAST] Already sent, skipping");
+    logger.info('[BROADCAST] Already sent, skipping');
     return;
   }
 
   const groups = database.groups.getAll();
-  console.log(`[BROADCAST] Sending news to ${groups.length} groups...`);
+  logger.info(`[BROADCAST] Sending news to ${groups.length} groups...`);
 
   let sent = 0;
   let failed = 0;
@@ -54,26 +57,22 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
       await bot.api.sendMessage({
         chat_id: group.telegram_group_id,
         text: NEWS_MESSAGE,
-        parse_mode: "HTML",
-        ...(group.active_topic_id
-          ? { message_thread_id: group.active_topic_id }
-          : {}),
+        parse_mode: 'HTML',
+        ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
       });
       sent++;
-      console.log(`[BROADCAST] ✓ Sent to group ${group.telegram_group_id}`);
+      logger.info(`[BROADCAST] ✓ Sent to group ${group.telegram_group_id}`);
     } catch (error: any) {
       failed++;
-      console.error(
+      logger.error(
         `[BROADCAST] ✗ Failed for group ${group.telegram_group_id}:`,
-        error?.message || error
+        error?.message || error,
       );
     }
   }
 
   alreadySent = true;
-  console.log(
-    `[BROADCAST] Done. Sent: ${sent}, Failed: ${failed}, Total: ${groups.length}`
-  );
+  logger.info(`[BROADCAST] Done. Sent: ${sent}, Failed: ${failed}, Total: ${groups.length}`);
 }
 
 /**
@@ -81,13 +80,13 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
  */
 export function scheduleNewsBroadcast(bot: Bot): void {
   // Run at 12:00 on March 11 only — stops after execution
-  const task = cron.schedule("0 12 11 3 *", () => {
-    console.log("[BROADCAST] Cron triggered — March 11 12:00");
+  const task = cron.schedule('0 12 11 3 *', () => {
+    logger.info('[BROADCAST] Cron triggered — March 11 12:00');
     broadcastToAllGroups(bot).then(() => {
       task.stop();
-      console.log("[BROADCAST] Cron task stopped after execution");
+      logger.info('[BROADCAST] Cron task stopped after execution');
     });
   });
 
-  console.log("📢 News broadcast scheduled for March 11 at 12:00");
+  logger.info('📢 News broadcast scheduled for March 11 at 12:00');
 }

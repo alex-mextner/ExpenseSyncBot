@@ -1,28 +1,28 @@
-import { Bot } from "gramio";
-import { env } from "../config/env";
-import { handleBudgetCommand } from "./commands/budget";
-import { handleCategoriesCommand } from "./commands/categories";
-import { handleConnectCommand } from "./commands/connect";
-import {
-  handleReconnectCommand,
-  handleSettingsCommand,
-} from "./commands/settings";
-import { handleSpreadsheetCommand } from "./commands/spreadsheet";
-import { handleStartCommand } from "./commands/start";
-import { handleStatsCommand } from "./commands/stats";
-import { handleSumCommand } from "./commands/sum";
-import { handlePushCommand } from "./commands/push";
-import { handleSyncCommand } from "./commands/sync";
-import { handlePingCommand } from "./commands/ping";
-import { handleCallbackQuery } from "./handlers/callback.handler";
-import { handleExpenseMessage } from "./handlers/message.handler";
-import { handlePhotoMessage } from "./handlers/photo.handler";
-import { handleAskQuestion, handleAdviceCommand } from "./commands/ask";
-import { handlePromptCommand } from "./commands/prompt";
-import { handleTopicCommand } from "./commands/topic";
-import { handleDevCommand, initDevPipeline } from "./commands/dev";
-import { startPhotoProcessor } from "../services/receipt/photo-processor";
-import { registerTopicMiddleware } from "./topic-middleware";
+import { Bot } from 'gramio';
+import { env } from '../config/env';
+import { startPhotoProcessor } from '../services/receipt/photo-processor';
+import { createLogger } from '../utils/logger.ts';
+import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
+import { handleBudgetCommand } from './commands/budget';
+import { handleCategoriesCommand } from './commands/categories';
+import { handleConnectCommand } from './commands/connect';
+import { handleDevCommand, initDevPipeline } from './commands/dev';
+import { handlePingCommand } from './commands/ping';
+import { handlePromptCommand } from './commands/prompt';
+import { handlePushCommand } from './commands/push';
+import { handleReconnectCommand, handleSettingsCommand } from './commands/settings';
+import { handleSpreadsheetCommand } from './commands/spreadsheet';
+import { handleStartCommand } from './commands/start';
+import { handleStatsCommand } from './commands/stats';
+import { handleSumCommand } from './commands/sum';
+import { handleSyncCommand } from './commands/sync';
+import { handleTopicCommand } from './commands/topic';
+import { handleCallbackQuery } from './handlers/callback.handler';
+import { handleExpenseMessage } from './handlers/message.handler';
+import { handlePhotoMessage } from './handlers/photo.handler';
+import { registerTopicMiddleware } from './topic-middleware';
+
+const logger = createLogger('index');
 
 /**
  * Initialize and configure bot
@@ -37,32 +37,32 @@ export function createBot(): Bot {
   let botUsername: string | undefined;
 
   // Commands
-  bot.command("start", handleStartCommand);
-  bot.command("connect", handleConnectCommand);
-  bot.command("spreadsheet", handleSpreadsheetCommand);
-  bot.command("table", handleSpreadsheetCommand);
-  bot.command("sheet", handleSpreadsheetCommand);
-  bot.command("t", handleSpreadsheetCommand);
-  bot.command("stats", handleStatsCommand);
-  bot.command("sum", handleSumCommand);
-  bot.command("total", handleSumCommand);
-  bot.command("sync", handleSyncCommand);
-  bot.command("push", handlePushCommand);
-  bot.command("budget", handleBudgetCommand);
-  bot.command("categories", handleCategoriesCommand);
-  bot.command("settings", handleSettingsCommand);
-  bot.command("reconnect", handleReconnectCommand);
-  bot.command("advice", handleAdviceCommand);
-  bot.command("prompt", handlePromptCommand);
-  bot.command("topic", handleTopicCommand);
-  bot.command("dev", handleDevCommand);
-  bot.command("ping", handlePingCommand);
+  bot.command('start', handleStartCommand);
+  bot.command('connect', handleConnectCommand);
+  bot.command('spreadsheet', handleSpreadsheetCommand);
+  bot.command('table', handleSpreadsheetCommand);
+  bot.command('sheet', handleSpreadsheetCommand);
+  bot.command('t', handleSpreadsheetCommand);
+  bot.command('stats', handleStatsCommand);
+  bot.command('sum', handleSumCommand);
+  bot.command('total', handleSumCommand);
+  bot.command('sync', handleSyncCommand);
+  bot.command('push', handlePushCommand);
+  bot.command('budget', handleBudgetCommand);
+  bot.command('categories', handleCategoriesCommand);
+  bot.command('settings', handleSettingsCommand);
+  bot.command('reconnect', handleReconnectCommand);
+  bot.command('advice', handleAdviceCommand);
+  bot.command('prompt', handlePromptCommand);
+  bot.command('topic', handleTopicCommand);
+  bot.command('dev', handleDevCommand);
+  bot.command('ping', handlePingCommand);
 
   // Callback queries (inline keyboard buttons)
-  bot.on("callback_query", (ctx) => handleCallbackQuery(ctx, bot));
+  bot.on('callback_query', (ctx) => handleCallbackQuery(ctx, bot));
 
   // Text messages (expense entries or questions)
-  bot.on("message", async (ctx) => {
+  bot.on('message', async (ctx) => {
     // Handle photo messages (receipts with QR codes)
     if (ctx.photo && ctx.photo.length > 0) {
       await handlePhotoMessage(ctx);
@@ -70,7 +70,7 @@ export function createBot(): Bot {
     }
 
     // Skip if it's a command
-    if (ctx.text?.startsWith("/")) {
+    if (ctx.text?.startsWith('/')) {
       return;
     }
 
@@ -89,7 +89,7 @@ export function createBot(): Bot {
 
     // Check for @botname mention
     if (botUsername) {
-      const mentionPattern = new RegExp(`@${botUsername}\\s+(.+)`, "i");
+      const mentionPattern = new RegExp(`@${botUsername}\\s+(.+)`, 'i');
       const match = text.match(mentionPattern);
 
       if (match?.[1]) {
@@ -112,20 +112,20 @@ export function createBot(): Bot {
 export async function startBot(): Promise<Bot> {
   const bot = createBot();
 
-  console.log("🤖 Starting bot...");
+  logger.info('🤖 Starting bot...');
   await bot.start();
-  console.log("✓ Bot started successfully");
+  logger.info('✓ Bot started successfully');
 
   // Start background photo processor
-  console.log("📸 Starting photo processor...");
+  logger.info('📸 Starting photo processor...');
   await startPhotoProcessor(bot);
-  console.log("✓ Photo processor started");
+  logger.info('✓ Photo processor started');
 
   // Initialize dev pipeline and resume incomplete tasks
-  console.log("🔧 Starting dev pipeline...");
+  logger.info('🔧 Starting dev pipeline...');
   const devPipeline = initDevPipeline(bot);
   await devPipeline.resumeIncompleteTasksOnStartup();
-  console.log("✓ Dev pipeline started");
+  logger.info('✓ Dev pipeline started');
 
   return bot;
 }

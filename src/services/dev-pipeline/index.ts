@@ -4,45 +4,45 @@
  * Re-exports everything needed by consumers.
  */
 
-export { DevPipeline, type NotifyCallback } from './pipeline';
+export { runCodexReview } from './codex-integration';
 export {
-  DevTaskState,
-  STATE_TRANSITIONS,
-  STATE_LABELS,
-  STATE_EMOJI,
-  PROTECTED_FILES,
-  MAX_RETRY_ATTEMPTS,
-  type DevTask,
-  type CreateDevTaskData,
-  type UpdateDevTaskData,
-} from './types';
+  deleteFile,
+  fileExists,
+  listDirectory,
+  readFile,
+  searchCode,
+  validateFilePath,
+  writeFile,
+} from './file-ops';
 export {
-  isTransitionAllowed,
-  getAllowedTransitions,
-  validateTransition,
-  isTerminalState,
-  isWaitingForUser,
-  isResumableState,
-} from './state-machine';
-export {
-  createWorktree,
-  removeWorktree,
-  worktreeExists,
   commitChanges,
-  pushBranch,
   createPR,
-  mergePR,
+  createWorktree,
+  generateBranchName,
   getCurrentDiff,
   getDiffFromMain,
-  generateBranchName,
+  mergePR,
+  pushBranch,
+  removeWorktree,
+  worktreeExists,
 } from './git-ops';
+export { DevPipeline, type NotifyCallback } from './pipeline';
 export {
-  validateFilePath,
-  readFile,
-  writeFile,
-  listDirectory,
-  searchCode,
-  fileExists,
-  deleteFile,
-} from './file-ops';
-export { runCodexReview } from './codex-integration';
+  getAllowedTransitions,
+  isResumableState,
+  isTerminalState,
+  isTransitionAllowed,
+  isWaitingForUser,
+  validateTransition,
+} from './state-machine';
+export {
+  type CreateDevTaskData,
+  type DevTask,
+  DevTaskState,
+  MAX_RETRY_ATTEMPTS,
+  PROTECTED_FILES,
+  STATE_EMOJI,
+  STATE_LABELS,
+  STATE_TRANSITIONS,
+  type UpdateDevTaskData,
+} from './types';

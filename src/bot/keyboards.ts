@@ -1,6 +1,6 @@
 import { InlineKeyboard } from 'gramio';
 import type { CurrencyCode } from '../config/constants';
-import { SUPPORTED_CURRENCIES, KEYBOARD_TEXTS } from '../config/constants';
+import { KEYBOARD_TEXTS, SUPPORTED_CURRENCIES } from '../config/constants';
 
 /**
  * Create currency set selection keyboard (Step 1)
@@ -86,9 +86,7 @@ export function createCategoriesListKeyboard(categories: string[]): InlineKeyboa
 export function createConfirmKeyboard(action: string): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  keyboard
-    .text('✅ Да', `confirm:${action}:yes`)
-    .text('❌ Нет', `confirm:${action}:no`);
+  keyboard.text('✅ Да', `confirm:${action}:yes`).text('❌ Нет', `confirm:${action}:no`);
 
   return keyboard;
 }
@@ -96,15 +94,26 @@ export function createConfirmKeyboard(action: string): InlineKeyboard {
 /**
  * Create budget setup prompt keyboard
  */
-export function createBudgetPromptKeyboard(category: string, defaultCurrency: string = 'EUR'): InlineKeyboard {
+export function createBudgetPromptKeyboard(
+  category: string,
+  defaultCurrency: string = 'EUR',
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol = defaultCurrency === 'EUR' ? '€' :
-                        defaultCurrency === 'USD' ? '$' :
-                        defaultCurrency === 'RUB' ? '₽' : defaultCurrency;
+  const currencySymbol =
+    defaultCurrency === 'EUR'
+      ? '€'
+      : defaultCurrency === 'USD'
+        ? '$'
+        : defaultCurrency === 'RUB'
+          ? '₽'
+          : defaultCurrency;
 
   keyboard
-    .text(`💰 Установить бюджет ${currencySymbol}100`, `budget:set:${category}:100:${defaultCurrency}`)
+    .text(
+      `💰 Установить бюджет ${currencySymbol}100`,
+      `budget:set:${category}:100:${defaultCurrency}`,
+    )
     .row()
     .text('⏭️ Пропустить', `budget:skip:${category}`);
 
@@ -114,15 +123,21 @@ export function createBudgetPromptKeyboard(category: string, defaultCurrency: st
 /**
  * Create keyboard for adding new category with budget
  */
-export function createAddCategoryWithBudgetKeyboard(category: string, amount: number, currency: string = 'EUR'): InlineKeyboard {
+export function createAddCategoryWithBudgetKeyboard(
+  category: string,
+  amount: number,
+  currency: string = 'EUR',
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol = currency === 'EUR' ? '€' :
-                        currency === 'USD' ? '$' :
-                        currency === 'RUB' ? '₽' : currency;
+  const currencySymbol =
+    currency === 'EUR' ? '€' : currency === 'USD' ? '$' : currency === 'RUB' ? '₽' : currency;
 
   keyboard
-    .text(`✅ Добавить "${category}" с бюджетом ${currencySymbol}${amount}`, `budget:add-category:${category}:${amount}:${currency}`)
+    .text(
+      `✅ Добавить "${category}" с бюджетом ${currencySymbol}${amount}`,
+      `budget:add-category:${category}:${amount}:${currency}`,
+    )
     .row()
     .text('❌ Отменить', `budget:cancel`);
 

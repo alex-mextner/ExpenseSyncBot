@@ -1,19 +1,19 @@
-import { format, getDaysInMonth, startOfMonth, subMonths, subDays } from 'date-fns';
+import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
+import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency } from '../currency/converter';
-import type { CurrencyCode } from '../../config/constants';
 import type {
-  FinancialSnapshot,
   BudgetBurnRate,
-  SpendingTrend,
-  CategoryChange,
-  CategoryAnomaly,
-  DayOfWeekPattern,
-  SpendingVelocity,
   BudgetUtilization,
-  SpendingStreak,
-  MonthlyProjection,
+  CategoryAnomaly,
+  CategoryChange,
   CategoryProjection,
+  DayOfWeekPattern,
+  FinancialSnapshot,
+  MonthlyProjection,
+  SpendingStreak,
+  SpendingTrend,
+  SpendingVelocity,
 } from './types';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -40,7 +40,12 @@ export class SpendingAnalytics {
       anomalies: this.computeAnomalies(groupId, now, currentMonthStart, today),
       dayOfWeekPatterns: this.computeDayPatterns(groupId, today),
       velocity: this.computeVelocity(groupId, today),
-      budgetUtilization: this.computeBudgetUtilization(groupId, currentMonthStr, currentMonthStart, today),
+      budgetUtilization: this.computeBudgetUtilization(
+        groupId,
+        currentMonthStr,
+        currentMonthStart,
+        today,
+      ),
       streak: this.computeStreak(groupId, today),
       projection: this.computeProjection(groupId, now, currentMonthStr, currentMonthStart, today),
     };
@@ -82,7 +87,8 @@ export class SpendingAnalytics {
       const dailyBurnRate = daysElapsed > 0 ? spent / daysElapsed : 0;
       const projectedTotal = dailyBurnRate * daysInMonth;
       const projectedOvershoot = projectedTotal - budget.limit_amount;
-      const runwayDays = dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
+      const runwayDays =
+        dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
 
       // Determine status: cascade top-down
       let status: BudgetBurnRate['status'];
@@ -135,17 +141,24 @@ export class SpendingAnalytics {
       }
     }
 
-    const changePercent = previousTotal > 0
-      ? ((currentTotal - previousTotal) / previousTotal) * 100
-      : currentTotal > 0 ? 100 : 0;
+    const changePercent =
+      previousTotal > 0
+        ? ((currentTotal - previousTotal) / previousTotal) * 100
+        : currentTotal > 0
+          ? 100
+          : 0;
 
-    const allCategories = new Set([...Object.keys(currentByCategory), ...Object.keys(previousByCategory)]);
+    const allCategories = new Set([
+      ...Object.keys(currentByCategory),
+      ...Object.keys(previousByCategory),
+    ]);
     const categoryChanges: CategoryChange[] = [];
 
     for (const category of allCategories) {
       const current = currentByCategory[category] || 0;
       const previous = previousByCategory[category] || 0;
-      const catChange = previous > 0 ? ((current - previous) / previous) * 100 : (current > 0 ? 100 : 0);
+      const catChange =
+        previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : 0;
       categoryChanges.push({
         category,
         current: Math.round(current * 100) / 100,
@@ -186,8 +199,10 @@ export class SpendingAnalytics {
 
     const rows = database.expenses.getMonthOverMonthData(
       groupId,
-      currentMonthStart, today,
-      prevMonthStart, prevMonthSameDay,
+      currentMonthStart,
+      today,
+      prevMonthStart,
+      prevMonthSameDay,
     );
 
     let currentTotal = 0;
@@ -198,9 +213,12 @@ export class SpendingAnalytics {
       currentTotal += row.current_month;
       previousTotal += row.previous_month;
 
-      const catChange = row.previous_month > 0
-        ? ((row.current_month - row.previous_month) / row.previous_month) * 100
-        : (row.current_month > 0 ? 100 : 0);
+      const catChange =
+        row.previous_month > 0
+          ? ((row.current_month - row.previous_month) / row.previous_month) * 100
+          : row.current_month > 0
+            ? 100
+            : 0;
 
       if (row.current_month > 0 || row.previous_month > 0) {
         categoryChanges.push({
@@ -212,9 +230,12 @@ export class SpendingAnalytics {
       }
     }
 
-    const changePercent = previousTotal > 0
-      ? ((currentTotal - previousTotal) / previousTotal) * 100
-      : currentTotal > 0 ? 100 : 0;
+    const changePercent =
+      previousTotal > 0
+        ? ((currentTotal - previousTotal) / previousTotal) * 100
+        : currentTotal > 0
+          ? 100
+          : 0;
 
     categoryChanges.sort((a, b) => Math.abs(b.change_percent) - Math.abs(a.change_percent));
 
@@ -249,7 +270,11 @@ export class SpendingAnalytics {
     const threeMonthsAgo = subMonths(startOfMonth(now), 3);
     const historyStart = format(threeMonthsAgo, 'yyyy-MM-dd');
 
-    const historyRows = database.expenses.getMonthlyHistoryByCategory(groupId, historyStart, currentMonthStart);
+    const historyRows = database.expenses.getMonthlyHistoryByCategory(
+      groupId,
+      historyStart,
+      currentMonthStart,
+    );
 
     // Compute average per category over the history months
     const categoryHistory: Record<string, { total: number; months: number }> = {};
@@ -362,9 +387,12 @@ export class SpendingAnalytics {
     const period1DailyAvg = earlierTotal / 7;
     const period2DailyAvg = recentTotal / 7;
 
-    const acceleration = period1DailyAvg > 0
-      ? ((period2DailyAvg - period1DailyAvg) / period1DailyAvg) * 100
-      : (period2DailyAvg > 0 ? 100 : 0);
+    const acceleration =
+      period1DailyAvg > 0
+        ? ((period2DailyAvg - period1DailyAvg) / period1DailyAvg) * 100
+        : period2DailyAvg > 0
+          ? 100
+          : 0;
 
     let trend: SpendingVelocity['trend'];
     if (Math.abs(acceleration) <= 10) {
@@ -470,7 +498,10 @@ export class SpendingAnalytics {
       } else {
         // Check if continues same streak
         const isAbove = dayTotal > overallDailyAvg;
-        if ((streakType === 'above_average' && isAbove) || (streakType === 'below_average' && !isAbove)) {
+        if (
+          (streakType === 'above_average' && isAbove) ||
+          (streakType === 'below_average' && !isAbove)
+        ) {
           streakDays++;
           streakSum += dayTotal;
         } else {
@@ -484,7 +515,8 @@ export class SpendingAnalytics {
     return {
       current_streak_days: streakDays,
       streak_type: streakType,
-      avg_daily_during_streak: streakDays > 0 ? Math.round((streakSum / streakDays) * 100) / 100 : 0,
+      avg_daily_during_streak:
+        streakDays > 0 ? Math.round((streakSum / streakDays) * 100) / 100 : 0,
       overall_daily_average: Math.round(overallDailyAvg * 100) / 100,
     };
   }
@@ -513,12 +545,17 @@ export class SpendingAnalytics {
     // Get last month total for comparison
     const prevMonth = subMonths(now, 1);
     const prevMonthStart = format(startOfMonth(prevMonth), 'yyyy-MM-dd');
-    const prevMonthEnd = format(new Date(prevMonth.getFullYear(), prevMonth.getMonth() + 1, 0), 'yyyy-MM-dd');
-    const lastMonthTotal = database.expenses.getTotalEurForRange(groupId, prevMonthStart, prevMonthEnd);
+    const prevMonthEnd = format(
+      new Date(prevMonth.getFullYear(), prevMonth.getMonth() + 1, 0),
+      'yyyy-MM-dd',
+    );
+    const lastMonthTotal = database.expenses.getTotalEurForRange(
+      groupId,
+      prevMonthStart,
+      prevMonthEnd,
+    );
 
-    const projectedVsLastMonth = lastMonthTotal > 0
-      ? (projectedTotal / lastMonthTotal) * 100
-      : 0;
+    const projectedVsLastMonth = lastMonthTotal > 0 ? (projectedTotal / lastMonthTotal) * 100 : 0;
 
     // Confidence
     let confidence: MonthlyProjection['confidence'];

@@ -1,5 +1,5 @@
-import type { Ctx } from "../types";
-import { database } from "../../database";
+import { database } from '../../database';
+import type { Ctx } from '../types';
 
 /**
  * /topic command handler - set topic for bot to listen to
@@ -7,27 +7,27 @@ import { database } from "../../database";
  *   /topic - if called from a topic, bot will only listen to that topic
  *   /topic clear - clear topic restriction, bot listens to all messages
  */
-export async function handleTopicCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleTopicCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
   if (!chatId) {
-    await ctx.send("Error: Unable to identify chat");
+    await ctx.send('Error: Unable to identify chat');
     return;
   }
 
   // Only allow in groups
-  const isGroup = chatType === "group" || chatType === "supergroup";
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!isGroup) {
-    await ctx.send("❌ Эта команда работает только в группах.");
+    await ctx.send('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
 
   if (!group) {
-    await ctx.send("❌ Группа не настроена. Используй /connect");
+    await ctx.send('❌ Группа не настроена. Используй /connect');
     return;
   }
 
@@ -35,13 +35,13 @@ export async function handleTopicCommand(ctx: Ctx["Command"]): Promise<void> {
   const threadId = (ctx as any).payload?.message_thread_id as number | undefined;
 
   // Get command argument
-  const commandText = ctx.text || "";
-  const args = commandText.split(/\s+/).slice(1).join(" ").trim();
+  const commandText = ctx.text || '';
+  const args = commandText.split(/\s+/).slice(1).join(' ').trim();
 
   // If "clear", remove topic restriction
-  if (args.toLowerCase() === "clear") {
+  if (args.toLowerCase() === 'clear') {
     database.groups.update(chatId, { active_topic_id: null });
-    await ctx.send("✅ Ограничение по топику снято. Бот слушает все сообщения в группе.");
+    await ctx.send('✅ Ограничение по топику снято. Бот слушает все сообщения в группе.');
     return;
   }
 
@@ -50,14 +50,14 @@ export async function handleTopicCommand(ctx: Ctx["Command"]): Promise<void> {
     if (group.active_topic_id) {
       await ctx.send(
         `📍 Бот слушает топик #${group.active_topic_id}\n\n` +
-        `<i>Вызови /topic в нужном топике чтобы сменить, или /topic clear чтобы слушать всё</i>`,
-        { parse_mode: "HTML" }
+          `<i>Вызови /topic в нужном топике чтобы сменить, или /topic clear чтобы слушать всё</i>`,
+        { parse_mode: 'HTML' },
       );
     } else {
       await ctx.send(
-        "📍 Бот слушает все сообщения в группе.\n\n" +
-        "<i>Вызови /topic в нужном топике чтобы ограничить</i>",
-        { parse_mode: "HTML" }
+        '📍 Бот слушает все сообщения в группе.\n\n' +
+          '<i>Вызови /topic в нужном топике чтобы ограничить</i>',
+        { parse_mode: 'HTML' },
       );
     }
     return;
@@ -67,8 +67,8 @@ export async function handleTopicCommand(ctx: Ctx["Command"]): Promise<void> {
   database.groups.update(chatId, { active_topic_id: threadId });
   await ctx.send(
     `✅ Бот теперь слушает только этот топик (#${threadId})\n\n` +
-    `<i>Расходы и команды из других топиков будут игнорироваться.\n` +
-    `/topic clear — слушать все сообщения</i>`,
-    { parse_mode: "HTML" }
+      `<i>Расходы и команды из других топиков будут игнорироваться.\n` +
+      `/topic clear — слушать все сообщения</i>`,
+    { parse_mode: 'HTML' },
   );
 }

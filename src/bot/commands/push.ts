@@ -1,8 +1,15 @@
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
-import { appendExpenseRow, readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
+import {
+  appendExpenseRow,
+  readExpensesFromSheet,
+  type SheetRow,
+} from '../../services/google/sheets';
+import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
+
+const logger = createLogger('push');
 
 /**
  * Create unique key for expense comparison
@@ -32,7 +39,7 @@ function makeDbExpenseKey(expense: Expense): string {
 /**
  * /push command handler - push expenses from database to Google Sheet
  */
-export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -64,19 +71,19 @@ export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
   await ctx.send('🔄 Читаю данные из БД и Google Sheets...');
 
   try {
-    console.log(`[PUSH] Reading expenses from database for group ${group.id}`);
+    logger.info(`[PUSH] Reading expenses from database for group ${group.id}`);
 
     // Read all expenses from DB (use large limit to get all)
     const dbExpenses = database.expenses.findByGroupId(group.id, 100000);
-    console.log(`[PUSH] Found ${dbExpenses.length} expenses in database`);
+    logger.info(`[PUSH] Found ${dbExpenses.length} expenses in database`);
 
     // Read all expenses from sheet
-    console.log(`[PUSH] Reading expenses from Google Sheet`);
+    logger.info(`[PUSH] Reading expenses from Google Sheet`);
     const sheetExpenses = await readExpensesFromSheet(
       group.google_refresh_token,
-      group.spreadsheet_id
+      group.spreadsheet_id,
     );
-    console.log(`[PUSH] Found ${sheetExpenses.length} expenses in sheet`);
+    logger.info(`[PUSH] Found ${sheetExpenses.length} expenses in sheet`);
 
     // Create set of existing keys in sheet
     const existingKeys = new Set<string>();
@@ -96,14 +103,16 @@ export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
       }
     }
 
-    console.log(`[PUSH] ${expensesToAdd.length} expenses to add (${dbExpenses.length - expensesToAdd.length} already in sheet)`);
+    logger.info(
+      `[PUSH] ${expensesToAdd.length} expenses to add (${dbExpenses.length - expensesToAdd.length} already in sheet)`,
+    );
 
     if (expensesToAdd.length === 0) {
       await ctx.send(
         `✅ Все данные уже синхронизированы!\n\n` +
-        `📊 В БД: ${dbExpenses.length}\n` +
-        `📋 В таблице: ${sheetExpenses.length}\n` +
-        `➕ Добавлено: 0`
+          `📊 В БД: ${dbExpenses.length}\n` +
+          `📋 В таблице: ${sheetExpenses.length}\n` +
+          `➕ Добавлено: 0`,
       );
       return;
     }
@@ -133,33 +142,30 @@ export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
         };
         amounts[expense.currency as CurrencyCode] = expense.amount;
 
-        await appendExpenseRow(
-          group.google_refresh_token,
-          group.spreadsheet_id,
-          {
-            date: expense.date,
-            category: expense.category,
-            comment: expense.comment,
-            amounts,
-            eurAmount: expense.eur_amount,
-          }
-        );
+        await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
+          date: expense.date,
+          category: expense.category,
+          comment: expense.comment,
+          amounts,
+          eurAmount: expense.eur_amount,
+        });
 
         addedCount++;
 
         // Log progress every 10 items
         if (addedCount % 10 === 0) {
-          console.log(`[PUSH] Progress: ${addedCount}/${expensesToAdd.length}`);
+          logger.info(`[PUSH] Progress: ${addedCount}/${expensesToAdd.length}`);
         }
       } catch (err) {
         errorCount++;
-        console.error(`[PUSH] Failed to add expense ${expense.id}:`, err);
+        logger.error({ err: err }, '[PUSH] Failed to add expense ${expense.id}');
       }
     }
 
-    console.log(`[PUSH] ✅ Push completed: ${addedCount} added, ${errorCount} errors`);
+    logger.info(`[PUSH] ✅ Push completed: ${addedCount} added, ${errorCount} errors`);
 
-    let message = `✅ Push завершён!\n\n` +
+    let message =
+      `✅ Push завершён!\n\n` +
       `📊 В БД: ${dbExpenses.length}\n` +
       `📋 Было в таблице: ${sheetExpenses.length}\n` +
       `➕ Добавлено: ${addedCount}`;
@@ -169,9 +175,8 @@ export async function handlePushCommand(ctx: Ctx["Command"]): Promise<void> {
     }
 
     await ctx.send(message);
-
   } catch (error) {
-    console.error('[PUSH] ❌ Push failed:', error);
+    logger.error({ err: error }, '[PUSH] ❌ Push failed');
     await ctx.send(`❌ Ошибка push: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }

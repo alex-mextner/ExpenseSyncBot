@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
-import { env } from '../../config/env';
 import { GOOGLE_SCOPES } from '../../config/constants';
+import { env } from '../../config/env';
 
 /**
  * OAuth2 client instance
@@ -8,7 +8,7 @@ import { GOOGLE_SCOPES } from '../../config/constants';
 export const oauth2Client = new google.auth.OAuth2(
   env.GOOGLE_CLIENT_ID,
   env.GOOGLE_CLIENT_SECRET,
-  env.GOOGLE_REDIRECT_URI
+  env.GOOGLE_REDIRECT_URI,
 );
 
 /**
@@ -55,7 +55,7 @@ export function getAuthenticatedClient(refreshToken: string) {
   const client = new google.auth.OAuth2(
     env.GOOGLE_CLIENT_ID,
     env.GOOGLE_CLIENT_SECRET,
-    env.GOOGLE_REDIRECT_URI
+    env.GOOGLE_REDIRECT_URI,
   );
 
   client.setCredentials({

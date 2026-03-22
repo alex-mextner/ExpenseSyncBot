@@ -1,13 +1,13 @@
-import { test, expect, describe } from 'bun:test';
-import { DevTaskState, STATE_TRANSITIONS } from './types';
+import { describe, expect, test } from 'bun:test';
 import {
-  isTransitionAllowed,
-  isTerminalState,
-  isWaitingForUser,
-  isResumableState,
   getAllowedTransitions,
+  isResumableState,
+  isTerminalState,
+  isTransitionAllowed,
+  isWaitingForUser,
   validateTransition,
 } from './state-machine';
+import { DevTaskState, STATE_TRANSITIONS } from './types';
 
 // ─────────────────────────────────────────────
 // isTransitionAllowed
@@ -109,9 +109,15 @@ describe('isTransitionAllowed', () => {
 
   test('any non-terminal state -> REJECTED is allowed (cancel)', () => {
     const nonTerminal = [
-      DevTaskState.PENDING, DevTaskState.CLARIFYING, DevTaskState.DESIGNING,
-      DevTaskState.APPROVAL, DevTaskState.IMPLEMENTING, DevTaskState.TESTING,
-      DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING, DevTaskState.UPDATING,
+      DevTaskState.PENDING,
+      DevTaskState.CLARIFYING,
+      DevTaskState.DESIGNING,
+      DevTaskState.APPROVAL,
+      DevTaskState.IMPLEMENTING,
+      DevTaskState.TESTING,
+      DevTaskState.PULL_REQUEST,
+      DevTaskState.REVIEWING,
+      DevTaskState.UPDATING,
     ];
     for (const s of nonTerminal) {
       expect(isTransitionAllowed(s, DevTaskState.REJECTED)).toBe(true);
@@ -178,9 +184,15 @@ describe('isTerminalState', () => {
 
   test('non-terminal states return false', () => {
     const nonTerminal = [
-      DevTaskState.PENDING, DevTaskState.CLARIFYING, DevTaskState.DESIGNING,
-      DevTaskState.APPROVAL, DevTaskState.IMPLEMENTING, DevTaskState.TESTING,
-      DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING, DevTaskState.UPDATING,
+      DevTaskState.PENDING,
+      DevTaskState.CLARIFYING,
+      DevTaskState.DESIGNING,
+      DevTaskState.APPROVAL,
+      DevTaskState.IMPLEMENTING,
+      DevTaskState.TESTING,
+      DevTaskState.PULL_REQUEST,
+      DevTaskState.REVIEWING,
+      DevTaskState.UPDATING,
     ];
     for (const s of nonTerminal) {
       expect(isTerminalState(s)).toBe(false);
@@ -202,9 +214,15 @@ describe('isWaitingForUser', () => {
 
   test('automated states are not waiting for user', () => {
     const automated = [
-      DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING,
-      DevTaskState.TESTING, DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING,
-      DevTaskState.UPDATING, DevTaskState.COMPLETED, DevTaskState.REJECTED,
+      DevTaskState.PENDING,
+      DevTaskState.DESIGNING,
+      DevTaskState.IMPLEMENTING,
+      DevTaskState.TESTING,
+      DevTaskState.PULL_REQUEST,
+      DevTaskState.REVIEWING,
+      DevTaskState.UPDATING,
+      DevTaskState.COMPLETED,
+      DevTaskState.REJECTED,
       DevTaskState.FAILED,
     ];
     for (const s of automated) {
@@ -219,8 +237,12 @@ describe('isWaitingForUser', () => {
 describe('isResumableState', () => {
   test('resumable states return true', () => {
     const resumable = [
-      DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING,
-      DevTaskState.TESTING, DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING,
+      DevTaskState.PENDING,
+      DevTaskState.DESIGNING,
+      DevTaskState.IMPLEMENTING,
+      DevTaskState.TESTING,
+      DevTaskState.PULL_REQUEST,
+      DevTaskState.REVIEWING,
       DevTaskState.UPDATING,
     ];
     for (const s of resumable) {
@@ -230,8 +252,11 @@ describe('isResumableState', () => {
 
   test('non-resumable states return false', () => {
     const notResumable = [
-      DevTaskState.CLARIFYING, DevTaskState.APPROVAL,
-      DevTaskState.COMPLETED, DevTaskState.REJECTED, DevTaskState.FAILED,
+      DevTaskState.CLARIFYING,
+      DevTaskState.APPROVAL,
+      DevTaskState.COMPLETED,
+      DevTaskState.REJECTED,
+      DevTaskState.FAILED,
     ];
     for (const s of notResumable) {
       expect(isResumableState(s)).toBe(false);
@@ -249,13 +274,13 @@ describe('validateTransition', () => {
 
   test('invalid transition throws with descriptive message', () => {
     expect(() => validateTransition(1, DevTaskState.PENDING, DevTaskState.COMPLETED)).toThrow(
-      'Invalid state transition'
+      'Invalid state transition',
     );
   });
 
   test('transition from terminal state throws', () => {
     expect(() => validateTransition(1, DevTaskState.COMPLETED, DevTaskState.PENDING)).toThrow(
-      'Invalid state transition'
+      'Invalid state transition',
     );
   });
 });

@@ -7,7 +7,7 @@ import type {
   DeriveDefinitions,
   ErrorDefinitions,
   MessageContext,
-} from "gramio";
+} from 'gramio';
 
 /**
  * Helper to make specific properties required and non-nullable
@@ -34,10 +34,10 @@ export type Ctx = {
    * Message context (regular messages, commands)
    * Requires 'from' field to be present
    */
-  Message: Require<MessageContext<BotInstance>, "from">;
+  Message: Require<MessageContext<BotInstance>, 'from'>;
 
   /**
    * Command context (same as Message, used for clarity)
    */
-  Command: Require<MessageContext<BotInstance>, "from">;
+  Command: Require<MessageContext<BotInstance>, 'from'>;
 };

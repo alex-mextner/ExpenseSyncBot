@@ -7,10 +7,13 @@
  * lies recursive self-improvement, and we're not ready for that episode.
  */
 
-import { $ } from 'bun';
-import path from 'node:path';
 import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { $ } from 'bun';
+import { createLogger } from '../../utils/logger.ts';
 import { PROTECTED_FILES } from './types';
+
+const logger = createLogger('file-ops');
 
 /**
  * Validate that a file path is safe to operate on.
@@ -22,10 +25,7 @@ import { PROTECTED_FILES } from './types';
  *
  * @throws Error if the path is unsafe
  */
-export function validateFilePath(
-  worktreePath: string,
-  filePath: string
-): string {
+export function validateFilePath(worktreePath: string, filePath: string): string {
   // Normalize the path
   const normalized = path.normalize(filePath);
 
@@ -39,17 +39,13 @@ export function validateFilePath(
 
   // Ensure it's still within the worktree
   if (!absolutePath.startsWith(path.resolve(worktreePath))) {
-    throw new Error(
-      `Path escapes worktree: ${filePath} resolved to ${absolutePath}`
-    );
+    throw new Error(`Path escapes worktree: ${filePath} resolved to ${absolutePath}`);
   }
 
   // Check against protected files
   for (const protectedPath of PROTECTED_FILES) {
     if (normalized.startsWith(protectedPath) || normalized === protectedPath) {
-      throw new Error(
-        `Cannot modify protected file/directory: ${protectedPath}`
-      );
+      throw new Error(`Cannot modify protected file/directory: ${protectedPath}`);
     }
   }
 
@@ -63,10 +59,7 @@ export function validateFilePath(
  * @param filePath - Relative path within the worktree
  * @returns File contents as string
  */
-export async function readFile(
-  worktreePath: string,
-  filePath: string
-): Promise<string> {
+export async function readFile(worktreePath: string, filePath: string): Promise<string> {
   const absolutePath = validateFilePath(worktreePath, filePath);
 
   if (!existsSync(absolutePath)) {
@@ -90,7 +83,7 @@ export async function readFile(
 export async function writeFile(
   worktreePath: string,
   filePath: string,
-  content: string
+  content: string,
 ): Promise<void> {
   const absolutePath = validateFilePath(worktreePath, filePath);
 
@@ -101,7 +94,7 @@ export async function writeFile(
   }
 
   await Bun.write(absolutePath, content);
-  console.log(`[FILE-OPS] Written: ${filePath}`);
+  logger.info(`[FILE-OPS] Written: ${filePath}`);
 }
 
 /**
@@ -113,7 +106,7 @@ export async function writeFile(
  */
 export async function listDirectory(
   worktreePath: string,
-  dirPath: string = '.'
+  dirPath: string = '.',
 ): Promise<string[]> {
   const absolutePath = validateFilePath(worktreePath, dirPath);
 
@@ -141,12 +134,11 @@ export async function listDirectory(
 export async function searchCode(
   worktreePath: string,
   pattern: string,
-  glob?: string
+  glob?: string,
 ): Promise<string> {
   try {
     const globArgs = glob ? ['--include', glob] : [];
-    const result =
-      await $`grep -rn ${pattern} ${worktreePath}/src ${globArgs}`.text();
+    const result = await $`grep -rn ${pattern} ${worktreePath}/src ${globArgs}`.text();
     return result;
   } catch {
     // grep returns exit code 1 when no matches found
@@ -157,10 +149,7 @@ export async function searchCode(
 /**
  * Check if a file exists in a worktree.
  */
-export function fileExists(
-  worktreePath: string,
-  filePath: string
-): boolean {
+export function fileExists(worktreePath: string, filePath: string): boolean {
   try {
     const absolutePath = validateFilePath(worktreePath, filePath);
     return existsSync(absolutePath);
@@ -174,10 +163,7 @@ export function fileExists(
  *
  * Refuses to delete PROTECTED_FILES.
  */
-export async function deleteFile(
-  worktreePath: string,
-  filePath: string
-): Promise<void> {
+export async function deleteFile(worktreePath: string, filePath: string): Promise<void> {
   const absolutePath = validateFilePath(worktreePath, filePath);
 
   if (!existsSync(absolutePath)) {
@@ -185,5 +171,5 @@ export async function deleteFile(
   }
 
   await $`rm ${absolutePath}`.quiet();
-  console.log(`[FILE-OPS] Deleted: ${filePath}`);
+  logger.info(`[FILE-OPS] Deleted: ${filePath}`);
 }

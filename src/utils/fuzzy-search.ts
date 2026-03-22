@@ -11,10 +11,7 @@ export function normalizeCategoryName(name: string): string {
  * Find best matching category using simple fuzzy search
  * Returns the best match or null if no match found
  */
-export function findBestCategoryMatch(
-  input: string,
-  categories: string[]
-): string | null {
+export function findBestCategoryMatch(input: string, categories: string[]): string | null {
   if (!input || categories.length === 0) {
     return null;
   }
@@ -22,25 +19,19 @@ export function findBestCategoryMatch(
   const normalizedInput = input.toLowerCase().trim();
 
   // First try exact match (case-insensitive)
-  const exactMatch = categories.find(
-    (cat) => cat.toLowerCase() === normalizedInput
-  );
+  const exactMatch = categories.find((cat) => cat.toLowerCase() === normalizedInput);
   if (exactMatch) {
     return exactMatch;
   }
 
   // Try to find category that contains the input
-  const containsMatch = categories.find((cat) =>
-    cat.toLowerCase().includes(normalizedInput)
-  );
+  const containsMatch = categories.find((cat) => cat.toLowerCase().includes(normalizedInput));
   if (containsMatch) {
     return containsMatch;
   }
 
   // Try to find category that is contained in the input
-  const containedInMatch = categories.find((cat) =>
-    normalizedInput.includes(cat.toLowerCase())
-  );
+  const containedInMatch = categories.find((cat) => normalizedInput.includes(cat.toLowerCase()));
   if (containedInMatch) {
     return containedInMatch;
   }
@@ -55,7 +46,7 @@ export function findBestCategoryMatch(
 export function findSimilarCategories(
   input: string,
   categories: string[],
-  limit: number = 3
+  limit: number = 3,
 ): string[] {
   if (!input || categories.length === 0) {
     return [];
@@ -88,7 +79,7 @@ export function findSimilarCategories(
       const categoryWords = normalizedCategory.split(/\s+/);
 
       const commonWords = inputWords.filter((word) =>
-        categoryWords.some((catWord) => catWord.includes(word) || word.includes(catWord))
+        categoryWords.some((catWord) => catWord.includes(word) || word.includes(catWord)),
       );
 
       if (commonWords.length > 0) {

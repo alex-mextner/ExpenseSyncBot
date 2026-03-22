@@ -1,15 +1,15 @@
 import type { Database } from 'bun:sqlite';
-import type { Expense, CreateExpenseData } from '../types';
 import type {
   CategoryTotal,
   DailyTotal,
   DayOfWeekStats,
   DayOfWeekTopCategory,
-  WeekPeriodRow,
   MonthComparisonRow,
-  VelocityRow,
   MonthlyHistoryRow,
+  VelocityRow,
+  WeekPeriodRow,
 } from '../../services/analytics/types';
+import type { CreateExpenseData, Expense } from '../types';
 
 export class ExpenseRepository {
   constructor(private db: Database) {}
@@ -56,7 +56,10 @@ export class ExpenseRepository {
    * Create new expense
    */
   create(data: CreateExpenseData): Expense {
-    const query = this.db.query<{ id: number }, [number, number, string, string, string, number, string, number]>(`
+    const query = this.db.query<
+      { id: number },
+      [number, number, string, string, string, number, string, number]
+    >(`
       INSERT INTO expenses (
         group_id,
         user_id,
@@ -79,7 +82,7 @@ export class ExpenseRepository {
       data.comment,
       data.amount,
       data.currency,
-      data.eur_amount
+      data.eur_amount,
     );
 
     if (!result) {
@@ -228,7 +231,11 @@ export class ExpenseRepository {
   /**
    * Get top category per day-of-week
    */
-  getDayOfWeekTopCategories(groupId: number, startDate: string, endDate: string): DayOfWeekTopCategory[] {
+  getDayOfWeekTopCategories(
+    groupId: number,
+    startDate: string,
+    endDate: string,
+  ): DayOfWeekTopCategory[] {
     const query = this.db.query<DayOfWeekTopCategory, [number, string, string]>(`
       SELECT dow, category, cat_total FROM (
         SELECT
@@ -278,7 +285,10 @@ export class ExpenseRepository {
     prevMonthStart: string,
     prevMonthSameDay: string,
   ): MonthComparisonRow[] {
-    const query = this.db.query<MonthComparisonRow, [string, string, string, string, number, string, string]>(`
+    const query = this.db.query<
+      MonthComparisonRow,
+      [string, string, string, string, number, string, string]
+    >(`
       SELECT
         category,
         SUM(CASE WHEN date >= ? AND date <= ? THEN eur_amount ELSE 0 END) as current_month,
@@ -289,10 +299,13 @@ export class ExpenseRepository {
     `);
 
     return query.all(
-      currentMonthStart, currentMonthEnd,
-      prevMonthStart, prevMonthSameDay,
+      currentMonthStart,
+      currentMonthEnd,
+      prevMonthStart,
+      prevMonthSameDay,
       groupId,
-      prevMonthStart, currentMonthEnd
+      prevMonthStart,
+      currentMonthEnd,
     );
   }
 
@@ -320,7 +333,11 @@ export class ExpenseRepository {
    * Get monthly category history for anomaly detection
    * Returns per-category per-month totals for the specified range
    */
-  getMonthlyHistoryByCategory(groupId: number, startDate: string, endDate: string): MonthlyHistoryRow[] {
+  getMonthlyHistoryByCategory(
+    groupId: number,
+    startDate: string,
+    endDate: string,
+  ): MonthlyHistoryRow[] {
     const query = this.db.query<MonthlyHistoryRow, [number, string, string]>(`
       SELECT
         category,

@@ -15,10 +15,22 @@ export const threadStorage = new AsyncLocalStorage<ThreadContext>();
 
 /** Telegram API methods that support message_thread_id */
 const THREAD_AWARE_METHODS = [
-  'sendMessage', 'sendPhoto', 'sendDocument', 'sendVideo',
-  'sendAudio', 'sendVoice', 'sendVideoNote', 'sendAnimation',
-  'sendSticker', 'sendLocation', 'sendContact', 'sendPoll',
-  'sendDice', 'sendMediaGroup', 'copyMessage', 'forwardMessage',
+  'sendMessage',
+  'sendPhoto',
+  'sendDocument',
+  'sendVideo',
+  'sendAudio',
+  'sendVoice',
+  'sendVideoNote',
+  'sendAnimation',
+  'sendSticker',
+  'sendLocation',
+  'sendContact',
+  'sendPoll',
+  'sendDice',
+  'sendMediaGroup',
+  'copyMessage',
+  'forwardMessage',
   'sendChatAction',
 ] as const;
 
@@ -32,12 +44,8 @@ export function registerTopicMiddleware(bot: Bot): void {
     const payload = (ctx as any).payload;
     // For messages: payload.message_thread_id
     // For callback queries: ctx.message?.message_thread_id
-    const threadId =
-      payload?.message_thread_id ??
-      (ctx as any).message?.message_thread_id;
-    const chatId =
-      (ctx as any).chat?.id ??
-      (ctx as any).message?.chat?.id;
+    const threadId = payload?.message_thread_id ?? (ctx as any).message?.message_thread_id;
+    const chatId = (ctx as any).chat?.id ?? (ctx as any).message?.chat?.id;
 
     if (chatId !== undefined) {
       return threadStorage.run({ chatId, threadId }, () => next());
@@ -49,11 +57,7 @@ export function registerTopicMiddleware(bot: Bot): void {
   bot.preRequest(THREAD_AWARE_METHODS as any, (context) => {
     const stored = threadStorage.getStore();
     const params = context.params as Record<string, unknown>;
-    if (
-      stored?.threadId &&
-      !params.message_thread_id &&
-      params.chat_id === stored.chatId
-    ) {
+    if (stored?.threadId && !params.message_thread_id && params.chat_id === stored.chatId) {
       params.message_thread_id = stored.threadId;
     }
     return context;

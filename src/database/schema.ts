@@ -1,5 +1,8 @@
 import { Database } from 'bun:sqlite';
 import { env } from '../config/env';
+import { createLogger } from '../utils/logger.ts';
+
+const logger = createLogger('schema');
 
 /**
  * Initialize database connection
@@ -403,7 +406,7 @@ export function runMigrations(db: Database): void {
             ALTER TABLE photo_processing_queue
             ADD COLUMN message_thread_id INTEGER;
           `);
-          console.log('✓ Added message_thread_id column to photo_processing_queue');
+          logger.info('✓ Added message_thread_id column to photo_processing_queue');
         }
       },
     },
@@ -423,7 +426,7 @@ export function runMigrations(db: Database): void {
             ALTER TABLE receipt_items
             ADD COLUMN waiting_for_category_input INTEGER DEFAULT 0;
           `);
-          console.log('✓ Added waiting_for_category_input column to receipt_items');
+          logger.info('✓ Added waiting_for_category_input column to receipt_items');
         }
       },
     },
@@ -477,7 +480,7 @@ export function runMigrations(db: Database): void {
           ON receipt_items(status);
         `);
 
-        console.log('✓ Added "skipped" status to receipt_items');
+        logger.info('✓ Added "skipped" status to receipt_items');
       },
     },
     {
@@ -548,7 +551,7 @@ export function runMigrations(db: Database): void {
           `);
         }
 
-        console.log('✓ Added summary mode columns to photo_processing_queue');
+        logger.info('✓ Added summary mode columns to photo_processing_queue');
       },
     },
     {
@@ -566,7 +569,7 @@ export function runMigrations(db: Database): void {
             ALTER TABLE groups
             ADD COLUMN active_topic_id INTEGER;
           `);
-          console.log('✓ Added active_topic_id column to groups');
+          logger.info('✓ Added active_topic_id column to groups');
         }
       },
     },
@@ -597,7 +600,7 @@ export function runMigrations(db: Database): void {
           ON advice_log(group_id, created_at);
         `);
 
-        console.log('✓ Added composite index on expenses(group_id, date) and advice_log table');
+        logger.info('✓ Added composite index on expenses(group_id, date) and advice_log table');
       },
     },
     {
@@ -642,39 +645,37 @@ export function runMigrations(db: Database): void {
           ON dev_tasks(user_id);
         `);
 
-        console.log('✓ Created dev_tasks table');
+        logger.info('✓ Created dev_tasks table');
       },
     },
     {
       name: '020_add_failed_at_state_to_dev_tasks',
       up: () => {
         db.exec(`ALTER TABLE dev_tasks ADD COLUMN failed_at_state TEXT`);
-        console.log('✓ Added failed_at_state column to dev_tasks');
+        logger.info('✓ Added failed_at_state column to dev_tasks');
       },
     },
   ];
 
   // Check and run migrations
   const checkMigration = db.query<{ count: number }, [string]>(
-    'SELECT COUNT(*) as count FROM migrations WHERE name = ?'
+    'SELECT COUNT(*) as count FROM migrations WHERE name = ?',
   );
 
-  const recordMigration = db.query<void, [string]>(
-    'INSERT INTO migrations (name) VALUES (?)'
-  );
+  const recordMigration = db.query<void, [string]>('INSERT INTO migrations (name) VALUES (?)');
 
   for (const migration of migrations) {
     const result = checkMigration.get(migration.name);
 
     if (result && result.count === 0) {
-      console.log(`Running migration: ${migration.name}`);
+      logger.info(`Running migration: ${migration.name}`);
       migration.up();
       recordMigration.run(migration.name);
-      console.log(`✓ Migration ${migration.name} completed`);
+      logger.info(`✓ Migration ${migration.name} completed`);
     }
   }
 
-  console.log('✓ All migrations completed');
+  logger.info('✓ All migrations completed');
 }
 
 /**

@@ -5,8 +5,11 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { AI_MODEL, AI_BASE_URL } from '../ai/agent';
 import { env } from '../../config/env';
+import { createLogger } from '../../utils/logger.ts';
+import { AI_BASE_URL, AI_MODEL } from '../ai/agent';
+
+const logger = createLogger('codex-integration');
 
 /**
  * Run code review using Anthropic/GLM API.
@@ -60,7 +63,7 @@ ${truncatedDiff}
     }
     return review.trim() || 'No review comments.';
   } catch (error) {
-    console.error('[REVIEW] Failed:', error);
+    logger.error({ err: error }, '[REVIEW] Failed');
     return `Review failed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }

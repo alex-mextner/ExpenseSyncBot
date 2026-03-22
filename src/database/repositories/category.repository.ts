@@ -108,6 +108,6 @@ export class CategoryRepository {
    */
   getCategoryNames(groupId: number): string[] {
     const categories = this.findByGroupId(groupId);
-    return categories.map(c => c.name);
+    return categories.map((c) => c.name);
   }
 }

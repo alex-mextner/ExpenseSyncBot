@@ -1,4 +1,4 @@
-import { chromium, type Browser } from 'playwright';
+import { type Browser, chromium } from 'playwright';
 import { isURL } from './qr-scanner';
 
 let browser: Browser | null = null;
@@ -38,7 +38,8 @@ export async function fetchReceiptData(qrData: string): Promise<string> {
     try {
       const browserInstance = await getBrowser();
       const context = await browserInstance.newContext({
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        userAgent:
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       });
       const page = await context.newPage();
 

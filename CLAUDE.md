@@ -4,7 +4,7 @@
 
 ExpenseSyncBot is a Telegram bot for tracking expenses and syncing them to Google Sheets. It supports multi-currency expenses, AI-powered expense analysis, category detection, and budget management.
 
-**Tech Stack:** Bun runtime, GramIO (Telegram), SQLite (bun:sqlite), googleapis, Hugging Face inference API
+**Tech Stack:** Bun runtime, GramIO (Telegram), SQLite (bun:sqlite), googleapis, Hugging Face inference API, pino (logging), Biome (linting), Lefthook (git hooks)
 
 ## Common Commands
 
@@ -20,7 +20,15 @@ bun run start
 # Type checking
 bun run type-check
 # or directly:
-bunx tsc --noEmit
+tsc --noEmit
+
+# Linting
+bun run lint          # check
+bun run lint:fix      # auto-fix
+bun run format        # format with Biome
+
+# Install git hooks (one-time, after clone)
+node_modules/.bin/lefthook install --force
 ```
 
 ### Deployment
@@ -303,6 +311,13 @@ See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 - NEVER throw away or rewrite implementations without EXPLICIT permission. If considering this, STOP and ask first.
 - MATCH the style and formatting of surrounding code, even if it differs from standard style guides. Consistency within a file trumps external standards.
 - Fix broken things immediately when you find them. Don't ask permission to fix bugs.
+- **Dependency versions always use `^`** (e.g. `"gramio": "^0.4.11"`). Never pin exact versions.
+- **No `any`/`as any`/`Function`** — proper typing only. `as unknown as ConcreteType` is acceptable only at framework boundaries.
+- No commented-out code. No template literals without variables. `Number.parseInt`. `T[]` not `Array<T>`.
+- **Unused parameters**: remove entirely (parameter + argument at call sites), don't prefix with `_`.
+- **Always handle `.catch()`** on fire-and-forget promises — at minimum log the error. Silent promise rejections hide bugs.
+- **Security checks fail-closed**: when a guard function is injected/optional, the absent-function default is `false` (deny), never `true` (allow).
+- **Multi-step DB operations are atomic**: SELECT followed by UPDATE on the same rows must be wrapped in a transaction. Without it, concurrent writes can corrupt data.
 
 ### Naming
 
@@ -314,6 +329,7 @@ See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 ### Code Comments
 
 - NEVER add comments explaining that something is "improved", "better", "new", "enhanced", or referencing what it used to be
+- NEVER add instructional comments: "copy this pattern", "use this instead", "prefer X over Y"
 - Comments should explain WHAT the code does or WHY it exists, not how it's better than something else
 - NEVER remove code comments unless you can PROVE they are actively false
 - NEVER refer to temporal context in comments ("recently refactored", "moved", "new")
@@ -330,7 +346,20 @@ Follow this framework for ANY technical issue:
 
 ### Testing
 
-- NEVER delete a test because it's failing — raise the issue instead
+- **Always write tests**: new functionality must include unit tests; bug fixes must include regression tests that reproduce the bug before the fix.
+- **TDD workflow** (mandatory for new features and bugfixes):
+  1. Write a failing test that validates the desired behavior
+  2. Run the test — confirm it fails for the RIGHT reason (not a syntax error or wrong import)
+  3. Write ONLY enough code to make the test pass
+  4. Run the test — confirm it passes
+  5. Refactor while keeping tests green
+- **Tests must exercise production code**: never reimplement logic in tests.
+- NEVER delete a failing test. Investigate and fix the root cause.
+- **Changing tests to match code is a red flag**: always analyze WHY.
+- **Every commit must have tests**: no committing code without corresponding test coverage.
+- **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
+- **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
+- **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
 - NEVER write tests that "test" mocked behavior instead of real logic
 - NEVER ignore system or test output — logs and messages often contain CRITICAL information
 - Test output MUST BE PRISTINE TO PASS
@@ -340,6 +369,96 @@ Follow this framework for ANY technical issue:
 - NEVER use `git add -A` without checking `git status` first
 - Commit frequently throughout development, even if high-level tasks are not yet done
 - NEVER skip, evade, or disable a pre-commit hook
+
+## Documentation
+
+- Specs: `docs/specs/YYYY-MM-DD-<topic>.md` — design documents and feature specifications
+- Plans: `docs/plans/YYYY-MM-DD-<topic>.md` — implementation plans with task breakdowns
+
+## Logging
+
+Use **pino** for all logging. Import via `createLogger` from `src/utils/logger.ts`:
+
+```ts
+import { createLogger } from '../../utils/logger.ts';
+const logger = createLogger('my-module');
+```
+
+- Pass errors as `{ err: error }`, never as `{ error: String(error) }` or `{ error: err.message }`.
+- `String(error)` and `.message` lose the stack trace and are not acceptable.
+- For structured data: `logger.info({ data }, 'label')` — NOT `logger.info('label:', data)`.
+- For simple messages: `logger.info('message')` or template literal `logger.info(\`msg ${var}\`)`.
+
+## Linting
+
+**Biome** for linting and formatting. Config in `biome.jsonc`.
+
+- `bun run lint` — check, `bun run lint:fix` — auto-fix, `bun run format` — format.
+- Run `biome` directly (from `node_modules/.bin`), not via `bunx biome`.
+- **Zero warnings policy**: lint warnings are NOT acceptable. Fix before committing.
+- `noConsole` rule is `warn` — use `logger.*` instead of `console.*` in all production code.
+
+## Git Hooks (Lefthook)
+
+`lefthook.yml` configures pre-commit and pre-push hooks:
+- **pre-commit**: typecheck + biome lint on staged files
+- **pre-push**: full test suite
+
+Install hooks after clone: `node_modules/.bin/lefthook install --force`
+
+## Backward Compatibility
+
+When renaming variables, constants, config keys, or any other interface:
+- **Ask immediately**: is backward compatibility needed, or can we migrate everything and remove the old names?
+- **Default recommendation**: full migration — no aliases, no legacy shims. Aliases are technical debt.
+- **Exceptions** worth keeping old names: public API with external consumers, stable library interface, or explicit user decision.
+- If migration is feasible (internal code, DB rows can be updated, tests can be rewritten), propose full migration as the primary option. Final call is the programmer's.
+
+## Tone of Voice (bot messages)
+
+All user-facing bot messages must follow these rules:
+
+- Address the user as **"ты"** (informal singular), never "вы", never "пользователь".
+- Speak directly to the person: "Ты уже подключил таблицу", not "The user has connected a spreadsheet".
+
+## Session Wrap-Up
+
+When summarising completed work or suggesting next steps, always scan the conversation history for items that were explicitly deferred, noted as "pending", or silently dropped mid-discussion. Surface them as concrete suggestions — not vague hints.
+
+After completing any task, answer these two questions out loud:
+
+1. **Всё ли сделано из того, что просили?** — go through the original request point by point. Did any sub-task get quietly skipped?
+2. **Есть ли что улучшить, исправить или убрать?** — name specific things, not vague hints. Open issues? Known limitations introduced? Stale comments or dead code noticed?
+
+## Telegram Bot API Limits
+
+### Message length
+- `sendMessage` / `editMessageText`: **4 096 chars**
+- Caption (photo, document, video, etc.): **1 024 chars**
+- `answerCallbackQuery` alert: **200 chars**
+
+When text may exceed 4 096 chars, split into multiple messages.
+
+### Rate limits
+- **~1 msg/sec per chat** — safe burst rate for a single user/group
+- **~30 msg/sec globally** across all chats
+- **20 msg/min per group/channel**
+- Exceeding any limit → HTTP **429** with `retry_after`. A 429 **blocks all API calls** — implement global backoff, not per-method.
+
+### Inline keyboard
+- Max **8 buttons per row**, max **100 buttons total**
+- `callback_data` per button: **64 bytes** (UTF-8). Exceeding → `400 BUTTON_DATA_INVALID`. Store state server-side, pass a short key.
+
+### Commands
+- Command name: **1–32 chars** (lowercase a-z, 0-9, `_`)
+- `/start` deep-link payload: **64 bytes**
+
+### File size
+- Upload to Telegram: **50 MB**
+- Download via `getFile`: **20 MB**
+
+### Message editing
+- Editable for **48 hours** after sending.
 
 ---
 

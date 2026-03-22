@@ -1,13 +1,13 @@
 import type {
-  FinancialSnapshot,
   BudgetBurnRate,
-  SpendingTrend,
-  CategoryAnomaly,
-  MonthlyProjection,
-  SpendingVelocity,
-  SpendingStreak,
   BudgetUtilization,
+  CategoryAnomaly,
+  FinancialSnapshot,
+  MonthlyProjection,
   OverallSeverity,
+  SpendingStreak,
+  SpendingTrend,
+  SpendingVelocity,
 } from './types';
 
 /**
@@ -57,20 +57,22 @@ export function formatSnapshotForPrompt(snapshot: FinancialSnapshot): string {
  */
 export function computeOverallSeverity(snapshot: FinancialSnapshot): OverallSeverity {
   // Critical: any budget exceeded or extreme anomaly
-  const hasExceeded = snapshot.burnRates.some(br => br.status === 'exceeded');
-  const hasExtremeAnomaly = snapshot.anomalies.some(a => a.severity === 'extreme');
+  const hasExceeded = snapshot.burnRates.some((br) => br.status === 'exceeded');
+  const hasExtremeAnomaly = snapshot.anomalies.some((a) => a.severity === 'extreme');
   if (hasExceeded || hasExtremeAnomaly) return 'critical';
 
   // Concern: critical burn rate, significant anomalies, or utilization > 90%
-  const hasCriticalBurn = snapshot.burnRates.some(br => br.status === 'critical');
-  const hasSignificantAnomaly = snapshot.anomalies.some(a => a.severity === 'significant');
-  const highUtilization = snapshot.budgetUtilization && snapshot.budgetUtilization.utilization_percent > 90;
+  const hasCriticalBurn = snapshot.burnRates.some((br) => br.status === 'critical');
+  const hasSignificantAnomaly = snapshot.anomalies.some((a) => a.severity === 'significant');
+  const highUtilization =
+    snapshot.budgetUtilization && snapshot.budgetUtilization.utilization_percent > 90;
   if (hasCriticalBurn || hasSignificantAnomaly || highUtilization) return 'concern';
 
   // Watch: warning burn rate, accelerating velocity, or mild anomalies
-  const hasWarningBurn = snapshot.burnRates.some(br => br.status === 'warning');
-  const isAccelerating = snapshot.velocity.trend === 'accelerating' && snapshot.velocity.acceleration > 20;
-  const hasMildAnomaly = snapshot.anomalies.some(a => a.severity === 'mild');
+  const hasWarningBurn = snapshot.burnRates.some((br) => br.status === 'warning');
+  const isAccelerating =
+    snapshot.velocity.trend === 'accelerating' && snapshot.velocity.acceleration > 20;
+  const hasMildAnomaly = snapshot.anomalies.some((a) => a.severity === 'mild');
   if (hasWarningBurn || isAccelerating || hasMildAnomaly) return 'watch';
 
   return 'good';
@@ -81,16 +83,22 @@ function formatBurnRates(burnRates: BudgetBurnRate[]): string {
 
   for (const br of burnRates) {
     const percent = br.budget_limit > 0 ? ((br.spent / br.budget_limit) * 100).toFixed(0) : '0';
-    const statusLabel = br.status === 'exceeded' ? 'ПРЕВЫШЕН'
-      : br.status === 'critical' ? 'КРИТИЧНО'
-      : br.status === 'warning' ? 'ВНИМАНИЕ'
-      : 'ОК';
+    const statusLabel =
+      br.status === 'exceeded'
+        ? 'ПРЕВЫШЕН'
+        : br.status === 'critical'
+          ? 'КРИТИЧНО'
+          : br.status === 'warning'
+            ? 'ВНИМАНИЕ'
+            : 'ОК';
 
-    lines.push(`- ${br.category}: ТОЧНО ${br.spent.toFixed(2)} ${br.currency} потрачено из ${br.budget_limit.toFixed(2)} ${br.currency} (${percent}%). ` +
-      `Темп: ${br.daily_burn_rate.toFixed(2)} ${br.currency}/день. ` +
-      `Прогноз к концу месяца: ${br.projected_total.toFixed(2)} ${br.currency}. ` +
-      `Запас: ${br.runway_days < 999 ? br.runway_days.toFixed(0) + ' дней' : '∞'}. ` +
-      `[${statusLabel}]`);
+    lines.push(
+      `- ${br.category}: ТОЧНО ${br.spent.toFixed(2)} ${br.currency} потрачено из ${br.budget_limit.toFixed(2)} ${br.currency} (${percent}%). ` +
+        `Темп: ${br.daily_burn_rate.toFixed(2)} ${br.currency}/день. ` +
+        `Прогноз к концу месяца: ${br.projected_total.toFixed(2)} ${br.currency}. ` +
+        `Запас: ${br.runway_days < 999 ? br.runway_days.toFixed(0) + ' дней' : '∞'}. ` +
+        `[${statusLabel}]`,
+    );
   }
 
   return lines.join('\n');
@@ -99,7 +107,9 @@ function formatBurnRates(burnRates: BudgetBurnRate[]): string {
 function formatBudgetUtilization(util: BudgetUtilization): string {
   const lines = ['=== ИСПОЛЬЗОВАНИЕ БЮДЖЕТА ==='];
   lines.push(`- Общий бюджет (EUR): ${util.total_budget.toFixed(2)}`);
-  lines.push(`- Потрачено: ${util.total_spent.toFixed(2)} (${util.utilization_percent.toFixed(1)}%)`);
+  lines.push(
+    `- Потрачено: ${util.total_spent.toFixed(2)} (${util.utilization_percent.toFixed(1)}%)`,
+  );
   lines.push(`- Остаток: ${util.remaining.toFixed(2)} (${util.remaining_percent.toFixed(1)}%)`);
 
   if (util.utilization_percent > 100) {
@@ -116,22 +126,29 @@ function formatTrends(weekTrend: SpendingTrend, monthTrend: SpendingTrend): stri
 
   // Week
   const weekArrow = weekTrend.direction === 'up' ? '↑' : weekTrend.direction === 'down' ? '↓' : '→';
-  lines.push(`- Неделя: ${weekArrow} ${weekTrend.change_percent > 0 ? '+' : ''}${weekTrend.change_percent.toFixed(1)}% ` +
-    `(€${weekTrend.current_total.toFixed(2)} vs €${weekTrend.previous_total.toFixed(2)} прошлая неделя)`);
+  lines.push(
+    `- Неделя: ${weekArrow} ${weekTrend.change_percent > 0 ? '+' : ''}${weekTrend.change_percent.toFixed(1)}% ` +
+      `(€${weekTrend.current_total.toFixed(2)} vs €${weekTrend.previous_total.toFixed(2)} прошлая неделя)`,
+  );
 
   // Top category changes for week
   const significantWeekChanges = weekTrend.category_changes
-    .filter(c => Math.abs(c.change_percent) > 20 && (c.current > 5 || c.previous > 5))
+    .filter((c) => Math.abs(c.change_percent) > 20 && (c.current > 5 || c.previous > 5))
     .slice(0, 3);
   for (const c of significantWeekChanges) {
-    lines.push(`  - ${c.category}: ${c.change_percent > 0 ? '+' : ''}${c.change_percent.toFixed(0)}% ` +
-      `(€${c.current.toFixed(2)} vs €${c.previous.toFixed(2)})`);
+    lines.push(
+      `  - ${c.category}: ${c.change_percent > 0 ? '+' : ''}${c.change_percent.toFixed(0)}% ` +
+        `(€${c.current.toFixed(2)} vs €${c.previous.toFixed(2)})`,
+    );
   }
 
   // Month
-  const monthArrow = monthTrend.direction === 'up' ? '↑' : monthTrend.direction === 'down' ? '↓' : '→';
-  lines.push(`- Месяц (пропорциональное сравнение): ${monthArrow} ${monthTrend.change_percent > 0 ? '+' : ''}${monthTrend.change_percent.toFixed(1)}% ` +
-    `(€${monthTrend.current_total.toFixed(2)} vs €${monthTrend.previous_total.toFixed(2)} прошлый месяц)`);
+  const monthArrow =
+    monthTrend.direction === 'up' ? '↑' : monthTrend.direction === 'down' ? '↓' : '→';
+  lines.push(
+    `- Месяц (пропорциональное сравнение): ${monthArrow} ${monthTrend.change_percent > 0 ? '+' : ''}${monthTrend.change_percent.toFixed(1)}% ` +
+      `(€${monthTrend.current_total.toFixed(2)} vs €${monthTrend.previous_total.toFixed(2)} прошлый месяц)`,
+  );
 
   return lines.join('\n');
 }
@@ -140,12 +157,13 @@ function formatAnomalies(anomalies: CategoryAnomaly[]): string {
   const lines = ['=== АНОМАЛИИ ==='];
 
   for (const a of anomalies) {
-    const severityLabel = a.severity === 'extreme' ? 'EXTREME'
-      : a.severity === 'significant' ? 'SIGNIFICANT'
-      : 'MILD';
+    const severityLabel =
+      a.severity === 'extreme' ? 'EXTREME' : a.severity === 'significant' ? 'SIGNIFICANT' : 'MILD';
 
-    lines.push(`- ${a.category}: €${a.current_month_total.toFixed(2)} за текущий месяц vs среднее €${a.avg_3_month.toFixed(2)}/мес за 3 месяца. ` +
-      `Deviation: ${a.deviation_ratio.toFixed(2)}x. [${severityLabel}]`);
+    lines.push(
+      `- ${a.category}: €${a.current_month_total.toFixed(2)} за текущий месяц vs среднее €${a.avg_3_month.toFixed(2)}/мес за 3 месяца. ` +
+        `Deviation: ${a.deviation_ratio.toFixed(2)}x. [${severityLabel}]`,
+    );
   }
 
   return lines.join('\n');
@@ -154,9 +172,12 @@ function formatAnomalies(anomalies: CategoryAnomaly[]): string {
 function formatProjection(projection: MonthlyProjection): string {
   const lines = ['=== ПРОГНОЗ НА КОНЕЦ МЕСЯЦА ==='];
 
-  const confidenceLabel = projection.confidence === 'low' ? '(НИЗКАЯ ТОЧНОСТЬ, мало данных)'
-    : projection.confidence === 'medium' ? '(средняя точность)'
-    : '(высокая точность)';
+  const confidenceLabel =
+    projection.confidence === 'low'
+      ? '(НИЗКАЯ ТОЧНОСТЬ, мало данных)'
+      : projection.confidence === 'medium'
+        ? '(средняя точность)'
+        : '(высокая точность)';
 
   lines.push(`- День ${projection.days_elapsed}/${projection.days_in_month} ${confidenceLabel}`);
   lines.push(`- Текущая сумма: €${projection.current_total.toFixed(2)}`);
@@ -167,11 +188,13 @@ function formatProjection(projection: MonthlyProjection): string {
   }
 
   // Categories that will exceed budget
-  const exceeding = projection.category_projections.filter(cp => cp.will_exceed);
+  const exceeding = projection.category_projections.filter((cp) => cp.will_exceed);
   if (exceeding.length > 0) {
     lines.push('- Категории, которые превысят бюджет:');
     for (const cp of exceeding) {
-      lines.push(`  - ${cp.category}: прогноз €${cp.projected.toFixed(2)} при бюджете €${cp.budget_limit?.toFixed(2)}`);
+      lines.push(
+        `  - ${cp.category}: прогноз €${cp.projected.toFixed(2)} при бюджете €${cp.budget_limit?.toFixed(2)}`,
+      );
     }
   }
 
@@ -182,8 +205,10 @@ function formatVelocity(velocity: SpendingVelocity): string {
   const lines = ['=== СКОРОСТЬ ТРАТ ==='];
 
   const trend = velocity.trend === 'accelerating' ? 'Ускорение' : 'Замедление';
-  lines.push(`- ${trend}: ${velocity.acceleration > 0 ? '+' : ''}${velocity.acceleration.toFixed(1)}% ` +
-    `(€${velocity.period_2_daily_avg.toFixed(2)}/день последние 7 дней vs €${velocity.period_1_daily_avg.toFixed(2)}/день ранее)`);
+  lines.push(
+    `- ${trend}: ${velocity.acceleration > 0 ? '+' : ''}${velocity.acceleration.toFixed(1)}% ` +
+      `(€${velocity.period_2_daily_avg.toFixed(2)}/день последние 7 дней vs €${velocity.period_1_daily_avg.toFixed(2)}/день ранее)`,
+  );
 
   return lines.join('\n');
 }
@@ -193,7 +218,9 @@ function formatStreak(streak: SpendingStreak): string {
 
   const type = streak.streak_type === 'above_average' ? 'выше среднего' : 'ниже среднего';
   lines.push(`- ${streak.current_streak_days} дней подряд ${type}`);
-  lines.push(`- Среднее в серии: €${streak.avg_daily_during_streak.toFixed(2)}/день vs общее среднее €${streak.overall_daily_average.toFixed(2)}/день`);
+  lines.push(
+    `- Среднее в серии: €${streak.avg_daily_during_streak.toFixed(2)}/день vs общее среднее €${streak.overall_daily_average.toFixed(2)}/день`,
+  );
 
   return lines.join('\n');
 }

@@ -5,19 +5,12 @@
  * The actual DB persistence happens in pipeline.ts via transition().
  */
 
-import {
-  DevTaskState,
-  STATE_TRANSITIONS,
-  STATE_LABELS,
-} from './types';
+import { DevTaskState, STATE_LABELS, STATE_TRANSITIONS } from './types';
 
 /**
  * Check if a state transition is allowed
  */
-export function isTransitionAllowed(
-  currentState: DevTaskState,
-  newState: DevTaskState
-): boolean {
+export function isTransitionAllowed(currentState: DevTaskState, newState: DevTaskState): boolean {
   const allowed = STATE_TRANSITIONS[currentState];
   return allowed.includes(newState);
 }
@@ -25,9 +18,7 @@ export function isTransitionAllowed(
 /**
  * Get all allowed transitions from current state
  */
-export function getAllowedTransitions(
-  currentState: DevTaskState
-): DevTaskState[] {
+export function getAllowedTransitions(currentState: DevTaskState): DevTaskState[] {
   return STATE_TRANSITIONS[currentState];
 }
 
@@ -37,13 +28,13 @@ export function getAllowedTransitions(
 export function validateTransition(
   taskId: number,
   currentState: DevTaskState,
-  newState: DevTaskState
+  newState: DevTaskState,
 ): void {
   if (!isTransitionAllowed(currentState, newState)) {
     const from = STATE_LABELS[currentState];
     const to = STATE_LABELS[newState];
     throw new Error(
-      `Invalid state transition: ${from} (${currentState}) -> ${to} (${newState}) for task #${taskId}`
+      `Invalid state transition: ${from} (${currentState}) -> ${to} (${newState}) for task #${taskId}`,
     );
   }
 }

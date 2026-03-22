@@ -45,20 +45,51 @@ export enum DevTaskState {
  * Key = current state, value = array of allowed next states.
  */
 export const STATE_TRANSITIONS: Record<DevTaskState, DevTaskState[]> = {
-  [DevTaskState.PENDING]: [DevTaskState.CLARIFYING, DevTaskState.DESIGNING, DevTaskState.REJECTED, DevTaskState.FAILED],
+  [DevTaskState.PENDING]: [
+    DevTaskState.CLARIFYING,
+    DevTaskState.DESIGNING,
+    DevTaskState.REJECTED,
+    DevTaskState.FAILED,
+  ],
   [DevTaskState.CLARIFYING]: [DevTaskState.DESIGNING, DevTaskState.REJECTED, DevTaskState.FAILED],
   [DevTaskState.DESIGNING]: [DevTaskState.APPROVAL, DevTaskState.FAILED, DevTaskState.REJECTED],
-  [DevTaskState.APPROVAL]: [DevTaskState.IMPLEMENTING, DevTaskState.REJECTED, DevTaskState.DESIGNING],
+  [DevTaskState.APPROVAL]: [
+    DevTaskState.IMPLEMENTING,
+    DevTaskState.REJECTED,
+    DevTaskState.DESIGNING,
+  ],
   [DevTaskState.IMPLEMENTING]: [DevTaskState.TESTING, DevTaskState.FAILED, DevTaskState.REJECTED],
-  [DevTaskState.TESTING]: [DevTaskState.PULL_REQUEST, DevTaskState.AWAITING_MERGE, DevTaskState.IMPLEMENTING, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.TESTING]: [
+    DevTaskState.PULL_REQUEST,
+    DevTaskState.AWAITING_MERGE,
+    DevTaskState.IMPLEMENTING,
+    DevTaskState.FAILED,
+    DevTaskState.REJECTED,
+  ],
   [DevTaskState.PULL_REQUEST]: [DevTaskState.REVIEWING, DevTaskState.FAILED, DevTaskState.REJECTED],
-  [DevTaskState.REVIEWING]: [DevTaskState.AWAITING_REVIEW, DevTaskState.FAILED, DevTaskState.REJECTED],
+  [DevTaskState.REVIEWING]: [
+    DevTaskState.AWAITING_REVIEW,
+    DevTaskState.FAILED,
+    DevTaskState.REJECTED,
+  ],
   [DevTaskState.AWAITING_REVIEW]: [DevTaskState.UPDATING, DevTaskState.REJECTED],
   [DevTaskState.UPDATING]: [DevTaskState.TESTING, DevTaskState.FAILED, DevTaskState.REJECTED],
-  [DevTaskState.AWAITING_MERGE]: [DevTaskState.COMPLETED, DevTaskState.UPDATING, DevTaskState.REJECTED],
+  [DevTaskState.AWAITING_MERGE]: [
+    DevTaskState.COMPLETED,
+    DevTaskState.UPDATING,
+    DevTaskState.REJECTED,
+  ],
   [DevTaskState.COMPLETED]: [],
   [DevTaskState.REJECTED]: [],
-  [DevTaskState.FAILED]: [DevTaskState.PENDING, DevTaskState.DESIGNING, DevTaskState.IMPLEMENTING, DevTaskState.PULL_REQUEST, DevTaskState.REVIEWING, DevTaskState.AWAITING_REVIEW, DevTaskState.REJECTED],
+  [DevTaskState.FAILED]: [
+    DevTaskState.PENDING,
+    DevTaskState.DESIGNING,
+    DevTaskState.IMPLEMENTING,
+    DevTaskState.PULL_REQUEST,
+    DevTaskState.REVIEWING,
+    DevTaskState.AWAITING_REVIEW,
+    DevTaskState.REJECTED,
+  ],
 };
 
 /**

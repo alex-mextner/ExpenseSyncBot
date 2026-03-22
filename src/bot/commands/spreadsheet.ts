@@ -1,11 +1,11 @@
-import type { Ctx } from '../types';
 import { database } from '../../database';
 import { getSpreadsheetUrl } from '../../services/google/sheets';
+import type { Ctx } from '../types';
 
 /**
  * /spreadsheet command handler - get link to the Google Sheet
  */
-export async function handleSpreadsheetCommand(ctx: Ctx["Command"]): Promise<void> {
+export async function handleSpreadsheetCommand(ctx: Ctx['Command']): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -37,7 +37,5 @@ export async function handleSpreadsheetCommand(ctx: Ctx["Command"]): Promise<voi
 
   const spreadsheetUrl = getSpreadsheetUrl(group.spreadsheet_id);
 
-  await ctx.send(
-    `📊 Ссылка на таблицу:\n\n${spreadsheetUrl}`
-  );
+  await ctx.send(`📊 Ссылка на таблицу:\n\n${spreadsheetUrl}`);
 }

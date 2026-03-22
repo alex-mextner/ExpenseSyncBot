@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { User, CreateUserData, UpdateUserData } from '../types';
+import type { CreateUserData, UpdateUserData, User } from '../types';
 
 export class UserRepository {
   constructor(private db: Database) {}

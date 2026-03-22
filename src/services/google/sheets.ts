@@ -1,8 +1,11 @@
 import { google } from 'googleapis';
-import { getAuthenticatedClient } from './oauth';
 import type { CurrencyCode } from '../../config/constants';
 import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';
+import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
+import { getAuthenticatedClient } from './oauth';
+
+const logger = createLogger('sheets');
 
 /**
  * Row data from spreadsheet
@@ -21,7 +24,7 @@ export interface SheetRow {
 export async function createExpenseSpreadsheet(
   refreshToken: string,
   defaultCurrency: CurrencyCode,
-  enabledCurrencies: CurrencyCode[]
+  enabledCurrencies: CurrencyCode[],
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -29,7 +32,7 @@ export async function createExpenseSpreadsheet(
   // Build headers
   const headers = [
     SPREADSHEET_CONFIG.headers[0], // Дата
-    ...enabledCurrencies.map(code => `${code} (${CURRENCY_SYMBOLS[code]})`),
+    ...enabledCurrencies.map((code) => `${code} (${CURRENCY_SYMBOLS[code]})`),
     SPREADSHEET_CONFIG.eurColumnHeader, // EUR (calc)
     SPREADSHEET_CONFIG.headers[1], // Категория
     SPREADSHEET_CONFIG.headers[2], // Комментарий
@@ -55,7 +58,7 @@ export async function createExpenseSpreadsheet(
               startColumn: 0,
               rowData: [
                 {
-                  values: headers.map(header => ({
+                  values: headers.map((header) => ({
                     userEnteredValue: { stringValue: header },
                     userEnteredFormat: {
                       textFormat: { bold: true },
@@ -116,7 +119,7 @@ export async function appendExpenseRow(
     comment: string;
     amounts: Record<CurrencyCode, number | null>; // Currency -> amount
     eurAmount: number;
-  }
+  },
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -128,8 +131,8 @@ export async function appendExpenseRow(
   });
 
   const headers = headersResponse.data.values?.[0] || [];
-  console.log(`[SHEETS] Headers from spreadsheet:`, headers);
-  console.log(`[SHEETS] Data to append:`, data);
+  logger.info({ data: headers }, `[SHEETS] Headers from spreadsheet`);
+  logger.info({ data }, `[SHEETS] Data to append`);
 
   // Build row values based on header order
   const row: (string | number | null)[] = [];
@@ -137,30 +140,30 @@ export async function appendExpenseRow(
   for (const header of headers) {
     if (header === SPREADSHEET_CONFIG.headers[0]) {
       // Дата
-      console.log(`[SHEETS] Adding date: ${data.date}`);
+      logger.info(`[SHEETS] Adding date: ${data.date}`);
       row.push(data.date);
     } else if (header === SPREADSHEET_CONFIG.headers[1]) {
       // Категория
-      console.log(`[SHEETS] Adding category: ${data.category}`);
+      logger.info(`[SHEETS] Adding category: ${data.category}`);
       row.push(data.category);
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       // Комментарий
-      console.log(`[SHEETS] Adding comment: ${data.comment}`);
+      logger.info(`[SHEETS] Adding comment: ${data.comment}`);
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
       // EUR (calc)
-      console.log(`[SHEETS] Adding EUR (calc): ${data.eurAmount}`);
+      logger.info(`[SHEETS] Adding EUR (calc): ${data.eurAmount}`);
       row.push(data.eurAmount);
     } else {
       // Currency columns
       const currencyCode = header.split(' ')[0] as CurrencyCode;
       const value = data.amounts[currencyCode] ?? '';
-      console.log(`[SHEETS] Header "${header}" -> currency "${currencyCode}" -> value ${value}`);
+      logger.info(`[SHEETS] Header "${header}" -> currency "${currencyCode}" -> value ${value}`);
       row.push(value);
     }
   }
 
-  console.log(`[SHEETS] Final row:`, row);
+  logger.info({ data: row }, `[SHEETS] Final row`);
 
   // Find last row with data in column A
   const dataResponse = await sheets.spreadsheets.values.get({
@@ -171,7 +174,7 @@ export async function appendExpenseRow(
   const existingRows = dataResponse.data.values || [];
   const nextRow = existingRows.length + 1; // +1 because rows are 1-indexed
 
-  console.log(`[SHEETS] Last row with data: ${existingRows.length}, inserting at row ${nextRow}`);
+  logger.info(`[SHEETS] Last row with data: ${existingRows.length}, inserting at row ${nextRow}`);
 
   // Calculate last column letter dynamically based on row length
   const lastColLetter = String.fromCharCode(64 + row.length); // 1=A, 2=B, ..., 9=I, etc.
@@ -191,10 +194,14 @@ export async function appendExpenseRow(
   const updatedRows = response.data.updatedRows;
   const updatedCells = response.data.updatedCells;
 
-  console.log(`[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`);
+  logger.info(
+    `[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`,
+  );
 
   if (!updatedRows || updatedRows === 0) {
-    console.error(`[SHEETS] ⚠️ No rows were updated! Full response:`, JSON.stringify(response.data, null, 2));
+    logger.error(
+      `[SHEETS] ⚠️ No rows were updated! Full response: ${JSON.stringify(response.data, null, 2)}`,
+    );
   }
 }
 
@@ -210,7 +217,7 @@ export function getSpreadsheetUrl(spreadsheetId: string): string {
  */
 export async function verifySpreadsheetAccess(
   refreshToken: string,
-  spreadsheetId: string
+  spreadsheetId: string,
 ): Promise<boolean> {
   try {
     const auth = getAuthenticatedClient(refreshToken);
@@ -219,7 +226,7 @@ export async function verifySpreadsheetAccess(
     await sheets.spreadsheets.get({ spreadsheetId });
     return true;
   } catch (err) {
-    console.error('Failed to verify spreadsheet access:', err);
+    logger.error({ err: err }, 'Failed to verify spreadsheet access');
     return false;
   }
 }
@@ -246,21 +253,18 @@ function normalizeMonth(month: string): string {
 /**
  * Create empty Budget sheet with headers only
  */
-async function createEmptyBudgetSheet(
-  refreshToken: string,
-  spreadsheetId: string
-): Promise<void> {
+async function createEmptyBudgetSheet(refreshToken: string, spreadsheetId: string): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Check if Budget sheet already exists
   const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
   const existingSheet = spreadsheet.data.sheets?.find(
-    sheet => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName
+    (sheet) => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName,
   );
 
   if (existingSheet) {
-    console.log('[SHEETS] Budget sheet already exists');
+    logger.info('[SHEETS] Budget sheet already exists');
     return;
   }
 
@@ -287,7 +291,7 @@ async function createEmptyBudgetSheet(
 
   // Build header row
   const headers = BUDGET_SHEET_CONFIG.headers;
-  const headerRow = headers.map(header => ({
+  const headerRow = headers.map((header) => ({
     userEnteredValue: { stringValue: header },
     userEnteredFormat: {
       textFormat: { bold: true },
@@ -325,7 +329,7 @@ async function createEmptyBudgetSheet(
     },
   });
 
-  console.log('[SHEETS] Empty Budget sheet created');
+  logger.info('[SHEETS] Empty Budget sheet created');
 }
 
 /**
@@ -336,7 +340,7 @@ export async function createBudgetSheet(
   spreadsheetId: string,
   categories: string[],
   defaultLimit: number = 100,
-  currency: CurrencyCode = 'EUR'
+  currency: CurrencyCode = 'EUR',
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -344,11 +348,11 @@ export async function createBudgetSheet(
   // Check if Budget sheet already exists
   const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
   const existingSheet = spreadsheet.data.sheets?.find(
-    sheet => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName
+    (sheet) => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName,
   );
 
   if (existingSheet) {
-    console.log('[SHEETS] Budget sheet already exists');
+    logger.info('[SHEETS] Budget sheet already exists');
     return;
   }
 
@@ -382,7 +386,7 @@ export async function createBudgetSheet(
   // Build data rows (header + default budgets for categories)
   const rows = [
     // Header row
-    headers.map(header => ({
+    headers.map((header) => ({
       userEnteredValue: { stringValue: header },
       userEnteredFormat: {
         textFormat: { bold: true },
@@ -390,7 +394,7 @@ export async function createBudgetSheet(
       },
     })),
     // Budget rows for each category
-    ...categories.map(category => [
+    ...categories.map((category) => [
       { userEnteredValue: { stringValue: currentMonth } },
       { userEnteredValue: { stringValue: category } },
       { userEnteredValue: { numberValue: defaultLimit } },
@@ -405,7 +409,7 @@ export async function createBudgetSheet(
       requests: [
         {
           updateCells: {
-            rows: rows.map(row => ({ values: row })),
+            rows: rows.map((row) => ({ values: row })),
             fields: 'userEnteredValue,userEnteredFormat',
             start: {
               sheetId: budgetSheetId,
@@ -428,7 +432,7 @@ export async function createBudgetSheet(
     },
   });
 
-  console.log(`[SHEETS] Budget sheet created with ${categories.length} categories`);
+  logger.info(`[SHEETS] Budget sheet created with ${categories.length} categories`);
 }
 
 /**
@@ -436,7 +440,7 @@ export async function createBudgetSheet(
  */
 export async function readBudgetData(
   refreshToken: string,
-  spreadsheetId: string
+  spreadsheetId: string,
 ): Promise<Array<{ month: string; category: string; limit: number; currency: CurrencyCode }>> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -448,7 +452,12 @@ export async function readBudgetData(
     });
 
     const rows = response.data.values || [];
-    const budgets: Array<{ month: string; category: string; limit: number; currency: CurrencyCode }> = [];
+    const budgets: Array<{
+      month: string;
+      category: string;
+      limit: number;
+      currency: CurrencyCode;
+    }> = [];
 
     for (const row of rows) {
       if (row.length >= 3) {
@@ -468,7 +477,7 @@ export async function readBudgetData(
 
     return budgets;
   } catch (err) {
-    console.error('[SHEETS] Failed to read budget data:', err);
+    logger.error({ err: err }, '[SHEETS] Failed to read budget data');
     return [];
   }
 }
@@ -484,7 +493,7 @@ export async function writeBudgetRow(
     category: string;
     limit: number;
     currency: CurrencyCode;
-  }
+  },
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -541,7 +550,7 @@ export async function writeBudgetRow(
  */
 export async function hasBudgetSheet(
   refreshToken: string,
-  spreadsheetId: string
+  spreadsheetId: string,
 ): Promise<boolean> {
   try {
     const auth = getAuthenticatedClient(refreshToken);
@@ -549,12 +558,12 @@ export async function hasBudgetSheet(
 
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
     const budgetSheet = spreadsheet.data.sheets?.find(
-      sheet => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName
+      (sheet) => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName,
     );
 
     return !!budgetSheet;
   } catch (err) {
-    console.error('[SHEETS] Failed to check Budget sheet:', err);
+    logger.error({ err: err }, '[SHEETS] Failed to check Budget sheet');
     return false;
   }
 }
@@ -564,7 +573,7 @@ export async function hasBudgetSheet(
  */
 export async function readExpensesFromSheet(
   refreshToken: string,
-  spreadsheetId: string
+  spreadsheetId: string,
 ): Promise<SheetRow[]> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -583,7 +592,7 @@ export async function readExpensesFromSheet(
 
   // First row is headers
   const headers = rows[0] as string[];
-  console.log(`[SHEETS] Headers:`, headers);
+  logger.info({ data: headers }, `[SHEETS] Headers`);
 
   // Find column indices
   const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0]!); // Дата
@@ -599,10 +608,13 @@ export async function readExpensesFromSheet(
   const currencyColumns: Array<{ index: number; currency: string }> = [];
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
-    if (header && header !== SPREADSHEET_CONFIG.headers[0] &&
-        header !== SPREADSHEET_CONFIG.headers[1] &&
-        header !== SPREADSHEET_CONFIG.headers[2] &&
-        header !== SPREADSHEET_CONFIG.eurColumnHeader) {
+    if (
+      header &&
+      header !== SPREADSHEET_CONFIG.headers[0] &&
+      header !== SPREADSHEET_CONFIG.headers[1] &&
+      header !== SPREADSHEET_CONFIG.headers[2] &&
+      header !== SPREADSHEET_CONFIG.eurColumnHeader
+    ) {
       // Extract currency code from "USD ($)" -> "USD"
       const match = header.match(/^([A-Z]{3})\s*\(/);
       if (match) {
@@ -611,7 +623,7 @@ export async function readExpensesFromSheet(
     }
   }
 
-  console.log(`[SHEETS] Currency columns:`, currencyColumns);
+  logger.info({ data: currencyColumns }, `[SHEETS] Currency columns`);
 
   // Parse data rows (skip header)
   const expenses: SheetRow[] = [];
