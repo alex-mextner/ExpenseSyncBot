@@ -90,7 +90,8 @@ export class ExpenseBotAgent {
         for await (const event of stream) {
           // Text delta -- stream to Telegram
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            await writer.onTextDelta(event.delta.text);
+            writer.appendText(event.delta.text);
+            await writer.flush(false);
           }
 
           // Start of a new content block
@@ -118,7 +119,9 @@ export class ExpenseBotAgent {
 
               logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
 
-              await writer.onToolStart(currentToolUse.name, input);
+              // Show live indicator while tool executes
+              writer.setToolLabel(currentToolUse.name, input);
+              await writer.flush(true);
 
               const result = await executeTool(currentToolUse.name, input, this.ctx);
 
@@ -132,7 +135,7 @@ export class ExpenseBotAgent {
                 logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
               }
 
-              writer.onToolResult(currentToolUse.name, input, result);
+              writer.markToolResult(result.success);
 
               toolResults.push({ id: currentToolUse.id, result });
 
@@ -146,6 +149,9 @@ export class ExpenseBotAgent {
         const fullAssistantContent = finalMessage.content;
 
         if (toolResults.length > 0) {
+          // Commit this round's tool lines and reset text buffer for next round
+          writer.commitIntermediate();
+
           // Add assistant message + tool results, continue loop
           messages.push({ role: 'assistant', content: fullAssistantContent });
           messages.push({
