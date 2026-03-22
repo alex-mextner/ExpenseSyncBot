@@ -1,11 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type {
-  AdviceLog,
-  BudgetBurnRate,
-  CategoryAnomaly,
-  FinancialSnapshot,
-  SpendingVelocity,
-} from './types';
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
+import type { AdviceLog, BudgetBurnRate, CategoryAnomaly, FinancialSnapshot } from './types';
 
 // ── Mock database ──────────────────────────────────────────────────────
 
@@ -107,6 +101,9 @@ function buildAnomaly(overrides: Partial<CategoryAnomaly> = {}): CategoryAnomaly
 // ── Reset mocks between tests ──────────────────────────────────────────
 
 beforeEach(() => {
+  // 2026-03-23 is a Monday — fixes day-of-week-dependent tests
+  setSystemTime(new Date('2026-03-23T10:00:00Z'));
+
   mockAdviceLogs.countToday.mockImplementation(() => 0);
   mockAdviceLogs.hasTopicThisMonth.mockImplementation(() => false);
   mockAdviceLogs.getRecent.mockImplementation(() => []);
@@ -119,24 +116,23 @@ beforeEach(() => {
   // cooldowns explicitly where needed.
 });
 
+afterEach(() => {
+  setSystemTime(); // reset to real time
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // Tests for checkSmartTriggers
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('checkSmartTriggers', () => {
-  test('neutral snapshot with no anomalies or budget issues returns null (or weekly_check on Monday)', () => {
+  test('neutral snapshot with no anomalies or budget issues returns weekly_check on Monday', () => {
+    // System time is set to Monday 2026-03-23 in beforeEach
     const snapshot = buildNeutralSnapshot();
     const result = checkSmartTriggers(9999, snapshot);
-    const isMonday = new Date().getDay() === 1;
-    if (isMonday) {
-      // On Mondays, the weekly_check trigger may fire for a neutral snapshot
-      if (result) {
-        expect(result.type).toBe('weekly_check');
-        expect(result.tier).toBe('quick');
-      }
-    } else {
-      expect(result).toBeNull();
-    }
+    // On a Monday with neutral snapshot, weekly_check fires
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('weekly_check');
+    expect(result?.tier).toBe('quick');
   });
 
   test('returns null when daily advice limit is reached', () => {
@@ -165,13 +161,13 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(9997, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('budget_threshold');
-    expect(result!.tier).toBe('alert');
-    expect(result!.topic).toContain('Food');
-    expect(result!.topic).toContain('exceeded');
-    expect(result!.data.category).toBe('Food');
-    expect(result!.data.spent).toBe(600);
-    expect(result!.data.limit).toBe(500);
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.tier).toBe('alert');
+    expect(result?.topic).toContain('Food');
+    expect(result?.topic).toContain('exceeded');
+    expect(result?.data.category).toBe('Food');
+    expect(result?.data.spent).toBe(600);
+    expect(result?.data.limit).toBe(500);
   });
 
   test('budget warning triggers alert with projected data', () => {
@@ -189,10 +185,10 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(9996, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('budget_threshold');
-    expect(result!.tier).toBe('alert');
-    expect(result!.data.projected).toBe(700);
-    expect(result!.data.limit).toBe(500);
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.tier).toBe('alert');
+    expect(result?.data.projected).toBe(700);
+    expect(result?.data.limit).toBe(500);
   });
 
   test('budget critical triggers alert', () => {
@@ -210,10 +206,10 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(9995, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('budget_threshold');
-    expect(result!.tier).toBe('alert');
-    expect(result!.topic).toContain('Rent');
-    expect(result!.topic).toContain('100');
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.tier).toBe('alert');
+    expect(result?.topic).toContain('Rent');
+    expect(result?.topic).toContain('100');
   });
 
   test('significant category anomaly triggers alert', () => {
@@ -231,13 +227,13 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(9994, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('anomaly');
-    expect(result!.tier).toBe('alert');
-    expect(result!.topic).toContain('Entertainment');
-    expect(result!.data.category).toBe('Entertainment');
-    expect(result!.data.current).toBe(300);
-    expect(result!.data.average).toBe(100);
-    expect(result!.data.ratio).toBe(3.0);
+    expect(result?.type).toBe('anomaly');
+    expect(result?.tier).toBe('alert');
+    expect(result?.topic).toContain('Entertainment');
+    expect(result?.data.category).toBe('Entertainment');
+    expect(result?.data.current).toBe(300);
+    expect(result?.data.average).toBe(100);
+    expect(result?.data.ratio).toBe(3.0);
   });
 
   test('extreme anomaly triggers alert', () => {
@@ -247,8 +243,8 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(9993, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('anomaly');
-    expect(result!.tier).toBe('alert');
+    expect(result?.type).toBe('anomaly');
+    expect(result?.tier).toBe('alert');
   });
 
   test('mild anomaly does NOT trigger', () => {
@@ -276,9 +272,9 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(9991, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('velocity_spike');
-    expect(result!.tier).toBe('quick');
-    expect(result!.data.acceleration).toBe(100);
+    expect(result?.type).toBe('velocity_spike');
+    expect(result?.tier).toBe('quick');
+    expect(result?.data.acceleration).toBe(100);
   });
 
   test('budget exceeded takes priority over anomaly (priority order)', () => {
@@ -290,7 +286,7 @@ describe('checkSmartTriggers', () => {
     const result = checkSmartTriggers(9990, snapshot);
     expect(result).not.toBeNull();
     // Budget threshold fires first because it's checked before anomalies
-    expect(result!.type).toBe('budget_threshold');
+    expect(result?.type).toBe('budget_threshold');
   });
 
   test('already-sent topic this month is skipped', () => {
@@ -337,7 +333,7 @@ describe('recordAdviceSent + cooldown', () => {
 
     const first = checkSmartTriggers(groupId, snapshot);
     expect(first).not.toBeNull();
-    expect(first!.tier).toBe('alert');
+    expect(first?.tier).toBe('alert');
 
     // Record that we sent both tiers to fully lock this group
     recordAdviceSent(groupId, 'alert');
@@ -367,7 +363,7 @@ describe('recordAdviceSent + cooldown', () => {
 
     const first = checkSmartTriggers(groupId, snapshot);
     expect(first).not.toBeNull();
-    expect(first!.tier).toBe('quick');
+    expect(first?.tier).toBe('quick');
 
     recordAdviceSent(groupId, 'quick');
 
@@ -396,6 +392,215 @@ describe('recordAdviceSent + cooldown', () => {
 
     const result = checkSmartTriggers(groupId, snapshot);
     expect(result).not.toBeNull();
-    expect(result!.tier).toBe('quick');
+    expect(result?.tier).toBe('quick');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Additional edge cases
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('edge cases', () => {
+  test('weekly_check returns correct topic format with week number', () => {
+    // Monday 2026-03-23 set in beforeEach
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8001, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('weekly_check');
+    // topic format: weekly_check:YYYY-ww
+    expect(result?.topic).toMatch(/^weekly_check:\d{4}-\d+$/);
+  });
+
+  test('weekly_check does NOT fire on a non-Monday (Tuesday)', () => {
+    // Override to Tuesday
+    setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8002, snapshot);
+    // No budget/anomaly/velocity — should return null on non-Monday
+    expect(result).toBeNull();
+  });
+
+  test('weekly_check does NOT fire on Sunday', () => {
+    setSystemTime(new Date('2026-03-22T10:00:00Z')); // Sunday
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8003, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('multiple budgets: only the first exceeded one fires', () => {
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({ status: 'on_track', category: 'Food', spent: 100 }),
+        buildBurnRate({ status: 'exceeded', category: 'Transport', spent: 600 }),
+        buildBurnRate({ status: 'exceeded', category: 'Rent', spent: 1200 }),
+      ],
+    });
+    const result = checkSmartTriggers(8004, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+    // First exceeded budget fires (Transport comes before Rent)
+    expect(result?.data.category).toBe('Transport');
+  });
+
+  test('budget warning topic includes "80" threshold', () => {
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [buildBurnRate({ status: 'warning', category: 'Gym' })],
+    });
+    const result = checkSmartTriggers(8005, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.topic).toContain('80');
+  });
+
+  test('budget critical topic includes "100" threshold', () => {
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [buildBurnRate({ status: 'critical', category: 'Rent' })],
+    });
+    const result = checkSmartTriggers(8006, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.topic).toContain('100');
+  });
+
+  test('velocity spike at exactly 50% acceleration does NOT trigger (boundary: > 50 required)', () => {
+    const snapshot = buildNeutralSnapshot({
+      velocity: {
+        period_1_daily_avg: 50,
+        period_2_daily_avg: 75,
+        acceleration: 50, // exactly at boundary — not > 50
+        trend: 'accelerating',
+      },
+    });
+    // Use Tuesday to avoid weekly_check interference
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const result = checkSmartTriggers(8007, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('velocity spike at 51% acceleration DOES trigger', () => {
+    const snapshot = buildNeutralSnapshot({
+      velocity: {
+        period_1_daily_avg: 50,
+        period_2_daily_avg: 75.5,
+        acceleration: 51,
+        trend: 'accelerating',
+      },
+    });
+    const result = checkSmartTriggers(8008, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('velocity_spike');
+    expect(result?.data.acceleration).toBe(51);
+  });
+
+  test('velocity trend stable does NOT trigger velocity_spike even with high acceleration number', () => {
+    const snapshot = buildNeutralSnapshot({
+      velocity: {
+        period_1_daily_avg: 50,
+        period_2_daily_avg: 100,
+        acceleration: 100,
+        trend: 'stable', // not 'accelerating'
+      },
+    });
+    // Use Tuesday to avoid weekly_check
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const result = checkSmartTriggers(8009, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('first_expense_of_month fires when expenseCount === 1 and date <= 3', () => {
+    // Use March 1 (day 1 of month, also not Monday to isolate)
+    setSystemTime(new Date('2026-03-01T10:00:00Z')); // Sunday
+    mockExpenses.getCountForRange.mockImplementation(() => 1);
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8010, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('first_expense_of_month');
+    expect(result?.tier).toBe('quick');
+    expect(result?.data.month).toMatch(/^\d{4}-\d{2}$/);
+  });
+
+  test('first_expense_of_month does NOT fire when count > 1', () => {
+    setSystemTime(new Date('2026-03-01T10:00:00Z'));
+    mockExpenses.getCountForRange.mockImplementation(() => 5);
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8011, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('first_expense_of_month does NOT fire after day 3', () => {
+    setSystemTime(new Date('2026-03-05T10:00:00Z')); // day 5
+    mockExpenses.getCountForRange.mockImplementation(() => 1);
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8012, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('velocity_spike cooldown: second call within 7 days is blocked', () => {
+    const groupId = 8013;
+    const sevenDaysAgo = new Date('2026-03-23T10:00:00Z').getTime() - 6 * 24 * 60 * 60 * 1000;
+    mockAdviceLogs.getRecent.mockImplementation(() => [
+      {
+        topic: 'velocity_spike',
+        created_at: new Date(sevenDaysAgo).toISOString(),
+      } as AdviceLog,
+    ]);
+
+    // Use Tuesday to avoid weekly_check interference
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      velocity: {
+        period_1_daily_avg: 30,
+        period_2_daily_avg: 80,
+        acceleration: 167,
+        trend: 'accelerating',
+      },
+    });
+    const result = checkSmartTriggers(groupId, snapshot);
+    // Within 7 days — should be blocked
+    expect(result).toBeNull();
+  });
+
+  test('velocity_spike fires after 7-day cooldown expires', () => {
+    const groupId = 8014;
+    const moreThan7DaysAgo = new Date('2026-03-23T10:00:00Z').getTime() - 8 * 24 * 60 * 60 * 1000;
+    mockAdviceLogs.getRecent.mockImplementation(() => [
+      {
+        topic: 'velocity_spike',
+        created_at: new Date(moreThan7DaysAgo).toISOString(),
+      } as AdviceLog,
+    ]);
+
+    const snapshot = buildNeutralSnapshot({
+      velocity: {
+        period_1_daily_avg: 30,
+        period_2_daily_avg: 80,
+        acceleration: 167,
+        trend: 'accelerating',
+      },
+    });
+    const result = checkSmartTriggers(groupId, snapshot);
+    // More than 7 days ago — should fire
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('velocity_spike');
+  });
+
+  test('all trigger types return correct tier', () => {
+    // alert tier
+    const alertSnap = buildNeutralSnapshot({
+      burnRates: [buildBurnRate({ status: 'exceeded' })],
+    });
+    const alertResult = checkSmartTriggers(8015, alertSnap);
+    expect(alertResult?.tier).toBe('alert');
+
+    // quick tier — velocity (use unique groupId, Tuesday to avoid weekly check overlap)
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const quickSnap = buildNeutralSnapshot({
+      velocity: {
+        period_1_daily_avg: 30,
+        period_2_daily_avg: 80,
+        acceleration: 167,
+        trend: 'accelerating',
+      },
+    });
+    const quickResult = checkSmartTriggers(8016, quickSnap);
+    expect(quickResult?.tier).toBe('quick');
   });
 });
