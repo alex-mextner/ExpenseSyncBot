@@ -728,6 +728,27 @@ describe('calculate tool', () => {
     const result = await executeTool('calculate', { expression: 'not math' }, ctx);
     expect(result.success).toBe(false);
   });
+
+  test('returns error when group not found', async () => {
+    mockGroups.findById.mockReturnValue(null);
+    const result = await executeTool('calculate', { expression: '100 - 70' }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Group not found');
+  });
+
+  test('evaluates cross-currency expression (100$ - 70EUR in EUR)', async () => {
+    const result = await executeTool(
+      'calculate',
+      { expression: '100$ - 70EUR', target_currency: 'EUR' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    // 100 USD converted to EUR minus 70 EUR — result is a number in EUR
+    expect(result.output).toContain('EUR');
+    const value = parseFloat(result.output!);
+    expect(value).toBeGreaterThan(-200);
+    expect(value).toBeLessThan(200);
+  });
 });
 
 describe('error handling', () => {

@@ -609,8 +609,11 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
   }
 
   const group = database.groups.findById(ctx.groupId);
+  if (!group) {
+    return { success: false, error: 'Group not found' };
+  }
   const rawCurrency =
-    (input.target_currency as string | undefined) || group?.default_currency || 'EUR';
+    (input.target_currency as string | undefined) || group.default_currency || 'EUR';
   if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode)) {
     return { success: false, error: `Unknown currency: "${rawCurrency}"` };
   }
