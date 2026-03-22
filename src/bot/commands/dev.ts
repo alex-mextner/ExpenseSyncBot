@@ -49,7 +49,7 @@ export function initDevPipeline(bot: BotInstance): DevPipeline {
   const notify: NotifyCallback = async (
     groupId: number,
     message: string,
-    options?: { reply_markup?: any },
+    options?: { reply_markup?: InlineKeyboard },
   ) => {
     const group = database.groups.findById(groupId);
     if (!group) return;
@@ -565,7 +565,7 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
  * Handle dev task callback queries (approval buttons etc.)
  */
 export async function handleDevCallback(
-  ctx: any,
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
   bot: BotInstance,
@@ -636,9 +636,13 @@ export async function handleDevCallback(
         break;
 
       case 'edit': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'No chat context' });
+          return;
+        }
         const editTask = database.devTasks.findById(taskId);
         logger.info(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
-        pendingDesignEdits.set(chatId!, taskId);
+        pendingDesignEdits.set(chatId, taskId);
         await ctx.answerCallbackQuery({ text: 'Опишите правки' });
         answered = true;
 

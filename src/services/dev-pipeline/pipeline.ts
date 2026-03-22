@@ -11,6 +11,7 @@
  */
 
 import { $ } from 'bun';
+import type { InlineKeyboard } from 'gramio';
 import { escapeHtml } from '../../bot/commands/ask';
 import {
   createDevApprovalKeyboard,
@@ -159,7 +160,7 @@ TOPIC-AWARE MESSAGING:
 export type NotifyCallback = (
   groupId: number,
   message: string,
-  options?: { reply_markup?: any },
+  options?: { reply_markup?: InlineKeyboard },
 ) => Promise<void>;
 
 /**
@@ -240,7 +241,7 @@ export class DevPipeline {
       await deleteLocalBranch(task.branch_name);
     }
     if (task.worktree_path || task.branch_name) {
-      database.devTasks.update(task.id, { worktree_path: undefined } as any);
+      database.devTasks.update(task.id, { worktree_path: null });
     }
   }
 
@@ -432,7 +433,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     });
 
     // Update description with clarification context
-    database.devTasks.update(taskId, { description: enrichedDescription } as any);
+    database.devTasks.update(taskId, { description: enrichedDescription });
     updated.description = enrichedDescription;
 
     await this.notify(
@@ -469,7 +470,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
           ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
           : task.description;
 
-      database.devTasks.update(taskId, { description: enrichedDescription } as any);
+      database.devTasks.update(taskId, { description: enrichedDescription });
 
       // Smart resume: check what was already completed before the failure
       const hasWorktree = task.worktree_path && worktreeExists(task.worktree_path);
@@ -681,7 +682,7 @@ Keep the plan concise — 20-40 lines max.`;
     const enrichedDescription = `${task.description}\n\nDESIGN FEEDBACK:\nPrevious design:\n${task.design || ''}\n\nUser requested changes:\n${feedback}`;
 
     const updated = transition(task, DevTaskState.DESIGNING);
-    database.devTasks.update(taskId, { description: enrichedDescription } as any);
+    database.devTasks.update(taskId, { description: enrichedDescription });
     updated.description = enrichedDescription;
 
     await this.notify(task.group_id, `✏️ Dev task #${task.id}: redesigning with your feedback...`);
