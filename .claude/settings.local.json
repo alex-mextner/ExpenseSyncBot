@@ -15,7 +15,9 @@
       "Bash(PATH=\"~/.bun/bin:$PATH\" bunx tsc:*)",
       "Bash(PATH=\"~/.bun/bin:$PATH\" bun test:*)",
       "Bash(~/.bun/bin/bunx tsc:*)",
-      "Bash(node_modules/.bin/biome check:*)"
+      "Bash(node_modules/.bin/biome check:*)",
+      "Bash(node_modules/.bin/biome lint:*)",
+      "Bash(/Users/ultra/xp/ExpenseSyncBot/node_modules/.bin/biome check:*)"
     ],
     "deny": [],
     "ask": []

@@ -688,6 +688,69 @@ describe('executeSetCustomPrompt', () => {
   });
 });
 
+describe('calculate tool', () => {
+  beforeEach(resetAllMocks);
+
+  test('evaluates simple expression', async () => {
+    const result = await executeTool('calculate', { expression: '100 - 70' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('30');
+  });
+
+  test('result is rounded to 2 decimal places', async () => {
+    const result = await executeTool('calculate', { expression: '100 / 3' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/^33\.33 /); // not 33.333333...
+  });
+
+  test('uses group default currency when target_currency omitted', async () => {
+    const result = await executeTool('calculate', { expression: '50 + 50' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('EUR'); // group default_currency is EUR
+  });
+
+  test('returns error for unknown target_currency', async () => {
+    const result = await executeTool(
+      'calculate',
+      { expression: '100 - 70', target_currency: 'FOOBAR' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('FOOBAR');
+  });
+
+  test('returns error for missing expression', async () => {
+    const result = await executeTool('calculate', {}, ctx);
+    expect(result.success).toBe(false);
+  });
+
+  test('returns error for unevaluable expression', async () => {
+    const result = await executeTool('calculate', { expression: 'not math' }, ctx);
+    expect(result.success).toBe(false);
+  });
+
+  test('returns error when group not found', async () => {
+    mockGroups.findById.mockReturnValue(null);
+    const result = await executeTool('calculate', { expression: '100 - 70' }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Group not found');
+  });
+
+  test('evaluates cross-currency expression (100$ - 70EUR in EUR)', async () => {
+    const result = await executeTool(
+      'calculate',
+      { expression: '100$ - 70EUR', target_currency: 'EUR' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    // 100 USD converted to EUR minus 70 EUR — result is a number in EUR
+    expect(result.output).toContain('EUR');
+    const value = parseFloat(result.output ?? '');
+    expect(value).toBeGreaterThan(-200);
+    expect(value).toBeLessThan(200);
+  });
+});
+
 describe('error handling', () => {
   beforeEach(resetAllMocks);
 
