@@ -236,15 +236,16 @@ export class TelegramStreamWriter {
 
       this.lastSentText = textToSend;
       this.lastUpdateTime = Date.now();
-    } catch (err: any) {
-      if (err?.payload?.error_code === 429) {
+    } catch (err) {
+      const tgErr = err as { payload?: { error_code?: number; description?: string } };
+      if (tgErr?.payload?.error_code === 429) {
         logger.error('[STREAM] Rate limited, cooling down');
         this.lastErrorTime = Date.now();
-      } else if (err?.payload?.description?.includes('message is not modified')) {
+      } else if (tgErr?.payload?.description?.includes('message is not modified')) {
         this.lastSentText = textToSend;
         this.lastUpdateTime = Date.now();
       } else {
-        logger.error({ err: err }, '[STREAM] Update error');
+        logger.error({ err }, '[STREAM] Update error');
       }
     }
   }
@@ -327,13 +328,37 @@ export class TelegramStreamWriter {
 
     for (const para of paragraphs) {
       if (`${current}\n\n${para}`.length > maxLength && current) {
-        chunks.push(current.trim());
+        chunks.push(...this.splitByWords(current.trim(), maxLength));
         current = para;
       } else {
         current = current ? `${current}\n\n${para}` : para;
       }
     }
-    if (current) chunks.push(current.trim());
+    if (current) chunks.push(...this.splitByWords(current.trim(), maxLength));
     return chunks;
+  }
+
+  /**
+   * Split text at word boundaries so no chunk exceeds maxLength.
+   * If a single word is longer than maxLength it stays in its own chunk.
+   */
+  private splitByWords(text: string, maxLength: number): string[] {
+    if (text.length <= maxLength) return [text];
+
+    const result: string[] = [];
+    const words = text.split(' ');
+    let current = '';
+
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length > maxLength && current) {
+        result.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) result.push(current);
+    return result;
   }
 }

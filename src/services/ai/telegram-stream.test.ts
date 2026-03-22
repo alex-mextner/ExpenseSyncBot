@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { TelegramStreamWriter } from './telegram-stream';
 
 /**
  * Testing private methods via bracket notation on a minimal instance.
- * The constructor requires a Bot, chatId — we pass stubs since these
+ * The constructor requires a Bot, chatId -- we pass stubs since these
  * pure string methods don't touch the bot API.
  */
 function makeWriter(): TelegramStreamWriter {
@@ -14,6 +14,7 @@ function makeWriter(): TelegramStreamWriter {
       deleteMessage: () => Promise.resolve(),
       editMessageText: () => Promise.resolve(),
     },
+    // biome-ignore lint/suspicious/noExplicitAny: test stub for Bot API
   } as any;
   return new TelegramStreamWriter(fakeBot, 123);
 }
@@ -22,7 +23,9 @@ function makeWriter(): TelegramStreamWriter {
 
 describe('splitIntoChunks', () => {
   const writer = makeWriter();
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
   afterEach(() => (writer as any).stopTyping());
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
   const split = (text: string, max: number): string[] => (writer as any).splitIntoChunks(text, max);
 
   test('short text returns single chunk', () => {
@@ -54,13 +57,17 @@ describe('splitIntoChunks', () => {
     expect(chunks[1]).toBe('Third paragraph.');
   });
 
-  test('single long paragraph without \\n\\n stays in one chunk', () => {
-    const longText = 'X'.repeat(5000);
-    const chunks = split(longText, 4000);
-    // No paragraph breaks → the whole text ends up in one chunk
-    // because the split logic only splits on \n\n boundaries
-    expect(chunks.length).toBe(1);
-    expect(chunks[0]).toBe(longText);
+  test('single long paragraph without \\n\\n is split by words', () => {
+    // 100 words x ~7 chars -> ~700 chars total, split at 100
+    const words = Array.from({ length: 100 }, (_, i) => `word${String(i).padStart(2, '0')}`);
+    const longText = words.join(' ');
+    const chunks = split(longText, 100);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(100);
+    }
+    // No word cut in half -- reconstructing gives back original text
+    expect(chunks.join(' ')).toBe(longText);
   });
 });
 
@@ -68,7 +75,9 @@ describe('splitIntoChunks', () => {
 
 describe('truncateForTelegram', () => {
   const writer = makeWriter();
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
   afterEach(() => (writer as any).stopTyping());
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
   const truncate = (text: string): string => (writer as any).truncateForTelegram(text);
 
   test('text within limit is returned as-is', () => {
@@ -89,7 +98,7 @@ describe('truncateForTelegram', () => {
     const padding = 'X'.repeat(3998);
     const text = `${padding}<b>important</b>`;
     const result = truncate(text);
-    // The incomplete "<b>" should be stripped — result should not end with a partial tag
+    // The incomplete "<b>" should be stripped -- result should not end with a partial tag
     expect(result).not.toContain('<b>');
     expect(result.endsWith('...')).toBe(true);
   });
@@ -114,7 +123,7 @@ describe('truncateForTelegram', () => {
 
 // ── getText / historyText ─────────────────────────────────────────────
 // Regression: tool blockquote was saved to chat history, causing the AI
-// to mimic <blockquote expandable>⚙️ Инструменты</blockquote> format.
+// to mimic <blockquote expandable> format.
 
 describe('getText returns text without tool blockquote', () => {
   test('getText returns clean AI text, not the display text with tool blockquote', async () => {
@@ -145,6 +154,7 @@ describe('getText returns text without tool blockquote', () => {
         deleteMessage: () => Promise.resolve(),
         editMessageText: () => Promise.resolve(),
       },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub for Bot API
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
 
@@ -158,5 +168,219 @@ describe('getText returns text without tool blockquote', () => {
     // No additional chunks for a short response
     const extraSends = sent.filter((t) => !t.includes('Минутку'));
     expect(extraSends.length).toBeLessThanOrEqual(1);
+  });
+});
+
+// ── Edge cases: HTML tag handling ─────────────────────────────────────
+
+describe('truncateForTelegram edge cases', () => {
+  const writer = makeWriter();
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  afterEach(() => (writer as any).stopTyping());
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  const truncate = (text: string): string => (writer as any).truncateForTelegram(text);
+
+  test('text at exactly 4000 chars is returned as-is (no truncation)', () => {
+    const text = 'a'.repeat(4000);
+    const result = truncate(text);
+    expect(result).toBe(text);
+    expect(result).not.toContain('...');
+  });
+
+  test('text at 4001 chars is truncated', () => {
+    const text = 'a'.repeat(4001);
+    const result = truncate(text);
+    expect(result.length).toBeLessThanOrEqual(4003); // 4000 + '...'
+    expect(result).toContain('...');
+  });
+
+  test('closes unclosed <b> tag when text is truncated mid-content', () => {
+    const text = `<b>${'x'.repeat(4100)}`;
+    const result = truncate(text);
+    expect(result).toContain('</b>');
+    expect(result.endsWith('<b>')).toBe(false);
+  });
+
+  test('closes unclosed <i> tag at truncation boundary', () => {
+    const text = `<i>${'x'.repeat(4100)}`;
+    const result = truncate(text);
+    expect(result).toContain('</i>');
+    expect(result.endsWith('<i>')).toBe(false);
+  });
+
+  test('closes unclosed <code> tag after truncation', () => {
+    const text = `<code>${'x'.repeat(4100)}`;
+    const result = truncate(text);
+    expect(result).toContain('</code>');
+  });
+
+  test('handles deeply nested tags without throwing', () => {
+    const text = `<b><i><code>${'x'.repeat(100)}</code></i></b>`;
+    expect(() => truncate(text)).not.toThrow();
+    const result = truncate(text);
+    expect(result).toContain('<b>');
+    expect(result).toContain('</b>');
+  });
+
+  test('does not produce "..." when short text has unclosed tags', () => {
+    const text = 'Hello <b>world';
+    const result = truncate(text);
+    expect(result).not.toContain('...');
+    expect(result).toContain('</b>');
+  });
+});
+
+// ── Edge cases: splitIntoChunks ───────────────────────────────────────
+
+describe('splitIntoChunks edge cases', () => {
+  const writer = makeWriter();
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  afterEach(() => (writer as any).stopTyping());
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  const split = (text: string, max: number): string[] => (writer as any).splitIntoChunks(text, max);
+
+  test('produces all chunks within max length for word-split text', () => {
+    const text = Array.from({ length: 2000 }, (_, i) => `word${i}`).join(' ');
+    const chunks = split(text, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  test('reassembles to same content (no data loss) for word-split text', () => {
+    const words = Array.from({ length: 200 }, (_, i) => `word${i}`);
+    const text = words.join(' ');
+    const chunks = split(text, 200);
+    expect(chunks.join(' ')).toBe(text);
+  });
+
+  test('handles unicode text without corrupting characters', () => {
+    const text = 'привет '.repeat(700);
+    const chunks = split(text, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(typeof chunk).toBe('string');
+      expect(chunk.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('empty string returns single empty chunk', () => {
+    const chunks = split('', 4000);
+    expect(chunks).toEqual(['']);
+  });
+
+  test('single word longer than maxLength goes into its own chunk', () => {
+    const longWord = 'a'.repeat(200);
+    const text = `hello ${longWord} world`;
+    const chunks = split(text, 50);
+    const hasLongWord = chunks.some((c) => c.includes(longWord));
+    expect(hasLongWord).toBe(true);
+  });
+
+  test('text with only paragraph breaks splits correctly', () => {
+    const para = 'Short paragraph.';
+    const text = [para, para, para, para, para].join('\n\n');
+    const maxLen = `${para}\n\n${para}`.length;
+    const chunks = split(text, maxLen);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(maxLen);
+    }
+  });
+});
+
+// ── Edge cases: sendRemainingChunks ───────────────────────────────────
+
+describe('sendRemainingChunks edge cases', () => {
+  test('is a no-op for text within limit', async () => {
+    const sent: string[] = [];
+    const fakeBot = {
+      api: {
+        sendMessage: mock((opts: { text: string }) => {
+          sent.push(opts.text);
+          return Promise.resolve({ message_id: sent.length });
+        }),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: () => Promise.resolve(),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub for Bot API
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+    await writer.onTextDelta('Short message.');
+    await writer.finalize();
+    const sentBefore = sent.length;
+    await writer.sendRemainingChunks();
+    expect(sent.length).toBe(sentBefore);
+  });
+});
+
+// ── Edge cases: onToolResult state ────────────────────────────────────
+
+describe('onToolResult state tracking', () => {
+  test('failed tool shows error status in display text', async () => {
+    const writer = makeWriter();
+    await writer.onToolStart('add_expense', { amount: 100, currency: 'EUR', category: 'food' });
+    writer.onToolResult(
+      'add_expense',
+      { amount: 100, currency: 'EUR', category: 'food' },
+      { success: false, error: 'DB error' },
+    );
+    // biome-ignore lint/suspicious/noExplicitAny: access private field in test
+    expect((writer as any).fullText).toContain('\u274c');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+    (writer as any).stopTyping();
+  });
+
+  test('getText returns empty string before finalize', async () => {
+    const writer = makeWriter();
+    await writer.onToolStart('get_budgets', {});
+    writer.onToolResult('get_budgets', {}, { success: true, output: '[]' });
+    expect(writer.getText()).toBe('');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+    (writer as any).stopTyping();
+  });
+
+  test('multiple tool calls all appear in blockquote after finalize', async () => {
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => Promise.resolve({ message_id: 1 })),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub for Bot API
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+    await writer.onToolStart('get_expenses', {});
+    writer.onToolResult('get_expenses', {}, { success: true, output: 'ok' });
+    await writer.onToolStart('get_budgets', {});
+    writer.onToolResult('get_budgets', {}, { success: false, error: 'not found' });
+    await writer.onTextDelta('Summary.');
+    await writer.finalize();
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private field in test
+    const displayText: string = (writer as any).fullText;
+    expect(displayText).toContain('<blockquote expandable>');
+    expect(displayText).toContain('\u2705');
+    expect(displayText).toContain('\u274c');
+  });
+
+  test('tool indicator stripped from getText() history text', async () => {
+    const writer = makeWriter();
+    await writer.onTextDelta('Before tool.');
+    await writer.onToolStart('get_expenses', { period: '2026-03' });
+    writer.onToolResult('get_expenses', { period: '2026-03' }, { success: true, output: 'data' });
+    await writer.onTextDelta(' After tool.');
+    await writer.finalize();
+
+    const histText = writer.getText();
+    expect(histText).not.toContain('<blockquote expandable>');
+    expect(histText).not.toContain('Инструменты');
+    expect(histText).toContain('Before tool.');
+    expect(histText).toContain('After tool.');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+    (writer as any).stopTyping();
   });
 });
