@@ -391,6 +391,14 @@ Follow this framework for ANY technical issue:
 - Commit frequently throughout development, even if high-level tasks are not yet done
 - NEVER skip, evade, or disable a pre-commit hook
 
+## MCP Tools
+
+Use these MCP servers proactively whenever they can help:
+
+- **serena** — semantic code navigation and editing. Use instead of grep/read for finding symbols, understanding relationships between functions/classes, and making precise symbol-level edits. Prefer `find_symbol`, `get_symbols_overview`, `find_referencing_symbols` over reading entire files.
+- **context7** — up-to-date library documentation. Use when working with any external library (GramIO, Anthropic SDK, Bun APIs, googleapis, etc.) to get current docs and examples instead of guessing from memory.
+- **mcp__playwright** — browser automation for testing. Use when verifying OAuth flows, web UI, or any HTTP endpoints. Also useful for checking the bot's behavior end-to-end.
+
 ## Documentation
 
 - Specs: `docs/specs/YYYY-MM-DD-<topic>.md` — design documents and feature specifications
