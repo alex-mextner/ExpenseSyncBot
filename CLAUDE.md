@@ -327,7 +327,13 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 - MATCH the style and formatting of surrounding code, even if it differs from standard style guides. Consistency within a file trumps external standards.
 - Fix broken things immediately when you find them. Don't ask permission to fix bugs.
 - **Dependency versions always use `^`** (e.g. `"gramio": "^0.4.11"`). Never pin exact versions.
-- **No `any`/`as any`/`Function`** — proper typing only. `as unknown as ConcreteType` is acceptable only at framework boundaries.
+- **No `any`/`as any`/`Function`** — proper typing only.
+- **`as unknown as T` and `as unknown` are banned except as absolute last resort.** Before using either:
+  1. Try proper typing, generics, overloads, conditional types — go to any complexity.
+  2. If the problem is in a third-party library (gramio, @huggingface/inference, etc.) — fix the library: clone it, patch the types, verify locally, save the patch, open a PR upstream. Do NOT work around bad library types with casts.
+  3. Only if all else fails AND the cast is truly unavoidable (e.g. a runtime value that TypeScript structurally cannot express) — use `as unknown as T` with an explicit comment explaining WHY there is no alternative.
+  Skipping this process hides real bugs. Type casts are bug laundering.
+- **`Record<string, unknown>` is banned.** It's almost always a broken construct — an escape hatch that loses type information. Use a proper typed interface instead. `Record<string, unknown>` is the `any` of objects. Same goes for `Record<string, any>`, `object`, `{}` used as "some object".
 - No commented-out code. No template literals without variables. `Number.parseInt`. `T[]` not `Array<T>`.
 - **Unused parameters**: remove entirely (parameter + argument at call sites), don't prefix with `_`.
 - **Always handle `.catch()`** on fire-and-forget promises — at minimum log the error. Silent promise rejections hide bugs.
@@ -390,6 +396,8 @@ Follow this framework for ANY technical issue:
 - Specs: `docs/specs/YYYY-MM-DD-<topic>.md` — design documents and feature specifications
 - Plans: `docs/plans/YYYY-MM-DD-<topic>.md` — implementation plans with task breakdowns
 
+**OVERRIDE:** Skills that default to `docs/superpowers/plans/` or similar paths MUST use `docs/plans/` and `docs/specs/` instead. No `superpowers/` subdirectory.
+
 ## Logging
 
 Use **pino** for all logging. Import via `createLogger` from `src/utils/logger.ts`:
@@ -438,12 +446,14 @@ All user-facing bot messages must follow these rules:
 
 ## Session Wrap-Up
 
-When summarising completed work or suggesting next steps, always scan the conversation history for items that were explicitly deferred, noted as "pending", or silently dropped mid-discussion. Surface them as concrete suggestions — not vague hints.
+**MANDATORY after EVERY completed task — no exceptions, no skipping in rapid iterations.**
 
-After completing any task, answer these two questions out loud:
+After each task (push, fix, review-and-fix, deploy — any unit of work), answer these two questions out loud before responding to the next message:
 
 1. **Всё ли сделано из того, что просили?** — go through the original request point by point. Did any sub-task get quietly skipped?
 2. **Есть ли что улучшить, исправить или убрать?** — name specific things, not vague hints. Open issues? Known limitations introduced? Stale comments or dead code noticed?
+
+Also scan the conversation history for items explicitly deferred, noted as "pending", or silently dropped mid-discussion. Surface them as concrete suggestions.
 
 ## Telegram Bot API Limits
 

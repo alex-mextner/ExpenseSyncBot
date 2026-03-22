@@ -394,6 +394,101 @@ describe('sendRemainingChunks edge cases', () => {
   });
 });
 
+// ── finalize: tools-only (no AI text) ────────────────────────────────
+
+describe('finalize: tools without AI text', () => {
+  test('shows tool lines inline when AI produced no text', async () => {
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => Promise.resolve()),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+    await writer.onToolStart('get_expenses', { period: '2026-03' });
+    writer.onToolResult('get_expenses', { period: '2026-03' }, { success: true, output: 'ok' });
+    await writer.finalize();
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private field
+    const displayText: string = (writer as any).fullText;
+    // Should show tool lines inline — no collapsed blockquote header
+    expect(displayText).not.toContain('<blockquote expandable>');
+    // Must contain the tool result line
+    expect(displayText).toContain('\u2705');
+    expect(displayText).toContain('Загружаю расходы');
+  });
+
+  test('tools-only: getText() history is empty (no text to save)', async () => {
+    const writer = makeWriter();
+    await writer.onToolStart('get_budgets', {});
+    writer.onToolResult('get_budgets', {}, { success: true, output: '[]' });
+    await writer.finalize();
+    expect(writer.getText()).toBe('');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+
+  test('with AI text: tool summary wrapped in expandable blockquote', async () => {
+    const writer = makeWriter();
+    await writer.onToolStart('get_expenses', {});
+    writer.onToolResult('get_expenses', {}, { success: true, output: 'ok' });
+    await writer.onTextDelta('Ответ AI.');
+    await writer.finalize();
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private field
+    const displayText: string = (writer as any).fullText;
+    expect(displayText).toContain('<blockquote expandable>');
+    expect(displayText).toContain('Инструменты');
+    expect(displayText).toContain('Ответ AI.');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
+// ── flushUpdate: error cooldown ────────────────────────────────────────
+
+describe('flushUpdate error cooldown', () => {
+  test('sets lastErrorTime on generic API error to prevent rapid retries', async () => {
+    let callCount = 0;
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => {
+          callCount++;
+          return Promise.reject({
+            payload: { error_code: 400, description: 'Bad Request: text must be non-empty' },
+          });
+        }),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => Promise.resolve()),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // Force conditions so flushUpdate actually attempts the send
+    // biome-ignore lint/suspicious/noExplicitAny: set private field for test
+    (writer as any).lastUpdateTime = 0;
+
+    // First call: fails, sets lastErrorTime
+    await writer.onTextDelta('some text that is definitely long enough to flush');
+    const firstCallCount = callCount;
+
+    // Second call immediately after: should be blocked by ERROR_COOLDOWN_MS
+    await writer.onTextDelta(' more text');
+    const secondCallCount = callCount;
+
+    // No additional send attempt should have been made
+    expect(secondCallCount).toBe(firstCallCount);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
 // ── Edge cases: onToolResult state ────────────────────────────────────
 
 describe('onToolResult state tracking', () => {

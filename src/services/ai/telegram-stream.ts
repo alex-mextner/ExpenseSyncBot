@@ -187,11 +187,15 @@ export class TelegramStreamWriter {
 
     // Prepend tool summary as expandable blockquote
     if (toolLines.length > 0) {
-      const toolSummary = `<blockquote expandable>\u2699\ufe0f <b>Инструменты</b>\n${toolLines.join('\n')}</blockquote>`;
-      cleanText = `${toolSummary}\n\n${cleanText}`;
-    }
-
-    if (!cleanText) {
+      if (!cleanText) {
+        // AI used tools but produced no text — show tool results inline so user
+        // sees exactly what was done without having to expand a collapsed blockquote.
+        cleanText = toolLines.join('\n');
+      } else {
+        const toolSummary = `<blockquote expandable>\u2699\ufe0f <b>Инструменты</b>\n${toolLines.join('\n')}</blockquote>`;
+        cleanText = `${toolSummary}\n\n${cleanText}`;
+      }
+    } else if (!cleanText) {
       cleanText = '\u26a0\ufe0f AI did not produce a response.';
     }
 
@@ -246,6 +250,9 @@ export class TelegramStreamWriter {
         this.lastUpdateTime = Date.now();
       } else {
         logger.error({ err }, '[STREAM] Update error');
+        // Prevent rapid retries on any HTML/content error — without this every
+        // incoming token triggers a new failed API call until the stream ends.
+        this.lastErrorTime = Date.now();
       }
     }
   }

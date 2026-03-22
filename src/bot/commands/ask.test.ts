@@ -204,10 +204,19 @@ describe('processThinkTags', () => {
     expect(result).toContain('a &lt; b &amp; c &gt; d');
   });
 
-  test('handles empty think block', () => {
+  test('skips empty think block — no blockquote, no empty content', () => {
+    // Empty <think></think> was producing <blockquote expandable></blockquote>
+    // which Telegram rejects as "text must be non-empty".
     const input = '<think></think>answer';
     const result = processThinkTags(input);
-    expect(result).toContain('<blockquote expandable>');
+    expect(result).not.toContain('<blockquote expandable>');
+    expect(result).toContain('answer');
+  });
+
+  test('skips whitespace-only think block', () => {
+    const input = '<think>   \n  </think>answer';
+    const result = processThinkTags(input);
+    expect(result).not.toContain('<blockquote expandable>');
     expect(result).toContain('answer');
   });
 });
@@ -221,14 +230,14 @@ describe('safelyTruncateHTML', () => {
   });
 
   test('truncates long text and appends ellipsis', () => {
-    const longText = '<b>' + 'a'.repeat(500) + '</b>';
+    const longText = `<b>${'a'.repeat(500)}</b>`;
     const result = safelyTruncateHTML(longText, 300);
     expect(result.length).toBeLessThanOrEqual(300);
     expect(result).toContain('...');
   });
 
   test('closes unclosed tags after truncation', () => {
-    const longText = '<b>' + 'a'.repeat(500) + '</b>';
+    const longText = `<b>${'a'.repeat(500)}</b>`;
     const result = safelyTruncateHTML(longText, 300);
     // Should either close the <b> tag or strip HTML as fallback
     const hasClosingTag = result.includes('</b>');
@@ -243,7 +252,7 @@ describe('safelyTruncateHTML', () => {
 
   test('falls back to plain text if closing tags exceed maxLength', () => {
     // Very small maxLength forces the fallback path
-    const input = '<b><i><code>' + 'x'.repeat(300) + '</code></i></b>';
+    const input = `<b><i><code>${'x'.repeat(300)}</code></i></b>`;
     const result = safelyTruncateHTML(input, 50);
     expect(result.length).toBeLessThanOrEqual(50);
     expect(result.endsWith('...')).toBe(true);

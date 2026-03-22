@@ -5,6 +5,7 @@ import type { Bot } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import type { Group, User } from '../../database/types';
 import { AI_BASE_URL, AI_MODEL, ExpenseBotAgent } from '../../services/ai/agent';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
@@ -57,7 +58,8 @@ export async function handleAskQuestion(
   }
 
   // Check topic restriction
-  const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  const messageThreadId = (ctx as unknown as { payload?: { message_thread_id?: number } }).payload
+    ?.message_thread_id;
   if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
     logger.info(
       `[ASK] Ignoring: question from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
@@ -104,12 +106,12 @@ async function handleAskWithAnthropic(
   ctx: Ctx['Message'],
   question: string,
   bot: Bot,
-  group: any,
-  user: any,
+  group: Group,
+  user: User,
   userName: string,
   userFullName: string,
 ): Promise<void> {
-  const chatId = ctx.chat!.id;
+  const chatId = ctx.chat?.id;
 
   const agentCtx: AgentContext = {
     groupId: group.id,
@@ -163,8 +165,8 @@ async function handleAskWithHuggingFace(
   ctx: Ctx['Message'],
   question: string,
   bot: Bot,
-  group: any,
-  user: any,
+  group: Group,
+  user: User,
   userName: string,
   userFullName: string,
   chatId: number,
@@ -302,7 +304,9 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
     const stream = hfClient.chatCompletionStream({
       provider: 'novita',
       model: 'deepseek-ai/DeepSeek-R1-0528',
-      messages: messages as any,
+      messages: messages as unknown as Parameters<
+        typeof hfClient.chatCompletionStream
+      >[0]['messages'],
       max_tokens: 4000,
       temperature: 0.7,
     });
@@ -358,19 +362,19 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                 });
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
-              } catch (err: any) {
+              } catch (err: unknown) {
                 // If rate limited, wait longer
-                if (err?.code === 429) {
+                if ((err as { code?: number })?.code === 429) {
                   logger.error('[ASK] Rate limited, waiting...');
                   lastErrorTime = now;
                   // Wait the cooldown period
                   await new Promise((resolve) => setTimeout(resolve, ERROR_COOLDOWN_MS));
-                } else if (err?.message?.includes('message is not modified')) {
+                } else if ((err as Error)?.message?.includes('message is not modified')) {
                   // Shouldn't happen after the check above, but just in case
                   logger.info('[ASK] Message not modified (unexpected)');
                   lastMessageText = textToSend;
                   lastUpdateTime = now;
-                } else if (err?.message?.includes("can't parse entities")) {
+                } else if ((err as Error)?.message?.includes("can't parse entities")) {
                   logger.error(
                     { err: err },
                     '[ASK] HTML parse error in edit, falling back to plain text',
@@ -398,8 +402,8 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                 sentMessageId = sent.id;
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
-              } catch (err: any) {
-                if (err?.message?.includes("can't parse entities")) {
+              } catch (err: unknown) {
+                if ((err as Error)?.message?.includes("can't parse entities")) {
                   logger.error(
                     '[ASK] HTML parse error in initial send, falling back to plain text',
                   );
@@ -441,11 +445,11 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
             text: chunks[0],
             parse_mode: 'HTML',
           });
-        } catch (err: any) {
-          if (err?.message?.includes('message is not modified')) {
+        } catch (err: unknown) {
+          if ((err as Error)?.message?.includes('message is not modified')) {
             // Shouldn't happen after the check above, but just in case
             logger.info('[ASK] Final message not modified (unexpected)');
-          } else if (err?.message?.includes("can't parse entities")) {
+          } else if ((err as Error)?.message?.includes("can't parse entities")) {
             logger.error('[ASK] HTML parse error in final edit, falling back to plain text');
             try {
               await bot.api.editMessageText({
@@ -649,18 +653,18 @@ async function safeSend(
   ctx: Ctx['Message'],
   text: string,
   options?: { parse_mode?: 'HTML' | 'MarkdownV2' | 'Markdown' },
-): Promise<any> {
+): Promise<unknown> {
   try {
     return await ctx.send(text, options);
-  } catch (err: any) {
-    if (err?.message?.includes("can't parse entities")) {
+  } catch (err: unknown) {
+    if ((err as Error)?.message?.includes("can't parse entities")) {
       logger.error('[ASK] HTML error in safeSend, falling back to plain text');
       return await ctx.send(stripAllHtml(text));
     }
-    if (err?.message?.includes('message is too long')) {
+    if ((err as Error)?.message?.includes('message is too long')) {
       logger.error('[ASK] Message too long in safeSend, truncating');
       const plainText = stripAllHtml(text);
-      const truncated = plainText.substring(0, 4000) + '...';
+      const truncated = `${plainText.substring(0, 4000)}...`;
       return await ctx.send(truncated);
     }
     throw err;
@@ -673,8 +677,9 @@ async function safeSend(
  * Streaming blocks -> visible with escape
  */
 export function processThinkTags(text: string): string {
-  // Completed think blocks -> expandable blockquote
+  // Completed think blocks -> expandable blockquote (skip empty blocks)
   text = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, content) => {
+    if (!content.trim()) return '';
     const escaped = escapeHtml(content);
     return `<blockquote expandable>🤔 <b>Размышления</b>\n${escaped}</blockquote>\n`;
   });
@@ -729,7 +734,7 @@ export function safelyTruncateHTML(text: string, maxLength: number): string {
 
   // Final safety: if somehow still too long, strip HTML and hard-truncate
   if (truncated.length > maxLength - 3) {
-    return stripAllHtml(text).substring(0, maxLength - 3) + '...';
+    return `${stripAllHtml(text).substring(0, maxLength - 3)}...`;
   }
 
   return `${truncated}...`;
@@ -772,11 +777,11 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
               // Single sentence too long, split by words
               const words = sentence.split(' ');
               for (const word of words) {
-                if ((currentChunk + ' ' + word).length > maxLength) {
+                if (`${currentChunk} ${word}`.length > maxLength) {
                   chunks.push(currentChunk.trim());
                   currentChunk = word;
                 } else {
-                  currentChunk += ' ' + word;
+                  currentChunk += ` ${word}`;
                 }
               }
             }
@@ -1078,13 +1083,13 @@ async function sendSmartAdvice(
     if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
 
     // Send with tier-appropriate header
-    const header = tierConfig.emoji + ' ' + tierConfig.title;
+    const header = `${tierConfig.emoji} ${tierConfig.title}`;
     const message = `\n\n${header}\n\n${sanitizedAdvice}`;
 
     try {
       await ctx.send(message, { parse_mode: 'HTML' });
-    } catch (sendErr: any) {
-      if (sendErr?.message?.includes("can't parse entities")) {
+    } catch (sendErr: unknown) {
+      if ((sendErr as Error)?.message?.includes("can't parse entities")) {
         logger.error('[ADVICE] HTML parse error, falling back to plain text');
         await ctx.send(
           `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
