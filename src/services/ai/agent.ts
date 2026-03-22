@@ -6,16 +6,19 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
-import { TOOL_DEFINITIONS } from './tools';
-import { executeTool } from './tool-executor';
-import { TelegramStreamWriter } from './telegram-stream';
-import type { AgentContext, AgentEvent, ToolCallResult } from './types';
 import type { Bot } from 'gramio';
 import type { ChatMessage } from '../../database/types';
+import { createLogger } from '../../utils/logger.ts';
+import { TelegramStreamWriter } from './telegram-stream';
+import { executeTool } from './tool-executor';
+import { TOOL_DEFINITIONS } from './tools';
+import type { AgentContext, ToolCallResult } from './types';
+
+const logger = createLogger('agent');
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
-export const AI_MODEL = process.env.AI_MODEL || 'glm-4.7';
+export const AI_MODEL = process.env.AI_MODEL || 'glm-5';
 export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.z.ai/api/anthropic';
 
 export class ExpenseBotAgent {
@@ -39,11 +42,7 @@ export class ExpenseBotAgent {
    * @param messageThreadId - Optional forum topic thread ID
    * @returns Final text response (for saving to chat history)
    */
-  async run(
-    userMessage: string,
-    conversationHistory: ChatMessage[],
-    bot: Bot,
-  ): Promise<string> {
+  async run(userMessage: string, conversationHistory: ChatMessage[], bot: Bot): Promise<string> {
     const writer = new TelegramStreamWriter(bot, this.ctx.chatId);
 
     const messages: Anthropic.MessageParam[] = [
@@ -53,6 +52,9 @@ export class ExpenseBotAgent {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+
+    logger.info(`[AGENT] Starting: model=${AI_MODEL} base=${AI_BASE_URL}`);
+    logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
     try {
       let continueLoop = true;
@@ -77,7 +79,7 @@ export class ExpenseBotAgent {
           },
           {
             signal: controller.signal,
-          }
+          },
         );
 
         // Track current tool_use block for JSON accumulation
@@ -113,13 +115,21 @@ export class ExpenseBotAgent {
             if (currentToolUse) {
               const input = JSON.parse(currentToolUse.inputJson || '{}');
 
-              console.log(`[AGENT] Tool call: ${currentToolUse.name}`, JSON.stringify(input));
+              logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
 
               await writer.onToolStart(currentToolUse.name, input);
 
               const result = await executeTool(currentToolUse.name, input, this.ctx);
 
-              console.log(`[AGENT] Tool result: ${currentToolUse.name}`, result.success ? 'OK' : `ERR: ${result.error}`);
+              if (result.success) {
+                const preview = result.output ? result.output.substring(0, 300) : '(no output)';
+                const total = result.output?.length ?? 0;
+                logger.info(
+                  `[AGENT] Tool result: ${currentToolUse.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
+                );
+              } else {
+                logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
+              }
 
               writer.onToolResult(currentToolUse.name, input, result);
 
@@ -158,11 +168,15 @@ export class ExpenseBotAgent {
 
       // If response is long, send remaining chunks
       const finalText = writer.getText();
-      await writer.sendRemainingChunks(finalText);
+      logger.info(
+        `[AGENT] Final response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
+      );
+
+      await writer.sendRemainingChunks();
 
       return finalText;
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
         const timeoutMsg = '\u23f3 Время ожидания истекло. Попробуйте ещё раз.';
         try {
           await bot.api.sendMessage({
@@ -181,7 +195,7 @@ export class ExpenseBotAgent {
           errorMsg = '\u26a1 AI сервер перегружен. Попробуйте позже.';
         } else {
           errorMsg = '\u274c Ошибка AI. Попробуйте позже.';
-          console.error('[AGENT] Anthropic API error:', error.status, error.message);
+          logger.error('[AGENT] Anthropic API error:', error.status, error.message);
         }
 
         try {
@@ -216,24 +230,30 @@ CURRENT USER:
 - Username: @${this.ctx.userName}
 - Full name: ${this.ctx.userFullName}
 
-RULES:
-1. Use tools to get data. NEVER invent numbers.
-2. For questions about expenses -- call get_expenses with filters.
-3. For budget info -- call get_budgets.
-4. For actions -- ALWAYS use the appropriate tool. NEVER claim you did something without calling the tool.
-5. When the user asks to add an expense -- call add_expense. When they ask to delete -- call delete_expense. Do NOT just say "done" without calling the tool.
-6. When the user asks about THEIR expenses, look for a category matching their name.
+## DATA INTEGRITY — CRITICAL
+You MUST call the appropriate tool before answering any question about expenses or budgets.
+You MUST use ONLY the exact numbers, dates, categories, and comments returned by the tool.
+You MUST NEVER invent, assume, or extrapolate any expense data.
+If the tool returns no data for a period — say so. Do NOT fill in plausible-sounding entries.
+When listing individual expenses, copy the exact amount, date, and comment from the tool result. Do NOT paraphrase or round.
 
-FORMATTING: Use ONLY HTML tags:
+## TOOL USAGE
+1. Expense questions → call get_expenses with the relevant period/category filter.
+2. Budget questions → call get_budgets.
+3. Adding an expense → call add_expense. NEVER say "done" without calling the tool.
+4. Deleting an expense → call get_expenses first (to find the ID), confirm with the user, then call delete_expense.
+5. User asks about "their" expenses → filter by a category matching their name.
+6. If you need totals by category → use summary_only: true in get_expenses.
+
+## FORMATTING
+Use ONLY HTML tags (no Markdown, no ** or *):
 - <b>bold</b> for amounts and categories
-- <i>italic</i> for additional info
-- <code>code</code> for exact numbers
-- <blockquote>quote</blockquote>
+- <i>italic</i> for secondary info
+- <code>code</code> for exact numbers and IDs
+Escape < > & as &lt; &gt; &amp;
+Do NOT invent links.
 
-DO NOT use Markdown! Escape < > & as &lt; &gt; &amp;
-DO NOT invent links!
-
-Respond in the same language the user writes in (Russian or English).`;
+Respond in Russian if the user writes in Russian, otherwise in English.`;
 
     if (this.ctx.customPrompt) {
       prompt += `\n\n=== CUSTOM GROUP INSTRUCTIONS ===\n${this.ctx.customPrompt}`;

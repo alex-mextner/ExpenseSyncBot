@@ -2,23 +2,22 @@
  * Tool execution routing and implementation
  * Maps tool calls to database operations and services
  */
-import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
-import { database } from '../../database';
+import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 import type { CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
+import { createLogger } from '../../utils/logger.ts';
+import { convertCurrency, convertToEUR, formatExchangeRatesForAI } from '../currency/converter';
 import {
-  convertToEUR,
-  convertCurrency,
-  formatExchangeRatesForAI,
-} from '../currency/converter';
-import {
-  readExpensesFromSheet,
   appendExpenseRow,
-  hasBudgetSheet,
   createBudgetSheet,
-  writeBudgetRow,
+  hasBudgetSheet,
   readBudgetData,
+  readExpensesFromSheet,
+  writeBudgetRow,
 } from '../google/sheets';
-import type { ToolResult, AgentContext } from './types';
+import type { AgentContext, ToolResult } from './types';
+
+const logger = createLogger('tool-executor');
 
 /**
  * Execute a tool by name with given input
@@ -26,7 +25,7 @@ import type { ToolResult, AgentContext } from './types';
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
-  ctx: AgentContext
+  ctx: AgentContext,
 ): Promise<ToolResult> {
   try {
     switch (name) {
@@ -60,7 +59,7 @@ export async function executeTool(
         return { success: false, error: `Unknown tool: ${name}` };
     }
   } catch (error) {
-    console.error(`[TOOL] Error executing ${name}:`, error);
+    logger.error({ err: error }, `[TOOL] Error executing ${name}`);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -72,7 +71,7 @@ export async function executeTool(
 
 async function executeGetExpenses(
   input: Record<string, unknown>,
-  ctx: AgentContext
+  ctx: AgentContext,
 ): Promise<ToolResult> {
   const period = (input.period as string) || 'current_month';
   const category = input.category as string | undefined;
@@ -123,14 +122,20 @@ async function executeGetExpenses(
     expenses = expenses.filter((e) => e.category.toLowerCase() === categoryLower);
   }
 
+  logger.info(
+    `[TOOL] get_expenses: period=${period} (${startDate}–${endDate}), category=${category || 'all'}, found=${expenses.length}, limit=${limit}, summary=${summaryOnly}`,
+  );
+
   if (summaryOnly) {
     // Aggregate by category
-    const totals: Record<string, { count: number; eur_total: number; amounts: Record<string, number> }> = {};
+    const totals: Record<
+      string,
+      { count: number; eur_total: number; amounts: Record<string, number> }
+    > = {};
     for (const e of expenses) {
-      if (!totals[e.category]) {
-        totals[e.category] = { count: 0, eur_total: 0, amounts: {} };
-      }
-      const cat = totals[e.category]!;
+      const existing = totals[e.category];
+      const cat = existing ?? { count: 0, eur_total: 0, amounts: {} };
+      totals[e.category] = cat;
       cat.count++;
       cat.eur_total += e.eur_amount;
       cat.amounts[e.currency] = (cat.amounts[e.currency] || 0) + e.amount;
@@ -147,24 +152,32 @@ async function executeGetExpenses(
       lines.push(`${cat}: EUR ${data.eur_total.toFixed(2)} (${data.count} ops) [${amountParts}]`);
     }
 
-    return { success: true, output: lines.join('\n') };
+    const output = lines.join('\n');
+    logger.info(`[TOOL] get_expenses summary output:\n${output}`);
+    return { success: true, output };
   }
 
   // Return individual expenses (limited)
   const limited = expenses.slice(0, limit);
-  const lines = [`Period: ${startDate} to ${endDate}`, `Showing ${limited.length} of ${expenses.length} expenses`, ''];
+  const lines = [
+    `Period: ${startDate} to ${endDate}`,
+    `Showing ${limited.length} of ${expenses.length} expenses`,
+    '',
+  ];
   for (const e of limited) {
     lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${e.amount} ${e.currency} (EUR ${e.eur_amount.toFixed(2)})${e.comment ? ` | ${e.comment}` : ''}`
+      `[id:${e.id}] ${e.date} | ${e.category} | ${e.amount} ${e.currency} (EUR ${e.eur_amount.toFixed(2)})${e.comment ? ` | ${e.comment}` : ''}`,
     );
   }
 
-  return { success: true, output: lines.join('\n') };
+  const output = lines.join('\n');
+  logger.info(`[TOOL] get_expenses output (first 5 lines):\n${lines.slice(0, 5).join('\n')}`);
+  return { success: true, output };
 }
 
 async function executeGetBudgets(
   input: Record<string, unknown>,
-  ctx: AgentContext
+  ctx: AgentContext,
 ): Promise<ToolResult> {
   const month = (input.month as string) || format(new Date(), 'yyyy-MM');
   const categoryFilter = input.category as string | undefined;
@@ -198,11 +211,12 @@ async function executeGetBudgets(
     const spentEur = spendingByCategory[budget.category] || 0;
     const spentInCurrency = convertCurrency(spentEur, 'EUR', budget.currency);
     const remaining = budget.limit_amount - spentInCurrency;
-    const percent = budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+    const percent =
+      budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
     const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
 
     lines.push(
-      `${budget.category}: ${spentInCurrency.toFixed(2)}/${budget.limit_amount.toFixed(2)} ${budget.currency} (${percent}%) [${status}]`
+      `${budget.category}: ${spentInCurrency.toFixed(2)}/${budget.limit_amount.toFixed(2)} ${budget.currency} (${percent}%) [${status}]`,
     );
 
     totalLimit += budget.limit_amount;
@@ -210,7 +224,9 @@ async function executeGetBudgets(
   }
 
   lines.push('');
-  lines.push(`Total: ${totalSpent.toFixed(2)}/${totalLimit.toFixed(2)} (${Math.round((totalSpent / totalLimit) * 100)}%)`);
+  lines.push(
+    `Total: ${totalSpent.toFixed(2)}/${totalLimit.toFixed(2)} (${Math.round((totalSpent / totalLimit) * 100)}%)`,
+  );
 
   return { success: true, output: lines.join('\n') };
 }
@@ -254,7 +270,7 @@ function executeGetExchangeRates(): ToolResult {
 
 async function executeSetBudget(
   input: Record<string, unknown>,
-  ctx: AgentContext
+  ctx: AgentContext,
 ): Promise<ToolResult> {
   const category = input.category as string;
   const amount = input.amount as number;
@@ -296,7 +312,7 @@ async function executeSetBudget(
           group.spreadsheet_id,
           categories,
           100,
-          currency
+          currency,
         );
       }
       await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
@@ -306,7 +322,7 @@ async function executeSetBudget(
         currency,
       });
     } catch (err) {
-      console.error('[TOOL] Failed to write budget to Google Sheets:', err);
+      logger.error({ err: err }, '[TOOL] Failed to write budget to Google Sheets');
       // Non-fatal: budget is saved in DB
     }
   }
@@ -317,10 +333,7 @@ async function executeSetBudget(
   };
 }
 
-function executeDeleteBudget(
-  input: Record<string, unknown>,
-  ctx: AgentContext
-): ToolResult {
+function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const category = input.category as string;
   const month = (input.month as string) || format(new Date(), 'yyyy-MM');
 
@@ -338,7 +351,7 @@ function executeDeleteBudget(
 
 async function executeAddExpense(
   input: Record<string, unknown>,
-  ctx: AgentContext
+  ctx: AgentContext,
 ): Promise<ToolResult> {
   const amount = input.amount as number;
   const category = input.category as string;
@@ -390,7 +403,7 @@ async function executeAddExpense(
         eurAmount,
       });
     } catch (err) {
-      console.error('[TOOL] Failed to write expense to Google Sheets:', err);
+      logger.error({ err: err }, '[TOOL] Failed to write expense to Google Sheets');
       // Non-fatal: expense is saved in DB
     }
   }
@@ -401,10 +414,7 @@ async function executeAddExpense(
   };
 }
 
-function executeDeleteExpense(
-  input: Record<string, unknown>,
-  ctx: AgentContext
-): ToolResult {
+function executeDeleteExpense(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const expenseId = input.expense_id as number;
 
   if (!expenseId) {
@@ -439,13 +449,14 @@ async function executeSyncFromSheets(ctx: AgentContext): Promise<ToolResult> {
 
   const sheetExpenses = await readExpensesFromSheet(
     group.google_refresh_token,
-    group.spreadsheet_id
+    group.spreadsheet_id,
   );
 
   const deletedCount = database.expenses.deleteAllByGroupId(ctx.groupId);
 
   const users = database.users.findByGroupId ? database.users.findByGroupId(ctx.groupId) : [];
-  const defaultUserId = users.length > 0 ? users[0]!.id : ctx.userId;
+  const [firstUser] = users;
+  const defaultUserId = firstUser !== undefined ? firstUser.id : ctx.userId;
 
   let syncedCount = 0;
   let createdCategories = 0;
@@ -514,7 +525,7 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
     const existing = database.budgets.findByGroupCategoryMonth(
       ctx.groupId,
       budgetData.category,
-      budgetData.month
+      budgetData.month,
     );
 
     const hasChanged =
@@ -542,10 +553,7 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
 
 // === Settings tools ===
 
-function executeSetCustomPrompt(
-  input: Record<string, unknown>,
-  ctx: AgentContext
-): ToolResult {
+function executeSetCustomPrompt(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const prompt = input.prompt as string;
 
   if (prompt === undefined) {
@@ -562,10 +570,7 @@ function executeSetCustomPrompt(
   };
 }
 
-function executeManageCategory(
-  input: Record<string, unknown>,
-  ctx: AgentContext
-): ToolResult {
+function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const action = input.action as string;
   const name = input.name as string;
 

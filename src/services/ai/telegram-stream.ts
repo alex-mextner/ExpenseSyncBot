@@ -3,9 +3,12 @@
  * Handles throttled message updates, tool indicators, and message chunking
  */
 import type { Bot } from 'gramio';
+import { processThinkTags } from '../../bot/commands/ask';
+import { createLogger } from '../../utils/logger.ts';
 import { TOOL_LABELS } from './tools';
-import { escapeHtml, processThinkTags } from '../../bot/commands/ask';
 import type { ToolResult } from './types';
+
+const logger = createLogger('telegram-stream');
 
 /**
  * Extract key parameters from tool input for display in the indicator
@@ -16,17 +19,24 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
   switch (name) {
     case 'set_budget':
       return [input.category, input.amount && `${input.amount} ${input.currency || ''}`.trim()]
-        .filter(Boolean).join(', ');
+        .filter(Boolean)
+        .join(', ');
     case 'delete_budget':
       return [input.category, input.month].filter(Boolean).join(', ');
     case 'add_expense':
-      return [input.amount && `${input.amount} ${input.currency || ''}`.trim(), input.category, input.comment]
-        .filter(Boolean).join(', ');
+      return [
+        input.amount && `${input.amount} ${input.currency || ''}`.trim(),
+        input.category,
+        input.comment,
+      ]
+        .filter(Boolean)
+        .join(', ');
     case 'delete_expense':
       return input.expense_id ? `#${input.expense_id}` : '';
     case 'get_expenses':
       return [input.category, input.period, input.summary_only && 'сводка']
-        .filter(Boolean).join(', ');
+        .filter(Boolean)
+        .join(', ');
     case 'get_budgets':
       return [input.category, input.month].filter(Boolean).join(', ');
     case 'manage_category':
@@ -46,6 +56,7 @@ const MAX_MESSAGE_LENGTH = 4000;
 export class TelegramStreamWriter {
   private sentMessageId: number | null = null;
   private fullText = '';
+  private historyText = '';
   private lastUpdateTime = 0;
   private lastSentText = '';
   private lastErrorTime = 0;
@@ -58,19 +69,24 @@ export class TelegramStreamWriter {
     private chatId: number,
   ) {
     // Send placeholder and keep "typing" status alive
-    this.bot.api.sendMessage({
-      chat_id: this.chatId,
-      text: '⏳ Минутку...',
-    }).then(msg => {
-      this.placeholderMessageId = msg.message_id;
-    }).catch(() => {});
+    this.bot.api
+      .sendMessage({
+        chat_id: this.chatId,
+        text: '⏳ Минутку...',
+      })
+      .then((msg) => {
+        this.placeholderMessageId = msg.message_id;
+      })
+      .catch(() => {});
 
     this.typingInterval = setInterval(() => {
       if (!this.sentMessageId) {
-        this.bot.api.sendChatAction({
-          chat_id: this.chatId,
-          action: 'typing',
-        }).catch(() => {});
+        this.bot.api
+          .sendChatAction({
+            chat_id: this.chatId,
+            action: 'typing',
+          })
+          .catch(() => {});
       } else {
         this.stopTyping();
       }
@@ -89,10 +105,12 @@ export class TelegramStreamWriter {
     if (this.placeholderMessageId) {
       const id = this.placeholderMessageId;
       this.placeholderMessageId = null;
-      this.bot.api.deleteMessage({
-        chat_id: this.chatId,
-        message_id: id,
-      }).catch(() => {});
+      this.bot.api
+        .deleteMessage({
+          chat_id: this.chatId,
+          message_id: id,
+        })
+        .catch(() => {});
     }
   }
 
@@ -164,10 +182,13 @@ export class TelegramStreamWriter {
     // Clean up leading/trailing whitespace and extra newlines
     cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
 
+    // Save history text before adding tool UI (prevents AI from mimicking the format)
+    this.historyText = cleanText;
+
     // Prepend tool summary as expandable blockquote
     if (toolLines.length > 0) {
       const toolSummary = `<blockquote expandable>\u2699\ufe0f <b>Инструменты</b>\n${toolLines.join('\n')}</blockquote>`;
-      cleanText = toolSummary + '\n\n' + cleanText;
+      cleanText = `${toolSummary}\n\n${cleanText}`;
     }
 
     if (!cleanText) {
@@ -182,10 +203,10 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Get the accumulated text (for saving to history)
+   * Get the clean AI response text (for saving to history, without tool UI)
    */
   getText(): string {
-    return this.fullText;
+    return this.historyText;
   }
 
   /**
@@ -217,37 +238,42 @@ export class TelegramStreamWriter {
       this.lastUpdateTime = Date.now();
     } catch (err: any) {
       if (err?.payload?.error_code === 429) {
-        console.error('[STREAM] Rate limited, cooling down');
+        logger.error('[STREAM] Rate limited, cooling down');
         this.lastErrorTime = Date.now();
       } else if (err?.payload?.description?.includes('message is not modified')) {
         this.lastSentText = textToSend;
         this.lastUpdateTime = Date.now();
       } else {
-        console.error('[STREAM] Update error:', err);
+        logger.error({ err: err }, '[STREAM] Update error');
       }
     }
   }
 
   /**
-   * Truncate text to fit Telegram message limit, preserving valid HTML
+   * Truncate text to fit Telegram message limit and close any unclosed HTML tags.
+   * Unclosed tags must always be fixed — not only on truncation — because
+   * intermediate stream flushes can cut mid-tag while the AI is still generating.
    */
   private truncateForTelegram(text: string): string {
-    if (text.length <= MAX_MESSAGE_LENGTH) return text;
+    let truncated = text;
+    let wasTruncated = false;
 
-    let truncated = text.substring(0, MAX_MESSAGE_LENGTH);
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      truncated = text.substring(0, MAX_MESSAGE_LENGTH);
+      wasTruncated = true;
 
-    // Don't cut in the middle of an HTML tag
-    const lastTagStart = truncated.lastIndexOf('<');
-    const lastTagEnd = truncated.lastIndexOf('>');
-    if (lastTagStart > lastTagEnd) {
-      truncated = truncated.substring(0, lastTagStart);
+      // Don't cut in the middle of an HTML tag
+      const lastTagStart = truncated.lastIndexOf('<');
+      const lastTagEnd = truncated.lastIndexOf('>');
+      if (lastTagStart > lastTagEnd) {
+        truncated = truncated.substring(0, lastTagStart);
+      }
     }
 
-    // Close unclosed tags
+    // Always close unclosed tags — stream may be mid-generation
     const openTags: string[] = [];
     const tagRegex = /<\/?([a-z]+)[^>]*>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = tagRegex.exec(truncated)) !== null) {
+    for (const match of truncated.matchAll(tagRegex)) {
       const fullTag = match[0];
       const tagName = match[1];
       if (!tagName) continue;
@@ -258,21 +284,22 @@ export class TelegramStreamWriter {
         openTags.push(tagName);
       }
     }
+    if (wasTruncated) truncated += '...';
     for (let i = openTags.length - 1; i >= 0; i--) {
       truncated += `</${openTags[i]}>`;
     }
 
-    return `${truncated}...`;
+    return truncated;
   }
 
   /**
-   * Send additional chunks for long final messages
+   * Send additional chunks for long final messages (uses internal display text from finalize)
    */
-  async sendRemainingChunks(fullText: string): Promise<void> {
-    if (fullText.length <= MAX_MESSAGE_LENGTH) return;
+  async sendRemainingChunks(): Promise<void> {
+    if (this.fullText.length <= MAX_MESSAGE_LENGTH) return;
 
     // Split into chunks by paragraphs
-    const chunks = this.splitIntoChunks(fullText, MAX_MESSAGE_LENGTH);
+    const chunks = this.splitIntoChunks(this.fullText, MAX_MESSAGE_LENGTH);
 
     // First chunk was already sent/edited via finalize()
     for (let i = 1; i < chunks.length; i++) {
@@ -285,7 +312,7 @@ export class TelegramStreamWriter {
             parse_mode: 'HTML',
           });
         } catch (err) {
-          console.error('[STREAM] Failed to send chunk:', err);
+          logger.error({ err: err }, '[STREAM] Failed to send chunk');
         }
       }
     }
@@ -299,7 +326,7 @@ export class TelegramStreamWriter {
     const paragraphs = text.split('\n\n');
 
     for (const para of paragraphs) {
-      if ((current + '\n\n' + para).length > maxLength && current) {
+      if (`${current}\n\n${para}`.length > maxLength && current) {
         chunks.push(current.trim());
         current = para;
       } else {
