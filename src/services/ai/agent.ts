@@ -91,7 +91,6 @@ export class ExpenseBotAgent {
           // Text delta -- stream to Telegram
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
             writer.appendText(event.delta.text);
-            await writer.flush(false);
           }
 
           // Start of a new content block

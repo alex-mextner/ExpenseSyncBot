@@ -47,9 +47,8 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
   }
 }
 
-const UPDATE_INTERVAL_MS = 3000;
+const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
 const ERROR_COOLDOWN_MS = 10000;
-const MIN_DELTA_LENGTH = 20;
 const MAX_MESSAGE_LENGTH = 4000;
 
 export class TelegramStreamWriter {
@@ -59,7 +58,6 @@ export class TelegramStreamWriter {
   private historyText = ''; // clean final AI text for chat history
   private lastFlushTime = 0;
   private lastSentText = ''; // last display text actually sent
-  private lastFlushedLen = 0; // fullText.length at last successful flush
   private lastErrorTime = 0;
   private toolLabel: string | null = null; // live indicator shown during flush
   private pendingIndicators: string[] = []; // in-flight tool labels
@@ -119,26 +117,22 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Append text delta from streaming (caller must call flush afterwards)
+   * Append text delta from streaming — triggers a rate-limited flush automatically.
    */
   appendText(delta: string): void {
     this.fullText += delta;
+    void this.flush(false);
   }
 
   /**
-   * Flush current state to Telegram. force=true bypasses time/delta throttling
+   * Flush current state to Telegram. force=true bypasses time throttling
    * (used when a tool starts so the user sees it immediately).
    * Error cooldown is always respected.
    */
   async flush(force = false): Promise<void> {
     const now = Date.now();
     if (now - this.lastErrorTime < ERROR_COOLDOWN_MS) return;
-
-    if (!force) {
-      if (now - this.lastFlushTime < UPDATE_INTERVAL_MS) return;
-      // Skip if text hasn't grown enough and there's no live tool indicator to show
-      if (this.fullText.length - this.lastFlushedLen < MIN_DELTA_LENGTH && !this.toolLabel) return;
-    }
+    if (!force && now - this.lastFlushTime < UPDATE_INTERVAL_MS) return;
 
     // Build display: current streamed text + live tool indicator suffix
     let display = this.truncateForTelegram(processThinkTags(this.fullText)) || '⏳';
@@ -184,7 +178,6 @@ export class TelegramStreamWriter {
       this.toolLines = [];
     }
     this.fullText = '';
-    this.lastFlushedLen = 0;
     this.lastSentText = '';
   }
 
@@ -281,7 +274,6 @@ export class TelegramStreamWriter {
       }
 
       this.lastSentText = text;
-      this.lastFlushedLen = this.fullText.length;
       this.lastFlushTime = Date.now();
     } catch (err) {
       const tgErr = err as { payload?: { error_code?: number; description?: string } };
@@ -290,7 +282,6 @@ export class TelegramStreamWriter {
         this.lastErrorTime = Date.now();
       } else if (tgErr?.payload?.description?.includes('message is not modified')) {
         this.lastSentText = text;
-        this.lastFlushedLen = this.fullText.length;
         this.lastFlushTime = Date.now();
       } else {
         logger.error({ err }, '[STREAM] Update error');
