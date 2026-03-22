@@ -451,6 +451,97 @@ describe('finalize: tools without AI text', () => {
   });
 });
 
+// ── Telegram HTML compliance: what truncateForTelegram must guarantee ──
+// RED TESTS: these all currently FAIL because truncateForTelegram has no
+// sanitization step. Any text the AI generates goes to Telegram as-is,
+// and Telegram returns 400 "Can't parse entities" on:
+//   • unsupported tags (<div>, <h1>, <p>, <script>, <img>, etc.)
+//   • bare & not escaped as &amp;
+//   • bare < not part of a valid tag
+
+describe('truncateForTelegram: must produce valid Telegram HTML', () => {
+  const writer = makeWriter();
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  afterEach(() => (writer as any).stopTyping());
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  const truncate = (text: string): string => (writer as any).truncateForTelegram(text);
+
+  test('strips unsupported <div> tag, preserves inner text', () => {
+    const result = truncate('<div>some content</div>');
+    expect(result).not.toContain('<div>');
+    expect(result).not.toContain('</div>');
+    expect(result).toContain('some content');
+  });
+
+  test('strips unsupported <h1> tag, preserves inner text', () => {
+    const result = truncate('<h1>Title</h1>');
+    expect(result).not.toContain('<h1>');
+    expect(result).toContain('Title');
+  });
+
+  test('strips unsupported <p> tag, preserves inner text', () => {
+    const result = truncate('<p>paragraph text</p>');
+    expect(result).not.toContain('<p>');
+    expect(result).toContain('paragraph text');
+  });
+
+  test('strips <script> tag entirely, text after it survives', () => {
+    const result = truncate('<script>alert(1)</script>safe text');
+    expect(result).not.toContain('<script>');
+    expect(result).toContain('safe text');
+  });
+
+  test('escapes bare & to &amp;', () => {
+    const result = truncate('cats & dogs');
+    expect(result).toBe('cats &amp; dogs');
+  });
+
+  test('escapes bare & when surrounded by valid HTML', () => {
+    const result = truncate('paid <b>100 EUR</b> & tax included');
+    expect(result).not.toContain(' & ');
+    expect(result).toContain('&amp;');
+    expect(result).toContain('<b>100 EUR</b>');
+  });
+
+  test('preserves allowed tags while stripping disallowed ones', () => {
+    const result = truncate('<b>bold</b> <div>blocked</div> <i>italic</i>');
+    expect(result).toContain('<b>bold</b>');
+    expect(result).toContain('<i>italic</i>');
+    expect(result).not.toContain('<div>');
+    expect(result).toContain('blocked');
+  });
+});
+
+// ── finalize pipeline: AI text must be sanitized before reaching Telegram ──
+// RED TESTS: bare & and unsupported tags from AI responses flow through
+// finalize() into finalDisplayText without any sanitization.
+
+describe('finalize pipeline: sanitizes AI text before sending', () => {
+  test('bare & in AI response is not passed raw to Telegram', async () => {
+    const writer = makeWriter();
+    writer.appendText('Revenue & expenses for March');
+    await writer.finalize();
+    // biome-ignore lint/suspicious/noExplicitAny: access private field in test
+    const displayText: string = (writer as any).finalDisplayText;
+    expect(displayText).not.toContain(' & ');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+    (writer as any).stopTyping();
+  });
+
+  test('<div> in AI response is not passed raw to Telegram', async () => {
+    const writer = makeWriter();
+    writer.appendText('<div>Section</div> and <b>bold</b>');
+    await writer.finalize();
+    // biome-ignore lint/suspicious/noExplicitAny: access private field in test
+    const displayText: string = (writer as any).finalDisplayText;
+    expect(displayText).not.toContain('<div>');
+    expect(displayText).toContain('Section');
+    expect(displayText).toContain('<b>bold</b>');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+    (writer as any).stopTyping();
+  });
+});
+
 // ── flush: error cooldown ─────────────────────────────────────────────
 
 describe('flush error cooldown', () => {
