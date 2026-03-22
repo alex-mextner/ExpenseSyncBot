@@ -86,7 +86,10 @@ export class AppError extends Error {
 }
 
 export class GoogleSheetsError extends AppError {}
+// Used for HuggingFace Inference API (OCR, receipt AI services)
 export class HuggingFaceError extends AppError {}
+// Used for Anthropic SDK (main AI agent in src/services/ai/agent.ts)
+export class AnthropicError extends AppError {}
 export class NetworkError extends AppError {}
 export class OAuthError extends AppError {}
 ```
@@ -101,6 +104,7 @@ export {
   AppError,
   GoogleSheetsError,
   HuggingFaceError,
+  AnthropicError,
   NetworkError,
   OAuthError,
 } from './service-errors';
@@ -983,7 +987,7 @@ class NetworkError extends Error { constructor(msg: string, public code = 'NETWO
 ```
 Replace with real import once Agent 1 commits.
 
-**Mock strategy:** Use `mock()` from bun:test. Mock Playwright at module level for receipt-fetcher. Mock `fetch` globally for HTTP calls.
+**Mock strategy:** Use dependency injection (DI) for receipt-fetcher (see A4-3 — no `mock.module()`). Mock `fetch` globally via `global.fetch = mock(...)` for HTTP calls in other services.
 
 **Run tests with:** `bun test src/services/receipt/`
 
@@ -1201,7 +1205,7 @@ This is pure TDD: write tests FIRST, then implement `bot-error-formatter.ts`.
 
 import { describe, it, expect } from 'bun:test';
 import { formatErrorForUser } from './bot-error-formatter';
-import { GoogleSheetsError, HuggingFaceError, NetworkError, OAuthError, AppError } from '../errors';
+import { GoogleSheetsError, HuggingFaceError, AnthropicError, NetworkError, OAuthError, AppError } from '../errors';
 
 describe('formatErrorForUser', () => {
   describe('GoogleSheetsError', () => {
@@ -1237,6 +1241,14 @@ describe('formatErrorForUser', () => {
   describe('HuggingFaceError', () => {
     it('returns AI service message', () => {
       const err = new HuggingFaceError('rate limit', 'RATE_LIMIT');
+      const msg = formatErrorForUser(err);
+      expect(msg.toLowerCase()).toMatch(/ai|ии|сервис|попробуй/);
+    });
+  });
+
+  describe('AnthropicError', () => {
+    it('returns AI service unavailable message', () => {
+      const err = new AnthropicError('rate limit', 'RATE_LIMIT_429');
       const msg = formatErrorForUser(err);
       expect(msg.toLowerCase()).toMatch(/ai|ии|сервис|попробуй/);
     });
@@ -1291,7 +1303,7 @@ Expected: fail with "Cannot find module" or "formatErrorForUser is not a functio
 // src/bot/bot-error-formatter.ts
 // Translates typed service errors into user-friendly Telegram messages
 
-import { AppError, GoogleSheetsError, HuggingFaceError, NetworkError, OAuthError } from '../errors';
+import { AppError, GoogleSheetsError, HuggingFaceError, AnthropicError, NetworkError, OAuthError } from '../errors';
 
 export function formatErrorForUser(error: unknown): string {
   if (error instanceof OAuthError) {
@@ -1303,7 +1315,7 @@ export function formatErrorForUser(error: unknown): string {
   if (error instanceof NetworkError) {
     return 'Нет соединения с сервисом. Проверь интернет и попробуй снова.';
   }
-  if (error instanceof HuggingFaceError) {
+  if (error instanceof AnthropicError || error instanceof HuggingFaceError) {
     return 'AI-сервис временно недоступен. Попробуй позже.';
   }
   if (error instanceof AppError) {
@@ -1509,17 +1521,28 @@ describe('ExpenseBotAgent', () => {
 
     // TDD error handling: write FIRST (fail) → fix agent.ts → pass
 
-    it('[TDD] wraps 429 API error as typed error', async () => {
+    it('[TDD] wraps Anthropic 429 as AnthropicError', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const apiError = Object.assign(new Error('Rate limit exceeded'), { status: 429 });
       spyOn(anthropic.messages, 'stream').mockImplementation(() => { throw apiError; });
 
       // First: test FAILS because agent throws plain Error
-      // Then: add try/catch in agent.ts that maps status:429 → HuggingFaceError
-      const { HuggingFaceError } = await import('../../errors');
+      // Then: add try/catch in agent.ts that maps status:429 → AnthropicError
+      const { AnthropicError } = await import('../../errors');
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot)
-      ).rejects.toBeInstanceOf(HuggingFaceError);
+      ).rejects.toBeInstanceOf(AnthropicError);
+    });
+
+    it('[TDD] wraps Anthropic 5xx as AnthropicError', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      const serverErr = Object.assign(new Error('Internal server error'), { status: 500 });
+      spyOn(anthropic.messages, 'stream').mockImplementation(() => { throw serverErr; });
+
+      const { AnthropicError } = await import('../../errors');
+      await expect(
+        agent.run('question', [], mockBot as unknown as import('gramio').Bot)
+      ).rejects.toBeInstanceOf(AnthropicError);
     });
 
     it('[TDD] wraps timeout as NetworkError', async () => {
@@ -1539,7 +1562,7 @@ describe('ExpenseBotAgent', () => {
 **Aim for ~50 tests.** After the skeleton above compiles and runs, add more cases:
 - Tool call loop: mock stream that yields a `tool_use` block, verify `executeTool` is called
 - MAX_TOOL_ROUNDS: mock 11 consecutive tool calls, verify loop exits cleanly
-- Timeout (AGENT_TIMEOUT_MS): use `jest.useFakeTimers()` / `setSystemTime` to advance clock
+- Timeout (AGENT_TIMEOUT_MS): use `setSystemTime` from `bun:test` to advance clock
 - `buildHistoryMessages`: verify role mapping user/assistant, trimming long history
 
 ```bash
