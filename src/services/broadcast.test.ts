@@ -1,38 +1,27 @@
 // Tests for broadcast service — message delivery to groups with mock bot
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import cron from 'node-cron';
+import { database } from '../database';
+import { scheduleNewsBroadcast } from './broadcast';
 
-// ── Mock node-cron before importing broadcast ──────────────────────────────────
-// broadcast.ts calls cron.schedule() at module level via scheduleNewsBroadcast.
-// Mock node-cron to prevent actual cron jobs from being scheduled.
-mock.module('node-cron', () => ({
-  default: {
-    schedule: mock((_pattern: string, _callback: () => void) => ({
-      stop: mock(() => {}),
-    })),
-  },
-}));
+// ── Spies (no mock.module — banned per pipeline.ts:148) ────────────────────────
+let cronSpy: ReturnType<typeof spyOn>;
+let dbSpy: ReturnType<typeof spyOn>;
 
-// Mock the database so we control which groups are returned
-const mockGroupsGetAll = mock(
-  () =>
-    [] as Array<{
-      telegram_group_id: number;
-      active_topic_id?: number | null;
-    }>,
-);
+const fakeTask = { stop: mock(() => {}) };
 
-mock.module('../database', () => ({
-  database: {
-    groups: {
-      getAll: mockGroupsGetAll,
-    },
-  },
-}));
+beforeEach(() => {
+  cronSpy = spyOn(cron, 'schedule').mockReturnValue(
+    fakeTask as unknown as ReturnType<typeof cron.schedule>,
+  );
+  dbSpy = spyOn(database.groups, 'getAll').mockReturnValue([]);
+});
 
-// Import AFTER mocks are set up
-const { scheduleNewsBroadcast } = await import('./broadcast');
+afterEach(() => {
+  mock.restore();
+});
 
-// ── Mock bot factory ───────────────────────────────────────────────────────────
+// ── Mock bot factory ────────────────────────────────────────────────────────────
 
 function makeMockBot(opts: { sendFails?: boolean; failOnGroupId?: number } = {}) {
   const sendMessage = mock(
@@ -55,15 +44,13 @@ function makeMockBot(opts: { sendFails?: boolean; failOnGroupId?: number } = {})
   };
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
 type MockGroup = { telegram_group_id: number; active_topic_id?: number | null };
 
 function makeGroups(...ids: number[]): MockGroup[] {
   return ids.map((id) => ({ telegram_group_id: id }));
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────
+// ── scheduleNewsBroadcast ───────────────────────────────────────────────────────
 
 describe('scheduleNewsBroadcast', () => {
   it('is a function', () => {
@@ -74,42 +61,43 @@ describe('scheduleNewsBroadcast', () => {
     const bot = makeMockBot();
     expect(() => scheduleNewsBroadcast(bot as never)).not.toThrow();
   });
+
+  it('schedules a cron job', () => {
+    const bot = makeMockBot();
+    scheduleNewsBroadcast(bot as never);
+    expect(cronSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('cron expression targets March 11 at 12:00', () => {
+    const bot = makeMockBot();
+    scheduleNewsBroadcast(bot as never);
+    const [cronExpr] = cronSpy.mock.calls[0] as [string, ...unknown[]];
+    expect(cronExpr).toBe('0 12 11 3 *');
+  });
 });
 
-describe('broadcastToAllGroups (via preRequest injection logic)', () => {
-  // Since broadcastToAllGroups is not exported, we test via the module's internal logic.
-  // We verify the mock setup is correct and the database groups mock works.
+// ── Bot mock behaviour (logic reused by broadcastToAllGroups) ───────────────────
 
+describe('mock bot behaviour', () => {
   beforeEach(() => {
-    mockGroupsGetAll.mockClear();
+    // Reset alreadySent flag between tests by overriding the cron callback
+    dbSpy.mockReturnValue([]);
   });
 
-  it('database.groups.getAll is called when broadcast would fire', () => {
-    // Verify our mock is in place
-    mockGroupsGetAll.mockImplementation(() => makeGroups(111, 222));
-    const groups = mockGroupsGetAll();
-    expect(groups).toHaveLength(2);
-    expect(groups[0]?.telegram_group_id).toBe(111);
-  });
-
-  it('mock bot sendMessage resolves with ok:true', async () => {
+  it('sendMessage resolves with ok:true on success', async () => {
     const bot = makeMockBot();
-    const result = await bot.api.sendMessage({
-      chat_id: 100,
-      text: 'test',
-      parse_mode: 'HTML',
-    });
+    const result = await bot.api.sendMessage({ chat_id: 100, text: 'test', parse_mode: 'HTML' });
     expect(result.ok).toBe(true);
   });
 
-  it('mock bot sendMessage rejects when sendFails=true', async () => {
+  it('sendMessage rejects when sendFails=true', async () => {
     const bot = makeMockBot({ sendFails: true });
     await expect(
       bot.api.sendMessage({ chat_id: 100, text: 'test', parse_mode: 'HTML' }),
     ).rejects.toThrow('Failed to send');
   });
 
-  it('bot sends with message_thread_id when group has active_topic_id', async () => {
+  it('sends with message_thread_id when group has active_topic_id', async () => {
     const bot = makeMockBot();
     const group: MockGroup = { telegram_group_id: 500, active_topic_id: 7 };
 
@@ -126,7 +114,7 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
     });
   });
 
-  it('bot sends without message_thread_id when active_topic_id is null', async () => {
+  it('sends without message_thread_id when active_topic_id is null', async () => {
     const bot = makeMockBot();
     const group: MockGroup = { telegram_group_id: 600, active_topic_id: null };
 
@@ -137,16 +125,16 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
       ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
     });
 
-    const callParams = bot._sendMessage.mock.calls[0]?.[0];
-    expect(callParams?.chat_id).toBe(600);
-    expect(callParams?.message_thread_id).toBeUndefined();
+    const call = bot._sendMessage.mock.calls[0]?.[0];
+    expect(call?.chat_id).toBe(600);
+    expect(call?.message_thread_id).toBeUndefined();
   });
 
-  it('individual group failure does not stop sending to other groups', async () => {
+  it('individual group failure does not stop other sends', async () => {
     const bot = makeMockBot({ failOnGroupId: 200 });
     const groups: MockGroup[] = [
       { telegram_group_id: 100 },
-      { telegram_group_id: 200 }, // will fail
+      { telegram_group_id: 200 },
       { telegram_group_id: 300 },
     ];
 
@@ -157,13 +145,12 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
       try {
         await bot.api.sendMessage({
           chat_id: group.telegram_group_id,
-          text: 'broadcast',
+          text: 'x',
           parse_mode: 'HTML',
         });
         sent++;
       } catch {
         failed++;
-        // Error is caught — broadcast continues
       }
     }
 
@@ -173,11 +160,7 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
 
   it('sends to all groups in order', async () => {
     const bot = makeMockBot();
-    const groups: MockGroup[] = [
-      { telegram_group_id: 10 },
-      { telegram_group_id: 20 },
-      { telegram_group_id: 30 },
-    ];
+    const groups: MockGroup[] = makeGroups(10, 20, 30);
 
     for (const group of groups) {
       await bot.api.sendMessage({
@@ -187,11 +170,11 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
       });
     }
 
-    const calledIds = bot._sendMessage.mock.calls.map((call) => call[0]?.chat_id);
-    expect(calledIds).toEqual([10, 20, 30]);
+    const ids = bot._sendMessage.mock.calls.map((call) => call[0]?.chat_id);
+    expect(ids).toEqual([10, 20, 30]);
   });
 
-  it('sendMessage is called with HTML parse_mode', async () => {
+  it('sendMessage always called with HTML parse_mode', async () => {
     const bot = makeMockBot();
     await bot.api.sendMessage({ chat_id: 1, text: 'hello', parse_mode: 'HTML' });
     expect(bot._sendMessage.mock.calls[0]?.[0]?.parse_mode).toBe('HTML');
@@ -210,11 +193,10 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
     expect(bot._sendMessage.mock.calls.length).toBe(0);
   });
 
-  it('all failures still result in zero successful sends', async () => {
+  it('all failures result in zero successful sends', async () => {
     const bot = makeMockBot({ sendFails: true });
-    const groups: MockGroup[] = [{ telegram_group_id: 1 }, { telegram_group_id: 2 }];
     let sent = 0;
-    for (const group of groups) {
+    for (const group of makeGroups(1, 2)) {
       try {
         await bot.api.sendMessage({
           chat_id: group.telegram_group_id,
@@ -223,37 +205,31 @@ describe('broadcastToAllGroups (via preRequest injection logic)', () => {
         });
         sent++;
       } catch {
-        // silently ignore
+        /* expected */
       }
     }
     expect(sent).toBe(0);
   });
-});
 
-describe('broadcast message content', () => {
-  it('news message contains bot feature description', async () => {
-    // Import the module to get access to the NEWS_MESSAGE via indirect test
-    // The message is in the module's scope; we verify the module loads without error
-    const mod = await import('./broadcast');
-    expect(mod.scheduleNewsBroadcast).toBeTruthy();
-  });
-
-  it('mock bot captures text sent to sendMessage', async () => {
-    const bot = makeMockBot();
-    await bot.api.sendMessage({ chat_id: 123, text: 'Test broadcast message', parse_mode: 'HTML' });
-    expect(bot._sendMessage.mock.calls[0]?.[0]?.text).toBe('Test broadcast message');
-  });
-
-  it('message sent with HTML parse_mode (not Markdown)', async () => {
-    const bot = makeMockBot();
-    await bot.api.sendMessage({ chat_id: 1, text: '<b>bold</b>', parse_mode: 'HTML' });
-    expect(bot._sendMessage.mock.calls[0]?.[0]?.parse_mode).toBe('HTML');
-  });
-
-  it('failing send throws an Error (not silent)', async () => {
+  it('failing send throws Error instance', async () => {
     const bot = makeMockBot({ sendFails: true });
     await expect(
       bot.api.sendMessage({ chat_id: 9999, text: 'x', parse_mode: 'HTML' }),
     ).rejects.toBeInstanceOf(Error);
+  });
+});
+
+// ── database.groups.getAll spy ─────────────────────────────────────────────────
+
+describe('database spy', () => {
+  it('getAll spy returns configured groups', () => {
+    dbSpy.mockReturnValue(makeGroups(111, 222) as ReturnType<typeof database.groups.getAll>);
+    const groups = database.groups.getAll();
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.telegram_group_id).toBe(111);
+  });
+
+  it('getAll spy default returns empty array', () => {
+    expect(database.groups.getAll()).toHaveLength(0);
   });
 });

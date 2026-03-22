@@ -1,5 +1,22 @@
 import { type Browser, chromium } from 'playwright';
+import { NetworkError } from '../../errors';
 import { isURL } from './qr-scanner';
+
+/**
+ * Minimal browser interface required by fetchReceiptData.
+ * Matches Playwright Browser, but typed minimally to allow DI in tests.
+ */
+export interface BrowserLike {
+  newContext(opts?: unknown): Promise<{
+    newPage(): Promise<{
+      goto(url: string, opts?: unknown): Promise<unknown>;
+      waitForTimeout(ms: number): Promise<void>;
+      content(): Promise<string>;
+      close(): Promise<void>;
+    }>;
+    close(): Promise<void>;
+  }>;
+}
 
 let browser: Browser | null = null;
 
@@ -29,14 +46,18 @@ export async function closeBrowser(): Promise<void> {
 /**
  * Fetch receipt data from QR code data
  * @param qrData - QR code data (URL or text/JSON)
+ * @param getBrowserFn - Optional browser factory for dependency injection (tests)
  * @returns Receipt HTML content or text data
- * @throws Error if URL cannot be loaded or data is invalid
+ * @throws NetworkError if URL cannot be loaded or content is empty
  */
-export async function fetchReceiptData(qrData: string): Promise<string> {
+export async function fetchReceiptData(
+  qrData: string,
+  getBrowserFn: () => Promise<BrowserLike> = getBrowser,
+): Promise<string> {
   // If QR data is a URL, fetch it with Playwright
   if (isURL(qrData)) {
     try {
-      const browserInstance = await getBrowser();
+      const browserInstance = await getBrowserFn();
       const context = await browserInstance.newContext({
         userAgent:
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -59,15 +80,19 @@ export async function fetchReceiptData(qrData: string): Promise<string> {
       await context.close();
 
       if (!content || content.length < 100) {
-        throw new Error('Page loaded but content is empty or too short');
+        throw new NetworkError('Page loaded but content is empty or too short', 'EMPTY_CONTENT');
       }
 
       return content;
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Failed to load receipt URL: ${error.message}`);
+      if (error instanceof NetworkError) {
+        throw error;
       }
-      throw new Error('Failed to load receipt URL: Unknown error');
+      throw new NetworkError(
+        `Browser navigation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'NAVIGATION_FAILED',
+        error,
+      );
     }
   }
 
