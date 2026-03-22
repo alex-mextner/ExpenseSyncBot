@@ -17,14 +17,6 @@ import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
 
-export {
-  closeUnmatchedTags,
-  escapeHtml,
-  processThinkTags,
-  sanitizeHtmlForTelegram,
-  stripAllHtml,
-} from '../../utils/html';
-
 const logger = createLogger('ask');
 
 /**

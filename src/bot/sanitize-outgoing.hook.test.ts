@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { sanitizeHtmlPreRequest } from './sanitize-html.hook';
+import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 
 type PreRequestCtx = { method: string; params: Record<string, unknown> };
 
-describe('sanitizeHtmlPreRequest', () => {
-  const hook = sanitizeHtmlPreRequest;
+describe('sanitizeOutgoingMessages', () => {
+  const hook = sanitizeOutgoingMessages;
 
   // ── No parse_mode: leave as-is ────────────────────────────────────
 

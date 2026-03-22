@@ -20,7 +20,7 @@ import { handleTopicCommand } from './commands/topic';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
-import { sanitizeHtmlPreRequest } from './sanitize-html.hook';
+import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
 
 const logger = createLogger('index');
@@ -32,7 +32,7 @@ export function createBot(): Bot {
   const bot = new Bot(env.BOT_TOKEN);
 
   // Sanitize all outgoing HTML messages before they reach Telegram
-  bot.preRequest(sanitizeHtmlPreRequest);
+  bot.preRequest(sanitizeOutgoingMessages);
 
   // Global topic-aware middleware — must be registered before handlers
   registerTopicMiddleware(bot);

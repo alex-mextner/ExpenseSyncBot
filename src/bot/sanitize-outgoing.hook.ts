@@ -21,7 +21,7 @@ function sanitizeField(value: string, parseMode: string): string {
  * - Markdown: escape legacy Markdown special characters (_ * ` [ ])
  * All sanitizers are idempotent — safe to call multiple times.
  */
-export const sanitizeHtmlPreRequest: Hooks.PreRequest = (ctx) => {
+export const sanitizeOutgoingMessages: Hooks.PreRequest = (ctx) => {
   const params = ctx.params as SanitizableParams | undefined;
   if (!params?.parse_mode) return ctx;
 
