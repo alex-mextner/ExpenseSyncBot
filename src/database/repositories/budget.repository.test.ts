@@ -516,7 +516,8 @@ describe('BudgetRepository', () => {
         limit_amount: 300,
       });
       const group = groupRepo.findById(groupId);
-      groupRepo.delete(group!.telegram_group_id);
+      const tgId = group?.telegram_group_id ?? 0;
+      groupRepo.delete(tgId);
       expect(budgetRepo.findById(budget.id)).toBeNull();
     });
   });

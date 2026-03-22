@@ -53,7 +53,8 @@ describe('findBestCategoryMatch', () => {
   it('returns a match when input is whitespace only (trimmed to empty, matches all via contains)', () => {
     // trimmed empty string matches all via String.includes('') === true
     const result = findBestCategoryMatch('   ', cats);
-    expect(cats).toContain(result);
+    expect(result).not.toBeNull();
+    expect(cats).toContain(result as string);
   });
 });
 

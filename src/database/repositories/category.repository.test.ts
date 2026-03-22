@@ -222,7 +222,8 @@ describe('CategoryRepository', () => {
       const cat = categoryRepo.create({ group_id: groupId, name: 'Food' });
       // Get the telegram_group_id of the group
       const group = groupRepo.findById(groupId);
-      groupRepo.delete(group?.telegram_group_id);
+      const tgId = group?.telegram_group_id ?? 0;
+      groupRepo.delete(tgId);
       expect(categoryRepo.findById(cat.id)).toBeNull();
     });
   });
