@@ -84,7 +84,7 @@ export class SpendingAnalytics {
       // Convert EUR spent to budget currency for comparison
       const spent = convertCurrency(spentEur, 'EUR', currency);
 
-      const dailyBurnRate = daysElapsed > 0 ? spent / daysElapsed : 0;
+      const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
       const projectedTotal = dailyBurnRate * daysInMonth;
       const projectedOvershoot = projectedTotal - budget.limit_amount;
       const runwayDays =
