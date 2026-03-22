@@ -1,7 +1,7 @@
 import { format } from 'date-fns';
 import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
-import type { ReceiptItem } from '../../database/types';
+import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
@@ -298,7 +298,7 @@ export async function saveExpenseToSheet(
   groupId: number,
   pendingExpenseId: number,
   telegramGroupId?: number,
-  bot?: any,
+  bot?: BotInstance,
 ): Promise<void> {
   logger.info(`[SAVE] Starting save to sheet...`);
 
@@ -599,8 +599,8 @@ async function handleBulkCorrectionInput(
   ctx: Ctx['Message'],
   bot: BotInstance,
   correctionText: string,
-  queueItem: any,
-  group: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
 ): Promise<void> {
   const {
     buildSummaryFromItems,

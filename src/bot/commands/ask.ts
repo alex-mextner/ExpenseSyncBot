@@ -5,6 +5,7 @@ import type { Bot } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import type { Group, User } from '../../database/types';
 import { AI_BASE_URL, AI_MODEL, ExpenseBotAgent } from '../../services/ai/agent';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
@@ -104,8 +105,8 @@ async function handleAskWithAnthropic(
   ctx: Ctx['Message'],
   question: string,
   bot: Bot,
-  group: any,
-  user: any,
+  group: Group,
+  user: User,
   userName: string,
   userFullName: string,
 ): Promise<void> {
@@ -163,8 +164,8 @@ async function handleAskWithHuggingFace(
   ctx: Ctx['Message'],
   question: string,
   bot: Bot,
-  group: any,
-  user: any,
+  group: Group,
+  user: User,
   userName: string,
   userFullName: string,
   chatId: number,
@@ -302,7 +303,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
     const stream = hfClient.chatCompletionStream({
       provider: 'novita',
       model: 'deepseek-ai/DeepSeek-R1-0528',
-      messages: messages as any,
+      messages: messages,
       max_tokens: 4000,
       temperature: 0.7,
     });
@@ -649,7 +650,7 @@ async function safeSend(
   ctx: Ctx['Message'],
   text: string,
   options?: { parse_mode?: 'HTML' | 'MarkdownV2' | 'Markdown' },
-): Promise<any> {
+) {
   try {
     return await ctx.send(text, options);
   } catch (err: any) {

@@ -1,6 +1,7 @@
 import { format } from 'date-fns';
 import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
+import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
@@ -1041,7 +1042,7 @@ async function handleReceiptSummaryAction(
       break;
 
     case 'bulk_edit':
-      await handleReceiptBulkEdit(ctx, queueItem, group, bot, messageId, chatId);
+      await handleReceiptBulkEdit(ctx, queueItem, bot, messageId, chatId);
       break;
 
     case 'itemwise':
@@ -1066,9 +1067,9 @@ async function handleReceiptSummaryAction(
  */
 async function handleReceiptAcceptAll(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  user: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
+  user: User,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
@@ -1111,8 +1112,7 @@ async function handleReceiptAcceptAll(
  */
 async function handleReceiptBulkEdit(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  _group: any,
+  queueItem: PhotoQueueItem,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
@@ -1156,8 +1156,8 @@ async function handleReceiptBulkEdit(
  */
 async function handleReceiptItemwise(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
@@ -1189,9 +1189,9 @@ async function handleReceiptItemwise(
  */
 async function handleReceiptAcceptBulk(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  user: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
+  user: User,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
@@ -1279,8 +1279,8 @@ async function handleReceiptAcceptBulk(
  */
 async function handleReceiptCancel(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
