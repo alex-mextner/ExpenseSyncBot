@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { InferenceClient } from '@huggingface/inference';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import { TelegramError } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
@@ -359,21 +360,24 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                 });
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
-              } catch (err: any) {
+              } catch (err: unknown) {
                 // If rate limited, wait longer
-                if (err?.code === 429) {
+                if (err instanceof TelegramError && err.code === 429) {
                   logger.error('[ASK] Rate limited, waiting...');
                   lastErrorTime = now;
                   // Wait the cooldown period
                   await new Promise((resolve) => setTimeout(resolve, ERROR_COOLDOWN_MS));
-                } else if (err?.message?.includes('message is not modified')) {
+                } else if (
+                  err instanceof Error &&
+                  err.message.includes('message is not modified')
+                ) {
                   // Shouldn't happen after the check above, but just in case
                   logger.info('[ASK] Message not modified (unexpected)');
                   lastMessageText = textToSend;
                   lastUpdateTime = now;
-                } else if (err?.message?.includes("can't parse entities")) {
+                } else if (err instanceof Error && err.message.includes("can't parse entities")) {
                   logger.error(
-                    { err: err },
+                    { err },
                     '[ASK] HTML parse error in edit, falling back to plain text',
                   );
                   try {
@@ -388,7 +392,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                     logger.error({ err: innerErr }, '[ASK] Failed even plain text edit');
                   }
                 } else {
-                  logger.error({ err: err }, '[ASK] Failed to edit message');
+                  logger.error({ err }, '[ASK] Failed to edit message');
                 }
               }
             } else if (!isTruncated) {
@@ -399,8 +403,8 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                 sentMessageId = sent.id;
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
-              } catch (err: any) {
-                if (err?.message?.includes("can't parse entities")) {
+              } catch (err: unknown) {
+                if (err instanceof Error && err.message.includes("can't parse entities")) {
                   logger.error(
                     '[ASK] HTML parse error in initial send, falling back to plain text',
                   );
@@ -442,11 +446,11 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
             text: chunks[0],
             parse_mode: 'HTML',
           });
-        } catch (err: any) {
-          if (err?.message?.includes('message is not modified')) {
+        } catch (err: unknown) {
+          if (err instanceof Error && err.message.includes('message is not modified')) {
             // Shouldn't happen after the check above, but just in case
             logger.info('[ASK] Final message not modified (unexpected)');
-          } else if (err?.message?.includes("can't parse entities")) {
+          } else if (err instanceof Error && err.message.includes("can't parse entities")) {
             logger.error('[ASK] HTML parse error in final edit, falling back to plain text');
             try {
               await bot.api.editMessageText({
@@ -458,7 +462,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
               logger.error({ err: innerErr }, '[ASK] Failed even plain text final edit');
             }
           } else {
-            logger.error({ err: err }, '[ASK] Failed to edit final message');
+            logger.error({ err }, '[ASK] Failed to edit final message');
             // If edit failed for other reason, send as new message with fallback
             await safeSend(ctx, chunks[0], { parse_mode: 'HTML' });
           }
@@ -653,12 +657,12 @@ async function safeSend(
 ) {
   try {
     return await ctx.send(text, options);
-  } catch (err: any) {
-    if (err?.message?.includes("can't parse entities")) {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("can't parse entities")) {
       logger.error('[ASK] HTML error in safeSend, falling back to plain text');
       return await ctx.send(stripAllHtml(text));
     }
-    if (err?.message?.includes('message is too long')) {
+    if (err instanceof Error && err.message.includes('message is too long')) {
       logger.error('[ASK] Message too long in safeSend, truncating');
       const plainText = stripAllHtml(text);
       const truncated = `${plainText.substring(0, 4000)}...`;
@@ -1084,8 +1088,8 @@ async function sendSmartAdvice(
 
     try {
       await ctx.send(message, { parse_mode: 'HTML' });
-    } catch (sendErr: any) {
-      if (sendErr?.message?.includes("can't parse entities")) {
+    } catch (sendErr: unknown) {
+      if (sendErr instanceof Error && sendErr.message.includes("can't parse entities")) {
         logger.error('[ADVICE] HTML parse error, falling back to plain text');
         await ctx.send(
           `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,

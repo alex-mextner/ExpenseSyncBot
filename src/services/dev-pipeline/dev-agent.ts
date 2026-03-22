@@ -189,8 +189,11 @@ export class DevAgent {
             },
             { signal: controller.signal },
           );
-        } catch (err: any) {
-          if (err?.name === 'APIUserAbortError' || controller.signal.aborted) {
+        } catch (err: unknown) {
+          if (
+            (err instanceof Error && err.name === 'APIUserAbortError') ||
+            controller.signal.aborted
+          ) {
             if (this.aborted) {
               throw new AgentAbortedError();
             }
