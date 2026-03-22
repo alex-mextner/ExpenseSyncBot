@@ -264,10 +264,11 @@ export class TelegramStreamWriter {
       wasTruncated = true;
     }
 
-    // Fix incomplete HTML tags — the model sometimes omits the closing > of a tag.
-    // Case 1: incomplete tag before a newline (e.g. </blockquote\n → </blockquote>\n)
-    truncated = truncated.replace(/<[a-zA-Z/][^>\n]*(?=\n)/g, '$&>');
-    // Case 2: incomplete tag at end of string — remove it (no content to preserve)
+    // Fix incomplete HTML tags — applies to both truncated and non-truncated text,
+    // because the model itself can generate a tag without the closing > (e.g. </blockquote\n).
+    // Case 1: incomplete tag before a newline — complete it in-place (</blockquote\n → </blockquote>\n)
+    truncated = truncated.replace(/<[a-zA-Z/][^>\n\r]*(?=\n)/g, '$&>');
+    // Case 2: incomplete tag at end of string — remove it (no content to preserve after it)
     const lastTagStart = truncated.lastIndexOf('<');
     const lastTagEnd = truncated.lastIndexOf('>');
     if (lastTagStart > lastTagEnd) {

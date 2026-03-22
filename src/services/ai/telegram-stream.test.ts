@@ -135,12 +135,22 @@ describe('truncateForTelegram', () => {
   });
 
   test('removes incomplete tag at end of string when text is short', () => {
-    // Mid-stream flush where last delta ends with an incomplete tag
-    const text = 'Ответ<i>курсив</blockquote';
+    // Mid-stream flush where last delta ends with an incomplete tag (no content after it)
+    const text = 'Ответ</blockquote';
     const result = truncate(text);
     expect(result).not.toContain('<blockquote');
-    // Should not throw and should produce valid-enough output
     expect(result).toContain('Ответ');
+  });
+
+  test('case 1 then case 2: completes before-newline tag and strips end-of-string tag', () => {
+    // Both passes interact: first pass completes </b\n, second strips trailing </i
+    const text = '</b\nfoo</i';
+    const result = truncate(text);
+    // Case 1: </b\n → </b>\n
+    expect(result).toContain('</b>');
+    expect(result).toContain('foo');
+    // Case 2: trailing </i removed
+    expect(result).not.toContain('</i');
   });
 
   test('does not remove valid closed tags before newlines', () => {
