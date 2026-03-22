@@ -28,7 +28,7 @@ function tokenize(expr: string): MathToken[] | null {
         numStr = numStr.replace(',', '.');
       }
       const num = parseFloat(numStr);
-      if (isNaN(num)) return null;
+      if (Number.isNaN(num)) return null;
       tokens.push(num);
     } else if (match[2]) {
       const op = match[2] === '×' ? '*' : match[2];
@@ -302,7 +302,7 @@ function parseAmount(amountStr: string): number | null {
     }
 
     return parsed.value;
-  } catch (err) {
+  } catch (_err) {
     return null;
   }
 }

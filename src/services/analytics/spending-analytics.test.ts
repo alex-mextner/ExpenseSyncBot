@@ -519,9 +519,9 @@ describe('computeAnomalies', () => {
       [3, USER_ID, today, 'Food', 'spike', 500, 'EUR', 500],
     );
     // History: 3 months of ~100 EUR Food each
-    const m1 = format(subMonths(startOfMonth(now), 1), 'yyyy-MM-dd');
-    const m2 = format(subMonths(startOfMonth(now), 2), 'yyyy-MM-dd');
-    const m3 = format(subMonths(startOfMonth(now), 3), 'yyyy-MM-dd');
+    const _m1 = format(subMonths(startOfMonth(now), 1), 'yyyy-MM-dd');
+    const _m2 = format(subMonths(startOfMonth(now), 2), 'yyyy-MM-dd');
+    const _m3 = format(subMonths(startOfMonth(now), 3), 'yyyy-MM-dd');
     // Spread across different days within each month
     const m1mid = format(
       new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10),
@@ -558,8 +558,8 @@ describe('computeAnomalies', () => {
     expect(anomalies.length).toBeGreaterThanOrEqual(1);
     const foodAnomaly = anomalies.find((a: any) => a.category === 'Food');
     expect(foodAnomaly).toBeDefined();
-    expect(foodAnomaly!.deviation_ratio).toBeGreaterThanOrEqual(1.5);
-    expect(['mild', 'significant', 'extreme']).toContain(foodAnomaly!.severity);
+    expect(foodAnomaly?.deviation_ratio).toBeGreaterThanOrEqual(1.5);
+    expect(['mild', 'significant', 'extreme']).toContain(foodAnomaly?.severity);
   });
 
   test('normal spending does not produce anomalies', () => {

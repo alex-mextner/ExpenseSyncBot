@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { computeOverallSeverity, formatSnapshotForPrompt } from './formatters';
 import type {
   BudgetBurnRate,
-  BudgetUtilization,
   CategoryAnomaly,
   FinancialSnapshot,
   MonthlyProjection,

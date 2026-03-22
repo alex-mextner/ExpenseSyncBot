@@ -28,7 +28,6 @@ import {
   deleteLocalBranch,
   generateBranchName,
   getChangedFilesFromMain,
-  getCurrentDiff,
   getDiffFromMain,
   getRepoRoot,
   mergePR,
@@ -37,13 +36,7 @@ import {
   worktreeExists,
 } from './git-ops';
 import { isResumableState, isTerminalState, validateTransition } from './state-machine';
-import {
-  type CreateDevTaskData,
-  type DevTask,
-  DevTaskState,
-  MAX_RETRY_ATTEMPTS,
-  type UpdateDevTaskData,
-} from './types';
+import { type DevTask, DevTaskState, MAX_RETRY_ATTEMPTS, type UpdateDevTaskData } from './types';
 
 const logger = createLogger('pipeline');
 
@@ -87,7 +80,7 @@ function parseTestCounts(output: string): { pass: number; fail: number; error: n
 /** Take the last N characters of a string (errors are usually at the end of output) */
 function tailSlice(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
-  return '…' + text.slice(-maxChars);
+  return `…${text.slice(-maxChars)}`;
 }
 
 /** Extract tsc error lines (file:line:col + message) for concise display */
@@ -103,7 +96,7 @@ function extractTscErrors(output: string): string {
 }
 
 /** Filter tsc errors to only include errors in the given file list (relative paths) */
-function filterTscErrorsByFiles(output: string, changedFiles: string[]): string {
+function _filterTscErrorsByFiles(output: string, changedFiles: string[]): string {
   if (changedFiles.length === 0) return output;
   const lines = output.split('\n');
   const filtered: string[] = [];
@@ -662,7 +655,7 @@ Keep the plan concise — 20-40 lines max.`;
     const titleMatch = design.match(/TITLE:\s*(.+)/);
     const title = titleMatch?.[1]?.trim() || task.description.slice(0, 70);
 
-    const updated = transition(task, DevTaskState.APPROVAL, { design, title });
+    const _updated = transition(task, DevTaskState.APPROVAL, { design, title });
 
     await this.notify(
       task.group_id,
@@ -1017,7 +1010,7 @@ WORKFLOW:
         await commitChanges(task.worktree_path, `fix: address review feedback (task #${task.id})`);
         await pushBranch(task.worktree_path, task.branch_name!);
 
-        const updated = transition(task, DevTaskState.AWAITING_MERGE);
+        const _updated = transition(task, DevTaskState.AWAITING_MERGE);
 
         const testSummary = `${passCount} ✅`;
         await this.notify(
@@ -1155,7 +1148,7 @@ WORKFLOW:
     const diff = await getDiffFromMain(task.worktree_path);
     const review = await runCodexReview(diff);
 
-    const updated = transition(task, DevTaskState.AWAITING_REVIEW, { code_review: review });
+    const _updated = transition(task, DevTaskState.AWAITING_REVIEW, { code_review: review });
 
     await this.notify(
       task.group_id,

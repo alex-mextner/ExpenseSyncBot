@@ -23,7 +23,7 @@ export interface SheetRow {
  */
 export async function createExpenseSpreadsheet(
   refreshToken: string,
-  defaultCurrency: CurrencyCode,
+  _defaultCurrency: CurrencyCode,
   enabledCurrencies: CurrencyCode[],
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
   const auth = getAuthenticatedClient(refreshToken);
@@ -247,7 +247,7 @@ function normalizeMonth(month: string): string {
   const match = month.match(/^(\d{4})-(\d{1,2})$/);
   if (!match) return month;
   const [, year, m] = match;
-  return `${year}-${m!.padStart(2, '0')}`;
+  return `${year}-${m?.padStart(2, '0')}`;
 }
 
 /**
@@ -649,7 +649,7 @@ export async function readExpensesFromSheet(
       const value = row[index];
       if (value && value.trim() !== '') {
         const parsed = parseFloat(value);
-        if (!isNaN(parsed) && parsed > 0) {
+        if (!Number.isNaN(parsed) && parsed > 0) {
           amounts[currency] = parsed;
           foundAmount = true;
         }
@@ -666,7 +666,7 @@ export async function readExpensesFromSheet(
 
     if (eurAmountStr && eurAmountStr.trim() !== '') {
       const parsed = parseFloat(eurAmountStr);
-      eurAmount = !isNaN(parsed) ? parsed : 0;
+      eurAmount = !Number.isNaN(parsed) ? parsed : 0;
     } else {
       // Calculate EUR amount from the first non-null currency
       eurAmount = 0;

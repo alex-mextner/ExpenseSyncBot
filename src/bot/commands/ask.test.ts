@@ -221,14 +221,14 @@ describe('safelyTruncateHTML', () => {
   });
 
   test('truncates long text and appends ellipsis', () => {
-    const longText = '<b>' + 'a'.repeat(500) + '</b>';
+    const longText = `<b>${'a'.repeat(500)}</b>`;
     const result = safelyTruncateHTML(longText, 300);
     expect(result.length).toBeLessThanOrEqual(300);
     expect(result).toContain('...');
   });
 
   test('closes unclosed tags after truncation', () => {
-    const longText = '<b>' + 'a'.repeat(500) + '</b>';
+    const longText = `<b>${'a'.repeat(500)}</b>`;
     const result = safelyTruncateHTML(longText, 300);
     // Should either close the <b> tag or strip HTML as fallback
     const hasClosingTag = result.includes('</b>');
@@ -243,7 +243,7 @@ describe('safelyTruncateHTML', () => {
 
   test('falls back to plain text if closing tags exceed maxLength', () => {
     // Very small maxLength forces the fallback path
-    const input = '<b><i><code>' + 'x'.repeat(300) + '</code></i></b>';
+    const input = `<b><i><code>${'x'.repeat(300)}</code></i></b>`;
     const result = safelyTruncateHTML(input, 50);
     expect(result.length).toBeLessThanOrEqual(50);
     expect(result.endsWith('...')).toBe(true);

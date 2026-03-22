@@ -39,7 +39,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: any): Promi
     // Check if user has associated group
     const user = database.users.findByTelegramId(telegramId);
 
-    if (user && user.group_id) {
+    if (user?.group_id) {
       const group = database.groups.findById(user.group_id);
 
       if (group?.telegram_group_id) {

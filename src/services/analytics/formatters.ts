@@ -96,7 +96,7 @@ function formatBurnRates(burnRates: BudgetBurnRate[]): string {
       `- ${br.category}: ТОЧНО ${br.spent.toFixed(2)} ${br.currency} потрачено из ${br.budget_limit.toFixed(2)} ${br.currency} (${percent}%). ` +
         `Темп: ${br.daily_burn_rate.toFixed(2)} ${br.currency}/день. ` +
         `Прогноз к концу месяца: ${br.projected_total.toFixed(2)} ${br.currency}. ` +
-        `Запас: ${br.runway_days < 999 ? br.runway_days.toFixed(0) + ' дней' : '∞'}. ` +
+        `Запас: ${br.runway_days < 999 ? `${br.runway_days.toFixed(0)} дней` : '∞'}. ` +
         `[${statusLabel}]`,
     );
   }

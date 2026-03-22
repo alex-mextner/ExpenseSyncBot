@@ -86,7 +86,7 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
     if (!byCategory.has(cat)) {
       byCategory.set(cat, []);
     }
-    byCategory.get(cat)!.push(item);
+    byCategory.get(cat)?.push(item);
   }
 
   return {

@@ -1,5 +1,5 @@
 import { format } from 'date-fns';
-import { type CurrencyCode, MESSAGES } from '../../config/constants';
+import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
@@ -256,10 +256,10 @@ async function handleCategoryAction(
 async function handleConfirmAction(
   ctx: Ctx['CallbackQuery'],
   params: string[],
-  telegramId: number,
+  _telegramId: number,
   bot: any,
 ): Promise<void> {
-  const [action, answer] = params;
+  const [_action, answer] = params;
 
   if (answer === 'yes') {
     await ctx.answerCallbackQuery({ text: '✅ Подтверждено' });
@@ -738,7 +738,7 @@ export async function saveReceiptExpenses(
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
 
   // Get thread ID from queue item
-  const queueItem = database.photoQueue.findById(photoQueueId);
+  const _queueItem = database.photoQueue.findById(photoQueueId);
 
   // Notify user
   const totalItems = confirmedItems.length;
@@ -1109,7 +1109,7 @@ async function handleReceiptAcceptAll(
 async function handleReceiptBulkEdit(
   ctx: Ctx['CallbackQuery'],
   queueItem: any,
-  group: any,
+  _group: any,
   bot: any,
   messageId?: number,
   chatId?: number,

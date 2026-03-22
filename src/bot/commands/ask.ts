@@ -109,7 +109,7 @@ async function handleAskWithAnthropic(
   userName: string,
   userFullName: string,
 ): Promise<void> {
-  const chatId = ctx.chat!.id;
+  const chatId = ctx.chat?.id;
 
   const agentCtx: AgentContext = {
     groupId: group.id,
@@ -660,7 +660,7 @@ async function safeSend(
     if (err?.message?.includes('message is too long')) {
       logger.error('[ASK] Message too long in safeSend, truncating');
       const plainText = stripAllHtml(text);
-      const truncated = plainText.substring(0, 4000) + '...';
+      const truncated = `${plainText.substring(0, 4000)}...`;
       return await ctx.send(truncated);
     }
     throw err;
@@ -729,7 +729,7 @@ export function safelyTruncateHTML(text: string, maxLength: number): string {
 
   // Final safety: if somehow still too long, strip HTML and hard-truncate
   if (truncated.length > maxLength - 3) {
-    return stripAllHtml(text).substring(0, maxLength - 3) + '...';
+    return `${stripAllHtml(text).substring(0, maxLength - 3)}...`;
   }
 
   return `${truncated}...`;
@@ -772,11 +772,11 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
               // Single sentence too long, split by words
               const words = sentence.split(' ');
               for (const word of words) {
-                if ((currentChunk + ' ' + word).length > maxLength) {
+                if (`${currentChunk} ${word}`.length > maxLength) {
                   chunks.push(currentChunk.trim());
                   currentChunk = word;
                 } else {
-                  currentChunk += ' ' + word;
+                  currentChunk += ` ${word}`;
                 }
               }
             }
@@ -1078,7 +1078,7 @@ async function sendSmartAdvice(
     if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
 
     // Send with tier-appropriate header
-    const header = tierConfig.emoji + ' ' + tierConfig.title;
+    const header = `${tierConfig.emoji} ${tierConfig.title}`;
     const message = `\n\n${header}\n\n${sanitizedAdvice}`;
 
     try {

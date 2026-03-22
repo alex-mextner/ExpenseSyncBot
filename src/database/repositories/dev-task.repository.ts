@@ -6,7 +6,6 @@ import type { Database } from 'bun:sqlite';
 import type {
   CreateDevTaskData,
   DevTask,
-  DevTaskState,
   UpdateDevTaskData,
 } from '../../services/dev-pipeline/types';
 

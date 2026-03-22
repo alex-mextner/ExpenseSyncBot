@@ -57,7 +57,7 @@ export async function handleSyncCommand(ctx: Ctx['Command']): Promise<void> {
 
     // Get the first user from this group (for user_id field)
     const users = database.users.findByGroupId ? database.users.findByGroupId(group.id) : [];
-    const defaultUserId = users.length > 0 ? users[0]!.id : 1;
+    const defaultUserId = users[0]?.id ?? 1;
 
     // Collect unique categories from sheet
     const categoriesInSheet = new Set<string>();

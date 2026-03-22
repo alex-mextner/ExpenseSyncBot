@@ -263,15 +263,15 @@ export async function getCurrentDiff(worktreePath: string): Promise<string> {
   let result = '';
 
   if (staged.trim()) {
-    result += '=== STAGED CHANGES ===\n' + staged + '\n';
+    result += `=== STAGED CHANGES ===\n${staged}\n`;
   }
 
   if (unstaged.trim()) {
-    result += '=== UNSTAGED CHANGES ===\n' + unstaged + '\n';
+    result += `=== UNSTAGED CHANGES ===\n${unstaged}\n`;
   }
 
   if (untracked.trim()) {
-    result += '=== UNTRACKED FILES ===\n' + untracked + '\n';
+    result += `=== UNTRACKED FILES ===\n${untracked}\n`;
   }
 
   return result;

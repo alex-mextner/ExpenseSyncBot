@@ -140,8 +140,8 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Save processed image to disk for debugging
     try {
       const sharp = (await import('sharp')).default;
-      const fs = await import('fs/promises');
-      const path = await import('path');
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
 
       const processedBuffer = await sharp(photoBuffer)
         .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })

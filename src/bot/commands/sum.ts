@@ -1,4 +1,4 @@
-import { endOfMonth, format, startOfDay, startOfMonth, subMonths } from 'date-fns';
+import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { database } from '../../database';
 import { createBudgetSheet, hasBudgetSheet } from '../../services/google/sheets';
@@ -122,7 +122,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
   const categoryAverages: Record<string, { sum: number; count: number }> = {};
   for (const expense of expenses) {
     const monthKey = expense.date.substring(0, 7);
-    const key = `${expense.category}:${monthKey}`;
+    const _key = `${expense.category}:${monthKey}`;
 
     if (!categoryAverages[expense.category]) {
       categoryAverages[expense.category] = { sum: 0, count: 0 };
@@ -136,7 +136,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     if (!categoryMonths[expense.category]) {
       categoryMonths[expense.category] = new Set();
     }
-    categoryMonths[expense.category]!.add(monthKey);
+    categoryMonths[expense.category]?.add(monthKey);
   }
 
   // Calculate average per category
