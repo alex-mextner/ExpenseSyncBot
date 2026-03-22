@@ -5,7 +5,7 @@ import {
   processThinkTags,
   sanitizeHtmlForTelegram,
   stripAllHtml,
-} from './ask';
+} from '../../utils/html';
 
 // ── escapeHtml ─────────────────────────────────────────────────────────
 

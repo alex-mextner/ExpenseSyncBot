@@ -143,15 +143,16 @@ describe('truncateForTelegram', () => {
     expect(result).toContain('</i>');
   });
 
-  test('case 1 then case 2: completes before-newline tag and strips end-of-string tag', () => {
-    // Both passes interact: first pass completes </b\n, second strips trailing </i
+  test('partial tags without closing > are escaped to literal text, not completed', () => {
+    // Sanitization runs before the case-1/case-2 regexes.
+    // Partial tags like </b (no >) are not whitelisted so they get escaped.
     const text = '</b\nfoo</i';
     const result = truncate(text);
-    // Case 1: </b\n → </b>\n
-    expect(result).toContain('</b>');
+    // Plain text survives
     expect(result).toContain('foo');
-    // Case 2: trailing </i removed
-    expect(result).not.toContain('</i');
+    // Partial tags are escaped — no raw < left
+    expect(result).not.toContain('</b>');
+    expect(result).not.toContain('</i>');
   });
 
   test('CRLF: completes incomplete tag before \\r\\n without producing </tag\\r> artefact', () => {
