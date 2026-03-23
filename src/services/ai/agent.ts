@@ -19,8 +19,8 @@ const logger = createLogger('agent');
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
-export const AI_MODEL = process.env.AI_MODEL || 'glm-5';
-export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.z.ai/api/anthropic';
+export const AI_MODEL = process.env['AI_MODEL'] || 'glm-5';
+export const AI_BASE_URL = process.env['AI_BASE_URL'] || 'https://api.z.ai/api/anthropic';
 
 export class ExpenseBotAgent {
   private anthropic: Anthropic;

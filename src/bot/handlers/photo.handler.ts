@@ -13,7 +13,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   const photos = ctx.photo;
 
   // Get thread ID from payload (for forum topics)
-  const threadId = (ctx as any).payload?.message_thread_id;
+  const threadId = ctx.update?.message?.message_thread_id;
 
   logger.info(
     { data: { messageId, threadId, chatType: ctx.chat?.type } },
@@ -76,7 +76,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
     group_id: group.id,
     user_id: user.id,
     message_id: messageId,
-    message_thread_id: threadId,
+    message_thread_id: threadId ?? null,
     file_id: largestPhoto.fileId,
     status: 'pending',
   });

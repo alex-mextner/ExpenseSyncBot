@@ -114,6 +114,43 @@ mock.module('../../database', () => ({
 // Import AFTER mock is set up
 const { SpendingAnalytics } = await import('./spending-analytics');
 
+class TestableSpendingAnalytics extends SpendingAnalytics {
+  testComputeVelocity = (groupId: number, today: string) => this.computeVelocity(groupId, today);
+  testComputeStreak = (groupId: number, today: string) => this.computeStreak(groupId, today);
+  testComputeDayPatterns = (groupId: number, today: string) =>
+    this.computeDayPatterns(groupId, today);
+  testComputeWeekOverWeek = (groupId: number, today: string) =>
+    this.computeWeekOverWeek(groupId, today);
+  testComputeMonthOverMonth = (
+    groupId: number,
+    now: Date,
+    currentMonthStart: string,
+    today: string,
+  ) => this.computeMonthOverMonth(groupId, now, currentMonthStart, today);
+  testComputeProjection = (
+    groupId: number,
+    now: Date,
+    currentMonth: string,
+    monthStart: string,
+    today: string,
+  ) => this.computeProjection(groupId, now, currentMonth, monthStart, today);
+  testComputeBurnRates = (
+    groupId: number,
+    now: Date,
+    currentMonth: string,
+    monthStart: string,
+    today: string,
+  ) => this.computeBurnRates(groupId, now, currentMonth, monthStart, today);
+  testComputeAnomalies = (groupId: number, now: Date, currentMonthStart: string, today: string) =>
+    this.computeAnomalies(groupId, now, currentMonthStart, today);
+  testComputeBudgetUtilization = (
+    groupId: number,
+    currentMonth: string,
+    monthStart: string,
+    today: string,
+  ) => this.computeBudgetUtilization(groupId, currentMonth, monthStart, today);
+}
+
 // --- Fixture data ---
 
 const GROUP_ID = 1;
@@ -147,7 +184,7 @@ function insertExpense(date: string, category: string, eurAmount: number) {
   );
 }
 
-let analytics: InstanceType<typeof SpendingAnalytics>;
+let analytics: TestableSpendingAnalytics;
 
 beforeAll(() => {
   // Insert group
@@ -203,7 +240,7 @@ beforeAll(() => {
     [GROUP_ID, 'Transport', currentMonth, 150, 'EUR'],
   );
 
-  analytics = new SpendingAnalytics();
+  analytics = new TestableSpendingAnalytics();
 });
 
 afterAll(() => {
@@ -216,7 +253,7 @@ afterAll(() => {
 
 describe('computeVelocity', () => {
   test('daily average for recent period is calculated correctly', () => {
-    const velocity = (analytics as any).computeVelocity(GROUP_ID, today);
+    const velocity = analytics.testComputeVelocity(GROUP_ID, today);
 
     // Recent 7 days: today..6 days ago. That window includes today, yesterday
     // but NOT sevenDaysAgo (date(today, '-6 days') = subDays(6), sevenDaysAgo = subDays(7))
@@ -235,7 +272,7 @@ describe('computeVelocity', () => {
   });
 
   test('week-over-week acceleration is computed', () => {
-    const velocity = (analytics as any).computeVelocity(GROUP_ID, today);
+    const velocity = analytics.testComputeVelocity(GROUP_ID, today);
 
     // recent total: 50+30+25+15 = 120 → daily avg = 120/7 ≈ 17.14
     // earlier total: 100+40 = 140 → daily avg = 140/7 = 20
@@ -247,7 +284,7 @@ describe('computeVelocity', () => {
 
 describe('computeStreak', () => {
   test('consecutive days with expenses detected', () => {
-    const streak = (analytics as any).computeStreak(GROUP_ID, today);
+    const streak = analytics.testComputeStreak(GROUP_ID, today);
 
     // Today and yesterday both have expenses → at least 2 day streak
     // (only if both days are on the same side of average)
@@ -270,7 +307,7 @@ describe('computeStreak', () => {
       [2, USER_ID, threeDaysAgo, 'Food', 'test', 50, 'EUR', 50],
     );
 
-    const streak = (analytics as any).computeStreak(2, today);
+    const streak = analytics.testComputeStreak(2, today);
 
     // No expenses today → streak broken immediately, 0 days
     expect(streak.current_streak_days).toBe(0);
@@ -280,14 +317,16 @@ describe('computeStreak', () => {
 
 describe('computeDayPatterns', () => {
   test('day with most spending is identified', () => {
-    const patterns = (analytics as any).computeDayPatterns(GROUP_ID, today);
+    const patterns = analytics.testComputeDayPatterns(GROUP_ID, today);
 
     expect(patterns.length).toBeGreaterThan(0);
 
     // Find the day with highest avg_daily_spend
+    const first = patterns.at(0);
+    if (!first) return;
     const maxDay = patterns.reduce(
-      (max: any, p: any) => (p.avg_daily_spend > max.avg_daily_spend ? p : max),
-      patterns[0],
+      (max, p) => (p.avg_daily_spend > max.avg_daily_spend ? p : max),
+      first,
     );
 
     expect(maxDay.avg_daily_spend).toBeGreaterThan(0);
@@ -295,15 +334,19 @@ describe('computeDayPatterns', () => {
   });
 
   test('patterns are sorted by day_of_week ascending', () => {
-    const patterns = (analytics as any).computeDayPatterns(GROUP_ID, today);
+    const patterns = analytics.testComputeDayPatterns(GROUP_ID, today);
 
     for (let i = 1; i < patterns.length; i++) {
-      expect(patterns[i].day_of_week).toBeGreaterThanOrEqual(patterns[i - 1].day_of_week);
+      const curr = patterns.at(i);
+      const prev = patterns.at(i - 1);
+      if (curr && prev) {
+        expect(curr.day_of_week).toBeGreaterThanOrEqual(prev.day_of_week);
+      }
     }
   });
 
   test('each pattern has required fields', () => {
-    const patterns = (analytics as any).computeDayPatterns(GROUP_ID, today);
+    const patterns = analytics.testComputeDayPatterns(GROUP_ID, today);
 
     for (const p of patterns) {
       expect(typeof p.day_of_week).toBe('number');
@@ -321,7 +364,7 @@ describe('computeDayPatterns', () => {
 describe('computeMonthOverMonth', () => {
   test('current vs previous month trend direction', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const trend = (analytics as any).computeMonthOverMonth(GROUP_ID, now, monthStart, today);
+    const trend = analytics.testComputeMonthOverMonth(GROUP_ID, now, monthStart, today);
 
     expect(trend.period).toBe('month');
     expect(['up', 'down', 'stable']).toContain(trend.direction);
@@ -329,7 +372,7 @@ describe('computeMonthOverMonth', () => {
 
   test('percentage change is calculated', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const trend = (analytics as any).computeMonthOverMonth(GROUP_ID, now, monthStart, today);
+    const trend = analytics.testComputeMonthOverMonth(GROUP_ID, now, monthStart, today);
 
     expect(typeof trend.change_percent).toBe('number');
     expect(typeof trend.current_total).toBe('number');
@@ -338,7 +381,7 @@ describe('computeMonthOverMonth', () => {
 
   test('category changes are included', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const trend = (analytics as any).computeMonthOverMonth(GROUP_ID, now, monthStart, today);
+    const trend = analytics.testComputeMonthOverMonth(GROUP_ID, now, monthStart, today);
 
     expect(Array.isArray(trend.category_changes)).toBe(true);
     for (const cc of trend.category_changes) {
@@ -352,7 +395,7 @@ describe('computeMonthOverMonth', () => {
 
 describe('computeWeekOverWeek', () => {
   test('this week vs last week comparison', () => {
-    const trend = (analytics as any).computeWeekOverWeek(GROUP_ID, today);
+    const trend = analytics.testComputeWeekOverWeek(GROUP_ID, today);
 
     expect(trend.period).toBe('week');
     expect(typeof trend.current_total).toBe('number');
@@ -361,13 +404,15 @@ describe('computeWeekOverWeek', () => {
   });
 
   test('category changes sorted by absolute change_percent descending', () => {
-    const trend = (analytics as any).computeWeekOverWeek(GROUP_ID, today);
+    const trend = analytics.testComputeWeekOverWeek(GROUP_ID, today);
 
     const changes = trend.category_changes;
     for (let i = 1; i < changes.length; i++) {
-      expect(Math.abs(changes[i].change_percent)).toBeLessThanOrEqual(
-        Math.abs(changes[i - 1].change_percent),
-      );
+      const curr = changes.at(i);
+      const prev = changes.at(i - 1);
+      if (curr && prev) {
+        expect(Math.abs(curr.change_percent)).toBeLessThanOrEqual(Math.abs(prev.change_percent));
+      }
     }
   });
 });
@@ -375,7 +420,7 @@ describe('computeWeekOverWeek', () => {
 describe('computeProjection', () => {
   test('linear projection to end of month', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const projection = (analytics as any).computeProjection(
+    const projection = analytics.testComputeProjection(
       GROUP_ID,
       now,
       currentMonth,
@@ -390,13 +435,14 @@ describe('computeProjection', () => {
     }
 
     expect(projection).not.toBeNull();
+    if (!projection) return;
     expect(projection.days_elapsed).toBe(now.getDate());
     expect(projection.days_in_month).toBe(getDaysInMonth(now));
   });
 
   test('projection is based on daily rate * total days', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const projection = (analytics as any).computeProjection(
+    const projection = analytics.testComputeProjection(
       GROUP_ID,
       now,
       currentMonth,
@@ -413,7 +459,7 @@ describe('computeProjection', () => {
 
   test('confidence is low when days_elapsed < 7', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const projection = (analytics as any).computeProjection(
+    const projection = analytics.testComputeProjection(
       GROUP_ID,
       now,
       currentMonth,
@@ -434,7 +480,7 @@ describe('computeProjection', () => {
 describe('computeBurnRates', () => {
   test('budget utilization percentage computed for each category', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(
+    const burnRates = analytics.testComputeBurnRates(
       GROUP_ID,
       now,
       currentMonth,
@@ -453,7 +499,7 @@ describe('computeBurnRates', () => {
 
   test('status is one of on_track/warning/critical/exceeded', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(
+    const burnRates = analytics.testComputeBurnRates(
       GROUP_ID,
       now,
       currentMonth,
@@ -468,7 +514,7 @@ describe('computeBurnRates', () => {
 
   test('runway days calculation', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(
+    const burnRates = analytics.testComputeBurnRates(
       GROUP_ID,
       now,
       currentMonth,
@@ -492,7 +538,7 @@ describe('computeBurnRates', () => {
 
   test('days_elapsed and days_remaining add up to days in month', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = (analytics as any).computeBurnRates(
+    const burnRates = analytics.testComputeBurnRates(
       GROUP_ID,
       now,
       currentMonth,
@@ -519,9 +565,6 @@ describe('computeAnomalies', () => {
       [3, USER_ID, today, 'Food', 'spike', 500, 'EUR', 500],
     );
     // History: 3 months of ~100 EUR Food each
-    const m1 = format(subMonths(startOfMonth(now), 1), 'yyyy-MM-dd');
-    const m2 = format(subMonths(startOfMonth(now), 2), 'yyyy-MM-dd');
-    const m3 = format(subMonths(startOfMonth(now), 3), 'yyyy-MM-dd');
     // Spread across different days within each month
     const m1mid = format(
       new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10),
@@ -553,13 +596,14 @@ describe('computeAnomalies', () => {
     );
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const anomalies = (analytics as any).computeAnomalies(3, now, monthStart, today);
+    const anomalies = analytics.testComputeAnomalies(3, now, monthStart, today);
 
     expect(anomalies.length).toBeGreaterThanOrEqual(1);
-    const foodAnomaly = anomalies.find((a: any) => a.category === 'Food');
+    const foodAnomaly = anomalies.find((a) => a.category === 'Food');
     expect(foodAnomaly).toBeDefined();
-    expect(foodAnomaly!.deviation_ratio).toBeGreaterThanOrEqual(1.5);
-    expect(['mild', 'significant', 'extreme']).toContain(foodAnomaly!.severity);
+    if (!foodAnomaly) return;
+    expect(foodAnomaly.deviation_ratio).toBeGreaterThanOrEqual(1.5);
+    expect(['mild', 'significant', 'extreme']).toContain(foodAnomaly.severity);
   });
 
   test('normal spending does not produce anomalies', () => {
@@ -603,7 +647,7 @@ describe('computeAnomalies', () => {
     );
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const anomalies = (analytics as any).computeAnomalies(4, now, monthStart, today);
+    const anomalies = analytics.testComputeAnomalies(4, now, monthStart, today);
 
     // deviation_ratio = 100/100 = 1.0, which is below 1.3 threshold
     expect(anomalies.length).toBe(0);
@@ -649,25 +693,22 @@ describe('computeAnomalies', () => {
     );
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const anomalies = (analytics as any).computeAnomalies(5, now, monthStart, today);
+    const anomalies = analytics.testComputeAnomalies(5, now, monthStart, today);
 
     expect(anomalies.length).toBe(1);
-    expect(anomalies[0].severity).toBe('extreme');
-    expect(anomalies[0].deviation_ratio).toBeGreaterThanOrEqual(2.5);
+    const anomaly = anomalies.at(0);
+    expect(anomaly?.severity).toBe('extreme');
+    expect(anomaly?.deviation_ratio).toBeGreaterThanOrEqual(2.5);
   });
 });
 
 describe('computeBudgetUtilization', () => {
   test('percentage of budget used is calculated', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const util = (analytics as any).computeBudgetUtilization(
-      GROUP_ID,
-      currentMonth,
-      monthStart,
-      today,
-    );
+    const util = analytics.testComputeBudgetUtilization(GROUP_ID, currentMonth, monthStart, today);
 
     expect(util).not.toBeNull();
+    if (!util) return;
     expect(typeof util.total_budget).toBe('number');
     expect(typeof util.total_spent).toBe('number');
     expect(typeof util.utilization_percent).toBe('number');
@@ -677,12 +718,7 @@ describe('computeBudgetUtilization', () => {
 
   test('remaining = total_budget - total_spent', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const util = (analytics as any).computeBudgetUtilization(
-      GROUP_ID,
-      currentMonth,
-      monthStart,
-      today,
-    );
+    const util = analytics.testComputeBudgetUtilization(GROUP_ID, currentMonth, monthStart, today);
 
     if (util) {
       expect(util.remaining).toBe(Math.round((util.total_budget - util.total_spent) * 100) / 100);
@@ -692,7 +728,7 @@ describe('computeBudgetUtilization', () => {
   test('returns null when no budgets exist', () => {
     // Group 2 has no budgets
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const util = (analytics as any).computeBudgetUtilization(2, currentMonth, monthStart, today);
+    const util = analytics.testComputeBudgetUtilization(2, currentMonth, monthStart, today);
 
     expect(util).toBeNull();
   });

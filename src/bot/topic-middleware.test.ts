@@ -130,8 +130,8 @@ function simulatePreRequestInjection(
 ): Record<string, unknown> {
   // Mirrors the preRequest hook logic from topic-middleware.ts
   const result = { ...params };
-  if (stored?.threadId && !result.message_thread_id && result.chat_id === stored.chatId) {
-    result.message_thread_id = stored.threadId;
+  if (stored?.threadId && !result['message_thread_id'] && result['chat_id'] === stored.chatId) {
+    result['message_thread_id'] = stored.threadId;
   }
   return result;
 }
@@ -141,43 +141,43 @@ describe('preRequest injection logic', () => {
     const stored = { chatId: 100, threadId: 5 };
     const params = { chat_id: 100, text: 'hello' };
     const result = simulatePreRequestInjection(stored, params);
-    expect(result.message_thread_id).toBe(5);
+    expect(result['message_thread_id']).toBe(5);
   });
 
   it('does NOT inject when threadId is undefined', () => {
     const stored = { chatId: 100, threadId: undefined };
     const params = { chat_id: 100, text: 'hello' };
     const result = simulatePreRequestInjection(stored, params);
-    expect(result.message_thread_id).toBeUndefined();
+    expect(result['message_thread_id']).toBeUndefined();
   });
 
   it('does NOT inject when chat_id does not match stored chatId', () => {
     const stored = { chatId: 100, threadId: 5 };
     const params = { chat_id: 999, text: 'hello' };
     const result = simulatePreRequestInjection(stored, params);
-    expect(result.message_thread_id).toBeUndefined();
+    expect(result['message_thread_id']).toBeUndefined();
   });
 
   it('does NOT inject when message_thread_id already present in params', () => {
     const stored = { chatId: 100, threadId: 5 };
     const params = { chat_id: 100, text: 'hello', message_thread_id: 99 };
     const result = simulatePreRequestInjection(stored, params);
-    expect(result.message_thread_id).toBe(99); // original preserved
+    expect(result['message_thread_id']).toBe(99); // original preserved
   });
 
   it('does NOT inject when stored is undefined (no active context)', () => {
     const params = { chat_id: 100, text: 'hello' };
     const result = simulatePreRequestInjection(undefined, params);
-    expect(result.message_thread_id).toBeUndefined();
+    expect(result['message_thread_id']).toBeUndefined();
   });
 
   it('preserves all existing params when injecting', () => {
     const stored = { chatId: 50, threadId: 3 };
     const params = { chat_id: 50, text: 'test', parse_mode: 'HTML' };
     const result = simulatePreRequestInjection(stored, params);
-    expect(result.text).toBe('test');
-    expect(result.parse_mode).toBe('HTML');
-    expect(result.message_thread_id).toBe(3);
+    expect(result['text']).toBe('test');
+    expect(result['parse_mode']).toBe('HTML');
+    expect(result['message_thread_id']).toBe(3);
   });
 
   it('threadId 0 is falsy — does NOT inject', () => {
@@ -185,7 +185,7 @@ describe('preRequest injection logic', () => {
     const params = { chat_id: 100, text: 'hello' };
     const result = simulatePreRequestInjection(stored, params);
     // threadId: 0 is falsy so injection is skipped
-    expect(result.message_thread_id).toBeUndefined();
+    expect(result['message_thread_id']).toBeUndefined();
   });
 });
 

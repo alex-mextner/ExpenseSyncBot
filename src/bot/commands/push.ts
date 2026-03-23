@@ -158,7 +158,7 @@ export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
         }
       } catch (err) {
         errorCount++;
-        logger.error({ err: err }, '[PUSH] Failed to add expense ${expense.id}');
+        logger.error({ err: err }, `[PUSH] Failed to add expense ${expense.id}`);
       }
     }
 

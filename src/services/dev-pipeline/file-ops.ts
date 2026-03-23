@@ -138,7 +138,10 @@ export async function searchCode(
 ): Promise<string> {
   try {
     const globArgs = glob ? ['--include', glob] : [];
-    const result = await $`grep -rn ${pattern} ${worktreePath}/src ${globArgs}`.text();
+    // Pass pattern as array element so Bun forwards it as a single argv entry.
+    // `--` prevents grep from treating a leading `-` in pattern as a flag.
+    const args = ['--', pattern, `${worktreePath}/src`, ...globArgs];
+    const result = await $`grep -rn ${args}`.text();
     return result;
   } catch {
     // grep returns exit code 1 when no matches found

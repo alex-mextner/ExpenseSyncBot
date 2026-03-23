@@ -1,23 +1,24 @@
 import { format } from 'date-fns';
 import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
-import type { ReceiptItem } from '../../database/types';
+import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
+import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { silentSyncBudgets } from '../commands/budget';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
 
 /**
  * Handle expense message
  */
-export async function handleExpenseMessage(ctx: Ctx['Message'], bot: any): Promise<void> {
+export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance): Promise<void> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
@@ -39,7 +40,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: any): Promi
     // Check if user has associated group
     const user = database.users.findByTelegramId(telegramId);
 
-    if (user && user.group_id) {
+    if (user?.group_id) {
       const group = database.groups.findById(user.group_id);
 
       if (group?.telegram_group_id) {
@@ -100,7 +101,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: any): Promi
   }
 
   // Check topic restriction
-  const messageThreadId = (ctx as any).payload?.message_thread_id as number | undefined;
+  const messageThreadId = ctx.update?.message?.message_thread_id;
   if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
     logger.info(
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
@@ -298,7 +299,7 @@ export async function saveExpenseToSheet(
   groupId: number,
   pendingExpenseId: number,
   telegramGroupId?: number,
-  bot?: any,
+  bot?: BotInstance,
 ): Promise<void> {
   logger.info(`[SAVE] Starting save to sheet...`);
 
@@ -397,7 +398,7 @@ async function checkBudgetLimit(
   category: string,
   currentDate: string,
   telegramGroupId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const { startOfMonth, endOfMonth, format } = await import('date-fns');
   const { getCategoryEmoji } = await import('../../config/category-emojis');
@@ -457,7 +458,7 @@ async function checkBudgetLimit(
  */
 async function handleCategoryTextInput(
   ctx: Ctx['Message'],
-  bot: any,
+  bot: BotInstance,
   categoryText: string,
   waitingItem: ReceiptItem,
   groupId: number,
@@ -597,10 +598,10 @@ async function handleCategoryTextInput(
  */
 async function handleBulkCorrectionInput(
   ctx: Ctx['Message'],
-  bot: any,
+  bot: BotInstance,
   correctionText: string,
-  queueItem: any,
-  group: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
 ): Promise<void> {
   const {
     buildSummaryFromItems,
@@ -624,7 +625,7 @@ async function handleBulkCorrectionInput(
   }
 
   // Build current summary (from AI summary if exists, otherwise from items)
-  let currentSummary: any;
+  let currentSummary: ReceiptSummary;
   if (queueItem.ai_summary) {
     try {
       currentSummary = JSON.parse(queueItem.ai_summary);

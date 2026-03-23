@@ -81,7 +81,8 @@ function evaluateTokens(tokens: MathToken[]): number | null {
         continue;
       }
     }
-    addQueue.push(tokens[i] as MathToken);
+    const token = tokens[i];
+    if (token !== undefined) addQueue.push(token);
     i++;
   }
 
@@ -104,7 +105,7 @@ function evaluateTokens(tokens: MathToken[]): number | null {
  *
  * Returns null for invalid expressions, single numbers, overflow, or division by zero.
  *
- * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35
+ * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35, "100-70" → 30
  */
 export function evaluateMathExpression(expr: string): number | null {
   // Remove spaces
@@ -339,11 +340,11 @@ function parseRest(rest: string | undefined): {
 
   if (words.length === 1) {
     // Only category, no comment
-    return { category: normalizeCategory(words.at(0) ?? ''), comment: '' };
+    return { category: normalizeCategory(words[0] ?? ''), comment: '' };
   }
 
   // Category is first word, comment is the rest (also capitalized)
-  const category = normalizeCategory(words.at(0) ?? '');
+  const category = normalizeCategory(words[0] ?? '');
   const commentWords = words.slice(1);
 
   if (commentWords.length === 0) {

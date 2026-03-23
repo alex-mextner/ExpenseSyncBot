@@ -17,7 +17,7 @@ import { database } from '../../database';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
 import { DevTaskState, STATE_EMOJI, STATE_LABELS } from '../../services/dev-pipeline/types';
 import { createLogger } from '../../utils/logger.ts';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('dev');
 
@@ -45,11 +45,11 @@ export function consumePendingDesignEdit(chatId: number): number | null {
  *
  * Must be called once with a bot instance to enable notifications.
  */
-export function initDevPipeline(bot: any): DevPipeline {
+export function initDevPipeline(bot: BotInstance): DevPipeline {
   const notify: NotifyCallback = async (
     groupId: number,
     message: string,
-    options?: { reply_markup?: any },
+    options?: { reply_markup?: InlineKeyboard },
   ) => {
     const group = database.groups.findById(groupId);
     if (!group) return;
@@ -229,7 +229,7 @@ async function handleNewTask(
   }
 
   try {
-    const task = await pl.startTask(groupId, userId, description);
+    await pl.startTask(groupId, userId, description);
     // The pipeline sends its own notifications, so no need to reply here
   } catch (error) {
     logger.error({ err: error }, '[DEV-CMD] Failed to start task');
@@ -518,7 +518,7 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
     return;
   }
 
-  const logs = LOG_PATHS[target]!;
+  const logs = LOG_PATHS[target];
   const outPath = logs.out;
   const errorPath = logs.error;
 
@@ -565,10 +565,10 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
  * Handle dev task callback queries (approval buttons etc.)
  */
 export async function handleDevCallback(
-  ctx: any,
+  ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const [subAction, taskIdStr] = params;
   const messageId = ctx.message?.id;
@@ -636,9 +636,13 @@ export async function handleDevCallback(
         break;
 
       case 'edit': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'No chat context' });
+          return;
+        }
         const editTask = database.devTasks.findById(taskId);
         logger.info(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
-        pendingDesignEdits.set(chatId!, taskId);
+        pendingDesignEdits.set(chatId, taskId);
         await ctx.answerCallbackQuery({ text: 'Опишите правки' });
         answered = true;
 

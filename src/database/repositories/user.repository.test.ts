@@ -98,7 +98,7 @@ describe('UserRepository', () => {
     test('sets group_id to null', () => {
       const group = makeGroup(2001);
       userRepo.create({ telegram_id: 31, group_id: group.id });
-      const updated = userRepo.update(31, { group_id: undefined });
+      const updated = userRepo.update(31, {});
       // When undefined is passed, group_id field isn't updated
       expect(updated?.group_id).toBe(group.id);
     });

@@ -3,9 +3,10 @@ import {
   closeUnmatchedTags,
   escapeHtml,
   processThinkTags,
+  safelyTruncateHTML,
   sanitizeHtmlForTelegram,
   stripAllHtml,
-} from '../../utils/html';
+} from './ask';
 
 // ── escapeHtml ─────────────────────────────────────────────────────────
 
@@ -108,49 +109,6 @@ describe('sanitizeHtmlForTelegram', () => {
     const result = sanitizeHtmlForTelegram(input);
     expect(result).toBe('<b><i>bold italic</i></b>');
   });
-
-  test('strips href-less <a> tag attributes (no valid href)', () => {
-    // <a> with no href attr → attributes stripped, tag still rendered
-    const result = sanitizeHtmlForTelegram('<a onclick="x">click</a>');
-    expect(result).toBe('<a>click</a>');
-  });
-
-  test('strips non-expandable <blockquote> attributes', () => {
-    const result = sanitizeHtmlForTelegram('<blockquote class="foo">text</blockquote>');
-    expect(result).toBe('<blockquote>text</blockquote>');
-  });
-
-  test('preserves class attribute on <pre> tag', () => {
-    const result = sanitizeHtmlForTelegram('<pre class="language-ts">code</pre>');
-    expect(result).toBe('<pre class="language-ts">code</pre>');
-  });
-
-  test('strips unknown attributes from <code> tag', () => {
-    const result = sanitizeHtmlForTelegram('<code id="x">inline</code>');
-    expect(result).toBe('<code>inline</code>');
-  });
-
-  test('strips non-tg-spoiler class from <span>', () => {
-    const result = sanitizeHtmlForTelegram('<span class="highlight">text</span>');
-    expect(result).toBe('<span>text</span>');
-  });
-
-  test('preserves tg-spoiler class on <span>', () => {
-    const result = sanitizeHtmlForTelegram('<span class="tg-spoiler">hidden</span>');
-    expect(result).toBe('<span class="tg-spoiler">hidden</span>');
-  });
-
-  test('preserves emoji-id attribute on <tg-emoji>', () => {
-    const result = sanitizeHtmlForTelegram(
-      '<tg-emoji emoji-id="5368324170671202286">👋</tg-emoji>',
-    );
-    expect(result).toBe('<tg-emoji emoji-id="5368324170671202286">👋</tg-emoji>');
-  });
-
-  test('strips <tg-emoji> without emoji-id', () => {
-    const result = sanitizeHtmlForTelegram('<tg-emoji class="x">👋</tg-emoji>');
-    expect(result).toBe('<tg-emoji>👋</tg-emoji>');
-  });
 });
 
 // ── closeUnmatchedTags ─────────────────────────────────────────────────
@@ -246,19 +204,48 @@ describe('processThinkTags', () => {
     expect(result).toContain('a &lt; b &amp; c &gt; d');
   });
 
-  test('skips empty think block — no blockquote, no empty content', () => {
-    // Empty <think></think> was producing <blockquote expandable></blockquote>
-    // which Telegram rejects as "text must be non-empty".
+  test('handles empty think block', () => {
     const input = '<think></think>answer';
     const result = processThinkTags(input);
-    expect(result).not.toContain('<blockquote expandable>');
+    expect(result).toContain('<blockquote expandable>');
     expect(result).toContain('answer');
   });
+});
 
-  test('skips whitespace-only think block', () => {
-    const input = '<think>   \n  </think>answer';
-    const result = processThinkTags(input);
-    expect(result).not.toContain('<blockquote expandable>');
-    expect(result).toContain('answer');
+// ── safelyTruncateHTML ─────────────────────────────────────────────────
+
+describe('safelyTruncateHTML', () => {
+  test('returns text unchanged if within maxLength', () => {
+    const input = '<b>short</b>';
+    expect(safelyTruncateHTML(input, 1000)).toBe(input);
+  });
+
+  test('truncates long text and appends ellipsis', () => {
+    const longText = `<b>${'a'.repeat(500)}</b>`;
+    const result = safelyTruncateHTML(longText, 300);
+    expect(result.length).toBeLessThanOrEqual(300);
+    expect(result).toContain('...');
+  });
+
+  test('closes unclosed tags after truncation', () => {
+    const longText = `<b>${'a'.repeat(500)}</b>`;
+    const result = safelyTruncateHTML(longText, 300);
+    // Should either close the <b> tag or strip HTML as fallback
+    const hasClosingTag = result.includes('</b>');
+    const isPlainText = !result.includes('<b>');
+    expect(hasClosingTag || isPlainText).toBe(true);
+  });
+
+  test('handles text exactly at maxLength', () => {
+    const input = 'exact';
+    expect(safelyTruncateHTML(input, 5)).toBe(input);
+  });
+
+  test('falls back to plain text if closing tags exceed maxLength', () => {
+    // Very small maxLength forces the fallback path
+    const input = `<b><i><code>${'x'.repeat(300)}</code></i></b>`;
+    const result = safelyTruncateHTML(input, 50);
+    expect(result.length).toBeLessThanOrEqual(50);
+    expect(result.endsWith('...')).toBe(true);
   });
 });

@@ -38,7 +38,7 @@ export function checkSmartTriggers(
 
   // Compute snapshot if not provided
   const snap = snapshot || spendingAnalytics.getFinancialSnapshot(groupId);
-  const monthStart = format(startOfMonth(now), 'yyyy-MM-dd') + 'T00:00:00';
+  const monthStart = `${format(startOfMonth(now), 'yyyy-MM-dd')}T00:00:00`;
 
   // Priority order: budget_threshold > anomaly > velocity_spike > weekly_check > first_expense_of_month
 

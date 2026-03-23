@@ -2,6 +2,7 @@ import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { convertCurrency } from '../../services/currency/converter';
 import {
   createBudgetSheet,
@@ -185,7 +186,7 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
 
   if (subcommand === 'set' && args.length >= 3) {
     // /budget set Category Amount
-    const category = args[1]!;
+    const category = args[1] ?? '';
     const amountStr = args.slice(2).join(' ');
 
     const parsed = parseBudgetAmount(amountStr, group.default_currency);
@@ -220,7 +221,12 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
 /**
  * Show budget progress for current month
  */
-async function showBudgetProgress(ctx: Ctx['Command'], group: any): Promise<void> {
+async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<void> {
+  if (!group.google_refresh_token || !group.spreadsheet_id) {
+    await ctx.send('⚠️ Сначала подключи Google Sheets с помощью /connect');
+    return;
+  }
+
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
@@ -340,7 +346,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: any): Promise<void
  */
 async function setBudget(
   ctx: Ctx['Command'],
-  group: any,
+  group: Group,
   categoryName: string,
   amount: number,
   currency: CurrencyCode,
@@ -378,6 +384,16 @@ async function setBudget(
     limit_amount: amount,
     currency: currency,
   });
+
+  if (!group.google_refresh_token || !group.spreadsheet_id) {
+    const emoji = getCategoryEmoji(normalizedCategory);
+    const currencySymbol = getCurrencySymbol(currency);
+    await ctx.send(
+      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${currencySymbol}${amount.toFixed(2)}\n\n` +
+        '⚠️ Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
+    );
+    return;
+  }
 
   // Ensure Budget sheet exists
   const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
@@ -489,7 +505,12 @@ export async function silentSyncBudgets(
 /**
  * Sync budgets from Google Sheets to database
  */
-async function syncBudgets(ctx: Ctx['Command'], group: any): Promise<void> {
+async function syncBudgets(ctx: Ctx['Command'], group: Group): Promise<void> {
+  if (!group.google_refresh_token || !group.spreadsheet_id) {
+    await ctx.send('⚠️ Сначала подключи Google Sheets с помощью /connect');
+    return;
+  }
+
   try {
     // Check if Budget sheet exists
     const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);

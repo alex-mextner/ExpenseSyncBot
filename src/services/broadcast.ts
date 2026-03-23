@@ -62,12 +62,9 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
       });
       sent++;
       logger.info(`[BROADCAST] ✓ Sent to group ${group.telegram_group_id}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       failed++;
-      logger.error(
-        `[BROADCAST] ✗ Failed for group ${group.telegram_group_id}:`,
-        error?.message || error,
-      );
+      logger.error({ err: error }, `[BROADCAST] ✗ Failed for group ${group.telegram_group_id}`);
     }
   }
 

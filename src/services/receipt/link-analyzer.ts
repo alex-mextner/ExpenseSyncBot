@@ -1,7 +1,9 @@
+import type { BotInstance } from '../../bot/types';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
+import type { AIReceiptItem } from './ai-extractor';
 import { extractExpensesFromReceipt } from './ai-extractor';
 import { saveExtractedItems, showReceiptConfirmationOptions } from './photo-processor';
 import { fetchReceiptData } from './receipt-fetcher';
@@ -21,7 +23,7 @@ export function extractURLsFromText(text: string): string[] {
  * @returns true if any payment links were found and processed
  */
 export async function processPaymentLinks(
-  bot: any,
+  bot: BotInstance,
   chatId: number,
   messageId: number,
   urls: string[],
@@ -88,7 +90,7 @@ export async function processPaymentLinks(
 async function analyzeLink(
   url: string,
   groupId: number,
-): Promise<{ items: any[]; currency: CurrencyCode } | null> {
+): Promise<{ items: AIReceiptItem[]; currency: CurrencyCode } | null> {
   try {
     const content = await fetchReceiptData(url);
     if (content.length < 50) return null;

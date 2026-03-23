@@ -77,7 +77,7 @@ export function saveExtractedItems(
     database.receiptItems.create({
       photo_queue_id: photoQueueId,
       name_ru: item.name_ru,
-      name_original: item.name_original,
+      name_original: item.name_original ?? null,
       quantity: item.quantity,
       price: item.price,
       total: item.total,
@@ -130,8 +130,8 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Save processed image to disk for debugging
     try {
       const sharp = (await import('sharp')).default;
-      const fs = await import('fs/promises');
-      const path = await import('path');
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
 
       const processedBuffer = await sharp(photoBuffer)
         .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
@@ -182,7 +182,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
             await bot.api.setMessageReaction({
               chat_id: group.telegram_group_id,
               message_id: queueItem.message_id,
-              reaction: [{ type: 'emoji', emoji: '🤷‍♂' as any }],
+              reaction: [{ type: 'emoji', emoji: '🤷‍♂' }],
             });
             logger.info(`[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`);
           } catch (error) {
@@ -458,7 +458,7 @@ export async function showNextItemForConfirmation(
   // Add all possible categories (including confirmed custom ones) with their indices
   if (allPossibleCategories.length > 0) {
     for (let i = 0; i < allPossibleCategories.length; i++) {
-      const category = allPossibleCategories[i]!;
+      const category = allPossibleCategories[i] ?? '';
       buttons.push([
         {
           text: category,

@@ -91,9 +91,9 @@ describe('DevTaskRepository', () => {
 
       const found = repo.findById(created.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
-      expect(found!.description).toBe('Some task');
-      expect(found!.title).toBe('Test title');
+      expect(found?.id).toBe(created.id);
+      expect(found?.description).toBe('Some task');
+      expect(found?.title).toBe('Test title');
     });
 
     test('returns null for non-existent id', () => {
@@ -114,7 +114,7 @@ describe('DevTaskRepository', () => {
 
       const group200Tasks = repo.findByGroupId(200);
       expect(group200Tasks).toHaveLength(1);
-      expect(group200Tasks[0]!.description).toBe('Task C');
+      expect(group200Tasks[0]?.description).toBe('Task C');
     });
 
     test('returns empty array for group with no tasks', () => {
@@ -161,7 +161,7 @@ describe('DevTaskRepository', () => {
 
       const active = repo.findActiveByGroupId(50);
       expect(active).toHaveLength(1);
-      expect(active[0]!.id).toBe(task1.id);
+      expect(active[0]?.id).toBe(task1.id);
     });
 
     test('excludes completed, rejected, and failed tasks', () => {
@@ -204,11 +204,11 @@ describe('DevTaskRepository', () => {
       });
 
       expect(updated).not.toBeNull();
-      expect(updated!.state).toBe(DevTaskState.IMPLEMENTING);
-      expect(updated!.branch_name).toBe('feat/dark-mode');
-      expect(updated!.worktree_path).toBe('/tmp/worktree-123');
+      expect(updated?.state).toBe(DevTaskState.IMPLEMENTING);
+      expect(updated?.branch_name).toBe('feat/dark-mode');
+      expect(updated?.worktree_path).toBe('/tmp/worktree-123');
       // unchanged fields stay the same
-      expect(updated!.description).toBe('update me');
+      expect(updated?.description).toBe('update me');
     });
 
     test('returns updated task with new values', () => {
@@ -220,19 +220,19 @@ describe('DevTaskRepository', () => {
         design: 'Design doc here',
         plan: 'Step 1, Step 2',
         code_review: 'LGTM',
-        error_log: undefined,
+        error_log: null,
         retry_count: 2,
         title: 'Updated title',
       });
 
-      expect(updated!.pr_number).toBe(42);
-      expect(updated!.pr_url).toBe('https://github.com/repo/pull/42');
-      expect(updated!.design).toBe('Design doc here');
-      expect(updated!.plan).toBe('Step 1, Step 2');
-      expect(updated!.code_review).toBe('LGTM');
-      expect(updated!.error_log).toBeNull();
-      expect(updated!.retry_count).toBe(2);
-      expect(updated!.title).toBe('Updated title');
+      expect(updated?.pr_number).toBe(42);
+      expect(updated?.pr_url).toBe('https://github.com/repo/pull/42');
+      expect(updated?.design).toBe('Design doc here');
+      expect(updated?.plan).toBe('Step 1, Step 2');
+      expect(updated?.code_review).toBe('LGTM');
+      expect(updated?.error_log).toBeNull();
+      expect(updated?.retry_count).toBe(2);
+      expect(updated?.title).toBe('Updated title');
     });
 
     test('updated_at changes after update', async () => {
@@ -243,7 +243,7 @@ describe('DevTaskRepository', () => {
       await new Promise((resolve) => setTimeout(resolve, 1100));
 
       const updated = repo.update(task.id, { state: DevTaskState.DESIGNING });
-      expect(updated!.updated_at).not.toBe(originalUpdatedAt);
+      expect(updated?.updated_at).not.toBe(originalUpdatedAt);
     });
 
     test('returns unchanged task when no fields provided', () => {
@@ -251,8 +251,8 @@ describe('DevTaskRepository', () => {
 
       const result = repo.update(task.id, {});
       expect(result).not.toBeNull();
-      expect(result!.id).toBe(task.id);
-      expect(result!.description).toBe('noop update');
+      expect(result?.id).toBe(task.id);
+      expect(result?.description).toBe('noop update');
     });
   });
 

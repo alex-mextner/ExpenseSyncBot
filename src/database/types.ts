@@ -244,7 +244,7 @@ export interface ReceiptItem {
 export interface CreateReceiptItemData {
   photo_queue_id: number;
   name_ru: string;
-  name_original?: string;
+  name_original?: string | null;
   quantity: number;
   price: number;
   total: number;
@@ -278,7 +278,7 @@ export interface ExpenseItem {
 export interface CreateExpenseItemData {
   expense_id: number;
   name_ru: string;
-  name_original?: string;
+  name_original?: string | null;
   quantity: number;
   price: number;
   total: number;

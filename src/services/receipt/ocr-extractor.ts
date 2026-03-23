@@ -42,7 +42,7 @@ export function startTempImageCleanup(): void {
             await fs.unlink(filepath);
             deletedCount++;
           } catch (error) {
-            logger.error({ err: error }, '[OCR_CLEANUP] Failed to delete old file ${file}');
+            logger.error({ err: error }, `[OCR_CLEANUP] Failed to delete old file ${file}`);
           }
         }
       }

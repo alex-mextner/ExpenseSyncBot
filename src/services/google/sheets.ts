@@ -23,7 +23,7 @@ export interface SheetRow {
  */
 export async function createExpenseSpreadsheet(
   refreshToken: string,
-  defaultCurrency: CurrencyCode,
+  _defaultCurrency: CurrencyCode,
   enabledCurrencies: CurrencyCode[],
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
   const auth = getAuthenticatedClient(refreshToken);
@@ -74,7 +74,8 @@ export async function createExpenseSpreadsheet(
     },
   });
 
-  const spreadsheetId = response.data.spreadsheetId!;
+  const spreadsheetId = response.data.spreadsheetId;
+  if (!spreadsheetId) throw new Error('Spreadsheet creation did not return an ID');
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
 
   // Get real sheetId from response
@@ -247,7 +248,7 @@ function normalizeMonth(month: string): string {
   const match = month.match(/^(\d{4})-(\d{1,2})$/);
   if (!match) return month;
   const [, year, m] = match;
-  return `${year}-${m!.padStart(2, '0')}`;
+  return `${year}-${(m ?? '').padStart(2, '0')}`;
 }
 
 /**
@@ -287,7 +288,7 @@ async function createEmptyBudgetSheet(refreshToken: string, spreadsheetId: strin
     },
   });
 
-  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
 
   // Build header row
   const headers = BUDGET_SHEET_CONFIG.headers;
@@ -378,7 +379,7 @@ export async function createBudgetSheet(
     },
   });
 
-  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
 
   // Build header row
   const headers = BUDGET_SHEET_CONFIG.headers;
@@ -595,9 +596,9 @@ export async function readExpensesFromSheet(
   logger.info({ data: headers }, `[SHEETS] Headers`);
 
   // Find column indices
-  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0]!); // Дата
-  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1]!); // Категория
-  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2]!); // Комментарий
+  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? ''); // Дата
+  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? ''); // Категория
+  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? ''); // Комментарий
   const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader); // EUR (calc)
 
   if (dateCol === -1 || categoryCol === -1 || commentCol === -1) {
@@ -618,7 +619,7 @@ export async function readExpensesFromSheet(
       // Extract currency code from "USD ($)" -> "USD"
       const match = header.match(/^([A-Z]{3})\s*\(/);
       if (match) {
-        currencyColumns.push({ index: i, currency: match[1]! });
+        currencyColumns.push({ index: i, currency: match[1] ?? '' });
       }
     }
   }
@@ -649,7 +650,7 @@ export async function readExpensesFromSheet(
       const value = row[index];
       if (value && value.trim() !== '') {
         const parsed = parseFloat(value);
-        if (!isNaN(parsed) && parsed > 0) {
+        if (!Number.isNaN(parsed) && parsed > 0) {
           amounts[currency] = parsed;
           foundAmount = true;
         }
@@ -666,7 +667,7 @@ export async function readExpensesFromSheet(
 
     if (eurAmountStr && eurAmountStr.trim() !== '') {
       const parsed = parseFloat(eurAmountStr);
-      eurAmount = !isNaN(parsed) ? parsed : 0;
+      eurAmount = !Number.isNaN(parsed) ? parsed : 0;
     } else {
       // Calculate EUR amount from the first non-null currency
       eurAmount = 0;

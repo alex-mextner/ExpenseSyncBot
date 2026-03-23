@@ -17,31 +17,34 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
 
   switch (name) {
     case 'set_budget':
-      return [input.category, input.amount && `${input.amount} ${input.currency || ''}`.trim()]
+      return [
+        input['category'],
+        input['amount'] && `${input['amount']} ${input['currency'] || ''}`.trim(),
+      ]
         .filter(Boolean)
         .join(', ');
     case 'delete_budget':
-      return [input.category, input.month].filter(Boolean).join(', ');
+      return [input['category'], input['month']].filter(Boolean).join(', ');
     case 'add_expense':
       return [
-        input.amount && `${input.amount} ${input.currency || ''}`.trim(),
-        input.category,
-        input.comment,
+        input['amount'] && `${input['amount']} ${input['currency'] || ''}`.trim(),
+        input['category'],
+        input['comment'],
       ]
         .filter(Boolean)
         .join(', ');
     case 'delete_expense':
-      return input.expense_id ? `#${input.expense_id}` : '';
+      return input['expense_id'] ? `#${input['expense_id']}` : '';
     case 'get_expenses':
-      return [input.category, input.period, input.summary_only && 'сводка']
+      return [input['category'], input['period'], input['summary_only'] && 'сводка']
         .filter(Boolean)
         .join(', ');
     case 'get_budgets':
-      return [input.category, input.month].filter(Boolean).join(', ');
+      return [input['category'], input['month']].filter(Boolean).join(', ');
     case 'manage_category':
-      return [input.action, input.name].filter(Boolean).join(' ');
+      return [input['action'], input['name']].filter(Boolean).join(' ');
     case 'set_custom_prompt':
-      return input.prompt ? `${String(input.prompt).length} символов` : 'очистка';
+      return input['prompt'] ? `${String(input['prompt']).length} символов` : 'очистка';
     default:
       return '';
   }
@@ -276,7 +279,7 @@ export class TelegramStreamWriter {
       this.lastSentText = text;
       this.lastFlushTime = Date.now();
     } catch (err) {
-      const tgErr = err as { payload?: { error_code?: number; description?: string } };
+      const tgErr = err as unknown as { payload?: { error_code?: number; description?: string } };
       if (tgErr?.payload?.error_code === 429) {
         logger.error('[STREAM] Rate limited, cooling down');
         this.lastErrorTime = Date.now();

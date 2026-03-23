@@ -1,13 +1,14 @@
 import { format } from 'date-fns';
-import { type CurrencyCode, MESSAGES } from '../../config/constants';
+import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
+import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 import { saveExpenseToSheet } from './message.handler';
 
 const logger = createLogger('callback.handler');
@@ -40,7 +41,10 @@ function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
 /**
  * Handle callback queries from inline keyboards
  */
-export async function handleCallbackQuery(ctx: Ctx['CallbackQuery'], bot: any): Promise<void> {
+export async function handleCallbackQuery(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+): Promise<void> {
   const data = ctx.data;
   const telegramId = ctx.from.id;
   const chatId = ctx.message?.chat?.id;
@@ -79,7 +83,7 @@ export async function handleCallbackQuery(ctx: Ctx['CallbackQuery'], bot: any): 
         break;
 
       case 'confirm':
-        await handleConfirmAction(ctx, params, telegramId, bot);
+        await handleConfirmAction(ctx, params, bot);
         break;
 
       case 'budget':
@@ -91,7 +95,7 @@ export async function handleCallbackQuery(ctx: Ctx['CallbackQuery'], bot: any): 
         break;
 
       case 'receipt_item_other':
-        await handleReceiptItemOther(ctx, params, telegramId, bot);
+        await handleReceiptItemOther(ctx, params, bot);
         break;
 
       case 'skip_receipt_item':
@@ -118,7 +122,7 @@ export async function handleCallbackQuery(ctx: Ctx['CallbackQuery'], bot: any): 
         await ctx.answerCallbackQuery({ text: 'Unknown action' });
     }
   } catch (error) {
-    logger.error({ err: error }, '[CALLBACK] Unhandled error for action "${data}"');
+    logger.error({ err: error }, `[CALLBACK] Unhandled error for action "${data}"`);
     try {
       await ctx.answerCallbackQuery({ text: 'Internal error' });
     } catch {}
@@ -132,7 +136,7 @@ async function handleCategoryAction(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const [subAction, ...rest] = params;
   const chatId = ctx.message?.chat?.id;
@@ -256,10 +260,9 @@ async function handleCategoryAction(
 async function handleConfirmAction(
   ctx: Ctx['CallbackQuery'],
   params: string[],
-  telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
-  const [action, answer] = params;
+  const answer = params[1] ?? '';
 
   if (answer === 'yes') {
     await ctx.answerCallbackQuery({ text: '✅ Подтверждено' });
@@ -283,7 +286,7 @@ async function handleBudgetAction(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const [subAction, category, ...rest] = params;
   const chatId = ctx.message?.chat?.id;
@@ -468,7 +471,7 @@ async function handleReceiptItemConfirm(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const itemIdStr = params[0];
   const categoryIndexStr = params[1];
@@ -572,8 +575,7 @@ async function handleReceiptItemConfirm(
 async function handleReceiptItemOther(
   ctx: Ctx['CallbackQuery'],
   params: string[],
-  _telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const itemIdStr = params[0];
   const messageId = ctx.message?.id;
@@ -630,7 +632,7 @@ export async function saveReceiptExpenses(
   photoQueueId: number,
   groupId: number,
   userId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const confirmedItems = database.receiptItems.findConfirmedByPhotoQueueId(photoQueueId);
 
@@ -726,7 +728,7 @@ export async function saveReceiptExpenses(
       database.expenseItems.create({
         expense_id: expense.id,
         name_ru: item.name_ru,
-        name_original: item.name_original || undefined,
+        name_original: item.name_original || null,
         quantity: item.quantity,
         price: item.price,
         total: item.total,
@@ -736,9 +738,6 @@ export async function saveReceiptExpenses(
 
   // Delete all processed receipt items (confirmed + skipped)
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
-
-  // Get thread ID from queue item
-  const queueItem = database.photoQueue.findById(photoQueueId);
 
   // Notify user
   const totalItems = confirmedItems.length;
@@ -760,7 +759,7 @@ async function handleUseFoundCategory(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const itemIdStr = params[0];
   const category = params[1];
@@ -838,7 +837,7 @@ async function handleSkipReceiptItem(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const itemIdStr = params[0];
   const messageId = ctx.message?.id;
@@ -906,7 +905,7 @@ async function handleCreateNewCategory(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const itemIdStr = params[0];
   const category = params[1];
@@ -990,7 +989,7 @@ async function handleReceiptSummaryAction(
   ctx: Ctx['CallbackQuery'],
   params: string[],
   telegramId: number,
-  bot: any,
+  bot: BotInstance,
 ): Promise<void> {
   const [subAction, queueIdStr] = params;
   const messageId = ctx.message?.id;
@@ -1038,7 +1037,7 @@ async function handleReceiptSummaryAction(
       break;
 
     case 'bulk_edit':
-      await handleReceiptBulkEdit(ctx, queueItem, group, bot, messageId, chatId);
+      await handleReceiptBulkEdit(ctx, queueItem, bot, messageId, chatId);
       break;
 
     case 'itemwise':
@@ -1063,10 +1062,10 @@ async function handleReceiptSummaryAction(
  */
 async function handleReceiptAcceptAll(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  user: any,
-  bot: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
+  user: User,
+  bot: BotInstance,
   messageId?: number,
   chatId?: number,
 ): Promise<void> {
@@ -1108,9 +1107,8 @@ async function handleReceiptAcceptAll(
  */
 async function handleReceiptBulkEdit(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  bot: any,
+  queueItem: PhotoQueueItem,
+  bot: BotInstance,
   messageId?: number,
   chatId?: number,
 ): Promise<void> {
@@ -1153,9 +1151,9 @@ async function handleReceiptBulkEdit(
  */
 async function handleReceiptItemwise(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  bot: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
+  bot: BotInstance,
   messageId?: number,
   chatId?: number,
 ): Promise<void> {
@@ -1186,10 +1184,10 @@ async function handleReceiptItemwise(
  */
 async function handleReceiptAcceptBulk(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  user: any,
-  bot: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
+  user: User,
+  bot: BotInstance,
   messageId?: number,
   chatId?: number,
 ): Promise<void> {
@@ -1276,9 +1274,9 @@ async function handleReceiptAcceptBulk(
  */
 async function handleReceiptCancel(
   ctx: Ctx['CallbackQuery'],
-  queueItem: any,
-  group: any,
-  bot: any,
+  queueItem: PhotoQueueItem,
+  group: Group,
+  bot: BotInstance,
   messageId?: number,
   chatId?: number,
 ): Promise<void> {

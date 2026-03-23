@@ -189,8 +189,11 @@ export class DevAgent {
             },
             { signal: controller.signal },
           );
-        } catch (err: any) {
-          if (err?.name === 'APIUserAbortError' || controller.signal.aborted) {
+        } catch (err: unknown) {
+          if (
+            (err instanceof Error && err.name === 'APIUserAbortError') ||
+            controller.signal.aborted
+          ) {
             if (this.aborted) {
               throw new AgentAbortedError();
             }
@@ -258,10 +261,10 @@ export class DevAgent {
 
         case 'write_file':
           await writeFile(this.worktreePath, str('path'), str('content'));
-          return `Written: ${input.path}`;
+          return `Written: ${input['path']}`;
 
         case 'list_directory': {
-          const files = await listDirectory(this.worktreePath, (input.path as string) || '.');
+          const files = await listDirectory(this.worktreePath, (input['path'] as string) || '.');
           return files.join('\n');
         }
 
@@ -269,7 +272,7 @@ export class DevAgent {
           const results = await searchCode(
             this.worktreePath,
             str('pattern'),
-            input.glob as string | undefined,
+            input['glob'] as string | undefined,
           );
           return results || 'No matches found.';
         }
@@ -279,15 +282,15 @@ export class DevAgent {
 
         case 'delete_file':
           await deleteFile(this.worktreePath, str('path'));
-          return `Deleted: ${input.path}`;
+          return `Deleted: ${input['path']}`;
 
         case 'revert_file':
           await revertFileToMain(this.worktreePath, str('path'));
-          return `Reverted to main: ${input.path}`;
+          return `Reverted to main: ${input['path']}`;
 
         case 'commit':
           await commitChanges(this.worktreePath, str('message'));
-          return `Committed: ${input.message}`;
+          return `Committed: ${input['message']}`;
 
         case 'manage_packages': {
           const action = str('action');

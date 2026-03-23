@@ -30,7 +30,9 @@ export class AdviceLogRepository {
       throw new Error('Failed to create advice log entry');
     }
 
-    return this.findById(result.id)!;
+    const entry = this.findById(result.id);
+    if (!entry) throw new Error('Failed to retrieve created advice log entry');
+    return entry;
   }
 
   /**

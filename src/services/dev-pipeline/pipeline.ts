@@ -11,13 +11,14 @@
  */
 
 import { $ } from 'bun';
+import type { InlineKeyboard } from 'gramio';
+import { escapeHtml } from '../../bot/commands/ask';
 import {
   createDevApprovalKeyboard,
   createDevMergeKeyboard,
   createDevReviewKeyboard,
 } from '../../bot/keyboards';
 import { database } from '../../database';
-import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { runCodexReview } from './codex-integration';
 import { AgentAbortedError, DevAgent } from './dev-agent';
@@ -71,9 +72,9 @@ function parseTestCounts(output: string): { pass: number; fail: number; error: n
   const failMatch = output.match(/(\d+)\s+fail(?!\w)/);
   const errorMatch = output.match(/(\d+)\s+error/);
   return {
-    pass: passMatch ? parseInt(passMatch[1]!, 10) : 0,
-    fail: failMatch ? parseInt(failMatch[1]!, 10) : 0,
-    error: errorMatch ? parseInt(errorMatch[1]!, 10) : 0,
+    pass: passMatch ? parseInt(passMatch[1] ?? '0', 10) : 0,
+    fail: failMatch ? parseInt(failMatch[1] ?? '0', 10) : 0,
+    error: errorMatch ? parseInt(errorMatch[1] ?? '0', 10) : 0,
   };
 }
 
@@ -144,7 +145,7 @@ TOPIC-AWARE MESSAGING:
 export type NotifyCallback = (
   groupId: number,
   message: string,
-  options?: { reply_markup?: any },
+  options?: { reply_markup?: InlineKeyboard },
 ) => Promise<void>;
 
 /**
@@ -225,7 +226,7 @@ export class DevPipeline {
       await deleteLocalBranch(task.branch_name);
     }
     if (task.worktree_path || task.branch_name) {
-      database.devTasks.update(task.id, { worktree_path: undefined } as any);
+      database.devTasks.update(task.id, { worktree_path: null });
     }
   }
 
@@ -413,11 +414,11 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     const enrichedDescription = `${task.description}\n\nCLARIFICATION:\nQuestions: ${task.design || ''}\nAnswers: ${answer}`;
 
     const updated = transition(task, DevTaskState.DESIGNING, {
-      design: undefined, // will be regenerated
+      design: null, // will be regenerated
     });
 
     // Update description with clarification context
-    database.devTasks.update(taskId, { description: enrichedDescription } as any);
+    database.devTasks.update(taskId, { description: enrichedDescription });
     updated.description = enrichedDescription;
 
     await this.notify(
@@ -454,7 +455,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
           ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
           : task.description;
 
-      database.devTasks.update(taskId, { description: enrichedDescription } as any);
+      database.devTasks.update(taskId, { description: enrichedDescription });
 
       // Smart resume: check what was already completed before the failure
       const hasWorktree = task.worktree_path && worktreeExists(task.worktree_path);
@@ -463,7 +464,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       if (task.pr_number && task.code_review && hasWorktree) {
         const updated = transition(task, DevTaskState.AWAITING_REVIEW, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -482,7 +483,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       if (task.pr_number && hasWorktree) {
         const updated = transition(task, DevTaskState.REVIEWING, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -504,7 +505,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       ) {
         const updated = transition(task, DevTaskState.PULL_REQUEST, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -522,7 +523,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
         // Keep error_log so the agent knows what went wrong last time
         const updated = transition(task, DevTaskState.IMPLEMENTING, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -541,11 +542,11 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
         const worktreePath = await createWorktree(branchName);
 
         const updated = transition(task, DevTaskState.IMPLEMENTING, {
-          error_log: undefined,
+          error_log: null,
           retry_count: 0,
           branch_name: branchName,
           worktree_path: worktreePath,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -560,9 +561,9 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
       // No design — restart from scratch
       const updated = transition(task, DevTaskState.PENDING, {
-        error_log: undefined,
+        error_log: null,
         retry_count: 0,
-        failed_at_state: undefined,
+        failed_at_state: null,
       });
       updated.description = enrichedDescription;
 
@@ -666,7 +667,7 @@ Keep the plan concise — 20-40 lines max.`;
     const enrichedDescription = `${task.description}\n\nDESIGN FEEDBACK:\nPrevious design:\n${task.design || ''}\n\nUser requested changes:\n${feedback}`;
 
     const updated = transition(task, DevTaskState.DESIGNING);
-    database.devTasks.update(taskId, { description: enrichedDescription } as any);
+    database.devTasks.update(taskId, { description: enrichedDescription });
     updated.description = enrichedDescription;
 
     await this.notify(task.group_id, `✏️ Dev task #${task.id}: redesigning with your feedback...`);
@@ -992,8 +993,9 @@ WORKFLOW:
     if (allPassed) {
       if (task.pr_number) {
         // PR already exists — we're in the fix cycle, push and show merge keyboard
+        if (!task.branch_name) throw new Error(`Task #${task.id} has pr_number but no branch_name`);
         await commitChanges(task.worktree_path, `fix: address review feedback (task #${task.id})`);
-        await pushBranch(task.worktree_path, task.branch_name!);
+        await pushBranch(task.worktree_path, task.branch_name);
 
         transition(task, DevTaskState.AWAITING_MERGE);
 

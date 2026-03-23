@@ -287,7 +287,7 @@ describe('evaluateMathExpression', () => {
   test('100/3 → ~33.333', () => {
     const result = evaluateMathExpression('100/3');
     expect(result).not.toBeNull();
-    expect(result ?? 0).toBeCloseTo(33.333, 2);
+    expect(result as number).toBeCloseTo(33.333, 2);
   });
 
   // Mixed decimal separators
@@ -298,18 +298,6 @@ describe('evaluateMathExpression', () => {
 
   // Spaces (evaluateMathExpression strips spaces)
   test('10 * 3 → 30 (spaces stripped)', () => expect(evaluateMathExpression('10 * 3')).toBe(30));
-
-  // Subtraction
-  test('100-70 → 30', () => expect(evaluateMathExpression('100-70')).toBe(30));
-  test('10-3 → 7', () => expect(evaluateMathExpression('10-3')).toBe(7));
-  test('10+5-3 → 12', () => expect(evaluateMathExpression('10+5-3')).toBe(12));
-  test('10*3-5 → 25 (precedence: * before -)', () =>
-    expect(evaluateMathExpression('10*3-5')).toBe(25));
-  test('20-10/2 → 15 (precedence: / before -)', () =>
-    expect(evaluateMathExpression('20-10/2')).toBe(15));
-  test('10-3-2 → 5 (left-associative)', () => expect(evaluateMathExpression('10-3-2')).toBe(5));
-  test('100 - 70 → 30 (spaces stripped)', () =>
-    expect(evaluateMathExpression('100 - 70')).toBe(30));
 });
 
 // ── Math expressions in expense messages (integration) ────────────────

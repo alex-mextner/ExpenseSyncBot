@@ -97,7 +97,7 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
     await $`git worktree remove ${worktreePath} --force`.quiet();
     logger.info(`[GIT-OPS] Removed worktree: ${worktreePath}`);
   } catch (error) {
-    logger.error({ err: error }, '[GIT-OPS] Failed to remove worktree: ${worktreePath}');
+    logger.error({ err: error }, `[GIT-OPS] Failed to remove worktree: ${worktreePath}`);
   }
 }
 
@@ -169,10 +169,10 @@ export async function pushBranch(worktreePath: string, branchName: string): Prom
 function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } {
   // Handle both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git)
   const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-  if (!match) {
+  if (!match || !match[1] || !match[2]) {
     throw new Error(`Cannot parse GitHub owner/repo from remote URL: ${remoteUrl}`);
   }
-  return { owner: match[1]!, repo: match[2]! };
+  return { owner: match[1], repo: match[2] };
 }
 
 /**
@@ -263,15 +263,15 @@ export async function getCurrentDiff(worktreePath: string): Promise<string> {
   let result = '';
 
   if (staged.trim()) {
-    result += '=== STAGED CHANGES ===\n' + staged + '\n';
+    result += `=== STAGED CHANGES ===\n${staged}\n`;
   }
 
   if (unstaged.trim()) {
-    result += '=== UNSTAGED CHANGES ===\n' + unstaged + '\n';
+    result += `=== UNSTAGED CHANGES ===\n${unstaged}\n`;
   }
 
   if (untracked.trim()) {
-    result += '=== UNTRACKED FILES ===\n' + untracked + '\n';
+    result += `=== UNTRACKED FILES ===\n${untracked}\n`;
   }
 
   return result;
@@ -314,6 +314,15 @@ export async function getChangedFilesFromMain(worktreePath: string): Promise<str
  * Revert a file in worktree to its main branch version.
  */
 export async function revertFileToMain(worktreePath: string, filePath: string): Promise<void> {
+  // Guard against path traversal: resolved path must stay inside the worktree
+  const absolutePath = path.resolve(worktreePath, filePath);
+  const worktreePrefix = worktreePath.endsWith(path.sep)
+    ? worktreePath
+    : `${worktreePath}${path.sep}`;
+  if (!absolutePath.startsWith(worktreePrefix)) {
+    throw new Error(`Path traversal detected in revertFileToMain: ${filePath}`);
+  }
+
   // Check if file exists on main
   const existsOnMain = await $`git -C ${worktreePath} cat-file -e main:${filePath}`
     .nothrow()
@@ -325,7 +334,6 @@ export async function revertFileToMain(worktreePath: string, filePath: string): 
     logger.info(`[GIT-OPS] Reverted to main: ${filePath}`);
   } else {
     // File doesn't exist on main — it was created by agent, delete it
-    const absolutePath = path.resolve(worktreePath, filePath);
     if (existsSync(absolutePath)) {
       await $`rm ${absolutePath}`.quiet();
       logger.info(`[GIT-OPS] Deleted (not on main): ${filePath}`);

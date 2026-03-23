@@ -65,17 +65,17 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
     // Convert from "1 EUR = X OTHER" to "1 OTHER = X EUR"
     const rates: Record<CurrencyCode, number> = {
       EUR: 1.0,
-      USD: 1 / (data.rates.USD || 1),
-      RUB: 1 / (data.rates.RUB || 1),
-      RSD: 1 / (data.rates.RSD || 1),
-      GBP: 1 / (data.rates.GBP || 1),
-      BYN: 1 / (data.rates.BYN || 1),
-      CHF: 1 / (data.rates.CHF || 1),
-      JPY: 1 / (data.rates.JPY || 1),
-      CNY: 1 / (data.rates.CNY || 1),
-      INR: 1 / (data.rates.INR || 1),
-      LKR: 1 / (data.rates.LKR || 1),
-      AED: 1 / (data.rates.AED || 1),
+      USD: 1 / (data.rates['USD'] || 1),
+      RUB: 1 / (data.rates['RUB'] || 1),
+      RSD: 1 / (data.rates['RSD'] || 1),
+      GBP: 1 / (data.rates['GBP'] || 1),
+      BYN: 1 / (data.rates['BYN'] || 1),
+      CHF: 1 / (data.rates['CHF'] || 1),
+      JPY: 1 / (data.rates['JPY'] || 1),
+      CNY: 1 / (data.rates['CNY'] || 1),
+      INR: 1 / (data.rates['INR'] || 1),
+      LKR: 1 / (data.rates['LKR'] || 1),
+      AED: 1 / (data.rates['AED'] || 1),
     };
 
     logger.info('[CURRENCY] ✅ Successfully fetched exchange rates from API');

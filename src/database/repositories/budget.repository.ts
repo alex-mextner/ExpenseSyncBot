@@ -1,5 +1,4 @@
 import type { Database } from 'bun:sqlite';
-import type { CurrencyCode } from '../../config/constants';
 import type { Budget, BudgetProgress, CreateBudgetData, UpdateBudgetData } from '../types';
 
 export class BudgetRepository {

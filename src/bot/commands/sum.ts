@@ -1,4 +1,4 @@
-import { endOfMonth, format, startOfDay, startOfMonth, subMonths } from 'date-fns';
+import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { database } from '../../database';
 import { createBudgetSheet, hasBudgetSheet } from '../../services/google/sheets';
@@ -115,15 +115,12 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     if (!categoryTotals[expense.category]) {
       categoryTotals[expense.category] = 0;
     }
-    categoryTotals[expense.category]! += expense.eur_amount;
+    categoryTotals[expense.category] = (categoryTotals[expense.category] ?? 0) + expense.eur_amount;
   }
 
   // Calculate category averages from previous months
   const categoryAverages: Record<string, { sum: number; count: number }> = {};
   for (const expense of expenses) {
-    const monthKey = expense.date.substring(0, 7);
-    const key = `${expense.category}:${monthKey}`;
-
     if (!categoryAverages[expense.category]) {
       categoryAverages[expense.category] = { sum: 0, count: 0 };
     }
@@ -136,7 +133,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     if (!categoryMonths[expense.category]) {
       categoryMonths[expense.category] = new Set();
     }
-    categoryMonths[expense.category]!.add(monthKey);
+    categoryMonths[expense.category]?.add(monthKey);
   }
 
   // Calculate average per category
@@ -144,7 +141,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     if (!categoryAverages[expense.category]) {
       categoryAverages[expense.category] = { sum: 0, count: 0 };
     }
-    categoryAverages[expense.category]!.sum += expense.eur_amount;
+    const avgEntry = categoryAverages[expense.category];
+    if (avgEntry) avgEntry.sum += expense.eur_amount;
   }
 
   // Calculate category differences

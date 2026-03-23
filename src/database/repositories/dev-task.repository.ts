@@ -6,7 +6,6 @@ import type { Database } from 'bun:sqlite';
 import type {
   CreateDevTaskData,
   DevTask,
-  DevTaskState,
   UpdateDevTaskData,
 } from '../../services/dev-pipeline/types';
 
@@ -116,6 +115,11 @@ export class DevTaskRepository {
     if (data.title !== undefined) {
       fields.push('title = ?');
       values.push(data.title);
+    }
+
+    if (data.description !== undefined) {
+      fields.push('description = ?');
+      values.push(data.description);
     }
 
     if (data.branch_name !== undefined) {

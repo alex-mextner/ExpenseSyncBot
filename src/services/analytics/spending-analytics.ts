@@ -55,7 +55,7 @@ export class SpendingAnalytics {
    * Budget burn rate per category
    * Thresholds cascade top-down: exceeded > critical > warning > on_track
    */
-  private computeBurnRates(
+  protected computeBurnRates(
     groupId: number,
     now: Date,
     currentMonth: string,
@@ -123,7 +123,7 @@ export class SpendingAnalytics {
   /**
    * Week-over-week comparison (last 7 days vs previous 7 days)
    */
-  private computeWeekOverWeek(groupId: number, today: string): SpendingTrend {
+  protected computeWeekOverWeek(groupId: number, today: string): SpendingTrend {
     const rows = database.expenses.getWeekOverWeekData(groupId, today);
 
     const currentByCategory: Record<string, number> = {};
@@ -183,7 +183,7 @@ export class SpendingAnalytics {
   /**
    * Month-over-month comparison (proportional: first N days of current month vs first N days of previous month)
    */
-  private computeMonthOverMonth(
+  protected computeMonthOverMonth(
     groupId: number,
     now: Date,
     currentMonthStart: string,
@@ -253,7 +253,7 @@ export class SpendingAnalytics {
    * Category anomaly detection: current month vs 3-month average
    * Deviation > 1.5x = anomaly
    */
-  private computeAnomalies(
+  protected computeAnomalies(
     groupId: number,
     now: Date,
     currentMonthStart: string,
@@ -282,9 +282,11 @@ export class SpendingAnalytics {
       if (!categoryHistory[row.category]) {
         categoryHistory[row.category] = { total: 0, months: 0 };
       }
-      const entry = categoryHistory[row.category]!;
-      entry.total += row.monthly_total;
-      entry.months += 1;
+      const entry = categoryHistory[row.category];
+      if (entry) {
+        entry.total += row.monthly_total;
+        entry.months += 1;
+      }
     }
 
     const anomalies: CategoryAnomaly[] = [];
@@ -327,7 +329,7 @@ export class SpendingAnalytics {
   /**
    * Day-of-week spending patterns (last 90 days)
    */
-  private computeDayPatterns(groupId: number, today: string): DayOfWeekPattern[] {
+  protected computeDayPatterns(groupId: number, today: string): DayOfWeekPattern[] {
     const startDate = format(subDays(new Date(today), 90), 'yyyy-MM-dd');
 
     const stats = database.expenses.getDayOfWeekStats(groupId, startDate, today);
@@ -369,7 +371,7 @@ export class SpendingAnalytics {
    * Spending velocity: last 7 days vs previous 7 days
    * Divide by fixed window size (7), not active_days
    */
-  private computeVelocity(groupId: number, today: string): SpendingVelocity {
+  protected computeVelocity(groupId: number, today: string): SpendingVelocity {
     const rows = database.expenses.getVelocityData(groupId, today);
 
     let recentTotal = 0;
@@ -414,7 +416,7 @@ export class SpendingAnalytics {
   /**
    * Budget utilization rate (total budget vs total spent)
    */
-  private computeBudgetUtilization(
+  protected computeBudgetUtilization(
     groupId: number,
     currentMonth: string,
     monthStart: string,
@@ -449,7 +451,7 @@ export class SpendingAnalytics {
    * Spending streak: consecutive days above/below average
    * Days without expenses break the streak
    */
-  private computeStreak(groupId: number, today: string): SpendingStreak {
+  protected computeStreak(groupId: number, today: string): SpendingStreak {
     const startDate = format(subDays(new Date(today), 30), 'yyyy-MM-dd');
     const dailyTotals = database.expenses.getDailyTotals(groupId, startDate, today);
 
@@ -525,7 +527,7 @@ export class SpendingAnalytics {
    * Monthly projection with confidence level
    * confidence: 'low' if days_elapsed < 7
    */
-  private computeProjection(
+  protected computeProjection(
     groupId: number,
     now: Date,
     currentMonth: string,

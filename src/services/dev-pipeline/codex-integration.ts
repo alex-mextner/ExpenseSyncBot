@@ -26,7 +26,7 @@ export async function runCodexReview(diff: string): Promise<string> {
   const maxDiffLength = 50000;
   const truncatedDiff =
     diff.length > maxDiffLength
-      ? diff.slice(0, maxDiffLength) + '\n\n[... diff truncated ...]'
+      ? `${diff.slice(0, maxDiffLength)}\n\n[... diff truncated ...]`
       : diff;
 
   const anthropic = new Anthropic({

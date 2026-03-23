@@ -22,6 +22,11 @@
       "suspicious": {
         "noExplicitAny": "warn",
         "noConsole": "warn"
+      },
+      "complexity": {
+        // Disabled: conflicts with TypeScript's noPropertyAccessFromIndexSignature,
+        // which requires bracket notation for index signature types (Record<string, unknown>).
+        "useLiteralKeys": "off"
       }
     }
   },

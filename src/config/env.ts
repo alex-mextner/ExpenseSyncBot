@@ -34,7 +34,7 @@ function validateEnv(): EnvConfig {
     GOOGLE_CLIENT_ID: getEnvVariable('GOOGLE_CLIENT_ID'),
     GOOGLE_CLIENT_SECRET: getEnvVariable('GOOGLE_CLIENT_SECRET'),
     GOOGLE_REDIRECT_URI: getEnvVariable('GOOGLE_REDIRECT_URI'),
-    OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000'),
+    OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000', 10),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
     HF_TOKEN: getEnvVariable('HF_TOKEN', false),
