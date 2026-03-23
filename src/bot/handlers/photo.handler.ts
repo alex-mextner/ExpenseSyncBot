@@ -76,7 +76,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
     group_id: group.id,
     user_id: user.id,
     message_id: messageId,
-    message_thread_id: threadId,
+    message_thread_id: threadId ?? null,
     file_id: largestPhoto.fileId,
     status: 'pending',
   });

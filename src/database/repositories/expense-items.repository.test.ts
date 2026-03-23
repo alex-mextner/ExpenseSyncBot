@@ -83,7 +83,7 @@ describe('ExpenseItemsRepository', () => {
     });
 
     test('name_original can be null', () => {
-      const item = itemsRepo.create(makeItem({ name_original: undefined }));
+      const item = itemsRepo.create(makeItem({ name_original: null }));
       expect(item.name_original).toBeNull();
     });
 

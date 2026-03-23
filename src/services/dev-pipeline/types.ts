@@ -131,11 +131,11 @@ export interface UpdateDevTaskData {
   worktree_path?: string | null;
   pr_number?: number;
   pr_url?: string;
-  design?: string;
+  design?: string | null;
   plan?: string;
   code_review?: string;
-  error_log?: string;
-  failed_at_state?: string;
+  error_log?: string | null;
+  failed_at_state?: string | null;
   retry_count?: number;
 }
 

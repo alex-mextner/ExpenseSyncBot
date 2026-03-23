@@ -61,8 +61,8 @@ export function registerTopicMiddleware(bot: Bot): void {
   bot.preRequest(THREAD_AWARE_METHODS, (context) => {
     const stored = threadStorage.getStore();
     const params = context.params as Record<string, unknown>;
-    if (stored?.threadId && !params.message_thread_id && params.chat_id === stored.chatId) {
-      params.message_thread_id = stored.threadId;
+    if (stored?.threadId && !params['message_thread_id'] && params['chat_id'] === stored.chatId) {
+      params['message_thread_id'] = stored.threadId;
     }
     return context;
   });

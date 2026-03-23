@@ -220,7 +220,7 @@ describe('DevTaskRepository', () => {
         design: 'Design doc here',
         plan: 'Step 1, Step 2',
         code_review: 'LGTM',
-        error_log: undefined,
+        error_log: null,
         retry_count: 2,
         title: 'Updated title',
       });

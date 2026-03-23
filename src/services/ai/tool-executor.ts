@@ -76,10 +76,10 @@ async function executeGetExpenses(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const period = (input.period as string) || 'current_month';
-  const category = input.category as string | undefined;
-  const limit = Math.min(Math.max((input.limit as number) || 50, 1), 500);
-  const summaryOnly = (input.summary_only as boolean) || false;
+  const period = (input['period'] as string) || 'current_month';
+  const category = input['category'] as string | undefined;
+  const limit = Math.min(Math.max((input['limit'] as number) || 50, 1), 500);
+  const summaryOnly = (input['summary_only'] as boolean) || false;
 
   const now = new Date();
   let startDate: string;
@@ -182,8 +182,8 @@ async function executeGetBudgets(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const month = (input.month as string) || format(new Date(), 'yyyy-MM');
-  const categoryFilter = input.category as string | undefined;
+  const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
+  const categoryFilter = input['category'] as string | undefined;
 
   let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
 
@@ -275,9 +275,9 @@ async function executeSetBudget(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const category = input.category as string;
-  const amount = input.amount as number;
-  const month = (input.month as string) || format(new Date(), 'yyyy-MM');
+  const category = input['category'] as string;
+  const amount = input['amount'] as number;
+  const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
   if (!category || !amount || amount <= 0) {
     return { success: false, error: 'Invalid category or amount' };
@@ -288,7 +288,7 @@ async function executeSetBudget(
     return { success: false, error: 'Group not found' };
   }
 
-  const currency = (input.currency as CurrencyCode) || group.default_currency;
+  const currency = (input['currency'] as CurrencyCode) || group.default_currency;
 
   // Ensure category exists
   if (!database.categories.exists(ctx.groupId, category)) {
@@ -337,8 +337,8 @@ async function executeSetBudget(
 }
 
 function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const category = input.category as string;
-  const month = (input.month as string) || format(new Date(), 'yyyy-MM');
+  const category = input['category'] as string;
+  const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
   if (!category) {
     return { success: false, error: 'Category is required' };
@@ -356,10 +356,10 @@ async function executeAddExpense(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const amount = input.amount as number;
-  const category = input.category as string;
-  const comment = (input.comment as string) || '';
-  const date = (input.date as string) || format(new Date(), 'yyyy-MM-dd');
+  const amount = input['amount'] as number;
+  const category = input['category'] as string;
+  const comment = (input['comment'] as string) || '';
+  const date = (input['date'] as string) || format(new Date(), 'yyyy-MM-dd');
 
   if (!amount || amount <= 0 || !category) {
     return { success: false, error: 'Invalid amount or category' };
@@ -370,7 +370,7 @@ async function executeAddExpense(
     return { success: false, error: 'Group not found' };
   }
 
-  const currency = (input.currency as CurrencyCode) || group.default_currency;
+  const currency = (input['currency'] as CurrencyCode) || group.default_currency;
   const eurAmount = convertToEUR(amount, currency);
 
   // Ensure category exists
@@ -418,7 +418,7 @@ async function executeAddExpense(
 }
 
 function executeDeleteExpense(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const expenseId = input.expense_id as number;
+  const expenseId = input['expense_id'] as number;
 
   if (!expenseId) {
     return { success: false, error: 'expense_id is required' };
@@ -557,7 +557,7 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
 // === Settings tools ===
 
 function executeSetCustomPrompt(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const prompt = input.prompt as string;
+  const prompt = input['prompt'] as string;
 
   if (prompt === undefined) {
     return { success: false, error: 'prompt is required' };
@@ -574,8 +574,8 @@ function executeSetCustomPrompt(input: Record<string, unknown>, ctx: AgentContex
 }
 
 function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const action = input.action as string;
-  const name = input.name as string;
+  const action = input['action'] as string;
+  const name = input['name'] as string;
 
   if (!action || !name) {
     return { success: false, error: 'action and name are required' };
@@ -603,7 +603,7 @@ function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext
 }
 
 function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const expression = input.expression as string;
+  const expression = input['expression'] as string;
   if (!expression) {
     return { success: false, error: 'expression is required' };
   }
@@ -613,7 +613,7 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
     return { success: false, error: 'Group not found' };
   }
   const rawCurrency =
-    (input.target_currency as string | undefined) || group.default_currency || 'EUR';
+    (input['target_currency'] as string | undefined) || group.default_currency || 'EUR';
   if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode)) {
     return { success: false, error: `Unknown currency: "${rawCurrency}"` };
   }

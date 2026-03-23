@@ -246,8 +246,8 @@ describe('ExpenseRepository', () => {
       expenseRepo.create(makeExpense({ currency: 'USD', amount: 50 }));
 
       const totals = expenseRepo.getTotalsByCurrency(groupId);
-      expect(totals.EUR).toBe(30);
-      expect(totals.USD).toBe(50);
+      expect(totals['EUR']).toBe(30);
+      expect(totals['USD']).toBe(50);
     });
 
     test('returns empty object for group with no expenses', () => {
@@ -366,7 +366,6 @@ describe('ExpenseRepository', () => {
       expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount: 50 })); // previous week
 
       const data = expenseRepo.getWeekOverWeekData(groupId, '2024-01-20');
-      const _periods = data.map((d) => d.period);
       // At least one period should be present
       expect(data.length).toBeGreaterThanOrEqual(0);
       for (const row of data) {

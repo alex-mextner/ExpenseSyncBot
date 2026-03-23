@@ -87,7 +87,7 @@ export function saveExtractedItems(
     database.receiptItems.create({
       photo_queue_id: photoQueueId,
       name_ru: item.name_ru,
-      name_original: item.name_original,
+      name_original: item.name_original ?? null,
       quantity: item.quantity,
       price: item.price,
       total: item.total,

@@ -86,7 +86,7 @@ describe('ReceiptItemsRepository', () => {
     });
 
     it('creates item without name_original (null)', () => {
-      const item = makeItem({ name_original: undefined });
+      const item = makeItem({ name_original: null });
       expect(item.name_original).toBeNull();
     });
 

@@ -414,7 +414,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
     const enrichedDescription = `${task.description}\n\nCLARIFICATION:\nQuestions: ${task.design || ''}\nAnswers: ${answer}`;
 
     const updated = transition(task, DevTaskState.DESIGNING, {
-      design: undefined, // will be regenerated
+      design: null, // will be regenerated
     });
 
     // Update description with clarification context
@@ -464,7 +464,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       if (task.pr_number && task.code_review && hasWorktree) {
         const updated = transition(task, DevTaskState.AWAITING_REVIEW, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -483,7 +483,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       if (task.pr_number && hasWorktree) {
         const updated = transition(task, DevTaskState.REVIEWING, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -505,7 +505,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       ) {
         const updated = transition(task, DevTaskState.PULL_REQUEST, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -523,7 +523,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
         // Keep error_log so the agent knows what went wrong last time
         const updated = transition(task, DevTaskState.IMPLEMENTING, {
           retry_count: 0,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -542,11 +542,11 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
         const worktreePath = await createWorktree(branchName);
 
         const updated = transition(task, DevTaskState.IMPLEMENTING, {
-          error_log: undefined,
+          error_log: null,
           retry_count: 0,
           branch_name: branchName,
           worktree_path: worktreePath,
-          failed_at_state: undefined,
+          failed_at_state: null,
         });
         updated.description = enrichedDescription;
 
@@ -561,9 +561,9 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
       // No design — restart from scratch
       const updated = transition(task, DevTaskState.PENDING, {
-        error_log: undefined,
+        error_log: null,
         retry_count: 0,
-        failed_at_state: undefined,
+        failed_at_state: null,
       });
       updated.description = enrichedDescription;
 

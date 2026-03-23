@@ -165,9 +165,9 @@ describe('checkSmartTriggers', () => {
     expect(result?.tier).toBe('alert');
     expect(result?.topic).toContain('Food');
     expect(result?.topic).toContain('exceeded');
-    expect(result?.data.category).toBe('Food');
-    expect(result?.data.spent).toBe(600);
-    expect(result?.data.limit).toBe(500);
+    expect(result?.data['category']).toBe('Food');
+    expect(result?.data['spent']).toBe(600);
+    expect(result?.data['limit']).toBe(500);
   });
 
   test('budget warning triggers alert with projected data', () => {
@@ -187,8 +187,8 @@ describe('checkSmartTriggers', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('budget_threshold');
     expect(result?.tier).toBe('alert');
-    expect(result?.data.projected).toBe(700);
-    expect(result?.data.limit).toBe(500);
+    expect(result?.data['projected']).toBe(700);
+    expect(result?.data['limit']).toBe(500);
   });
 
   test('budget critical triggers alert', () => {
@@ -230,10 +230,10 @@ describe('checkSmartTriggers', () => {
     expect(result?.type).toBe('anomaly');
     expect(result?.tier).toBe('alert');
     expect(result?.topic).toContain('Entertainment');
-    expect(result?.data.category).toBe('Entertainment');
-    expect(result?.data.current).toBe(300);
-    expect(result?.data.average).toBe(100);
-    expect(result?.data.ratio).toBe(3.0);
+    expect(result?.data['category']).toBe('Entertainment');
+    expect(result?.data['current']).toBe(300);
+    expect(result?.data['average']).toBe(100);
+    expect(result?.data['ratio']).toBe(3.0);
   });
 
   test('extreme anomaly triggers alert', () => {
@@ -274,7 +274,7 @@ describe('checkSmartTriggers', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('velocity_spike');
     expect(result?.tier).toBe('quick');
-    expect(result?.data.acceleration).toBe(100);
+    expect(result?.data['acceleration']).toBe(100);
   });
 
   test('budget exceeded takes priority over anomaly (priority order)', () => {
@@ -439,7 +439,7 @@ describe('edge cases', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('budget_threshold');
     // First exceeded budget fires (Transport comes before Rent)
-    expect(result?.data.category).toBe('Transport');
+    expect(result?.data['category']).toBe('Transport');
   });
 
   test('budget warning topic includes "80" threshold', () => {
@@ -487,7 +487,7 @@ describe('edge cases', () => {
     const result = checkSmartTriggers(8008, snapshot);
     expect(result).not.toBeNull();
     expect(result?.type).toBe('velocity_spike');
-    expect(result?.data.acceleration).toBe(51);
+    expect(result?.data['acceleration']).toBe(51);
   });
 
   test('velocity trend stable does NOT trigger velocity_spike even with high acceleration number', () => {
@@ -514,7 +514,7 @@ describe('edge cases', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('first_expense_of_month');
     expect(result?.tier).toBe('quick');
-    expect(result?.data.month).toMatch(/^\d{4}-\d{2}$/);
+    expect(result?.data['month']).toMatch(/^\d{4}-\d{2}$/);
   });
 
   test('first_expense_of_month does NOT fire when count > 1', () => {

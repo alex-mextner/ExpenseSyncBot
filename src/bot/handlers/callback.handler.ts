@@ -728,7 +728,7 @@ export async function saveReceiptExpenses(
       database.expenseItems.create({
         expense_id: expense.id,
         name_ru: item.name_ru,
-        name_original: item.name_original || undefined,
+        name_original: item.name_original || null,
         quantity: item.quantity,
         price: item.price,
         total: item.total,

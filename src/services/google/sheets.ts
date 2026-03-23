@@ -288,7 +288,7 @@ async function createEmptyBudgetSheet(refreshToken: string, spreadsheetId: strin
     },
   });
 
-  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
 
   // Build header row
   const headers = BUDGET_SHEET_CONFIG.headers;
@@ -379,7 +379,7 @@ export async function createBudgetSheet(
     },
   });
 
-  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
 
   // Build header row
   const headers = BUDGET_SHEET_CONFIG.headers;
