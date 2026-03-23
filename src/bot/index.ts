@@ -7,6 +7,7 @@ import { handleBudgetCommand } from './commands/budget';
 import { handleCategoriesCommand } from './commands/categories';
 import { handleConnectCommand } from './commands/connect';
 import { handleDevCommand, initDevPipeline } from './commands/dev';
+import { handleHelpCommand } from './commands/help';
 import { handlePingCommand } from './commands/ping';
 import { handlePromptCommand } from './commands/prompt';
 import { handlePushCommand } from './commands/push';
@@ -47,6 +48,7 @@ export function createBot(): Bot {
 
   // Commands
   bot.command('start', handleStartCommand);
+  bot.command('help', handleHelpCommand);
   bot.command('connect', handleConnectCommand);
   bot.command('spreadsheet', handleSpreadsheetCommand);
   bot.command('table', handleSpreadsheetCommand);
@@ -124,6 +126,26 @@ export async function startBot(): Promise<Bot> {
   logger.info('🤖 Starting bot...');
   await bot.start();
   logger.info('✓ Bot started successfully');
+
+  // Register commands in Telegram menu
+  await bot.api.setMyCommands({
+    commands: [
+      { command: 'help', description: 'Все возможности бота' },
+      { command: 'connect', description: 'Подключить Google аккаунт' },
+      { command: 'spreadsheet', description: 'Ссылка на таблицу' },
+      { command: 'stats', description: 'Статистика расходов' },
+      { command: 'sum', description: 'Итого за месяц' },
+      { command: 'budget', description: 'Управление бюджетами' },
+      { command: 'categories', description: 'Список категорий' },
+      { command: 'advice', description: 'Финансовый совет от AI' },
+      { command: 'sync', description: 'Загрузить из таблицы' },
+      { command: 'push', description: 'Выгрузить в таблицу' },
+      { command: 'prompt', description: 'Настроить AI-промпт' },
+      { command: 'topic', description: 'Ограничить бота топиком' },
+      { command: 'settings', description: 'Текущие настройки' },
+    ],
+  });
+  logger.info('✓ Bot commands registered');
 
   // Start background photo processor
   logger.info('📸 Starting photo processor...');

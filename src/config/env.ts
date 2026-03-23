@@ -4,6 +4,7 @@
 
 interface EnvConfig {
   BOT_TOKEN: string;
+  BOT_USERNAME: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_REDIRECT_URI: string;
@@ -32,6 +33,7 @@ function getEnvVariable(name: string, required = true): string {
 function validateEnv(): EnvConfig {
   return {
     BOT_TOKEN: getEnvVariable('BOT_TOKEN'),
+    BOT_USERNAME: getEnvVariable('BOT_USERNAME', false) || 'ExpenseSyncBot',
     GOOGLE_CLIENT_ID: getEnvVariable('GOOGLE_CLIENT_ID'),
     GOOGLE_CLIENT_SECRET: getEnvVariable('GOOGLE_CLIENT_SECRET'),
     GOOGLE_REDIRECT_URI: getEnvVariable('GOOGLE_REDIRECT_URI'),

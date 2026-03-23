@@ -201,14 +201,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'calculate',
     description:
-      'Evaluate a math expression with optional currency amounts. Converts all currencies to the target currency using current exchange rates, then evaluates the expression. Use this for ANY arithmetic the user asks for — never calculate manually. Examples: "100$ - 70EUR" in USD, "1500 RSD + 50 EUR" in EUR, "100 * 3".',
+      'Evaluate a math expression with optional currency amounts. Converts all currencies to the target currency using current exchange rates, then evaluates the expression. Supports percentages: "100$ - 7.5%" → 92.50. Use this for ANY arithmetic the user asks for — never calculate manually. Examples: "100$ - 70EUR" in USD, "1500 RSD + 50 EUR" in EUR, "100 * 3", "500€ - 10%", "300$ / 3" (split between 3 people).',
     input_schema: {
       type: 'object' as const,
       properties: {
         expression: {
           type: 'string',
           description:
-            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /.',
+            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /. Supports percentage: "EXPR - N%" or "EXPR + N%".',
         },
         target_currency: {
           type: 'string',

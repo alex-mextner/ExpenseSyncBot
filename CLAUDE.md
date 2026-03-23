@@ -385,6 +385,7 @@ Follow this framework for ANY technical issue:
   3. Write ONLY enough code to make the test pass
   4. Run the test — confirm it passes
   5. Refactor while keeping tests green
+- **Exception: reviewed code without tests** — if implementation was already reviewed and approved but tests were skipped, do NOT delete the code. Write comprehensive tests against the existing implementation instead. If tests reveal bugs, fix the code.
 - **Tests must exercise production code**: never reimplement logic in tests.
 - NEVER delete a failing test. Investigate and fix the root cause.
 - **Changing tests to match code is a red flag**: always analyze WHY.

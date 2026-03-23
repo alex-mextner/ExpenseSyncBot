@@ -1,39 +1,33 @@
+/** Scheduled news broadcasts to all active groups */
 import type { Bot } from 'gramio';
 import cron from 'node-cron';
+import { env } from '../config/env';
 import { database } from '../database';
 import { createLogger } from '../utils/logger.ts';
 
 const logger = createLogger('broadcast');
 
-const NEWS_MESSAGE = `
+function buildNewsMessage(): string {
+  const bot = env.BOT_USERNAME;
+  return `\
 🆕 <b>Что нового в боте</b>
 
-<b>🧮 Математика в суммах</b>
-Теперь можно писать выражения прямо в расходе:
-<code>10*3$ еда</code> → запишет $30
-<code>100+50€ транспорт</code> → запишет €150
-Поддерживаются +, *, /
+<b>📸 Фото чеков</b>
+Отправь фото чека — бот разберёт все позиции и предложит подтвердить каждую. Нужно чтобы был чётко виден QR-код или текст с суммами.
 
-<b>🤖 AI-агент с суперсилами</b>
-Бот через @mention теперь не просто отвечает на вопросы — он умеет действовать:
-• Записать расход: <i>«запиши 50€ на еду за вчера»</i>
-• Удалить расход: <i>«удали последний расход»</i>
-• Управлять бюджетом: <i>«поставь бюджет 500€ на транспорт»</i>
-• Создать/удалить категорию
-• Синхронизировать с Google Sheets
-• Изменить AI-промпт группы
+<b>🧮 AI-калькулятор</b>
+ChatGPT, Claude и другие нейронки регулярно считают неправильно — это известная проблема. У нашего бота настоящий калькулятор — спроси через <code>@${bot}</code>:
+<i>«сколько мы потратили на еду в евро?»</i>
+<i>«100$ + 70€ + 2000 RSD — сколько в евро?»</i>
+<i>«раздели ужин на троих»</i>
+<i>«500€ минус 10% скидка»</i>
 
-При работе показывает что делает: «Записываю расход...», «Синхронизирую...»
+<b>🤖 AI точнее и надёжнее</b>
+Бот стал лучше отвечать на вопросы — перепроверяет себя и реже ошибается.
 
-<b>📊 Умные финансовые советы</b>
-/advice теперь работает по-умному. Вместо случайных советов бот анализирует:
-• Приближение к лимиту бюджета
-• Аномальный рост трат в категории
-• Резкое ускорение трат
-• Еженедельные и ежемесячные тренды
-
-Совет адаптируется по глубине — от короткой заметки до детального разбора.
-`.trim();
+<b>💡 /help</b>
+Добавили полную справку — /help покажет все возможности бота.`;
+}
 
 let alreadySent = false;
 
@@ -46,6 +40,7 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
     return;
   }
 
+  const newsMessage = buildNewsMessage();
   const groups = database.groups.getAll();
   logger.info(`[BROADCAST] Sending news to ${groups.length} groups...`);
 
@@ -56,7 +51,7 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
     try {
       await bot.api.sendMessage({
         chat_id: group.telegram_group_id,
-        text: NEWS_MESSAGE,
+        text: newsMessage,
         parse_mode: 'HTML',
         ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
       });
@@ -73,17 +68,17 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
 }
 
 /**
- * Schedule news broadcast for March 11 at 12:00 UTC (one-time)
+ * Schedule news broadcast for March 24 at 12:00 UTC (one-time)
  */
 export function scheduleNewsBroadcast(bot: Bot): void {
-  // Run at 12:00 on March 11 only — stops after execution
-  const task = cron.schedule('0 12 11 3 *', () => {
-    logger.info('[BROADCAST] Cron triggered — March 11 12:00');
+  // Run at 12:00 on March 24 only — stops after execution
+  const task = cron.schedule('0 12 24 3 *', () => {
+    logger.info('[BROADCAST] Cron triggered — March 24 12:00');
     broadcastToAllGroups(bot).then(() => {
       task.stop();
       logger.info('[BROADCAST] Cron task stopped after execution');
     });
   });
 
-  logger.info('📢 News broadcast scheduled for March 11 at 12:00');
+  logger.info('📢 News broadcast scheduled for March 24 at 12:00');
 }

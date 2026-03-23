@@ -1,9 +1,8 @@
+/** /start command handler */
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Ctx } from '../types';
 
-/**
- * /start command handler
- */
 export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
   const chatId = ctx.chat?.id;
@@ -14,35 +13,37 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     return;
   }
 
-  // Check if this is group chat
   const isGroup = chatType === 'group' || chatType === 'supergroup';
+  const bot = env.BOT_USERNAME;
 
   if (isGroup) {
-    // Group chat
     const group = database.groups.findByTelegramGroupId(chatId);
 
     if (group && database.groups.hasCompletedSetup(chatId)) {
       await ctx.send(
-        `👋 Привет! Бот уже настроен.\n\n` +
-          `Отправьте расход в формате:\n` +
-          `190 евро Алекс кулёма\n` +
-          `100$ еда обед\n\n` +
-          `Команды:\n` +
-          `/spreadsheet - ссылка на таблицу\n` +
-          `/stats - статистика\n` +
-          `/categories - категории\n` +
-          `/connect - переподключить`,
+        `👋 Бот настроен и готов к работе.\n\n` +
+          `Отправь расход: <code>100$ еда обед</code>\n` +
+          `Фото чека: бот разберёт позиции\n` +
+          `AI: <code>@${bot} вопрос</code>\n\n` +
+          `/help — все возможности бота`,
+        { parse_mode: 'HTML' },
       );
     } else {
       await ctx.send(
-        `👋 Привет! Я помогу вести учет расходов группы.\n\n` + `Для начала используй /connect`,
+        `👋 Привет! Я помогу вести учёт расходов группы и синхронизировать их с Google Sheets.\n\n` +
+          `<b>Как начать:</b>\n` +
+          `1. Набери /connect\n` +
+          `2. Нажми кнопку «Подключить Google» и авторизуйся\n` +
+          `3. Выбери валюты для учёта\n` +
+          `4. Готово — таблица создастся автоматически\n\n` +
+          `После настройки просто пиши расходы в чат: <code>100$ еда обед</code>`,
+        { parse_mode: 'HTML' },
       );
     }
   } else {
-    // Private chat
     await ctx.send(
-      `👋 Привет! Я работаю только в группах.\n\n` +
-        `Добавь меня в группу и используй /connect для настройки.`,
+      `👋 Я работаю только в группах.\n\n` +
+        `Добавь меня в группу и набери /connect для настройки.`,
     );
   }
 }

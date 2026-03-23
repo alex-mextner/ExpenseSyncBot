@@ -69,6 +69,45 @@ describe('evaluateCurrencyExpression', () => {
   test('huge expression result → null', () =>
     expect(evaluateCurrencyExpression('9999999 + 1', 'USD')).toBeNull());
 
+  // Percentage — subtract
+  test('100 - 10% → 90', () => expect(evaluateCurrencyExpression('100 - 10%', 'USD')).toBe(90));
+  test('200 - 25% → 150', () => expect(evaluateCurrencyExpression('200 - 25%', 'USD')).toBe(150));
+  test('100$ - 7.5% in USD → 92.5', () =>
+    expect(evaluateCurrencyExpression('100$ - 7.5%', 'USD')).toBeCloseTo(92.5, 2));
+
+  // Percentage — add
+  test('100 + 20% → 120', () => expect(evaluateCurrencyExpression('100 + 20%', 'USD')).toBe(120));
+  test('500€ + 10% in EUR → 550', () =>
+    expect(evaluateCurrencyExpression('500€ + 10%', 'EUR')).toBeCloseTo(550, 2));
+
+  // Percentage — with expression base (split + discount)
+  test('100 + 50 - 10% → 135 (percentage of combined total)', () =>
+    expect(evaluateCurrencyExpression('100 + 50 - 10%', 'USD')).toBe(135));
+  test('300 / 3 - 5% → 95 (split then discount)', () =>
+    expect(evaluateCurrencyExpression('300 / 3 - 5%', 'USD')).toBe(95));
+
+  // Percentage — with cross-currency base
+  test('100$ + 50€ - 10% in USD', () => {
+    const base = 100 + convertCurrency(50, 'EUR', 'USD');
+    const expected = base - base * 0.1;
+    expect(evaluateCurrencyExpression('100$ + 50€ - 10%', 'USD')).toBeCloseTo(expected, 1);
+  });
+
+  // Percentage — comma decimal
+  test('100 - 7,5% → 92.5 (comma decimal)', () =>
+    expect(evaluateCurrencyExpression('100 - 7,5%', 'USD')).toBeCloseTo(92.5, 2));
+
+  // Percentage — edge cases
+  test('100 - 0% → 100', () => expect(evaluateCurrencyExpression('100 - 0%', 'USD')).toBe(100));
+  test('100 + 100% → 200', () => expect(evaluateCurrencyExpression('100 + 100%', 'USD')).toBe(200));
+  test('100 - 100% → 0', () => expect(evaluateCurrencyExpression('100 - 100%', 'USD')).toBe(0));
+  test('bare 50% → null (no base)', () =>
+    expect(evaluateCurrencyExpression('50%', 'USD')).toBeNull());
+
+  // Percentage — overflow guard
+  test('9999999 + 50% → null (overflow)', () =>
+    expect(evaluateCurrencyExpression('9999999 + 50%', 'USD')).toBeNull());
+
   // Edge cases
   test('empty string → null', () => expect(evaluateCurrencyExpression('', 'USD')).toBeNull());
   test('plain text → null', () =>

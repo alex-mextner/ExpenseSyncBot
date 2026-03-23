@@ -75,6 +75,29 @@ export function evaluateCurrencyExpression(
     },
   );
 
+  // Handle percentage: "EXPR [+-] N%" → evaluate EXPR, then apply percentage
+  const pctMatch = converted.match(/^(.+?)\s*([+-])\s*(\d+(?:[.,]\d+)?)%\s*$/);
+  if (pctMatch) {
+    const baseExpr = pctMatch[1]?.trim() ?? '';
+    const op = pctMatch[2];
+    const pct = parseFloat((pctMatch[3] ?? '0').replace(',', '.'));
+    if (Number.isNaN(pct)) return null;
+
+    // Evaluate base — could be a single converted amount or a full expression
+    let baseValue: number | null;
+    if (/^\d+(?:\.\d+)?$/.test(baseExpr)) {
+      baseValue = parseFloat(baseExpr);
+    } else {
+      baseValue = evaluateMathExpression(baseExpr);
+    }
+    if (baseValue === null) return null;
+
+    const delta = baseValue * (pct / 100);
+    const result = op === '+' ? baseValue + delta : baseValue - delta;
+    if (result >= 10_000_000) return null;
+    return result;
+  }
+
   const trimmed = converted.trim();
 
   // Single currency amount (e.g. "100$", "70 EUR") → plain conversion, no operator needed
