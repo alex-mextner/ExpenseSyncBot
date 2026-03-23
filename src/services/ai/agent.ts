@@ -11,7 +11,8 @@ import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
 import { AnthropicError, NetworkError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
-import { AiDebugLogger } from './debug-logger';
+import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
+import { validateResponse } from './response-validator';
 import { TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { TOOL_DEFINITIONS } from './tools';
@@ -29,6 +30,7 @@ export const AI_BASE_URL = process.env['AI_BASE_URL'] || 'https://api.z.ai/api/a
 
 export class ExpenseBotAgent {
   private anthropic: Anthropic;
+  private apiKey: string;
   private ctx: AgentContext;
 
   constructor(apiKey: string, ctx: AgentContext) {
@@ -36,6 +38,7 @@ export class ExpenseBotAgent {
       apiKey,
       baseURL: AI_BASE_URL || undefined,
     });
+    this.apiKey = apiKey;
     this.ctx = ctx;
   }
 
@@ -73,145 +76,71 @@ export class ExpenseBotAgent {
     debugCtx?.logSystemPrompt(systemPrompt);
     debugCtx?.logHistory(conversationHistory.map((m) => ({ role: m.role, content: m.content })));
 
-    let totalToolCalls = 0;
+    const toolCallNames: string[] = [];
 
     try {
-      let continueLoop = true;
-      let round = 0;
+      const result = await this.runAgentLoop(
+        messages,
+        systemPrompt,
+        writer,
+        debugCtx,
+        controller.signal,
+        toolCallNames,
+      );
+      let { text: finalText } = result;
+      let { toolCount: totalToolCalls } = result;
 
-      while (continueLoop && round < MAX_TOOL_ROUNDS) {
-        round++;
-        debugCtx?.logRound(round);
+      // --- Validation pass (only when no tools were called) ---
+      if (toolCallNames.length === 0) {
+        const validation = await validateResponse(this.apiKey, {
+          userMessage,
+          toolCalls: toolCallNames,
+          response: finalText,
+        });
 
-        const stream = this.anthropic.messages.stream(
-          {
-            model: AI_MODEL,
-            max_tokens: 4096,
-            system: [
-              {
-                type: 'text',
-                text: systemPrompt,
-                cache_control: { type: 'ephemeral' },
-              },
-            ],
-            messages,
-            tools: TOOL_DEFINITIONS,
-          },
-          {
-            signal: controller.signal,
-          },
-        );
+        if (!validation.approved) {
+          logger.info(`[AGENT] Validation REJECTED: ${validation.reason}`);
 
-        // Track current tool_use block for JSON accumulation
-        let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
-        const toolResults: ToolCallResult[] = [];
+          writer.reset();
+          toolCallNames.length = 0;
 
-        for await (const event of stream) {
-          // Text delta -- stream to Telegram
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            writer.appendText(event.delta.text);
-          }
+          const retryController = new AbortController();
+          const retryTimeout = setTimeout(() => retryController.abort(), AGENT_TIMEOUT_MS);
 
-          // Start of a new content block
-          if (event.type === 'content_block_start') {
-            if (event.content_block.type === 'tool_use') {
-              currentToolUse = {
-                id: event.content_block.id,
-                name: event.content_block.name,
-                inputJson: '',
-              };
-            }
-          }
-
-          // Input JSON delta for tool_use (arrives in fragments)
-          if (event.type === 'content_block_delta' && event.delta.type === 'input_json_delta') {
-            if (currentToolUse) {
-              currentToolUse.inputJson += event.delta.partial_json;
-            }
-          }
-
-          // Content block finished
-          if (event.type === 'content_block_stop') {
-            if (currentToolUse) {
-              const input = JSON.parse(currentToolUse.inputJson || '{}');
-
-              logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
-              debugCtx?.logToolCall(currentToolUse.name, input);
-
-              // Show live indicator while tool executes
-              writer.setToolLabel(currentToolUse.name, input);
-              await writer.flush(true);
-
-              const result = await executeTool(currentToolUse.name, input, this.ctx);
-
-              if (result.success) {
-                const preview = result.output ? result.output.substring(0, 300) : '(no output)';
-                const total = result.output?.length ?? 0;
-                logger.info(
-                  `[AGENT] Tool result: ${currentToolUse.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
-                );
-              } else {
-                logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
-              }
-
-              debugCtx?.logToolResult(
-                currentToolUse.name,
-                result.success,
-                result.output,
-                result.error,
-              );
-              totalToolCalls++;
-
-              writer.markToolResult(result.success);
-
-              toolResults.push({ id: currentToolUse.id, result });
-
-              currentToolUse = null;
-            }
-          }
-        }
-
-        // Get full assistant message for conversation continuity
-        const finalMessage = await stream.finalMessage();
-        const fullAssistantContent = finalMessage.content;
-
-        if (toolResults.length > 0) {
-          // Commit this round's tool lines and reset text buffer for next round
-          writer.commitIntermediate();
-
-          // Add assistant message + tool results, continue loop
-          messages.push({ role: 'assistant', content: fullAssistantContent });
+          messages.push({ role: 'assistant', content: finalText });
           messages.push({
             role: 'user',
-            content: toolResults.map((tr) => ({
-              type: 'tool_result' as const,
-              tool_use_id: tr.id,
-              content: tr.result.success
-                ? tr.result.output || 'Success'
-                : `Error: ${tr.result.error}`,
-            })),
+            content: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${validation.reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
           });
-          continueLoop = true;
+
+          try {
+            const retry = await this.runAgentLoop(
+              messages,
+              systemPrompt,
+              writer,
+              debugCtx,
+              retryController.signal,
+              toolCallNames,
+            );
+            finalText = retry.text;
+            totalToolCalls = retry.toolCount;
+
+            logger.info(
+              `[AGENT] Retry response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
+            );
+          } finally {
+            clearTimeout(retryTimeout);
+          }
         } else {
-          continueLoop = false;
+          logger.info('[AGENT] Validation APPROVED');
         }
       }
-
-      // Finalize: clean up tool indicators and send final message
-      await writer.finalize();
-
-      // If response is long, send remaining chunks
-      const finalText = writer.getText();
-      logger.info(
-        `[AGENT] Final response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
-      );
 
       debugCtx?.logAiText(finalText);
       debugCtx?.logFinal(finalText, totalToolCalls);
       debugCtx?.flush();
 
       await writer.sendRemainingChunks();
-
       return finalText;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -262,6 +191,140 @@ export class ExpenseBotAgent {
   }
 
   /**
+   * Execute the streaming agent loop: stream text, call tools, repeat until done.
+   * Returns the final text response.
+   */
+  private async runAgentLoop(
+    messages: Anthropic.MessageParam[],
+    systemPrompt: string,
+    writer: TelegramStreamWriter,
+    debugCtx: AiDebugRunContext | null,
+    signal: AbortSignal,
+    toolCallNames: string[],
+  ): Promise<{ text: string; toolCount: number }> {
+    let totalToolCalls = 0;
+    let continueLoop = true;
+    let round = 0;
+
+    while (continueLoop && round < MAX_TOOL_ROUNDS) {
+      round++;
+      debugCtx?.logRound(round);
+
+      const stream = this.anthropic.messages.stream(
+        {
+          model: AI_MODEL,
+          max_tokens: 4096,
+          system: [
+            {
+              type: 'text',
+              text: systemPrompt,
+              cache_control: { type: 'ephemeral' },
+            },
+          ],
+          messages,
+          tools: TOOL_DEFINITIONS,
+        },
+        { signal },
+      );
+
+      let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
+      const toolResults: ToolCallResult[] = [];
+
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          writer.appendText(event.delta.text);
+        }
+
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'tool_use') {
+            currentToolUse = {
+              id: event.content_block.id,
+              name: event.content_block.name,
+              inputJson: '',
+            };
+          }
+        }
+
+        if (event.type === 'content_block_delta' && event.delta.type === 'input_json_delta') {
+          if (currentToolUse) {
+            currentToolUse.inputJson += event.delta.partial_json;
+          }
+        }
+
+        if (event.type === 'content_block_stop') {
+          if (currentToolUse) {
+            const input = JSON.parse(currentToolUse.inputJson || '{}');
+
+            logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
+            debugCtx?.logToolCall(currentToolUse.name, input);
+
+            writer.setToolLabel(currentToolUse.name, input);
+            await writer.flush(true);
+
+            const result = await executeTool(currentToolUse.name, input, this.ctx);
+
+            if (result.success) {
+              const preview = result.output ? result.output.substring(0, 300) : '(no output)';
+              const total = result.output?.length ?? 0;
+              logger.info(
+                `[AGENT] Tool result: ${currentToolUse.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
+              );
+            } else {
+              logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
+            }
+
+            debugCtx?.logToolResult(
+              currentToolUse.name,
+              result.success,
+              result.output,
+              result.error,
+            );
+            totalToolCalls++;
+            toolCallNames.push(currentToolUse.name);
+
+            writer.markToolResult(result.success);
+
+            toolResults.push({ id: currentToolUse.id, result });
+
+            currentToolUse = null;
+          }
+        }
+      }
+
+      const finalMessage = await stream.finalMessage();
+      const fullAssistantContent = finalMessage.content;
+
+      if (toolResults.length > 0) {
+        writer.commitIntermediate();
+
+        messages.push({ role: 'assistant', content: fullAssistantContent });
+        messages.push({
+          role: 'user',
+          content: toolResults.map((tr) => ({
+            type: 'tool_result' as const,
+            tool_use_id: tr.id,
+            content: tr.result.success
+              ? tr.result.output || 'Success'
+              : `Error: ${tr.result.error}`,
+          })),
+        });
+        continueLoop = true;
+      } else {
+        continueLoop = false;
+      }
+    }
+
+    await writer.finalize();
+
+    const finalText = writer.getText();
+    logger.info(
+      `[AGENT] Final response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
+    );
+
+    return { text: finalText, toolCount: totalToolCalls };
+  }
+
+  /**
    * Build compact system prompt (no data dumps -- data comes from tools)
    */
   private buildSystemPrompt(): string {
@@ -287,7 +350,7 @@ When listing individual expenses, copy the exact amount, date, and comment from 
 If an expense has no comment in the tool result, show nothing — do NOT invent a comment.
 
 ## TOOL USAGE
-1. Expense questions → call get_expenses with the relevant period/category filter.
+1. Expense questions → call get_expenses with the relevant period/category filter. Results are paginated (100/page). Check total_pages in the response — if > 1, fetch remaining pages.
 2. Budget questions → call get_budgets.
 3. Adding an expense → call add_expense. NEVER say "done" without calling the tool.
 4. Deleting an expense → call get_expenses first (to find the ID), confirm with the user, then call delete_expense.

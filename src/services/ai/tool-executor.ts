@@ -78,7 +78,8 @@ async function executeGetExpenses(
 ): Promise<ToolResult> {
   const period = (input['period'] as string) || 'current_month';
   const category = input['category'] as string | undefined;
-  const limit = Math.min(Math.max((input['limit'] as number) || 50, 1), 500);
+  const pageSize = Math.min(Math.max((input['page_size'] as number) || 100, 1), 500);
+  const page = Math.max((input['page'] as number) || 1, 1);
   const summaryOnly = (input['summary_only'] as boolean) || false;
 
   const now = new Date();
@@ -125,8 +126,10 @@ async function executeGetExpenses(
     expenses = expenses.filter((e) => e.category.toLowerCase() === categoryLower);
   }
 
+  const totalPages = summaryOnly ? 1 : Math.max(1, Math.ceil(expenses.length / pageSize));
+
   logger.info(
-    `[TOOL] get_expenses: period=${period} (${startDate}–${endDate}), category=${category || 'all'}, found=${expenses.length}, limit=${limit}, summary=${summaryOnly}`,
+    `[TOOL] get_expenses: period=${period} (${startDate}–${endDate}), category=${category || 'all'}, found=${expenses.length}, page=${page}/${totalPages}, page_size=${pageSize}, summary=${summaryOnly}`,
   );
 
   if (summaryOnly) {
@@ -160,14 +163,15 @@ async function executeGetExpenses(
     return { success: true, output };
   }
 
-  // Return individual expenses (limited)
-  const limited = expenses.slice(0, limit);
+  // Return individual expenses (paginated)
+  const offset = (page - 1) * pageSize;
+  const pageItems = expenses.slice(offset, offset + pageSize);
   const lines = [
     `Period: ${startDate} to ${endDate}`,
-    `Showing ${limited.length} of ${expenses.length} expenses`,
+    `Total: ${expenses.length} expenses | Page ${page}/${totalPages}`,
     '',
   ];
-  for (const e of limited) {
+  for (const e of pageItems) {
     lines.push(
       `[id:${e.id}] ${e.date} | ${e.category} | ${e.amount} ${e.currency} (EUR ${e.eur_amount.toFixed(2)}) | ${e.comment.trim() || '(no comment)'}`,
     );

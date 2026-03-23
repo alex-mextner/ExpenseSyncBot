@@ -8,7 +8,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'get_expenses',
     description:
-      'Get expenses with optional filters. Returns expenses sorted by date descending. Use this to answer questions about spending.',
+      'Get expenses with optional filters. Returns expenses sorted by date descending, paginated (100 per page). Use this to answer questions about spending.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -21,9 +21,15 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: 'string',
           description: 'Filter by category name (case-insensitive)',
         },
-        limit: {
+        page: {
           type: 'number',
-          description: 'Max number of expenses to return (default: 50, max: 500)',
+          description:
+            'Page number (default: 1). Use to fetch subsequent pages when total_pages > 1.',
+        },
+        page_size: {
+          type: 'number',
+          description:
+            'Items per page (default: 100, max: 500). Only change if you need fewer results.',
         },
         summary_only: {
           type: 'boolean',

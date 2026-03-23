@@ -36,10 +36,14 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
         .join(', ');
     case 'delete_expense':
       return input['expense_id'] ? `#${input['expense_id']}` : '';
-    case 'get_expenses':
-      return [input['category'], input['period'], input['summary_only'] && 'сводка']
-        .filter(Boolean)
-        .join(', ');
+    case 'get_expenses': {
+      const parts = [input['category'], input['period'], input['summary_only'] && 'сводка'];
+      const page = input['page'] as number | undefined;
+      if (page && page > 1) parts.push(`стр. ${page}`);
+      const pageSize = input['page_size'] as number | undefined;
+      if (pageSize && pageSize !== 100) parts.push(`(${pageSize})`);
+      return parts.filter(Boolean).join(', ');
+    }
     case 'get_budgets':
       return [input['category'], input['month']].filter(Boolean).join(', ');
     case 'manage_category':
@@ -119,6 +123,21 @@ export class TelegramStreamWriter {
         })
         .catch(() => {});
     }
+  }
+
+  /**
+   * Reset writer state for a retry pass (validation rejection).
+   * Keeps the existing Telegram message ID so edits continue in-place.
+   */
+  reset(): void {
+    this.fullText = '';
+    this.historyText = '';
+    this.lastSentText = '';
+    this.toolLabel = null;
+    this.pendingIndicators = [];
+    this.toolLines = [];
+    this.intermediateChunks = [];
+    this.finalDisplayText = '';
   }
 
   /**

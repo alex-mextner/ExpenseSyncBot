@@ -244,7 +244,7 @@ describe('executeGetExpenses', () => {
     expect(result.output).toContain('Food');
     expect(result.output).toContain('[id:2]');
     expect(result.output).toContain('Transport');
-    expect(result.output).toContain('Showing 2 of 2 expenses');
+    expect(result.output).toContain('Total: 2 expenses | Page 1/1');
   });
 
   test('expense with no comment shows (no comment) in output', async () => {
@@ -341,7 +341,7 @@ describe('executeGetExpenses', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Food');
     expect(result.output).not.toContain('Transport');
-    expect(result.output).toContain('Showing 1 of 1 expenses');
+    expect(result.output).toContain('Total: 1 expenses | Page 1/1');
   });
 
   test('respects date range via period filter', async () => {
@@ -350,6 +350,58 @@ describe('executeGetExpenses', () => {
     await executeTool('get_expenses', { period: '2025-12' }, ctx);
 
     expect(mockExpenses.findByDateRange).toHaveBeenCalledWith(1, '2025-12-01', '2025-12-31');
+  });
+
+  test('paginates results with page and page_size', async () => {
+    const expenses = Array.from({ length: 150 }, (_, i) => ({
+      id: i + 1,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: `item ${i + 1}`,
+      amount: 10,
+      currency: 'EUR' as const,
+      eur_amount: 10,
+      created_at: '',
+    }));
+    mockExpenses.findByDateRange.mockReturnValue(expenses);
+
+    const page1 = await executeTool('get_expenses', { page: 1 }, ctx);
+    expect(page1.success).toBe(true);
+    expect(page1.output).toContain('Total: 150 expenses | Page 1/2');
+    expect(page1.output).toContain('[id:1]');
+    expect(page1.output).toContain('[id:100]');
+    expect(page1.output).not.toContain('[id:101]');
+
+    const page2 = await executeTool('get_expenses', { page: 2 }, ctx);
+    expect(page2.success).toBe(true);
+    expect(page2.output).toContain('Total: 150 expenses | Page 2/2');
+    expect(page2.output).toContain('[id:101]');
+    expect(page2.output).toContain('[id:150]');
+    expect(page2.output).not.toContain('[id:1]');
+  });
+
+  test('custom page_size works', async () => {
+    const expenses = Array.from({ length: 30 }, (_, i) => ({
+      id: i + 1,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: '',
+      amount: 10,
+      currency: 'EUR' as const,
+      eur_amount: 10,
+      created_at: '',
+    }));
+    mockExpenses.findByDateRange.mockReturnValue(expenses);
+
+    const result = await executeTool('get_expenses', { page: 1, page_size: 10 }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Total: 30 expenses | Page 1/3');
+    expect(result.output).toContain('[id:10]');
+    expect(result.output).not.toContain('[id:11]');
   });
 });
 
