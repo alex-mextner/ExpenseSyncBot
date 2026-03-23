@@ -1,6 +1,7 @@
 import { InferenceClient } from '@huggingface/inference';
 import { env } from '../../config/env';
 import type { ReceiptItem } from '../../database/types';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('receipt-summarizer');
@@ -127,17 +128,6 @@ export function formatSummaryMessage(summary: ReceiptSummary, itemCount: number)
   message += `\n💰 <b>Итого:</b> ${summary.totalAmount.toFixed(2)} ${escapeHtml(summary.currency)}`;
 
   return message;
-}
-
-/**
- * Escape HTML special characters
- */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 /**

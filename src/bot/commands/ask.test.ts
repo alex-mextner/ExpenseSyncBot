@@ -5,7 +5,7 @@ import {
   processThinkTags,
   sanitizeHtmlForTelegram,
   stripAllHtml,
-} from './ask';
+} from '../../utils/html';
 
 // ── escapeHtml ─────────────────────────────────────────────────────────
 
@@ -107,6 +107,49 @@ describe('sanitizeHtmlForTelegram', () => {
     const input = '<b><i>bold italic</i></b>';
     const result = sanitizeHtmlForTelegram(input);
     expect(result).toBe('<b><i>bold italic</i></b>');
+  });
+
+  test('strips href-less <a> tag attributes (no valid href)', () => {
+    // <a> with no href attr → attributes stripped, tag still rendered
+    const result = sanitizeHtmlForTelegram('<a onclick="x">click</a>');
+    expect(result).toBe('<a>click</a>');
+  });
+
+  test('strips non-expandable <blockquote> attributes', () => {
+    const result = sanitizeHtmlForTelegram('<blockquote class="foo">text</blockquote>');
+    expect(result).toBe('<blockquote>text</blockquote>');
+  });
+
+  test('preserves class attribute on <pre> tag', () => {
+    const result = sanitizeHtmlForTelegram('<pre class="language-ts">code</pre>');
+    expect(result).toBe('<pre class="language-ts">code</pre>');
+  });
+
+  test('strips unknown attributes from <code> tag', () => {
+    const result = sanitizeHtmlForTelegram('<code id="x">inline</code>');
+    expect(result).toBe('<code>inline</code>');
+  });
+
+  test('strips non-tg-spoiler class from <span>', () => {
+    const result = sanitizeHtmlForTelegram('<span class="highlight">text</span>');
+    expect(result).toBe('<span>text</span>');
+  });
+
+  test('preserves tg-spoiler class on <span>', () => {
+    const result = sanitizeHtmlForTelegram('<span class="tg-spoiler">hidden</span>');
+    expect(result).toBe('<span class="tg-spoiler">hidden</span>');
+  });
+
+  test('preserves emoji-id attribute on <tg-emoji>', () => {
+    const result = sanitizeHtmlForTelegram(
+      '<tg-emoji emoji-id="5368324170671202286">👋</tg-emoji>',
+    );
+    expect(result).toBe('<tg-emoji emoji-id="5368324170671202286">👋</tg-emoji>');
+  });
+
+  test('strips <tg-emoji> without emoji-id', () => {
+    const result = sanitizeHtmlForTelegram('<tg-emoji class="x">👋</tg-emoji>');
+    expect(result).toBe('<tg-emoji>👋</tg-emoji>');
   });
 });
 

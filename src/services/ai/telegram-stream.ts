@@ -3,7 +3,7 @@
  * Handles throttled message updates, tool indicators, and message chunking
  */
 import type { Bot } from 'gramio';
-import { processThinkTags } from '../../bot/commands/ask';
+import { processThinkTags, sanitizeHtmlForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { TOOL_LABELS } from './tools';
 
@@ -298,27 +298,32 @@ export class TelegramStreamWriter {
    * intermediate stream flushes can cut mid-tag while the AI is still generating.
    */
   private truncateForTelegram(text: string): string {
-    let truncated = text;
+    // Convert <br> to newline before sanitization — sanitize would otherwise escape it.
+    // Telegram HTML does not support <br>.
+    const withNewlines = text.replace(/<br\s*\/?>/gi, '\n');
+
+    // Sanitize: strip unsupported tags, escape bare & < >.
+    // The preRequest hook also sanitizes, so this function is safe to call
+    // multiple times (sanitizeHtmlForTelegram is idempotent via decode-first).
+    let truncated = sanitizeHtmlForTelegram(withNewlines);
     let wasTruncated = false;
 
-    if (text.length > MAX_MESSAGE_LENGTH) {
-      truncated = text.substring(0, MAX_MESSAGE_LENGTH);
+    if (truncated.length > MAX_MESSAGE_LENGTH) {
+      truncated = truncated.substring(0, MAX_MESSAGE_LENGTH);
       wasTruncated = true;
     }
 
-    // Fix incomplete HTML tags — applies to both truncated and non-truncated text,
-    // because the model itself can generate a tag without the closing > (e.g. </blockquote\n).
-    // Case 1: incomplete tag before a newline — complete it in-place (</blockquote\n → </blockquote>\n)
+    // Fix incomplete HTML tags that result from truncation at MAX_MESSAGE_LENGTH.
+    // Sanitization ensures only whitelisted tags remain, so these regexes only
+    // ever fire on valid-but-truncated tags (e.g. <blockquote expandabl…).
+    // Case 1: incomplete tag before a newline — complete it in-place
     truncated = truncated.replace(/<[a-zA-Z/][^>\n\r]*(?=\r?\n)/g, '$&>');
-    // Case 2: incomplete tag at end of string — remove it (no content to preserve after it)
+    // Case 2: incomplete tag at end of string — remove it
     const lastTagStart = truncated.lastIndexOf('<');
     const lastTagEnd = truncated.lastIndexOf('>');
     if (lastTagStart > lastTagEnd) {
       truncated = truncated.substring(0, lastTagStart);
     }
-
-    // Telegram HTML does not support <br> — convert to newline before tag tracking.
-    truncated = truncated.replace(/<br\s*\/?>/gi, '\n');
 
     // Always close unclosed tags — stream may be mid-generation
     const openTags: string[] = [];

@@ -376,7 +376,7 @@ async function handlePlan(ctx: Ctx['Command'], args: string[], groupId: number):
     return;
   }
 
-  const { escapeHtml } = await import('./ask');
+  const { escapeHtml } = await import('../../utils/html');
   const keyboard = new InlineKeyboard().text('✕ Скрыть', `dev:hide_plan:${taskId}`);
 
   await ctx.send(
@@ -661,7 +661,7 @@ export async function handleDevCallback(
         answered = true;
     }
   } catch (error) {
-    logger.error({ err: error }, '[DEV-CB] Error handling dev:${subAction}:${taskIdStr}');
+    logger.error({ err: error }, `[DEV-CB] Error handling dev:${subAction}:${taskIdStr}`);
     if (!answered) {
       try {
         await ctx.answerCallbackQuery({
