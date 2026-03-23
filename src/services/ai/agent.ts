@@ -7,15 +7,20 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
 import { AnthropicError, NetworkError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
+import { AiDebugLogger } from './debug-logger';
 import { TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { TOOL_DEFINITIONS } from './tools';
 import type { AgentContext, ToolCallResult } from './types';
 
 const logger = createLogger('agent');
+
+/** Singleton debug logger — writes full AI conversations to logs/chats/ when enabled */
+export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
@@ -45,6 +50,13 @@ export class ExpenseBotAgent {
    */
   async run(userMessage: string, conversationHistory: ChatMessage[], bot: Bot): Promise<string> {
     const writer = new TelegramStreamWriter(bot, this.ctx.chatId);
+    const debugCtx = aiDebugLogger.createRunContext(
+      this.ctx.userId,
+      this.ctx.chatId,
+      this.ctx.userName,
+      this.ctx.userFullName,
+      userMessage,
+    );
 
     const messages: Anthropic.MessageParam[] = [
       ...this.buildHistoryMessages(conversationHistory),
@@ -57,12 +69,19 @@ export class ExpenseBotAgent {
     logger.info(`[AGENT] Starting: model=${AI_MODEL} base=${AI_BASE_URL}`);
     logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
+    const systemPrompt = this.buildSystemPrompt();
+    debugCtx?.logSystemPrompt(systemPrompt);
+    debugCtx?.logHistory(conversationHistory.map((m) => ({ role: m.role, content: m.content })));
+
+    let totalToolCalls = 0;
+
     try {
       let continueLoop = true;
       let round = 0;
 
       while (continueLoop && round < MAX_TOOL_ROUNDS) {
         round++;
+        debugCtx?.logRound(round);
 
         const stream = this.anthropic.messages.stream(
           {
@@ -71,7 +90,7 @@ export class ExpenseBotAgent {
             system: [
               {
                 type: 'text',
-                text: this.buildSystemPrompt(),
+                text: systemPrompt,
                 cache_control: { type: 'ephemeral' },
               },
             ],
@@ -117,6 +136,7 @@ export class ExpenseBotAgent {
               const input = JSON.parse(currentToolUse.inputJson || '{}');
 
               logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
+              debugCtx?.logToolCall(currentToolUse.name, input);
 
               // Show live indicator while tool executes
               writer.setToolLabel(currentToolUse.name, input);
@@ -133,6 +153,14 @@ export class ExpenseBotAgent {
               } else {
                 logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
               }
+
+              debugCtx?.logToolResult(
+                currentToolUse.name,
+                result.success,
+                result.output,
+                result.error,
+              );
+              totalToolCalls++;
 
               writer.markToolResult(result.success);
 
@@ -177,6 +205,10 @@ export class ExpenseBotAgent {
       logger.info(
         `[AGENT] Final response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
       );
+
+      debugCtx?.logAiText(finalText);
+      debugCtx?.logFinal(finalText, totalToolCalls);
+      debugCtx?.flush();
 
       await writer.sendRemainingChunks();
 

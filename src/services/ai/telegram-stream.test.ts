@@ -559,3 +559,225 @@ describe('tool state tracking', () => {
     (writer as any).stopTyping();
   });
 });
+
+// ── STREAMING BUG: unclosed tags during flush ───────────────────────
+
+describe('truncateForTelegram streaming scenarios', () => {
+  const writer = makeWriter();
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  afterEach(() => (writer as any).stopTyping());
+  // biome-ignore lint/suspicious/noExplicitAny: access private method in test
+  const truncate = (text: string): string => (writer as any).truncateForTelegram(text);
+
+  test('STREAMING: unclosed <i> in mid-generation expense report', () => {
+    // AI is still generating — <i> opened but </i> not yet emitted
+    const text = `<b>Потрачено</b>
+
+▪️ <b>Коты</b>: <b>54.16 EUR</b>
+<i>• 10.03 — 2575 RSD (наполнитель)
+• 03.03 — 3767 RSD`;
+    const result = truncate(text);
+    const iOpens = (result.match(/<i>/gi) || []).length;
+    const iCloses = (result.match(/<\/i>/gi) || []).length;
+    expect(iOpens).toBe(iCloses);
+  });
+
+  test('STREAMING: incomplete closing tag </ at end', () => {
+    // AI mid-stream: generating </i> but only </ arrived
+    const text = `<i>• 10.03 — 2575 RSD (наполнитель)
+• 03.03 — 3767 RSD (корм)</`;
+    const result = truncate(text);
+    const iOpens = (result.match(/<i>/gi) || []).length;
+    const iCloses = (result.match(/<\/i>/gi) || []).length;
+    expect(iOpens).toBe(iCloses);
+  });
+
+  test('STREAMING: incomplete closing tag </i at end (no >)', () => {
+    const text = '<i>text still coming</i';
+    const result = truncate(text);
+    const iOpens = (result.match(/<i>/gi) || []).length;
+    const iCloses = (result.match(/<\/i>/gi) || []).length;
+    expect(iOpens).toBe(iCloses);
+  });
+
+  test('PRODUCTION: exact error text with tool blockquote + expense list', () => {
+    const text = `<blockquote expandable>⚙️ <b>Инструменты</b>
+✅ <i>Загружаю расходы: март 2026</i></blockquote>
+
+<blockquote expandable>⚙️ <b>Инструменты</b></blockquote>
+
+<blockquote expandable>⚙️ <b>Инструменты</b></blockquote>
+
+<b>Потрачено за март 2026 по категориям</b>
+
+<u>EUR-категории</u>:
+
+▪️ <b>Путешествия</b>: <b>2949.47 EUR</b>
+<i>• 14.03 — 1149.47 EUR (Барселона билеты)
+• 14.03 — 1800.00 EUR (Барселона отель)</i>
+
+▪️ <b>Лена</b>: <b>594.37 EUR</b>
+<i>• 21.03 — 94.37 EUR (Zara)
+• 11.03 — 130.00 EUR (Zara)
+• 07.03 — 50.00 EUR (Подарок)
+• 03.03 — 40.00 EUR (косметика)
+• 02.03 — 280.00 EUR (косметика)</i>
+
+▪️ <b>Квартира</b>: <b>500.00 EUR</b>
+<i>• 01.03 — 500.00 EUR (Лена)</i>
+
+▪️ <b>Еда</b>: <b>131.90 EUR</b> ≈ 15443 RSD
+<i>• 13 записей, 1285–628 RSD каждая</i>
+
+▪️ <b>Алекс</b>: <b>27.50 EUR</b>
+<i>• 19.03 — 27.50 EUR</i>
+
+▪️ <b>Развлечения</b>: <b>32.70 EUR</b>
+<i>• 15.03 — 32.70 EUR</i>
+
+▪️ <b>Спорт</b>: <b>33.33 EUR</b>
+<i>• 02.03 — 33.33 EUR</i>
+
+▪️ <b>Коты</b>: <b>54.16 EUR</b> ≈ 6342 RSD
+<i>• 10.03 — 2575 RSD (наполнитель)
+• 03.03 — 3767 RSD`;
+
+    const result = truncate(text);
+
+    // ALL tag types must be balanced
+    for (const tag of ['i', 'b', 'u', 'blockquote']) {
+      const openRegex = tag === 'blockquote' ? /<blockquote[^>]*>/gi : new RegExp(`<${tag}>`, 'gi');
+      const closeRegex = new RegExp(`</${tag}>`, 'gi');
+      const opens = (result.match(openRegex) || []).length;
+      const closes = (result.match(closeRegex) || []).length;
+      if (opens !== closes) {
+        throw new Error(`Tag <${tag}> unbalanced: ${opens} opens vs ${closes} closes`);
+      }
+    }
+  });
+
+  test('TRUNCATION: long text with <i> tag cut mid-content', () => {
+    // Text is > 4000 chars, truncation cuts inside <i> block
+    const header = '<b>Потрачено за март 2026</b>\n\n';
+    const entry = '▪️ <b>Кат</b>: <b>100 EUR</b>\n<i>• 01.03 — 100 EUR (запись)</i>\n\n';
+    const openEntry = '▪️ <b>Последний</b>: <b>999 EUR</b>\n<i>';
+    const longContent = '• 01.03 — 100 EUR (длинное описание расхода) '.repeat(80);
+    const text = header + entry.repeat(20) + openEntry + longContent;
+
+    const result = truncate(text);
+
+    // Must be within limit
+    expect(result.length).toBeLessThanOrEqual(4100); // 4000 + closing tags + ...
+
+    // All tags must be balanced
+    for (const tag of ['i', 'b']) {
+      const opens = (result.match(new RegExp(`<${tag}>`, 'gi')) || []).length;
+      const closes = (result.match(new RegExp(`</${tag}>`, 'gi')) || []).length;
+      expect(opens).toBe(closes);
+    }
+  });
+});
+
+// ── sendOrEdit: HTML error fallback ─────────────────────────────────
+
+describe('sendOrEdit HTML error fallback', () => {
+  test('falls back to plain text when editMessageText fails with HTML parse error', async () => {
+    const calls: Array<{ text: string; parse_mode?: string }> = [];
+
+    const fakeBot = {
+      api: {
+        sendMessage: mock((opts: { text: string; parse_mode?: string }) => {
+          calls.push(opts);
+          return Promise.resolve({ message_id: 1 });
+        }),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock((opts: { text: string; parse_mode?: string }) => {
+          calls.push(opts);
+          if (opts.parse_mode === 'HTML') {
+            // HTML mode always fails — simulates Telegram rejecting the markup
+            return Promise.reject({
+              payload: {
+                error_code: 400,
+                description:
+                  'Bad Request: can\'t parse entities: Can\'t find end tag corresponding to start tag "i"',
+              },
+            });
+          }
+          // Plain text retry succeeds
+          return Promise.resolve();
+        }),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // First flush: sendMessage succeeds (sets sentMessageId)
+    writer.appendText('first text');
+    await writer.flush(true);
+
+    // Second flush: editMessageText with HTML fails → should retry plain text
+    writer.appendText(' more text');
+    await writer.flush(true);
+
+    // Should have a plain text call (no parse_mode, no HTML tags)
+    const plainTextCall = calls.find(
+      (c) => !c.parse_mode && c.text && c.text.includes('first text'),
+    );
+    expect(plainTextCall).toBeDefined();
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+
+  test('finalize succeeds even after multiple failed intermediate flushes', async () => {
+    let editCallCount = 0;
+    let lastSuccessText = '';
+
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock((opts: { text: string; parse_mode?: string }) => {
+          editCallCount++;
+          if (opts.parse_mode === 'HTML' && editCallCount <= 2) {
+            // First 2 HTML edits fail (intermediate streaming flushes)
+            return Promise.reject({
+              payload: {
+                error_code: 400,
+                description: "Bad Request: can't parse entities: Can't find end tag",
+              },
+            });
+          }
+          // Plain text fallback and later HTML edits succeed
+          lastSuccessText = opts.text;
+          return Promise.resolve();
+        }),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // First flush: sendMessage succeeds (sets sentMessageId)
+    writer.appendText('<i>partial');
+    await writer.flush(true);
+
+    // Second flush: editMessageText fails → plain text fallback
+    writer.appendText(' streaming');
+    await writer.flush(true);
+
+    // Finalize: AI finished, tags are closed now
+    writer.appendText('</i> done.');
+    await writer.finalize();
+
+    // finalize should have sent something
+    expect(lastSuccessText).toBeTruthy();
+    expect(lastSuccessText).toContain('done');
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});

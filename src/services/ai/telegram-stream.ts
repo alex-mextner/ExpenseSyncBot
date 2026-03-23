@@ -3,7 +3,7 @@
  * Handles throttled message updates, tool indicators, and message chunking
  */
 import type { Bot } from 'gramio';
-import { processThinkTags, sanitizeHtmlForTelegram } from '../../utils/html';
+import { processThinkTags, sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { TOOL_LABELS } from './tools';
 
@@ -286,12 +286,44 @@ export class TelegramStreamWriter {
       } else if (tgErr?.payload?.description?.includes('message is not modified')) {
         this.lastSentText = text;
         this.lastFlushTime = Date.now();
+      } else if (tgErr?.payload?.description?.includes("can't parse entities")) {
+        // HTML parsing failed — strip all tags and retry as plain text
+        logger.warn('[STREAM] HTML parse error, falling back to plain text');
+        await this.sendPlainTextFallback(text);
       } else {
         logger.error({ err }, '[STREAM] Update error');
         // Prevent rapid retries on any HTML/content error — without this every
         // incoming token triggers a new failed API call until the stream ends.
         this.lastErrorTime = Date.now();
       }
+    }
+  }
+
+  /**
+   * Fallback: strip HTML and send/edit as plain text when HTML parsing fails.
+   * This prevents the bot from freezing when Telegram rejects malformed HTML.
+   */
+  private async sendPlainTextFallback(htmlText: string): Promise<void> {
+    const plainText = stripAllHtml(htmlText);
+    try {
+      if (this.sentMessageId) {
+        await this.bot.api.editMessageText({
+          chat_id: this.chatId,
+          message_id: this.sentMessageId,
+          text: plainText,
+        });
+      } else {
+        const sent = await this.bot.api.sendMessage({
+          chat_id: this.chatId,
+          text: plainText,
+        });
+        this.sentMessageId = sent.message_id;
+      }
+      this.lastSentText = htmlText;
+      this.lastFlushTime = Date.now();
+    } catch (fallbackErr) {
+      logger.error({ err: fallbackErr }, '[STREAM] Plain text fallback also failed');
+      this.lastErrorTime = Date.now();
     }
   }
 

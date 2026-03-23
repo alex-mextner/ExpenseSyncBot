@@ -15,6 +15,7 @@ interface EnvConfig {
   AI_BASE_URL: string;
   AI_MODEL: string;
   GITHUB_TOKEN: string;
+  AI_DEBUG_LOGS: boolean;
   NODE_ENV: 'development' | 'production';
 }
 
@@ -42,6 +43,7 @@ function validateEnv(): EnvConfig {
     AI_BASE_URL: getEnvVariable('AI_BASE_URL', false),
     AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-4.7',
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
+    AI_DEBUG_LOGS: process.env['AI_DEBUG_LOGS'] === 'true',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
   };
 }
