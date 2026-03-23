@@ -17,7 +17,8 @@
       "Bash(~/.bun/bin/bunx tsc:*)",
       "Bash(node_modules/.bin/biome check:*)",
       "Bash(node_modules/.bin/biome lint:*)",
-      "Bash(/Users/ultra/xp/ExpenseSyncBot/node_modules/.bin/biome check:*)"
+      "Bash(/Users/ultra/xp/ExpenseSyncBot/node_modules/.bin/biome check:*)",
+      "Bash(node_modules/.bin/biome format:*)"
     ],
     "deny": [],
     "ask": []
