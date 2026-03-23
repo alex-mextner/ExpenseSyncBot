@@ -3,10 +3,9 @@
  * Handles throttled message updates, tool indicators, and message chunking
  */
 import type { Bot } from 'gramio';
-import { processThinkTags } from '../../bot/commands/ask';
+import { processThinkTags, sanitizeHtmlForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { TOOL_LABELS } from './tools';
-import type { ToolResult } from './types';
 
 const logger = createLogger('telegram-stream');
 
@@ -51,21 +50,24 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
   }
 }
 
-const UPDATE_INTERVAL_MS = 3000;
+const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
 const ERROR_COOLDOWN_MS = 10000;
-const MIN_DELTA_LENGTH = 20;
 const MAX_MESSAGE_LENGTH = 4000;
 
 export class TelegramStreamWriter {
   private sentMessageId: number | null = null;
-  private fullText = '';
-  private historyText = '';
-  private lastUpdateTime = 0;
-  private lastSentText = '';
-  private lastErrorTime = 0;
-  private toolIndicators: string[] = [];
-  private typingInterval: ReturnType<typeof setInterval> | null = null;
   private placeholderMessageId: number | null = null;
+  private fullText = ''; // current round's accumulated text
+  private historyText = ''; // clean final AI text for chat history
+  private lastFlushTime = 0;
+  private lastSentText = ''; // last display text actually sent
+  private lastErrorTime = 0;
+  private toolLabel: string | null = null; // live indicator shown during flush
+  private pendingIndicators: string[] = []; // in-flight tool labels
+  private toolLines: string[] = []; // completed ✅/❌ lines
+  private intermediateChunks: string[] = []; // committed snapshots per tool-use round
+  private finalDisplayText = ''; // full final text for sendRemainingChunks
+  private typingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private bot: Bot,
@@ -118,91 +120,105 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Append text delta from streaming
+   * Append text delta from streaming — triggers a rate-limited flush automatically.
    */
-  async onTextDelta(delta: string): Promise<void> {
+  appendText(delta: string): void {
     this.fullText += delta;
+    void this.flush(false);
+  }
 
+  /**
+   * Flush current state to Telegram. force=true bypasses time throttling
+   * (used when a tool starts so the user sees it immediately).
+   * Error cooldown is always respected.
+   */
+  async flush(force = false): Promise<void> {
     const now = Date.now();
-    if (now - this.lastUpdateTime < UPDATE_INTERVAL_MS) return;
     if (now - this.lastErrorTime < ERROR_COOLDOWN_MS) return;
-    if (this.fullText.length - this.lastSentText.length < MIN_DELTA_LENGTH) return;
+    if (!force && now - this.lastFlushTime < UPDATE_INTERVAL_MS) return;
 
-    await this.flushUpdate();
-  }
-
-  /**
-   * Show tool execution indicator with input details
-   */
-  async onToolStart(name: string, input?: Record<string, unknown>): Promise<void> {
-    const toolLabel = TOOL_LABELS[name] || name;
-    const details = formatToolInput(name, input);
-    const detailsSuffix = details ? `: ${details}` : '';
-    const indicator = `\n<code>  </code><i>${toolLabel}${detailsSuffix}...</i>`;
-    this.toolIndicators.push(indicator);
-    this.fullText += indicator;
-
-    const now = Date.now();
-    if (now - this.lastUpdateTime >= 2000 && now - this.lastErrorTime >= ERROR_COOLDOWN_MS) {
-      await this.flushUpdate();
+    // Build display: current streamed text + live tool indicator suffix
+    let display = this.truncateForTelegram(processThinkTags(this.fullText)) || '⏳';
+    if (this.toolLabel) {
+      display = `${display}\n\n${this.toolLabel}`;
     }
+
+    await this.sendOrEdit(display);
   }
 
   /**
-   * Update tool execution indicator with result status
+   * Set the live indicator for the tool currently executing.
+   * Shown as suffix in flush() until markToolResult() clears it.
    */
-  onToolResult(name: string, input: Record<string, unknown> | undefined, result: ToolResult): void {
-    const toolLabel = TOOL_LABELS[name] || name;
+  setToolLabel(name: string, input?: Record<string, unknown>): void {
+    const label = TOOL_LABELS[name] || name;
     const details = formatToolInput(name, input);
-    const detailsSuffix = details ? `: ${details}` : '';
-    const pendingPattern = `\n<code>  </code><i>${toolLabel}${detailsSuffix}...</i>`;
-    const status = result.success ? '\u2705' : '\u274c';
-    const replacement = `\n${status} <i>${toolLabel}${detailsSuffix}</i>`;
-
-    this.fullText = this.fullText.replace(pendingPattern, replacement);
+    const suffix = details ? `: ${details}` : '';
+    const labelText = `${label}${suffix}`;
+    this.toolLabel = `<i>${labelText}...</i>`;
+    this.pendingIndicators.push(labelText);
   }
 
   /**
-   * Send final message, cleaning up tool indicators
+   * Mark the most recently started tool as done.
+   * Moves label from live indicator to completed ✅/❌ line (shown in finalize blockquote).
+   */
+  markToolResult(success: boolean): void {
+    const indicator = this.pendingIndicators.pop();
+    if (indicator) {
+      this.toolLines.push(`${success ? '✅' : '❌'} <i>${indicator}</i>`);
+    }
+    this.toolLabel = null;
+  }
+
+  /**
+   * Commit this round's tool lines to history and reset text buffer.
+   * Called after each tool-use round so the next round starts fresh.
+   */
+  commitIntermediate(): void {
+    if (this.toolLines.length > 0) {
+      this.intermediateChunks.push(this.toolLines.join('\n'));
+      this.toolLines = [];
+    }
+    this.fullText = '';
+    this.lastSentText = '';
+  }
+
+  /**
+   * Build and send the final message:
+   * collapsed tool blockquote (if any tools ran) followed by AI response.
    */
   async finalize(): Promise<void> {
     this.stopTyping();
-    let cleanText = this.fullText;
+    this.toolLabel = null;
 
-    // Collect completed tool indicators into an expandable blockquote
-    const toolLines: string[] = [];
-    for (const indicator of this.toolIndicators) {
-      cleanText = cleanText.replace(indicator, '');
-    }
-    // Capture completed indicators (✅/❌ lines) and remove from main text
-    cleanText = cleanText.replace(/\n([\u2705\u274c] <i>[^<]+<\/i>)/g, (_, line) => {
-      toolLines.push(line);
-      return '';
-    });
-
-    // Process <think> tags -> expandable blockquote (same as HF path)
-    cleanText = processThinkTags(cleanText);
-    // Clean up leading/trailing whitespace and extra newlines
-    cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
-
-    // Save history text before adding tool UI (prevents AI from mimicking the format)
-    this.historyText = cleanText;
-
-    // Prepend tool summary as expandable blockquote
-    if (toolLines.length > 0) {
-      const toolSummary = `<blockquote expandable>\u2699\ufe0f <b>Инструменты</b>\n${toolLines.join('\n')}</blockquote>`;
-      cleanText = `${toolSummary}\n\n${cleanText}`;
+    // Collect any remaining tool lines from the last round
+    if (this.toolLines.length > 0) {
+      this.intermediateChunks.push(this.toolLines.join('\n'));
+      this.toolLines = [];
     }
 
-    if (!cleanText) {
-      cleanText = '\u26a0\ufe0f AI did not produce a response.';
+    const response = processThinkTags(this.fullText.trim());
+    // Save clean text for chat history before adding UI chrome
+    this.historyText = response;
+
+    let finalText: string;
+    if (this.intermediateChunks.length > 0) {
+      const body = this.intermediateChunks.join('\n');
+      if (response) {
+        finalText = `<blockquote expandable>⚙️ <b>Инструменты</b>\n${body}</blockquote>\n\n${response}`;
+      } else {
+        // AI only called tools, no text — show tool results inline
+        finalText = body;
+      }
+    } else {
+      finalText = response || '⚠️ AI did not produce a response.';
     }
 
-    this.fullText = cleanText;
+    finalText = finalText.replace(/\n{3,}/g, '\n\n').trim();
+    this.finalDisplayText = finalText;
 
-    if (this.fullText !== this.lastSentText) {
-      await this.flushUpdate();
-    }
+    await this.sendOrEdit(this.truncateForTelegram(finalText));
   }
 
   /**
@@ -213,42 +229,68 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Send or edit the Telegram message
+   * Send additional chunks for long final messages
    */
-  private async flushUpdate(): Promise<void> {
-    const textToSend = this.truncateForTelegram(processThinkTags(this.fullText));
+  async sendRemainingChunks(): Promise<void> {
+    if (this.finalDisplayText.length <= MAX_MESSAGE_LENGTH) return;
 
-    if (textToSend === this.lastSentText) return;
+    const chunks = this.splitIntoChunks(this.finalDisplayText, MAX_MESSAGE_LENGTH);
+
+    // First chunk was already sent/edited via finalize()
+    for (let i = 1; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunk) {
+        try {
+          await this.bot.api.sendMessage({
+            chat_id: this.chatId,
+            text: chunk,
+            parse_mode: 'HTML',
+          });
+        } catch (err) {
+          logger.error({ err }, '[STREAM] Failed to send chunk');
+        }
+      }
+    }
+  }
+
+  /**
+   * Send or edit the Telegram message with error handling and cooldown tracking
+   */
+  private async sendOrEdit(text: string): Promise<void> {
+    if (text === this.lastSentText) return;
 
     try {
       if (this.sentMessageId) {
         await this.bot.api.editMessageText({
           chat_id: this.chatId,
           message_id: this.sentMessageId,
-          text: textToSend,
+          text,
           parse_mode: 'HTML',
         });
       } else {
         const sent = await this.bot.api.sendMessage({
           chat_id: this.chatId,
-          text: textToSend,
+          text,
           parse_mode: 'HTML',
         });
         this.sentMessageId = sent.message_id;
       }
 
-      this.lastSentText = textToSend;
-      this.lastUpdateTime = Date.now();
+      this.lastSentText = text;
+      this.lastFlushTime = Date.now();
     } catch (err) {
       const tgErr = err as unknown as { payload?: { error_code?: number; description?: string } };
       if (tgErr?.payload?.error_code === 429) {
         logger.error('[STREAM] Rate limited, cooling down');
         this.lastErrorTime = Date.now();
       } else if (tgErr?.payload?.description?.includes('message is not modified')) {
-        this.lastSentText = textToSend;
-        this.lastUpdateTime = Date.now();
+        this.lastSentText = text;
+        this.lastFlushTime = Date.now();
       } else {
         logger.error({ err }, '[STREAM] Update error');
+        // Prevent rapid retries on any HTML/content error — without this every
+        // incoming token triggers a new failed API call until the stream ends.
+        this.lastErrorTime = Date.now();
       }
     }
   }
@@ -259,27 +301,32 @@ export class TelegramStreamWriter {
    * intermediate stream flushes can cut mid-tag while the AI is still generating.
    */
   private truncateForTelegram(text: string): string {
-    let truncated = text;
+    // Convert <br> to newline before sanitization — sanitize would otherwise escape it.
+    // Telegram HTML does not support <br>.
+    const withNewlines = text.replace(/<br\s*\/?>/gi, '\n');
+
+    // Sanitize: strip unsupported tags, escape bare & < >.
+    // The preRequest hook also sanitizes, so this function is safe to call
+    // multiple times (sanitizeHtmlForTelegram is idempotent via decode-first).
+    let truncated = sanitizeHtmlForTelegram(withNewlines);
     let wasTruncated = false;
 
-    if (text.length > MAX_MESSAGE_LENGTH) {
-      truncated = text.substring(0, MAX_MESSAGE_LENGTH);
+    if (truncated.length > MAX_MESSAGE_LENGTH) {
+      truncated = truncated.substring(0, MAX_MESSAGE_LENGTH);
       wasTruncated = true;
     }
 
-    // Fix incomplete HTML tags — applies to both truncated and non-truncated text,
-    // because the model itself can generate a tag without the closing > (e.g. </blockquote\n).
-    // Case 1: incomplete tag before a newline — complete it in-place (</blockquote\n → </blockquote>\n)
+    // Fix incomplete HTML tags that result from truncation at MAX_MESSAGE_LENGTH.
+    // Sanitization ensures only whitelisted tags remain, so these regexes only
+    // ever fire on valid-but-truncated tags (e.g. <blockquote expandabl…).
+    // Case 1: incomplete tag before a newline — complete it in-place
     truncated = truncated.replace(/<[a-zA-Z/][^>\n\r]*(?=\r?\n)/g, '$&>');
-    // Case 2: incomplete tag at end of string — remove it (no content to preserve after it)
+    // Case 2: incomplete tag at end of string — remove it
     const lastTagStart = truncated.lastIndexOf('<');
     const lastTagEnd = truncated.lastIndexOf('>');
     if (lastTagStart > lastTagEnd) {
       truncated = truncated.substring(0, lastTagStart);
     }
-
-    // Telegram HTML does not support <br> — convert to newline before tag tracking.
-    truncated = truncated.replace(/<br\s*\/?>/gi, '\n');
 
     // Always close unclosed tags — stream may be mid-generation
     const openTags: string[] = [];
@@ -301,32 +348,6 @@ export class TelegramStreamWriter {
     }
 
     return truncated;
-  }
-
-  /**
-   * Send additional chunks for long final messages (uses internal display text from finalize)
-   */
-  async sendRemainingChunks(): Promise<void> {
-    if (this.fullText.length <= MAX_MESSAGE_LENGTH) return;
-
-    // Split into chunks by paragraphs
-    const chunks = this.splitIntoChunks(this.fullText, MAX_MESSAGE_LENGTH);
-
-    // First chunk was already sent/edited via finalize()
-    for (let i = 1; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (chunk) {
-        try {
-          await this.bot.api.sendMessage({
-            chat_id: this.chatId,
-            text: chunk,
-            parse_mode: 'HTML',
-          });
-        } catch (err) {
-          logger.error({ err: err }, '[STREAM] Failed to send chunk');
-        }
-      }
-    }
   }
 
   private splitIntoChunks(text: string, maxLength: number): string[] {

@@ -3,6 +3,7 @@ import { createReceiptSummaryKeyboard } from '../../bot/keyboards';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import {
   type AIExtractionResult,
@@ -16,17 +17,6 @@ import { buildSummaryFromItems, formatSummaryMessage } from './receipt-summarize
 const logger = createLogger('photo-processor');
 
 let isProcessing = false;
-
-/**
- * Escape HTML special characters for Telegram
- */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 /**
  * Start background photo processor

@@ -143,15 +143,16 @@ describe('truncateForTelegram', () => {
     expect(result).toContain('</i>');
   });
 
-  test('case 1 then case 2: completes before-newline tag and strips end-of-string tag', () => {
-    // Both passes interact: first pass completes </b\n, second strips trailing </i
+  test('partial tags without closing > are escaped to literal text, not completed', () => {
+    // Sanitization runs before the case-1/case-2 regexes.
+    // Partial tags like </b (no >) are not whitelisted so they get escaped.
     const text = '</b\nfoo</i';
     const result = truncate(text);
-    // Case 1: </b\n → </b>\n
-    expect(result).toContain('</b>');
+    // Plain text survives
     expect(result).toContain('foo');
-    // Case 2: trailing </i removed
-    expect(result).not.toContain('</i');
+    // Partial tags are escaped — no raw < left
+    expect(result).not.toContain('</b>');
+    expect(result).not.toContain('</i>');
   });
 
   test('CRLF: completes incomplete tag before \\r\\n without producing </tag\\r> artefact', () => {
@@ -182,17 +183,19 @@ describe('getText returns text without tool blockquote', () => {
   test('getText returns clean AI text, not the display text with tool blockquote', async () => {
     const writer = makeWriter();
 
-    // Simulate one tool call
-    await writer.onTextDelta('Ответ AI.');
-    await writer.onToolStart('get_expenses', { period: '2026-03' });
-    writer.onToolResult('get_expenses', { period: '2026-03' }, { success: true, output: 'data' });
-
+    // Simulate one tool call followed by text response
+    writer.setToolLabel('get_expenses', { period: '2026-03' });
+    writer.markToolResult(true);
+    writer.commitIntermediate();
+    writer.appendText('Ответ AI.');
     await writer.finalize();
 
     const historyText = writer.getText();
     expect(historyText).not.toContain('<blockquote expandable>');
     expect(historyText).not.toContain('Инструменты');
     expect(historyText).toContain('Ответ AI.');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
   });
 
   test('sendRemainingChunks uses display text (with tool blockquote) for correct chunking', async () => {
@@ -211,8 +214,8 @@ describe('getText returns text without tool blockquote', () => {
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
 
-    await writer.onToolStart('get_expenses', {});
-    writer.onToolResult('get_expenses', {}, { success: true, output: 'ok' });
+    writer.setToolLabel('get_expenses', {});
+    writer.markToolResult(true);
     await writer.finalize();
 
     // For short responses, sendRemainingChunks should be a no-op
@@ -386,7 +389,7 @@ describe('sendRemainingChunks edge cases', () => {
       // biome-ignore lint/suspicious/noExplicitAny: test stub for Bot API
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
-    await writer.onTextDelta('Short message.');
+    writer.appendText('Short message.');
     await writer.finalize();
     const sentBefore = sent.length;
     await writer.sendRemainingChunks();
@@ -394,27 +397,119 @@ describe('sendRemainingChunks edge cases', () => {
   });
 });
 
-// ── Edge cases: onToolResult state ────────────────────────────────────
+// ── finalize: tools-only (no AI text) ────────────────────────────────
 
-describe('onToolResult state tracking', () => {
-  test('failed tool shows error status in display text', async () => {
+describe('finalize: tools without AI text', () => {
+  test('shows tool lines inline when AI produced no text', async () => {
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => Promise.resolve()),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+    writer.setToolLabel('get_expenses', { period: '2026-03' });
+    writer.markToolResult(true);
+    await writer.finalize();
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private field
+    const displayText: string = (writer as any).finalDisplayText;
+    // Should show tool lines inline — no collapsed blockquote header
+    expect(displayText).not.toContain('<blockquote expandable>');
+    // Must contain the tool result line
+    expect(displayText).toContain('\u2705');
+    expect(displayText).toContain('Загружаю расходы');
+  });
+
+  test('tools-only: getText() history is empty (no text to save)', async () => {
     const writer = makeWriter();
-    await writer.onToolStart('add_expense', { amount: 100, currency: 'EUR', category: 'food' });
-    writer.onToolResult(
-      'add_expense',
-      { amount: 100, currency: 'EUR', category: 'food' },
-      { success: false, error: 'DB error' },
-    );
+    writer.setToolLabel('get_budgets', {});
+    writer.markToolResult(true);
+    await writer.finalize();
+    expect(writer.getText()).toBe('');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+
+  test('with AI text: tool summary wrapped in expandable blockquote', async () => {
+    const writer = makeWriter();
+    writer.setToolLabel('get_expenses', {});
+    writer.markToolResult(true);
+    writer.commitIntermediate();
+    writer.appendText('Ответ AI.');
+    await writer.finalize();
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private field
+    const displayText: string = (writer as any).finalDisplayText;
+    expect(displayText).toContain('<blockquote expandable>');
+    expect(displayText).toContain('Инструменты');
+    expect(displayText).toContain('Ответ AI.');
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
+// ── flush: error cooldown ─────────────────────────────────────────────
+
+describe('flush error cooldown', () => {
+  test('sets lastErrorTime on generic API error to prevent rapid retries', async () => {
+    let callCount = 0;
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => {
+          callCount++;
+          return Promise.reject({
+            payload: { error_code: 400, description: 'Bad Request: text must be non-empty' },
+          });
+        }),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => Promise.resolve()),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // First flush: fails and sets lastErrorTime
+    writer.appendText('some text that is definitely long enough to flush');
+    await writer.flush(true);
+    const firstCallCount = callCount;
+
+    // Second flush immediately after: should be blocked by ERROR_COOLDOWN_MS
+    writer.appendText(' more text');
+    await writer.flush(true);
+    const secondCallCount = callCount;
+
+    // No additional send attempt should have been made
+    expect(secondCallCount).toBe(firstCallCount);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
+// ── Edge cases: tool state tracking ───────────────────────────────────
+
+describe('tool state tracking', () => {
+  test('failed tool shows error status in final display text', async () => {
+    const writer = makeWriter();
+    writer.setToolLabel('add_expense', { amount: 100, currency: 'EUR', category: 'food' });
+    writer.markToolResult(false);
+    await writer.finalize();
     // biome-ignore lint/suspicious/noExplicitAny: access private field in test
-    expect((writer as any).fullText).toContain('\u274c');
+    const displayText: string = (writer as any).finalDisplayText;
+    expect(displayText).toContain('\u274c');
     // biome-ignore lint/suspicious/noExplicitAny: access private method in test
     (writer as any).stopTyping();
   });
 
   test('getText returns empty string before finalize', async () => {
     const writer = makeWriter();
-    await writer.onToolStart('get_budgets', {});
-    writer.onToolResult('get_budgets', {}, { success: true, output: '[]' });
+    writer.setToolLabel('get_budgets', {});
+    writer.markToolResult(true);
     expect(writer.getText()).toBe('');
     // biome-ignore lint/suspicious/noExplicitAny: access private method in test
     (writer as any).stopTyping();
@@ -431,33 +526,35 @@ describe('onToolResult state tracking', () => {
       // biome-ignore lint/suspicious/noExplicitAny: test stub for Bot API
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
-    await writer.onToolStart('get_expenses', {});
-    writer.onToolResult('get_expenses', {}, { success: true, output: 'ok' });
-    await writer.onToolStart('get_budgets', {});
-    writer.onToolResult('get_budgets', {}, { success: false, error: 'not found' });
-    await writer.onTextDelta('Summary.');
+    writer.setToolLabel('get_expenses', {});
+    writer.markToolResult(true);
+    writer.setToolLabel('get_budgets', {});
+    writer.markToolResult(false);
+    writer.commitIntermediate();
+    writer.appendText('Summary.');
     await writer.finalize();
 
     // biome-ignore lint/suspicious/noExplicitAny: access private field in test
-    const displayText: string = (writer as any).fullText;
+    const displayText: string = (writer as any).finalDisplayText;
     expect(displayText).toContain('<blockquote expandable>');
     expect(displayText).toContain('\u2705');
     expect(displayText).toContain('\u274c');
   });
 
-  test('tool indicator stripped from getText() history text', async () => {
+  test('getText() returns only the final AI text, not tool UI', async () => {
     const writer = makeWriter();
-    await writer.onTextDelta('Before tool.');
-    await writer.onToolStart('get_expenses', { period: '2026-03' });
-    writer.onToolResult('get_expenses', { period: '2026-03' }, { success: true, output: 'data' });
-    await writer.onTextDelta(' After tool.');
+    // Round 1: tool call
+    writer.setToolLabel('get_expenses', { period: '2026-03' });
+    writer.markToolResult(true);
+    writer.commitIntermediate();
+    // Round 2: AI text response
+    writer.appendText('Ответ AI.');
     await writer.finalize();
 
     const histText = writer.getText();
     expect(histText).not.toContain('<blockquote expandable>');
     expect(histText).not.toContain('Инструменты');
-    expect(histText).toContain('Before tool.');
-    expect(histText).toContain('After tool.');
+    expect(histText).toBe('Ответ AI.');
     // biome-ignore lint/suspicious/noExplicitAny: access private method in test
     (writer as any).stopTyping();
   });

@@ -90,7 +90,7 @@ export class ExpenseBotAgent {
         for await (const event of stream) {
           // Text delta -- stream to Telegram
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            await writer.onTextDelta(event.delta.text);
+            writer.appendText(event.delta.text);
           }
 
           // Start of a new content block
@@ -118,7 +118,9 @@ export class ExpenseBotAgent {
 
               logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
 
-              await writer.onToolStart(currentToolUse.name, input);
+              // Show live indicator while tool executes
+              writer.setToolLabel(currentToolUse.name, input);
+              await writer.flush(true);
 
               const result = await executeTool(currentToolUse.name, input, this.ctx);
 
@@ -132,7 +134,7 @@ export class ExpenseBotAgent {
                 logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
               }
 
-              writer.onToolResult(currentToolUse.name, input, result);
+              writer.markToolResult(result.success);
 
               toolResults.push({ id: currentToolUse.id, result });
 
@@ -146,6 +148,9 @@ export class ExpenseBotAgent {
         const fullAssistantContent = finalMessage.content;
 
         if (toolResults.length > 0) {
+          // Commit this round's tool lines and reset text buffer for next round
+          writer.commitIntermediate();
+
           // Add assistant message + tool results, continue loop
           messages.push({ role: 'assistant', content: fullAssistantContent });
           messages.push({
@@ -256,6 +261,7 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 4. Deleting an expense → call get_expenses first (to find the ID), confirm with the user, then call delete_expense.
 5. User asks about "their" expenses → filter by a category matching their name.
 6. If you need totals by category → use summary_only: true in get_expenses.
+7. Arithmetic or currency conversion → call calculate. NEVER do math in your head. Reply with only the result number and currency code, nothing else. The tool uses live exchange rates.
 
 ## FORMATTING
 Use ONLY these HTML tags (no Markdown, no ** or *):

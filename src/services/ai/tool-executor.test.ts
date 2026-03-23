@@ -247,6 +247,68 @@ describe('executeGetExpenses', () => {
     expect(result.output).toContain('Showing 2 of 2 expenses');
   });
 
+  test('expense with no comment shows (no comment) in output', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-14',
+        category: 'Путешествия',
+        comment: '',
+        amount: 1149.47,
+        currency: 'EUR',
+        eur_amount: 1149.47,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool('get_expenses', {}, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('(no comment)');
+  });
+
+  test('expense with whitespace-only comment shows (no comment) in output', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-14',
+        category: 'Лена',
+        comment: '   ',
+        amount: 94.37,
+        currency: 'EUR',
+        eur_amount: 94.37,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool('get_expenses', {}, ctx);
+    expect(result.output).toContain('(no comment)');
+  });
+
+  test('expense with real comment shows the comment', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-14',
+        category: 'Еда',
+        comment: 'обед',
+        amount: 25,
+        currency: 'EUR',
+        eur_amount: 25,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool('get_expenses', {}, ctx);
+    expect(result.output).toContain('обед');
+    expect(result.output).not.toContain('(no comment)');
+  });
+
   test('respects category filter (case-insensitive)', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
       {
@@ -623,6 +685,69 @@ describe('executeSetCustomPrompt', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Custom prompt cleared');
     expect(mockGroups.update).toHaveBeenCalledWith(456, { custom_prompt: null });
+  });
+});
+
+describe('calculate tool', () => {
+  beforeEach(resetAllMocks);
+
+  test('evaluates simple expression', async () => {
+    const result = await executeTool('calculate', { expression: '100 - 70' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('30');
+  });
+
+  test('result is rounded to 2 decimal places', async () => {
+    const result = await executeTool('calculate', { expression: '100 / 3' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/^33\.33 /); // not 33.333333...
+  });
+
+  test('uses group default currency when target_currency omitted', async () => {
+    const result = await executeTool('calculate', { expression: '50 + 50' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('EUR'); // group default_currency is EUR
+  });
+
+  test('returns error for unknown target_currency', async () => {
+    const result = await executeTool(
+      'calculate',
+      { expression: '100 - 70', target_currency: 'FOOBAR' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('FOOBAR');
+  });
+
+  test('returns error for missing expression', async () => {
+    const result = await executeTool('calculate', {}, ctx);
+    expect(result.success).toBe(false);
+  });
+
+  test('returns error for unevaluable expression', async () => {
+    const result = await executeTool('calculate', { expression: 'not math' }, ctx);
+    expect(result.success).toBe(false);
+  });
+
+  test('returns error when group not found', async () => {
+    mockGroups.findById.mockReturnValue(null);
+    const result = await executeTool('calculate', { expression: '100 - 70' }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Group not found');
+  });
+
+  test('evaluates cross-currency expression (100$ - 70EUR in EUR)', async () => {
+    const result = await executeTool(
+      'calculate',
+      { expression: '100$ - 70EUR', target_currency: 'EUR' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    // 100 USD converted to EUR minus 70 EUR — result is a number in EUR
+    expect(result.output).toContain('EUR');
+    const value = parseFloat(result.output ?? '');
+    expect(value).toBeGreaterThan(-200);
+    expect(value).toBeLessThan(200);
   });
 });
 

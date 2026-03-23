@@ -376,7 +376,7 @@ async function handlePlan(ctx: Ctx['Command'], args: string[], groupId: number):
     return;
   }
 
-  const { escapeHtml } = await import('./ask');
+  const { escapeHtml } = await import('../../utils/html');
   const keyboard = new InlineKeyboard().text('✕ Скрыть', `dev:hide_plan:${taskId}`);
 
   await ctx.send(

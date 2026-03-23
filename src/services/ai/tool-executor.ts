@@ -169,7 +169,7 @@ async function executeGetExpenses(
   ];
   for (const e of limited) {
     lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${e.amount} ${e.currency} (EUR ${e.eur_amount.toFixed(2)})${e.comment ? ` | ${e.comment}` : ''}`,
+      `[id:${e.id}] ${e.date} | ${e.category} | ${e.amount} ${e.currency} (EUR ${e.eur_amount.toFixed(2)}) | ${e.comment.trim() || '(no comment)'}`,
     );
   }
 
