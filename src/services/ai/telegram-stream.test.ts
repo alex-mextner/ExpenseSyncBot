@@ -1,5 +1,23 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { TelegramError } from 'gramio';
 import { TelegramStreamWriter } from './telegram-stream';
+
+/**
+ * Helper to construct TelegramError instances for tests.
+ * GramIO constructor: new TelegramError({ ok, description, error_code, parameters }, method, params)
+ */
+function makeTelegramError(
+  description: string,
+  errorCode: number,
+  parameters: { retry_after?: number } = {},
+): TelegramError<'editMessageText'> {
+  return new TelegramError(
+    { ok: false as const, description, error_code: errorCode, parameters },
+    'editMessageText',
+    // biome-ignore lint/suspicious/noExplicitAny: test stub — full API params not needed
+    {} as any,
+  );
+}
 
 /**
  * Testing private methods via bracket notation on a minimal instance.
@@ -695,14 +713,12 @@ describe('sendOrEdit HTML error fallback', () => {
         editMessageText: mock((opts: { text: string; parse_mode?: string }) => {
           calls.push(opts);
           if (opts.parse_mode === 'HTML') {
-            // HTML mode always fails — simulates Telegram rejecting the markup
-            return Promise.reject({
-              payload: {
-                error_code: 400,
-                description:
-                  'Bad Request: can\'t parse entities: Can\'t find end tag corresponding to start tag "i"',
-              },
-            });
+            return Promise.reject(
+              makeTelegramError(
+                'Bad Request: can\'t parse entities: Can\'t find end tag corresponding to start tag "i"',
+                400,
+              ),
+            );
           }
           // Plain text retry succeeds
           return Promise.resolve();
@@ -713,15 +729,18 @@ describe('sendOrEdit HTML error fallback', () => {
 
     const writer = new TelegramStreamWriter(fakeBot, 123);
 
-    // First flush: sendMessage succeeds (sets sentMessageId)
-    writer.appendText('first text');
-    await writer.flush(true);
+    // Set fullText directly to avoid appendText's fire-and-forget flush timing issues
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'first text';
+    await writer.flush(true); // sendMessage succeeds → sentMessageId set
 
-    // Second flush: editMessageText with HTML fails → should retry plain text
-    writer.appendText(' more text');
-    await writer.flush(true);
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'first text more text';
+    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
+    (writer as any).lastSentText = '';
+    await writer.flush(true); // editMessageText with HTML fails → plain text fallback
 
-    // Should have a plain text call (no parse_mode, no HTML tags)
+    // Should have a plain text call (no parse_mode) from sendPlainTextFallback
     const plainTextCall = calls.find(
       (c) => !c.parse_mode && c.text && c.text.includes('first text'),
     );
@@ -743,13 +762,9 @@ describe('sendOrEdit HTML error fallback', () => {
         editMessageText: mock((opts: { text: string; parse_mode?: string }) => {
           editCallCount++;
           if (opts.parse_mode === 'HTML' && editCallCount <= 2) {
-            // First 2 HTML edits fail (intermediate streaming flushes)
-            return Promise.reject({
-              payload: {
-                error_code: 400,
-                description: "Bad Request: can't parse entities: Can't find end tag",
-              },
-            });
+            return Promise.reject(
+              makeTelegramError("Bad Request: can't parse entities: Can't find end tag", 400),
+            );
           }
           // Plain text fallback and later HTML edits succeed
           lastSuccessText = opts.text;
@@ -776,6 +791,143 @@ describe('sendOrEdit HTML error fallback', () => {
     // finalize should have sent something
     expect(lastSuccessText).toBeTruthy();
     expect(lastSuccessText).toContain('done');
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
+// ── 429 rate limit handling ─────────────────────────────────────────
+
+describe('429 rate limit handling', () => {
+  test('detects TelegramError with code 429 and triggers cooldown', async () => {
+    let editCount = 0;
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => {
+          editCount++;
+          return Promise.reject(
+            makeTelegramError('Too Many Requests: retry after 5', 429, { retry_after: 5 }),
+          );
+        }),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // First flush: sendMessage succeeds → sentMessageId set
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'initial text';
+    await writer.flush(true);
+
+    // Second flush: editMessageText → 429 → cooldown
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'updated text';
+    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
+    (writer as any).lastSentText = '';
+    await writer.flush(true);
+    expect(editCount).toBe(1);
+
+    // Third flush: should be blocked by error cooldown
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'even more text';
+    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
+    (writer as any).lastSentText = '';
+    await writer.flush(true);
+    expect(editCount).toBe(1); // no new call — cooldown active
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+
+  test('"message is not modified" is silently ignored (no cooldown)', async () => {
+    let editCount = 0;
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => {
+          editCount++;
+          if (editCount === 1) {
+            return Promise.reject(makeTelegramError('Bad Request: message is not modified', 400));
+          }
+          return Promise.resolve();
+        }),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // First flush: sendMessage → sentMessageId set
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'initial';
+    await writer.flush(true);
+
+    // Second flush: editMessageText → "not modified" (silently OK, no cooldown)
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'same text';
+    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
+    (writer as any).lastSentText = '';
+    await writer.flush(true);
+    expect(editCount).toBe(1);
+
+    // Third flush: should NOT be blocked — "not modified" doesn't set lastErrorTime
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'different text now';
+    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
+    (writer as any).lastSentText = '';
+    // biome-ignore lint/suspicious/noExplicitAny: reset flush time to bypass throttle
+    (writer as any).lastFlushTime = 0;
+    await writer.flush(true);
+    expect(editCount).toBeGreaterThanOrEqual(2);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
+// ── flush mutex (concurrent call prevention) ─────────────────────────
+
+describe('flush mutex prevents concurrent API calls', () => {
+  test('concurrent flush(true) calls result in at most 1 editMessageText', async () => {
+    let editCount = 0;
+    const fakeBot = {
+      api: {
+        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => {
+          editCount++;
+          // Simulate network delay — while this is in flight, other flush calls arrive
+          return new Promise((resolve) => setTimeout(resolve, 50));
+        }),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // First: establish sentMessageId via sendMessage
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'initial';
+    await writer.flush(true);
+
+    // Now fire 20 concurrent flush(true) calls — simulating rapid token arrival
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'updated text with many tokens';
+    // biome-ignore lint/suspicious/noExplicitAny: reset to force different text
+    (writer as any).lastSentText = '';
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < 20; i++) {
+      promises.push(writer.flush(true));
+    }
+    await Promise.all(promises);
+
+    // Mutex ensures only 1 editMessageText call, not 20
+    expect(editCount).toBe(1);
 
     // biome-ignore lint/suspicious/noExplicitAny: access private method
     (writer as any).stopTyping();

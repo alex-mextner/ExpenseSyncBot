@@ -20,6 +20,7 @@ import { handleTopicCommand } from './commands/topic';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
+import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
 
@@ -30,6 +31,10 @@ const logger = createLogger('index');
  */
 export function createBot(): Bot {
   const bot = new Bot(env.BOT_TOKEN);
+
+  // Rate limiter — must be first: respects 429 backoff before any API call
+  bot.preRequest(rateLimitPreRequest);
+  bot.onResponseError(rateLimitOnResponseError);
 
   // Sanitize all outgoing HTML messages before they reach Telegram
   bot.preRequest(sanitizeOutgoingMessages);

@@ -3,6 +3,7 @@
  * Handles throttled message updates, tool indicators, and message chunking
  */
 import type { Bot } from 'gramio';
+import { TelegramError } from 'gramio';
 import { processThinkTags, sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { TOOL_LABELS } from './tools';
@@ -62,6 +63,7 @@ export class TelegramStreamWriter {
   private lastFlushTime = 0;
   private lastSentText = ''; // last display text actually sent
   private lastErrorTime = 0;
+  private flushInProgress = false; // mutex: prevents concurrent API calls
   private toolLabel: string | null = null; // live indicator shown during flush
   private pendingIndicators: string[] = []; // in-flight tool labels
   private toolLines: string[] = []; // completed ✅/❌ lines
@@ -130,20 +132,31 @@ export class TelegramStreamWriter {
   /**
    * Flush current state to Telegram. force=true bypasses time throttling
    * (used when a tool starts so the user sees it immediately).
-   * Error cooldown is always respected.
+   * Error cooldown is always respected. Mutex prevents concurrent API calls —
+   * without it, multiple appendText() tokens pass the time check while
+   * the first sendOrEdit is still in flight, causing 429 spam.
    */
   async flush(force = false): Promise<void> {
     const now = Date.now();
     if (now - this.lastErrorTime < ERROR_COOLDOWN_MS) return;
     if (!force && now - this.lastFlushTime < UPDATE_INTERVAL_MS) return;
+    if (this.flushInProgress) return;
 
-    // Build display: current streamed text + live tool indicator suffix
-    let display = this.truncateForTelegram(processThinkTags(this.fullText)) || '⏳';
-    if (this.toolLabel) {
-      display = `${display}\n\n${this.toolLabel}`;
+    this.flushInProgress = true;
+    try {
+      // Build display: current streamed text + live tool indicator suffix
+      let display = this.truncateForTelegram(processThinkTags(this.fullText)) || '⏳';
+      if (this.toolLabel) {
+        display = `${display}\n\n${this.toolLabel}`;
+      }
+
+      await this.sendOrEdit(display);
+    } catch (err) {
+      logger.error({ err }, '[STREAM] Unexpected flush error');
+      this.lastErrorTime = Date.now();
+    } finally {
+      this.flushInProgress = false;
     }
-
-    await this.sendOrEdit(display);
   }
 
   /**
@@ -279,21 +292,22 @@ export class TelegramStreamWriter {
       this.lastSentText = text;
       this.lastFlushTime = Date.now();
     } catch (err) {
-      const tgErr = err as unknown as { payload?: { error_code?: number; description?: string } };
-      if (tgErr?.payload?.error_code === 429) {
-        logger.error('[STREAM] Rate limited, cooling down');
-        this.lastErrorTime = Date.now();
-      } else if (tgErr?.payload?.description?.includes('message is not modified')) {
-        this.lastSentText = text;
-        this.lastFlushTime = Date.now();
-      } else if (tgErr?.payload?.description?.includes("can't parse entities")) {
-        // HTML parsing failed — strip all tags and retry as plain text
-        logger.warn('[STREAM] HTML parse error, falling back to plain text');
-        await this.sendPlainTextFallback(text);
+      if (err instanceof TelegramError) {
+        if (err.code === 429) {
+          logger.error('[STREAM] Rate limited, cooling down');
+          this.lastErrorTime = Date.now();
+        } else if (err.message.includes('message is not modified')) {
+          this.lastSentText = text;
+          this.lastFlushTime = Date.now();
+        } else if (err.message.includes("can't parse entities")) {
+          logger.warn('[STREAM] HTML parse error, falling back to plain text');
+          await this.sendPlainTextFallback(text);
+        } else {
+          logger.error({ err }, '[STREAM] Update error');
+          this.lastErrorTime = Date.now();
+        }
       } else {
         logger.error({ err }, '[STREAM] Update error');
-        // Prevent rapid retries on any HTML/content error — without this every
-        // incoming token triggers a new failed API call until the stream ends.
         this.lastErrorTime = Date.now();
       }
     }
