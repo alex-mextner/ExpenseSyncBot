@@ -162,7 +162,7 @@ function formatAnomalies(anomalies: CategoryAnomaly[]): string {
 
     lines.push(
       `- ${a.category}: €${a.current_month_total.toFixed(2)} за текущий месяц vs среднее €${a.avg_3_month.toFixed(2)}/мес за 3 месяца. ` +
-        `Deviation: ${a.deviation_ratio.toFixed(2)}x. [${severityLabel}]`,
+        `Отклонение: ${a.deviation_ratio.toFixed(2)}x (траты в ${a.deviation_ratio.toFixed(1)} раза выше среднего за 3 мес). [${severityLabel}]`,
     );
   }
 
