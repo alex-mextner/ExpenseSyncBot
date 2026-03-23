@@ -249,6 +249,10 @@ bun test
 
 ## Environment Variables
 
+All `process.env.*` reads go through `src/config/env.ts` and are accessed via the config object.
+Never read `process.env.*` directly in feature code, bot handlers, or services.
+Optional features that depend on an env var must deactivate gracefully when the var is absent — never throw at startup.
+
 Required in `.env` (see [.env.example](.env.example)):
 
 - `BOT_TOKEN` - from @BotFather
@@ -284,6 +288,11 @@ ssh www-data@104.248.84.190 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
 # Состояние процессов:
 ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 ```
+
+### AI chat logs
+
+`logs/chats/` на сервере содержит подробные логи общения бота через ИИ с пользователями —
+полные запросы, ответы, tool calls. Смотри при отладке неожиданного поведения ИИ.
 
 ## Common Gotchas
 
@@ -326,6 +335,8 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 - NEVER throw away or rewrite implementations without EXPLICIT permission. If considering this, STOP and ask first.
 - MATCH the style and formatting of surrounding code, even if it differs from standard style guides. Consistency within a file trumps external standards.
 - Fix broken things immediately when you find them. Don't ask permission to fix bugs.
+- **Comments hygiene**: when refactoring, verify no useful comments were accidentally deleted.
+  Check: `git diff | grep "^-.*\/\/"`. Never silently drop comments.
 - **Dependency versions always use `^`** (e.g. `"gramio": "^0.4.11"`). Never pin exact versions.
 - **No `any`/`as any`/`Function`** — proper typing only.
 - **`as unknown as T` and `as unknown` are banned except as absolute last resort.** Before using either:
@@ -382,7 +393,8 @@ Follow this framework for ANY technical issue:
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
 - NEVER write tests that "test" mocked behavior instead of real logic
-- NEVER ignore system or test output — logs and messages often contain CRITICAL information
+- **NEVER ignore test/system output** — logs and messages often contain CRITICAL information.
+  Read test output, don't just check pass/fail. Warnings in logs point to real bugs.
 - Test output MUST BE PRISTINE TO PASS
 
 ### Version Control
@@ -390,7 +402,13 @@ Follow this framework for ANY technical issue:
 - NEVER use `git add -A` without checking `git status` first
 - Commit frequently throughout development, even if high-level tasks are not yet done
 - NEVER skip, evade, or disable a pre-commit hook
-- **Before every commit**: after your own review, run `codex exec review --uncommitted` and address any issues it finds before committing. This 2-stage review is mandatory even if the user just says "commit" — that is not permission to skip it.
+- **NEVER use `git add -A`** without checking `git status` first.
+- **Deferred findings**: when skipping a review finding (out of scope, pre-existing), create a GitHub
+  issue for it. Don't silently drop known issues.
+- **Before every commit** (3-stage review, mandatory even if the user just says "commit"):
+  1. Run `bunx knip` — fix unused exports, dependencies, and files.
+  2. Self-review your own changes.
+  3. Run `codex exec review --uncommitted` — address any issues it finds.
 
 ## MCP Tools
 
@@ -468,136 +486,41 @@ Also scan the conversation history for items explicitly deferred, noted as "pend
 
 ### Message length
 - `sendMessage` / `editMessageText`: **4 096 chars**
-- Caption (photo, document, video, etc.): **1 024 chars**
+- Caption (photo, document, video, etc.): **1 024 chars** (4 096 for Telegram Premium users)
+- Quote in reply: **1 024 chars**
 - `answerCallbackQuery` alert: **200 chars**
 
 When text may exceed 4 096 chars, split into multiple messages.
+Never send a caption > 1 024 — it silently fails for non-Premium users.
 
 ### Rate limits
 - **~1 msg/sec per chat** — safe burst rate for a single user/group
-- **~30 msg/sec globally** across all chats
+- **~30 msg/sec globally** across all chats (official FAQ)
 - **20 msg/min per group/channel**
-- Exceeding any limit → HTTP **429** with `retry_after`. A 429 **blocks all API calls** — implement global backoff, not per-method.
+- Exceeding any limit → HTTP **429** with `retry_after` (seconds). A 429 **blocks all API calls**, not just sendMessage — implement global backoff, not per-method.
 
 ### Inline keyboard
-- Max **8 buttons per row**, max **100 buttons total**
+- Max **8 buttons per row**
+- Max **100 buttons total**
+- Total `reply_markup` JSON: **10 KB** — easy to exceed with 100 buttons with long labels
 - `callback_data` per button: **64 bytes** (UTF-8). Exceeding → `400 BUTTON_DATA_INVALID`. Store state server-side, pass a short key.
 
 ### Commands
 - Command name: **1–32 chars** (lowercase a-z, 0-9, `_`)
+- Command description: **256 chars**
+- Max commands registered: **100**
 - `/start` deep-link payload: **64 bytes**
 
 ### File size
 - Upload to Telegram: **50 MB**
 - Download via `getFile`: **20 MB**
+- Album (`sendMediaGroup`): **2–10 items**
+
+### Formatting entities
+- Max **100 entities per message** — don't generate unbounded lists of bold/italic/code spans.
+- `parse_mode` and explicit `entities` are mutually exclusive.
 
 ### Message editing
-- Editable for **48 hours** after sending.
+- Editable for **48 hours** after sending (channels: no limit).
+- Can't edit messages sent by other bots or users.
 
----
-
-## Default to using Bun instead of Node.js
-
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Bun automatically loads .env, so don't use dotenv.
-
-## APIs
-
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
-
-## Testing with bun
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
-
-## Frontend with bun
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-
-// import .css files directly and it works
-import './index.css';
-
-import { createRoot } from "react-dom/client";
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.md`.
