@@ -2,7 +2,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import { InferenceClient } from '@huggingface/inference';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
-import { TelegramError } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
@@ -313,11 +312,10 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
     let lastMessageText = '';
     let sentMessageId: number | null = null;
     let lastUpdateTime = 0;
-    let lastErrorTime = 0;
     const UPDATE_INTERVAL_MS = 5000; // Update every 5 seconds
-    const ERROR_COOLDOWN_MS = 10000; // Wait 10 seconds after error
 
     // Stream the response with controlled updates
+    // Rate limiting is handled by the global rate-limit middleware
     for await (const chunk of stream) {
       if (chunk.choices && chunk.choices.length > 0) {
         const delta = chunk.choices[0]?.delta;
@@ -327,12 +325,10 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
 
           const now = Date.now();
           const timeSinceLastUpdate = now - lastUpdateTime;
-          const timeSinceLastError = now - lastErrorTime;
 
           // Update message only if enough time has passed
           if (
             timeSinceLastUpdate >= UPDATE_INTERVAL_MS &&
-            timeSinceLastError >= ERROR_COOLDOWN_MS &&
             fullResponse.length - lastMessageText.length > 10
           ) {
             // Truncate to fit Telegram limit (4096 chars) for intermediate updates
@@ -350,7 +346,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
               if (textToSend === lastMessageText) {
                 continue;
               }
-              // Edit existing message
+              // Edit existing message — 429 is handled by rate limiter middleware
               try {
                 await bot.api.editMessageText({
                   chat_id: chatId,
@@ -361,18 +357,7 @@ ${budgetsContext}${financialSnapshotContext ? `\n\n=== ФИНАНСОВАЯ АН
                 lastMessageText = textToSend;
                 lastUpdateTime = now;
               } catch (err: unknown) {
-                // If rate limited, wait longer
-                if (err instanceof TelegramError && err.code === 429) {
-                  logger.error('[ASK] Rate limited, waiting...');
-                  lastErrorTime = now;
-                  // Wait the cooldown period
-                  await new Promise((resolve) => setTimeout(resolve, ERROR_COOLDOWN_MS));
-                } else if (
-                  err instanceof Error &&
-                  err.message.includes('message is not modified')
-                ) {
-                  // Shouldn't happen after the check above, but just in case
-                  logger.info('[ASK] Message not modified (unexpected)');
+                if (err instanceof Error && err.message.includes('message is not modified')) {
                   lastMessageText = textToSend;
                   lastUpdateTime = now;
                 } else if (err instanceof Error && err.message.includes("can't parse entities")) {

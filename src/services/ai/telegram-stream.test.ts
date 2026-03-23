@@ -800,7 +800,7 @@ describe('sendOrEdit HTML error fallback', () => {
 // ── 429 rate limit handling ─────────────────────────────────────────
 
 describe('429 rate limit handling', () => {
-  test('detects TelegramError with code 429 and triggers cooldown', async () => {
+  test('retries after 429 and succeeds on second attempt', async () => {
     let editCount = 0;
     const fakeBot = {
       api: {
@@ -809,9 +809,14 @@ describe('429 rate limit handling', () => {
         deleteMessage: () => Promise.resolve(),
         editMessageText: mock(() => {
           editCount++;
-          return Promise.reject(
-            makeTelegramError('Too Many Requests: retry after 5', 429, { retry_after: 5 }),
-          );
+          if (editCount === 1) {
+            // First edit: 429 with minimal retry_after for fast test
+            return Promise.reject(
+              makeTelegramError('Too Many Requests: retry after 1', 429, { retry_after: 1 }),
+            );
+          }
+          // Retry succeeds
+          return Promise.resolve();
         }),
       },
       // biome-ignore lint/suspicious/noExplicitAny: test stub
@@ -823,21 +828,19 @@ describe('429 rate limit handling', () => {
     (writer as any).fullText = 'initial text';
     await writer.flush(true);
 
-    // Second flush: editMessageText → 429 → cooldown
+    // Second flush: editMessageText → 429 → wait → retry succeeds
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
     (writer as any).fullText = 'updated text';
     // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
     (writer as any).lastSentText = '';
+    const start = Date.now();
     await writer.flush(true);
-    expect(editCount).toBe(1);
+    const elapsed = Date.now() - start;
 
-    // Third flush: should be blocked by error cooldown
-    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
-    (writer as any).fullText = 'even more text';
-    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
-    (writer as any).lastSentText = '';
-    await writer.flush(true);
-    expect(editCount).toBe(1); // no new call — cooldown active
+    // Should have retried: 2 edit calls (original + retry)
+    expect(editCount).toBe(2);
+    // Should have waited ~1 second for retry_after
+    expect(elapsed).toBeGreaterThanOrEqual(900);
 
     // biome-ignore lint/suspicious/noExplicitAny: access private method
     (writer as any).stopTyping();

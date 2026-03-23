@@ -294,8 +294,32 @@ export class TelegramStreamWriter {
     } catch (err) {
       if (err instanceof TelegramError) {
         if (err.code === 429) {
-          logger.error('[STREAM] Rate limited, cooling down');
-          this.lastErrorTime = Date.now();
+          const retryAfter = err.payload?.retry_after ?? 5;
+          logger.error(`[STREAM] Rate limited, retrying after ${retryAfter}s`);
+          await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+          // Retry once — rate limiter middleware will also delay the call
+          try {
+            if (this.sentMessageId) {
+              await this.bot.api.editMessageText({
+                chat_id: this.chatId,
+                message_id: this.sentMessageId,
+                text,
+                parse_mode: 'HTML',
+              });
+            } else {
+              const sent = await this.bot.api.sendMessage({
+                chat_id: this.chatId,
+                text,
+                parse_mode: 'HTML',
+              });
+              this.sentMessageId = sent.message_id;
+            }
+            this.lastSentText = text;
+            this.lastFlushTime = Date.now();
+          } catch (retryErr) {
+            logger.error({ err: retryErr }, '[STREAM] Retry after 429 also failed');
+            this.lastErrorTime = Date.now();
+          }
         } else if (err.message.includes('message is not modified')) {
           this.lastSentText = text;
           this.lastFlushTime = Date.now();

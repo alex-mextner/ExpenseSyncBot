@@ -123,3 +123,51 @@ describe('rateLimitPreRequest', () => {
     expect((result.params as any).text).toBe('original');
   });
 });
+
+// ── Per-chat throttle ───────────────────────────────────────────────
+
+describe('per-chat throttle', () => {
+  test('second call to same chat is delayed by PER_CHAT_INTERVAL_MS', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    const ctx1 = { method: 'sendMessage', params: { chat_id: 42, text: 'a' } } as any;
+    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    const ctx2 = { method: 'editMessageText', params: { chat_id: 42, text: 'b' } } as any;
+
+    await rateLimitPreRequest(ctx1);
+    const start = Date.now();
+    await rateLimitPreRequest(ctx2);
+    const elapsed = Date.now() - start;
+
+    // Should wait ~200ms (PER_CHAT_INTERVAL_MS)
+    expect(elapsed).toBeGreaterThanOrEqual(150);
+    expect(elapsed).toBeLessThan(400);
+  });
+
+  test('calls to different chats are not delayed', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    const ctx1 = { method: 'sendMessage', params: { chat_id: 100, text: 'a' } } as any;
+    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    const ctx2 = { method: 'sendMessage', params: { chat_id: 200, text: 'b' } } as any;
+
+    await rateLimitPreRequest(ctx1);
+    const start = Date.now();
+    await rateLimitPreRequest(ctx2);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  test('calls without chat_id are not throttled', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    const ctx1 = { method: 'getMe', params: {} } as any;
+    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    const ctx2 = { method: 'getMe', params: {} } as any;
+
+    await rateLimitPreRequest(ctx1);
+    const start = Date.now();
+    await rateLimitPreRequest(ctx2);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(50);
+  });
+});
