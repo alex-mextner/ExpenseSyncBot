@@ -12,13 +12,13 @@
 
 import { $ } from 'bun';
 import type { InlineKeyboard } from 'gramio';
-import { escapeHtml } from '../../bot/commands/ask';
 import {
   createDevApprovalKeyboard,
   createDevMergeKeyboard,
   createDevReviewKeyboard,
 } from '../../bot/keyboards';
 import { database } from '../../database';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { runCodexReview } from './codex-integration';
 import { AgentAbortedError, DevAgent } from './dev-agent';
