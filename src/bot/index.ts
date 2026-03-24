@@ -127,23 +127,10 @@ export async function startBot(): Promise<Bot> {
   await bot.start();
   logger.info('✓ Bot started successfully');
 
-  // Register commands in Telegram menu
+  // Register commands in Telegram menu (from single source of truth)
+  const { BOT_COMMANDS } = await import('./command-descriptions');
   await bot.api.setMyCommands({
-    commands: [
-      { command: 'help', description: 'Все возможности бота' },
-      { command: 'connect', description: 'Подключить Google аккаунт' },
-      { command: 'spreadsheet', description: 'Ссылка на таблицу' },
-      { command: 'stats', description: 'Статистика расходов' },
-      { command: 'sum', description: 'Итого за месяц' },
-      { command: 'budget', description: 'Управление бюджетами' },
-      { command: 'categories', description: 'Список категорий' },
-      { command: 'advice', description: 'Финансовый совет от AI' },
-      { command: 'sync', description: 'Загрузить из таблицы' },
-      { command: 'push', description: 'Выгрузить в таблицу' },
-      { command: 'prompt', description: 'Настроить AI-промпт' },
-      { command: 'topic', description: 'Ограничить бота топиком' },
-      { command: 'settings', description: 'Текущие настройки' },
-    ],
+    commands: BOT_COMMANDS.map((c) => ({ command: c.command, description: c.description })),
   });
   logger.info('✓ Bot commands registered');
 

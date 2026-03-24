@@ -183,10 +183,22 @@ export async function appendExpenseRow(
     headers = await ensureRateColumn(sheets, spreadsheetId, headers);
   }
 
+  // Find column indices for formula generation
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  let amountColIdx = -1;
+  for (let i = 0; i < headers.length; i++) {
+    const code = headers[i]?.split(' ')[0];
+    if (code === expenseCurrency) {
+      amountColIdx = i;
+      break;
+    }
+  }
+
   // Build row values based on header order
   const row: (string | number | null)[] = [];
 
-  for (const header of headers) {
+  for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+    const header = headers[colIdx];
     if (header === SPREADSHEET_CONFIG.headers[0]) {
       row.push(data.date);
     } else if (header === SPREADSHEET_CONFIG.headers[1]) {
@@ -194,18 +206,21 @@ export async function appendExpenseRow(
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      row.push(data.eurAmount);
+      // EUR(calc) as formula: =AMOUNT*RATE (or static for EUR expenses / missing rate)
+      if (expenseCurrency === 'EUR' || !data.rate || amountColIdx === -1 || rateColIdx === -1) {
+        row.push(data.eurAmount);
+      } else {
+        // Formula placeholder — row number is filled in below after we know nextRow
+        row.push(`__EUR_FORMULA__`);
+      }
     } else if (header === RATE_COLUMN_HEADER) {
       row.push(data.rate ?? '');
     } else {
-      // Currency columns
-      const currencyCode = header.split(' ')[0] as CurrencyCode;
+      const currencyCode = header?.split(' ')[0] as CurrencyCode;
       const value = data.amounts[currencyCode] ?? '';
       row.push(value);
     }
   }
-
-  logger.info({ data: row }, `[SHEETS] Final row`);
 
   // Find last row with data in column A
   const dataResponse = await sheets.spreadsheets.values.get({
@@ -215,6 +230,16 @@ export async function appendExpenseRow(
 
   const existingRows = dataResponse.data.values || [];
   const nextRow = existingRows.length + 1;
+
+  // Replace EUR formula placeholder with actual formula now that we know the row
+  const formulaIdx = row.indexOf('__EUR_FORMULA__');
+  if (formulaIdx !== -1 && amountColIdx !== -1 && rateColIdx !== -1) {
+    const amountCell = `${colLetter(amountColIdx)}${nextRow}`;
+    const rateCell = `${colLetter(rateColIdx)}${nextRow}`;
+    row[formulaIdx] = `=${amountCell}*${rateCell}`;
+  }
+
+  logger.info({ data: row }, `[SHEETS] Final row`);
 
   const lastCol = colLetter(row.length - 1);
 

@@ -201,13 +201,13 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 - `/advice` - Get AI daily advice (groups only)
 - `/prompt` - Manage AI system prompt (groups only)
 
-### Group vs Personal Mode
+### Group-Only Mode
 
-Bot supports both personal chats and groups:
+Bot works **only in groups** (group / supergroup). Personal chat redirects user to their group with a link button.
 
-- **Personal:** Each user has own spreadsheet, categories, expenses
-- **Groups:** Shared spreadsheet/budget, multiple users contribute
-- Group mode was added later (migration 007) - users table has group_id
+- All commands check `isGroup` and reply with "работает только в группах" otherwise
+- One spreadsheet per group, shared between all members
+- `message.handler.ts` in private chat tries to find user's group and sends a link
 
 Check chat type: `ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'`
 
