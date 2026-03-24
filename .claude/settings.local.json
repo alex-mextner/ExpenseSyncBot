@@ -18,7 +18,10 @@
       "Bash(node_modules/.bin/biome check:*)",
       "Bash(node_modules/.bin/biome lint:*)",
       "Bash(/Users/ultra/xp/ExpenseSyncBot/node_modules/.bin/biome check:*)",
-      "Bash(node_modules/.bin/biome format:*)"
+      "Bash(node_modules/.bin/biome format:*)",
+      "Bash(/Users/ultra/.bun/bin/bunx knip:*)",
+      "Bash(./scripts/backup-db.sh 2>&1)",
+      "Bash(bunx knip:*)"
     ],
     "deny": [],
     "ask": []

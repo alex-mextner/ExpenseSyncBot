@@ -44,4 +44,4 @@ temp-images/
 debug-images/
 
 # Other
-.claude/worktrees/
+.claude/worktrees/.playwright-mcp
