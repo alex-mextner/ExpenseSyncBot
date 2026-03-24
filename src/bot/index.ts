@@ -72,6 +72,16 @@ export function createBot(): Bot {
 
   // Text messages (expense entries or questions)
   bot.on('message', async (ctx) => {
+    // Auto-sync from sheet (non-blocking, 10 min cooldown)
+    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+    if (isGroup) {
+      const group = database.groups.findByTelegramGroupId(ctx.chat.id);
+      if (group?.spreadsheet_id && group?.google_refresh_token) {
+        const { maybeSyncExpenses } = await import('./commands/sync');
+        maybeSyncExpenses(group.id).catch(() => {});
+      }
+    }
+
     // Handle photo messages (receipts with QR codes)
     if (ctx.photo && ctx.photo.length > 0) {
       await handlePhotoMessage(ctx);

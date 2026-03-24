@@ -12,7 +12,6 @@ import {
   createBudgetSheet,
   hasBudgetSheet,
   readBudgetData,
-  readExpensesFromSheet,
   writeBudgetRow,
 } from '../google/sheets';
 import type { AgentContext, ToolResult } from './types';
@@ -434,72 +433,30 @@ function executeDeleteExpense(input: Record<string, unknown>, ctx: AgentContext)
 // === Sync tools ===
 
 async function executeSyncFromSheets(ctx: AgentContext): Promise<ToolResult> {
-  const group = database.groups.findById(ctx.groupId);
-  if (!group || !group.google_refresh_token || !group.spreadsheet_id) {
-    return { success: false, error: 'Google Sheets not connected' };
-  }
+  try {
+    const { syncExpenses } = await import('../../bot/commands/sync');
+    const result = await syncExpenses(ctx.groupId);
 
-  const { expenses: sheetExpenses, errors: multiCurrencyErrors } = await readExpensesFromSheet(
-    group.google_refresh_token,
-    group.spreadsheet_id,
-  );
+    if (result.errors.length > 0) {
+      const lines = result.errors.map(
+        (e) => `Row ${e.row}: ${e.date} ${e.category} — currencies: ${e.currencies.join(', ')}`,
+      );
+      return {
+        success: false,
+        error: `Found ${result.errors.length} rows with amounts in multiple currency columns:\n${lines.join('\n')}`,
+      };
+    }
 
-  if (multiCurrencyErrors.length > 0) {
-    const lines = multiCurrencyErrors.map(
-      (e) => `Row ${e.row}: ${e.date} ${e.category} — currencies: ${e.currencies.join(', ')}`,
-    );
+    return {
+      success: true,
+      output: `Sync complete. Added: ${result.added.length}, Deleted: ${result.deleted.length}, Updated: ${result.updated.length}, Unchanged: ${result.unchanged}, New categories: ${result.createdCategories.length}`,
+    };
+  } catch (err) {
     return {
       success: false,
-      error: `Found ${multiCurrencyErrors.length} rows with amounts in multiple currency columns. Fix in spreadsheet first:\n${lines.join('\n')}`,
+      error: `Sync failed: ${err instanceof Error ? err.message : 'unknown'}`,
     };
   }
-
-  const deletedCount = database.expenses.deleteAllByGroupId(ctx.groupId);
-
-  const users = database.users.findByGroupId ? database.users.findByGroupId(ctx.groupId) : [];
-  const [firstUser] = users;
-  const defaultUserId = firstUser !== undefined ? firstUser.id : ctx.userId;
-
-  let syncedCount = 0;
-  let createdCategories = 0;
-
-  for (const expense of sheetExpenses) {
-    // Create category if missing
-    if (expense.category && expense.category !== 'Без категории') {
-      if (!database.categories.exists(ctx.groupId, expense.category)) {
-        database.categories.create({ group_id: ctx.groupId, name: expense.category });
-        createdCategories++;
-      }
-    }
-
-    let amount = 0;
-    let currency: CurrencyCode = 'EUR';
-    for (const [curr, amt] of Object.entries(expense.amounts) as [string, number][]) {
-      amount = amt;
-      currency = curr as CurrencyCode;
-      break;
-    }
-
-    if (amount === 0) continue;
-
-    database.expenses.create({
-      group_id: ctx.groupId,
-      user_id: defaultUserId,
-      date: expense.date,
-      category: expense.category,
-      comment: expense.comment,
-      amount,
-      currency,
-      eur_amount: expense.eurAmount,
-    });
-
-    syncedCount++;
-  }
-
-  return {
-    success: true,
-    output: `Sync complete. Deleted: ${deletedCount}, Loaded: ${syncedCount}, New categories: ${createdCategories}`,
-  };
 }
 
 async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
