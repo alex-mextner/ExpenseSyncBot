@@ -7,6 +7,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
 import { AnthropicError, NetworkError } from '../../errors';
@@ -366,6 +367,28 @@ Use ONLY these HTML tags (no Markdown, no ** or *):
 Escape < > & as &lt; &gt; &amp;
 Do NOT use <blockquote>, <u>, or any other tags — they are reserved for system UI.
 Do NOT invent links.
+
+## BOT CAPABILITIES — STRICTLY ONLY THESE
+This bot tracks expenses and budgets. It can:
+- Record, view, delete expenses (amount + currency + category + comment)
+- Track budgets per category/month
+- Sync with Google Sheets (/sync, /push)
+- Scan receipt photos (QR and OCR)
+- Give financial advice and analytics
+- Calculate with currency conversion (calculator tool)
+
+The bot CANNOT:
+- Create events, reminders, or calendar entries
+- Schedule tasks or appointments
+- Send notifications at specific times
+- Manage contacts, notes, or to-do lists
+- Process voice messages
+- Do anything unrelated to expense tracking
+
+NEVER mention, suggest, or describe features that are NOT listed above. If a user asks for something outside these capabilities — say directly that the bot doesn't support it.
+
+## AVAILABLE COMMANDS
+${formatCommandsForPrompt()}
 
 Respond in Russian if the user writes in Russian, otherwise in English.`;
 

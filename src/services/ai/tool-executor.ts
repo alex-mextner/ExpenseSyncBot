@@ -7,9 +7,8 @@ import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants'
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
-import { convertCurrency, convertToEUR, formatExchangeRatesForAI } from '../currency/converter';
+import { convertCurrency, formatExchangeRatesForAI } from '../currency/converter';
 import {
-  appendExpenseRow,
   createBudgetSheet,
   hasBudgetSheet,
   readBudgetData,
@@ -375,50 +374,36 @@ async function executeAddExpense(
   }
 
   const currency = (input['currency'] as CurrencyCode) || group.default_currency;
-  const eurAmount = convertToEUR(amount, currency);
 
   // Ensure category exists
   if (!database.categories.exists(ctx.groupId, category)) {
     database.categories.create({ group_id: ctx.groupId, name: category });
   }
 
-  // Create expense in DB
-  const expense = database.expenses.create({
-    group_id: ctx.groupId,
-    user_id: ctx.userId,
-    date,
-    category,
-    comment,
-    amount,
-    currency,
-    eur_amount: eurAmount,
-  });
+  // Record via ExpenseRecorder (handles sheet write, EUR conversion, rate storage, DB insert)
+  const { getExpenseRecorder } = await import('../expense-recorder');
+  const recorder = getExpenseRecorder();
 
-  // Sync to Google Sheets
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    try {
-      const amounts = {} as Record<CurrencyCode, number | null>;
-      for (const curr of group.enabled_currencies) {
-        amounts[curr] = curr === currency ? amount : null;
-      }
+  try {
+    const { expense, eurAmount } = await recorder.record(ctx.groupId, ctx.userId, {
+      date,
+      category,
+      comment,
+      amount,
+      currency,
+    });
 
-      await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
-        date,
-        category,
-        comment,
-        amounts,
-        eurAmount,
-      });
-    } catch (err) {
-      logger.error({ err: err }, '[TOOL] Failed to write expense to Google Sheets');
-      // Non-fatal: expense is saved in DB
-    }
+    return {
+      success: true,
+      output: `Expense added: ${amount.toFixed(2)} ${currency} (EUR ${eurAmount.toFixed(2)}) in ${category} on ${date}. ID: ${expense.id}`,
+    };
+  } catch (err) {
+    logger.error({ err: err }, '[TOOL] Failed to add expense');
+    return {
+      success: false,
+      error: `Failed to add expense: ${err instanceof Error ? err.message : 'unknown'}`,
+    };
   }
-
-  return {
-    success: true,
-    output: `Expense added: ${amount.toFixed(2)} ${currency} (EUR ${eurAmount.toFixed(2)}) in ${category} on ${date}. ID: ${expense.id}`,
-  };
 }
 
 function executeDeleteExpense(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
@@ -454,10 +439,20 @@ async function executeSyncFromSheets(ctx: AgentContext): Promise<ToolResult> {
     return { success: false, error: 'Google Sheets not connected' };
   }
 
-  const sheetExpenses = await readExpensesFromSheet(
+  const { expenses: sheetExpenses, errors: multiCurrencyErrors } = await readExpensesFromSheet(
     group.google_refresh_token,
     group.spreadsheet_id,
   );
+
+  if (multiCurrencyErrors.length > 0) {
+    const lines = multiCurrencyErrors.map(
+      (e) => `Row ${e.row}: ${e.date} ${e.category} — currencies: ${e.currencies.join(', ')}`,
+    );
+    return {
+      success: false,
+      error: `Found ${multiCurrencyErrors.length} rows with amounts in multiple currency columns. Fix in spreadsheet first:\n${lines.join('\n')}`,
+    };
+  }
 
   const deletedCount = database.expenses.deleteAllByGroupId(ctx.groupId);
 
@@ -479,7 +474,7 @@ async function executeSyncFromSheets(ctx: AgentContext): Promise<ToolResult> {
 
     let amount = 0;
     let currency: CurrencyCode = 'EUR';
-    for (const [curr, amt] of Object.entries(expense.amounts)) {
+    for (const [curr, amt] of Object.entries(expense.amounts) as [string, number][]) {
       amount = amt;
       currency = curr as CurrencyCode;
       break;

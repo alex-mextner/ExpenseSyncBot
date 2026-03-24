@@ -37,5 +37,10 @@ export async function handleSpreadsheetCommand(ctx: Ctx['Command']): Promise<voi
 
   const spreadsheetUrl = getSpreadsheetUrl(group.spreadsheet_id);
 
-  await ctx.send(`📊 Ссылка на таблицу:\n\n${spreadsheetUrl}`);
+  await ctx.send(
+    `📊 Ссылка на таблицу:\n${spreadsheetUrl}\n\n` +
+      `Можно редактировать прямо в таблице. После правок:\n` +
+      `• /sync — подхватить изменения расходов\n` +
+      `• /budget sync — подхватить изменения бюджетов`,
+  );
 }

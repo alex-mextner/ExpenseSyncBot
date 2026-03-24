@@ -44,12 +44,23 @@ export async function handleSyncCommand(ctx: Ctx['Command']): Promise<void> {
     logger.info(`[SYNC] Reading expenses from Google Sheet for group ${group.id}`);
 
     // Read all expenses from sheet
-    const sheetExpenses = await readExpensesFromSheet(
+    const { expenses: sheetExpenses, errors: multiCurrencyErrors } = await readExpensesFromSheet(
       group.google_refresh_token,
       group.spreadsheet_id,
     );
 
     logger.info(`[SYNC] Found ${sheetExpenses.length} expenses in sheet`);
+
+    // Report multi-currency errors
+    if (multiCurrencyErrors.length > 0) {
+      const errorLines = multiCurrencyErrors.map(
+        (e) => `• Строка ${e.row}: ${e.date} ${e.category} — валюты: ${e.currencies.join(', ')}`,
+      );
+      await ctx.send(
+        `⚠️ Найдены строки с суммами в нескольких валютах одновременно:\n${errorLines.join('\n')}\n\n` +
+          `Поправь в таблице — в каждой строке сумма должна быть только в одном столбце валюты. Эти строки пропущены.`,
+      );
+    }
 
     // Delete all existing expenses for this group
     const deletedCount = database.expenses.deleteAllByGroupId(group.id);

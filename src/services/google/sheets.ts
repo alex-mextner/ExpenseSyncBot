@@ -14,8 +14,19 @@ export interface SheetRow {
   date: string;
   amounts: Record<string, number>; // currency -> amount
   eurAmount: number;
+  rate: number | null; // exchange rate stored at write time (1 CURRENCY = rate EUR)
   category: string;
   comment: string;
+}
+
+/**
+ * Error describing a row with amounts in multiple currency columns
+ */
+export interface MultiCurrencyRowError {
+  row: number; // 1-based spreadsheet row
+  date: string;
+  currencies: string[]; // e.g. ["USD", "RSD"]
+  category: string;
 }
 
 /**
@@ -111,6 +122,24 @@ export async function createExpenseSpreadsheet(
 /**
  * Append expense row to spreadsheet
  */
+/**
+ * Column letter for a 0-based index (0=A, 1=B, ..., 25=Z, 26=AA)
+ */
+function colLetter(index: number): string {
+  let letter = '';
+  let n = index;
+  while (n >= 0) {
+    letter = String.fromCharCode(65 + (n % 26)) + letter;
+    n = Math.floor(n / 26) - 1;
+  }
+  return letter;
+}
+
+/**
+ * Rate column header constant
+ */
+const RATE_COLUMN_HEADER = 'Rate (→EUR)';
+
 export async function appendExpenseRow(
   refreshToken: string,
   spreadsheetId: string,
@@ -118,8 +147,9 @@ export async function appendExpenseRow(
     date: string;
     category: string;
     comment: string;
-    amounts: Record<CurrencyCode, number | null>; // Currency -> amount
+    amounts: Record<string, number | null>; // Currency -> amount
     eurAmount: number;
+    rate?: number; // Exchange rate used (1 CURRENCY = rate EUR)
   },
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
@@ -128,38 +158,49 @@ export async function appendExpenseRow(
   // Get headers to determine column order
   const headersResponse = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A1:Z1`,
+    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
   });
 
-  const headers = headersResponse.data.values?.[0] || [];
+  let headers: string[] = headersResponse.data.values?.[0] || [];
   logger.info({ data: headers }, `[SHEETS] Headers from spreadsheet`);
-  logger.info({ data }, `[SHEETS] Data to append`);
+
+  // Check if expense currency has a column; if not, insert one
+  const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
+  if (expenseCurrency) {
+    const hasCurrencyCol = headers.some((h) => h.startsWith(`${expenseCurrency} (`));
+    if (!hasCurrencyCol) {
+      headers = await insertCurrencyColumn(
+        sheets,
+        spreadsheetId,
+        headers,
+        expenseCurrency as CurrencyCode,
+      );
+    }
+  }
+
+  // Ensure Rate column exists
+  if (!headers.includes(RATE_COLUMN_HEADER)) {
+    headers = await ensureRateColumn(sheets, spreadsheetId, headers);
+  }
 
   // Build row values based on header order
   const row: (string | number | null)[] = [];
 
   for (const header of headers) {
     if (header === SPREADSHEET_CONFIG.headers[0]) {
-      // Дата
-      logger.info(`[SHEETS] Adding date: ${data.date}`);
       row.push(data.date);
     } else if (header === SPREADSHEET_CONFIG.headers[1]) {
-      // Категория
-      logger.info(`[SHEETS] Adding category: ${data.category}`);
       row.push(data.category);
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
-      // Комментарий
-      logger.info(`[SHEETS] Adding comment: ${data.comment}`);
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      // EUR (calc)
-      logger.info(`[SHEETS] Adding EUR (calc): ${data.eurAmount}`);
       row.push(data.eurAmount);
+    } else if (header === RATE_COLUMN_HEADER) {
+      row.push(data.rate ?? '');
     } else {
       // Currency columns
       const currencyCode = header.split(' ')[0] as CurrencyCode;
       const value = data.amounts[currencyCode] ?? '';
-      logger.info(`[SHEETS] Header "${header}" -> currency "${currencyCode}" -> value ${value}`);
       row.push(value);
     }
   }
@@ -173,37 +214,158 @@ export async function appendExpenseRow(
   });
 
   const existingRows = dataResponse.data.values || [];
-  const nextRow = existingRows.length + 1; // +1 because rows are 1-indexed
+  const nextRow = existingRows.length + 1;
 
-  logger.info(`[SHEETS] Last row with data: ${existingRows.length}, inserting at row ${nextRow}`);
+  const lastCol = colLetter(row.length - 1);
 
-  // Calculate last column letter dynamically based on row length
-  const lastColLetter = String.fromCharCode(64 + row.length); // 1=A, 2=B, ..., 9=I, etc.
-
-  // Update specific row instead of append
   const response = await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:${lastColLetter}${nextRow}`,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:${lastCol}${nextRow}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [row],
     },
   });
 
-  // Log API response for debugging
-  const updatedRange = response.data.updatedRange;
   const updatedRows = response.data.updatedRows;
-  const updatedCells = response.data.updatedCells;
-
   logger.info(
-    `[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`,
+    `[SHEETS] API response: range=${response.data.updatedRange}, rows=${updatedRows}, cells=${response.data.updatedCells}`,
   );
 
   if (!updatedRows || updatedRows === 0) {
     logger.error(
-      `[SHEETS] ⚠️ No rows were updated! Full response: ${JSON.stringify(response.data, null, 2)}`,
+      `[SHEETS] No rows were updated! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
   }
+}
+
+/**
+ * Insert a new currency column before EUR (calc) in an existing spreadsheet.
+ * Returns the updated headers array.
+ */
+async function insertCurrencyColumn(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  currentHeaders: string[],
+  currency: CurrencyCode,
+): Promise<string[]> {
+  const symbol = CURRENCY_SYMBOLS[currency] || currency;
+  const newHeader = `${currency} (${symbol})`;
+
+  // Insert before EUR (calc)
+  const eurCalcIdx = currentHeaders.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const insertIdx = eurCalcIdx !== -1 ? eurCalcIdx : currentHeaders.length;
+
+  // Get sheet ID
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets?.find(
+    (s) => s.properties?.title === SPREADSHEET_CONFIG.sheetName,
+  );
+  const sheetId = sheet?.properties?.sheetId;
+
+  if (sheetId === undefined) {
+    logger.error('[SHEETS] Cannot find Expenses sheet ID for column insertion');
+    return currentHeaders;
+  }
+
+  // Insert column at position
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: 'COLUMNS',
+              startIndex: insertIdx,
+              endIndex: insertIdx + 1,
+            },
+          },
+        },
+        {
+          updateCells: {
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: { stringValue: newHeader },
+                    userEnteredFormat: {
+                      textFormat: { bold: true },
+                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                    },
+                  },
+                ],
+              },
+            ],
+            fields: 'userEnteredValue,userEnteredFormat',
+            start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Inserted currency column "${newHeader}" at index ${insertIdx}`);
+
+  // Return updated headers
+  const updated = [...currentHeaders];
+  updated.splice(insertIdx, 0, newHeader);
+  return updated;
+}
+
+/**
+ * Ensure the Rate (→EUR) column exists, appending it at the end if missing.
+ * Returns the updated headers array.
+ */
+async function ensureRateColumn(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  currentHeaders: string[],
+): Promise<string[]> {
+  // Append at end
+  const insertIdx = currentHeaders.length;
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets?.find(
+    (s) => s.properties?.title === SPREADSHEET_CONFIG.sheetName,
+  );
+  const sheetId = sheet?.properties?.sheetId;
+
+  if (sheetId === undefined) {
+    logger.error('[SHEETS] Cannot find Expenses sheet ID for rate column');
+    return currentHeaders;
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateCells: {
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: { stringValue: RATE_COLUMN_HEADER },
+                    userEnteredFormat: {
+                      textFormat: { bold: true },
+                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                    },
+                  },
+                ],
+              },
+            ],
+            fields: 'userEnteredValue,userEnteredFormat',
+            start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Added Rate column at index ${insertIdx}`);
+  return [...currentHeaders, RATE_COLUMN_HEADER];
 }
 
 /**
@@ -570,16 +732,16 @@ export async function hasBudgetSheet(
 }
 
 /**
- * Read all expenses from Google Sheet
+ * Read all expenses from Google Sheet.
+ * Returns expenses and any rows with amounts in multiple currency columns (data errors).
  */
 export async function readExpensesFromSheet(
   refreshToken: string,
   spreadsheetId: string,
-): Promise<SheetRow[]> {
+): Promise<{ expenses: SheetRow[]; errors: MultiCurrencyRowError[] }> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Read all data from sheet
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${SPREADSHEET_CONFIG.sheetName}!A:Z`,
@@ -588,63 +750,56 @@ export async function readExpensesFromSheet(
   const rows = response.data.values || [];
 
   if (rows.length === 0) {
-    return [];
+    return { expenses: [], errors: [] };
   }
 
-  // First row is headers
   const headers = rows[0] as string[];
   logger.info({ data: headers }, `[SHEETS] Headers`);
 
-  // Find column indices
-  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? ''); // Дата
-  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? ''); // Категория
-  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? ''); // Комментарий
-  const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader); // EUR (calc)
+  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? '');
+  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? '');
+  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? '');
+  const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const rateCol = headers.indexOf(RATE_COLUMN_HEADER);
 
   if (dateCol === -1 || categoryCol === -1 || commentCol === -1) {
     throw new Error('Required columns not found in spreadsheet');
   }
 
-  // Find currency columns (e.g., "USD ($)", "RSD (RSD)")
+  // Find currency columns
   const currencyColumns: Array<{ index: number; currency: string }> = [];
   for (let i = 0; i < headers.length; i++) {
-    const header = headers[i];
+    const header = headers[i] ?? '';
     if (
       header &&
       header !== SPREADSHEET_CONFIG.headers[0] &&
       header !== SPREADSHEET_CONFIG.headers[1] &&
       header !== SPREADSHEET_CONFIG.headers[2] &&
-      header !== SPREADSHEET_CONFIG.eurColumnHeader
+      header !== SPREADSHEET_CONFIG.eurColumnHeader &&
+      header !== RATE_COLUMN_HEADER
     ) {
-      // Extract currency code from "USD ($)" -> "USD"
       const match = header.match(/^([A-Z]{3})\s*\(/);
-      if (match) {
-        currencyColumns.push({ index: i, currency: match[1] ?? '' });
+      if (match?.[1]) {
+        currencyColumns.push({ index: i, currency: match[1] });
       }
     }
   }
 
-  logger.info({ data: currencyColumns }, `[SHEETS] Currency columns`);
-
-  // Parse data rows (skip header)
   const expenses: SheetRow[] = [];
+  const errors: MultiCurrencyRowError[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as string[];
+    if (!row || row.length === 0 || !row[dateCol]) continue;
 
-    // Skip empty rows
-    if (!row || row.length === 0 || !row[dateCol]) {
-      continue;
-    }
-
-    const date = row[dateCol];
+    const date = row[dateCol] ?? '';
     const category = row[categoryCol] || 'Без категории';
     const comment = row[commentCol] || '';
     const eurAmountStr = eurCol !== -1 ? row[eurCol] : null;
 
     // Parse amounts for each currency
     const amounts: Record<string, number> = {};
-    let foundAmount = false;
+    const foundCurrencies: string[] = [];
 
     for (const { index, currency } of currencyColumns) {
       const value = row[index];
@@ -652,39 +807,55 @@ export async function readExpensesFromSheet(
         const parsed = parseFloat(value);
         if (!Number.isNaN(parsed) && parsed > 0) {
           amounts[currency] = parsed;
-          foundAmount = true;
+          foundCurrencies.push(currency);
         }
       }
     }
 
-    // Skip rows without any amounts
-    if (!foundAmount) {
-      continue;
+    if (foundCurrencies.length === 0) continue;
+
+    // Flag rows with amounts in multiple currency columns
+    if (foundCurrencies.length > 1) {
+      errors.push({
+        row: i + 1, // 1-based for spreadsheet display
+        date,
+        currencies: foundCurrencies,
+        category,
+      });
+      continue; // skip this row — data is ambiguous
     }
 
-    // Use EUR amount from sheet if available, otherwise calculate
-    let eurAmount: number;
+    // Read stored exchange rate
+    let rate: number | null = null;
+    if (rateCol !== -1) {
+      const rateStr = row[rateCol];
+      if (rateStr && rateStr.trim() !== '') {
+        const parsed = parseFloat(rateStr);
+        if (!Number.isNaN(parsed) && parsed > 0) {
+          rate = parsed;
+        }
+      }
+    }
 
+    // EUR amount: from sheet if available, otherwise recalculate
+    let eurAmount: number;
     if (eurAmountStr && eurAmountStr.trim() !== '') {
       const parsed = parseFloat(eurAmountStr);
       eurAmount = !Number.isNaN(parsed) ? parsed : 0;
     } else {
-      // Calculate EUR amount from the first non-null currency
-      eurAmount = 0;
-      for (const [curr, amt] of Object.entries(amounts)) {
-        eurAmount = convertToEUR(amt, curr as CurrencyCode);
-        break;
+      // Recalculate using stored rate or current rate
+      const [curr, amt] = Object.entries(amounts)[0] ?? [];
+      if (curr && amt) {
+        eurAmount = rate
+          ? Math.round(amt * rate * 100) / 100
+          : convertToEUR(amt, curr as CurrencyCode);
+      } else {
+        eurAmount = 0;
       }
     }
 
-    expenses.push({
-      date,
-      amounts,
-      eurAmount,
-      category,
-      comment,
-    });
+    expenses.push({ date, amounts, eurAmount, rate, category, comment });
   }
 
-  return expenses;
+  return { expenses, errors };
 }

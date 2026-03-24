@@ -60,12 +60,18 @@ mock.module('../../database', () => ({
 
 // Mock Google Sheets (used by sync/write tools)
 mock.module('../google/sheets', () => ({
-  readExpensesFromSheet: mock(() => Promise.resolve([])),
+  readExpensesFromSheet: mock(() => Promise.resolve({ expenses: [], errors: [] })),
   appendExpenseRow: mock(() => Promise.resolve()),
   hasBudgetSheet: mock(() => Promise.resolve(false)),
   createBudgetSheet: mock(() => Promise.resolve()),
   writeBudgetRow: mock(() => Promise.resolve()),
   readBudgetData: mock(() => Promise.resolve([])),
+}));
+
+// Mock ExpenseRecorder (used by add_expense tool)
+const mockRecord = mock(() => Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+mock.module('../expense-recorder', () => ({
+  getExpenseRecorder: () => ({ record: mockRecord }),
 }));
 
 // Import after mocks are set up
@@ -456,8 +462,8 @@ describe('executeGetBudgets', () => {
 describe('executeAddExpense', () => {
   beforeEach(resetAllMocks);
 
-  test('creates expense with correct fields', async () => {
-    mockExpenses.create.mockReturnValue({ id: 42 });
+  test('creates expense with correct fields via ExpenseRecorder', async () => {
+    mockRecord.mockResolvedValue({ expense: { id: 42 }, eurAmount: 25.5 });
 
     const result = await executeTool(
       'add_expense',
@@ -466,21 +472,17 @@ describe('executeAddExpense', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(mockExpenses.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        group_id: 1,
-        user_id: 123,
-        date: '2026-03-09',
-        category: 'Food',
-        comment: 'lunch',
-        amount: 25.5,
-        currency: 'EUR',
-      }),
-    );
+    expect(mockRecord).toHaveBeenCalledWith(1, 123, {
+      date: '2026-03-09',
+      category: 'Food',
+      comment: 'lunch',
+      amount: 25.5,
+      currency: 'EUR',
+    });
   });
 
   test('returns confirmation with amount and currency', async () => {
-    mockExpenses.create.mockReturnValue({ id: 99 });
+    mockRecord.mockResolvedValue({ expense: { id: 99 }, eurAmount: 43 });
 
     const result = await executeTool(
       'add_expense',

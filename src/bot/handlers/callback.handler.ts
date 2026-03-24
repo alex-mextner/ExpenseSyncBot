@@ -626,7 +626,7 @@ async function handleReceiptItemOther(
 }
 
 /**
- * Save all confirmed receipt items as expenses
+ * Save all confirmed receipt items as expenses via ExpenseRecorder
  */
 export async function saveReceiptExpenses(
   photoQueueId: number,
@@ -647,109 +647,41 @@ export async function saveReceiptExpenses(
     return;
   }
 
-  // Group items by category
-  const itemsByCategory: Map<string, typeof confirmedItems> = new Map();
+  const { getExpenseRecorder } = await import('../../services/expense-recorder');
+  const recorder = getExpenseRecorder();
 
-  for (const item of confirmedItems) {
-    const category = item.confirmed_category;
-    if (!category) {
-      continue;
-    }
-    if (!itemsByCategory.has(category)) {
-      itemsByCategory.set(category, []);
-    }
-    const categoryItems = itemsByCategory.get(category);
-    if (categoryItems) {
-      categoryItems.push(item);
-    }
-  }
+  // Build receipt items for batch recording
+  const receiptItems = confirmedItems
+    .filter(
+      (item): item is typeof item & { confirmed_category: string } =>
+        item.confirmed_category !== null,
+    )
+    .map((item) => ({
+      name: item.name_ru,
+      nameOriginal: item.name_original || null,
+      quantity: item.quantity,
+      price: item.price,
+      total: item.total,
+      currency: item.currency,
+      category: item.confirmed_category,
+    }));
 
-  const { convertToEUR } = await import('../../services/currency/converter');
-  const { appendExpenseRow } = await import('../../services/google/sheets');
-  const { format } = await import('date-fns');
-
-  const currentDate = format(new Date(), 'yyyy-MM-dd');
-
-  // For each category, create one expense with multiple items
-  for (const [category, items] of itemsByCategory.entries()) {
-    if (items.length === 0) {
-      continue;
-    }
-
-    // Calculate total amount for this category
-    const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
-    const firstItem = items[0];
-    if (!firstItem) {
-      continue;
-    }
-    const currency = firstItem.currency; // All items should have same currency
-
-    // Convert to EUR
-    const eurAmount = convertToEUR(totalAmount, currency);
-
-    // Build comment with item details
-    const itemNames = items.map((item) => `${item.name_ru} (${item.quantity}x${item.price})`);
-    const comment = `Чек: ${itemNames.join(', ')}`;
-
-    // Prepare amounts for each enabled currency
-    const amounts: Record<string, number | null> = {};
-    for (const curr of group.enabled_currencies) {
-      amounts[curr] = curr === currency ? totalAmount : null;
-    }
-
-    // Append to Google Sheet
-    try {
-      await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
-        date: currentDate,
-        category,
-        comment,
-        amounts,
-        eurAmount,
-      });
-    } catch (error) {
-      logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet');
-      continue;
-    }
-
-    // Create expense in database
-    const expense = database.expenses.create({
-      group_id: groupId,
-      user_id: userId,
-      date: currentDate,
-      category,
-      comment,
-      amount: totalAmount,
-      currency,
-      eur_amount: eurAmount,
-    });
-
-    // Create expense items for each item in this category
-    for (const item of items) {
-      database.expenseItems.create({
-        expense_id: expense.id,
-        name_ru: item.name_ru,
-        name_original: item.name_original || null,
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total,
-      });
-    }
-  }
+  await recorder.recordBatch(groupId, userId, receiptItems);
 
   // Delete all processed receipt items (confirmed + skipped)
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
 
   // Notify user
   const totalItems = confirmedItems.length;
-  const totalCategories = itemsByCategory.size;
+  const categories = new Set(confirmedItems.map((i) => i.confirmed_category).filter(Boolean));
 
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
-    text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
+    text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${categories.size}`,
     parse_mode: 'HTML',
   });
 
-  logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
+  logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${categories.size} categories)`);
 }
 
 /**
