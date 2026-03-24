@@ -198,7 +198,7 @@ The bot will:
 
 **Spreadsheet:**
 
-- `/spreadsheet` (or `/table`, `/sheet`, `/t`) - Get link to your Google Sheet
+- `/spreadsheet` - Get link to your Google Sheet
 
 **AI Features (Groups):**
 
