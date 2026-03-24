@@ -48,6 +48,17 @@ export class GroupRepository {
   }
 
   /**
+   * Find all groups
+   */
+  findAll(): Group[] {
+    const query = this.db.query<GroupRow, []>('SELECT * FROM groups');
+    return query.all().map((row) => ({
+      ...row,
+      enabled_currencies: JSON.parse(row.enabled_currencies) as CurrencyCode[],
+    }));
+  }
+
+  /**
    * Create new group
    */
   create(data: CreateGroupData): Group {

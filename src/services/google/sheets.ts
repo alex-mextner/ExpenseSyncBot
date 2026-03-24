@@ -40,13 +40,14 @@ export async function createExpenseSpreadsheet(
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Build headers
+  // Build headers: Date | Currencies | EUR(calc) | Category | Comment | Rate
   const headers = [
     SPREADSHEET_CONFIG.headers[0], // Дата
     ...enabledCurrencies.map((code) => `${code} (${CURRENCY_SYMBOLS[code]})`),
     SPREADSHEET_CONFIG.eurColumnHeader, // EUR (calc)
     SPREADSHEET_CONFIG.headers[1], // Категория
     SPREADSHEET_CONFIG.headers[2], // Комментарий
+    RATE_COLUMN_HEADER, // Rate (→EUR)
   ];
 
   // Create spreadsheet
@@ -391,6 +392,39 @@ async function ensureRateColumn(
 
   logger.info(`[SHEETS] Added Rate column at index ${insertIdx}`);
   return [...currentHeaders, RATE_COLUMN_HEADER];
+}
+
+/**
+ * Ensure spreadsheet has all required columns (currency columns + Rate).
+ * Call at bot startup for each configured group.
+ */
+export async function ensureSheetColumns(
+  refreshToken: string,
+  spreadsheetId: string,
+  enabledCurrencies: CurrencyCode[],
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const headersResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+  });
+
+  let headers: string[] = headersResponse.data.values?.[0] || [];
+
+  // Add missing currency columns
+  for (const currency of enabledCurrencies) {
+    const hasCurrencyCol = headers.some((h) => h.startsWith(`${currency} (`));
+    if (!hasCurrencyCol) {
+      headers = await insertCurrencyColumn(sheets, spreadsheetId, headers, currency);
+    }
+  }
+
+  // Add Rate column if missing
+  if (!headers.includes(RATE_COLUMN_HEADER)) {
+    await ensureRateColumn(sheets, spreadsheetId, headers);
+  }
 }
 
 /**

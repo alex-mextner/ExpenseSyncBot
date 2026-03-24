@@ -1,5 +1,6 @@
 import { Bot } from 'gramio';
 import { env } from '../config/env';
+import { database } from '../database';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
@@ -130,6 +131,24 @@ export async function startBot(): Promise<Bot> {
     commands: BOT_COMMANDS.map((c) => ({ command: c.command, description: c.description })),
   });
   logger.info('✓ Bot commands registered');
+
+  // Ensure spreadsheet columns are up to date for all configured groups
+  try {
+    const { ensureSheetColumns } = await import('../services/google/sheets');
+    const allGroups = database.groups.findAll();
+    for (const group of allGroups) {
+      if (group.spreadsheet_id && group.google_refresh_token) {
+        await ensureSheetColumns(
+          group.google_refresh_token,
+          group.spreadsheet_id,
+          group.enabled_currencies,
+        );
+      }
+    }
+    logger.info('✓ Spreadsheet columns verified');
+  } catch (err) {
+    logger.error({ err }, 'Failed to verify spreadsheet columns (non-fatal)');
+  }
 
   // Start background photo processor
   logger.info('📸 Starting photo processor...');
