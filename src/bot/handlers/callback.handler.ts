@@ -9,7 +9,7 @@ import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../comman
 import { handleDevCallback } from '../commands/dev';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
-import { saveExpenseToSheet } from './message.handler';
+import { getSheetWriteErrorMessage, saveExpenseToSheet } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -172,13 +172,26 @@ async function handleCategoryAction(
         (p) => p.detected_category === categoryName && p.status === 'pending_category',
       );
 
+      let expenseSaved = false;
       if (pending) {
         database.pendingExpenses.update(pending.id, { status: 'confirmed' });
-        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+        try {
+          await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+          expenseSaved = true;
+        } catch (error) {
+          logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
+          database.pendingExpenses.delete(pending.id);
+          if (chatId) {
+            await bot.api.sendMessage({
+              chat_id: chatId,
+              text: getSheetWriteErrorMessage(group.id),
+            });
+          }
+        }
       }
 
-      // Prompt for budget setup
-      if (chatId) {
+      // Prompt for budget setup only if expense was saved
+      if (expenseSaved && chatId) {
         const keyboard = createBudgetPromptKeyboard(categoryName, group.default_currency);
         await bot.api.sendMessage({
           chat_id: chatId,
@@ -236,7 +249,18 @@ async function handleCategoryAction(
       }
 
       // Save expense
-      await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+      try {
+        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+      } catch (error) {
+        logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
+        database.pendingExpenses.delete(pending.id);
+        if (chatId) {
+          await bot.api.sendMessage({
+            chat_id: chatId,
+            text: getSheetWriteErrorMessage(group.id),
+          });
+        }
+      }
       break;
     }
 

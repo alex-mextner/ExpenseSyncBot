@@ -15,6 +15,22 @@ import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
 
+/** Track consecutive sheet write failures per group to suggest /reconnect */
+const sheetFailuresByGroup = new Map<number, number>();
+
+export function getSheetWriteErrorMessage(groupId: number): string {
+  const count = sheetFailuresByGroup.get(groupId) ?? 0;
+  sheetFailuresByGroup.set(groupId, count + 1);
+  if (count >= 1) {
+    return '❌ Не удалось записать расход в Google таблицу. Возможно, авторизация устарела — попробуй /reconnect';
+  }
+  return '❌ Не удалось записать расход в Google таблицу. Попробуй ещё раз.';
+}
+
+export function resetSheetWriteFailures(groupId: number): void {
+  sheetFailuresByGroup.delete(groupId);
+}
+
 /**
  * Handle expense message
  */
@@ -246,8 +262,17 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     // If category exists, save directly
     if (categoryExists || !parsed.category) {
       logger.info(`[MSG] Line ${index + 1}: saving to sheet`);
-      await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId, bot);
-      successCount++;
+      try {
+        await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId, bot);
+        successCount++;
+      } catch (error) {
+        logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
+        database.pendingExpenses.delete(pendingExpense.id);
+        await bot.api.sendMessage({
+          chat_id: telegramGroupId,
+          text: getSheetWriteErrorMessage(group.id),
+        });
+      }
     }
   }
 
@@ -337,6 +362,8 @@ export async function saveExpenseToSheet(
     amount: pendingExpense.parsed_amount,
     currency: pendingExpense.parsed_currency,
   });
+
+  resetSheetWriteFailures(groupId);
 
   logger.info(
     `[SAVE] ✅ Recorded ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
