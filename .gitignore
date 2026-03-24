@@ -45,3 +45,5 @@ debug-images/
 
 # Other
 .claude/worktrees/.playwright-mcp
+.playwright-mcp
+.claude/worktrees/
