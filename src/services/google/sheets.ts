@@ -871,8 +871,6 @@ export async function readExpensesFromSheet(
       }
     }
 
-    if (foundCurrencies.length === 0) continue;
-
     // Flag rows with amounts in multiple currency columns
     if (foundCurrencies.length > 1) {
       errors.push({
@@ -882,6 +880,16 @@ export async function readExpensesFromSheet(
         category,
       });
       continue; // skip this row — data is ambiguous
+    }
+
+    // No currency amount found — fall back to EUR(calc) as EUR amount
+    // (happens when expense was in a currency without a column in the sheet)
+    if (foundCurrencies.length === 0) {
+      const eurCalcVal = eurAmountStr ? parseFloat(eurAmountStr) : 0;
+      if (!eurCalcVal || eurCalcVal <= 0) continue; // truly empty row
+
+      amounts['EUR'] = eurCalcVal;
+      foundCurrencies.push('EUR');
     }
 
     // Read stored exchange rate
@@ -902,7 +910,6 @@ export async function readExpensesFromSheet(
       const parsed = parseFloat(eurAmountStr);
       eurAmount = !Number.isNaN(parsed) ? parsed : 0;
     } else {
-      // Recalculate using stored rate or current rate
       const [curr, amt] = Object.entries(amounts)[0] ?? [];
       if (curr && amt) {
         eurAmount = rate
