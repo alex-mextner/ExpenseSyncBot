@@ -9,7 +9,7 @@ import {
   type SheetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('sync');
 
@@ -35,7 +35,6 @@ function dbExpenseToKey(e: Expense): string {
   return makeKey(e.date, e.category, e.amount, e.currency);
 }
 
-/** Format expense one-liner for reports */
 function fmtExpense(
   date: string,
   amount: number,
@@ -77,7 +76,8 @@ export interface SyncResult {
 
 /**
  * Core sync logic — compare sheet with DB and apply diff.
- * Reusable for /sync command and auto-sync.
+ * Uses greedy matching: first exact match (including comment+EUR),
+ * then partial match (key only) to detect updates.
  */
 export async function syncExpenses(groupId: number): Promise<SyncResult> {
   const group = database.groups.findById(groupId);
@@ -92,17 +92,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
 
   logger.info(`[SYNC] Sheet: ${sheetExpenses.length} expenses, ${errors.length} errors`);
 
-  // Get existing DB expenses
   const dbExpenses = database.expenses.findByGroupId(groupId, 100000);
-
-  // Build lookup maps
-  const dbByKey = new Map<string, Expense>();
-  for (const e of dbExpenses) {
-    dbByKey.set(dbExpenseToKey(e), e);
-  }
-
-  const sheetKeys = new Set<string>();
-
   const users = database.users.findByGroupId ? database.users.findByGroupId(groupId) : [];
   const defaultUserId = users[0]?.id ?? 1;
 
@@ -116,29 +106,98 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
   };
 
   // Create missing categories
-  const categoriesInSheet = new Set<string>();
   for (const expense of sheetExpenses) {
     if (expense.category && expense.category !== 'Без категории') {
-      categoriesInSheet.add(expense.category);
-    }
-  }
-  for (const name of categoriesInSheet) {
-    if (!database.categories.exists(groupId, name)) {
-      database.categories.create({ group_id: groupId, name });
-      result.createdCategories.push(name);
+      if (!database.categories.exists(groupId, expense.category)) {
+        database.categories.create({ group_id: groupId, name: expense.category });
+        result.createdCategories.push(expense.category);
+      }
     }
   }
 
-  // Process sheet rows: find added/updated/unchanged
+  // Build multimap from DB: shortKey → [Expense]
+  const dbPool = new Map<string, Expense[]>();
+  for (const e of dbExpenses) {
+    const key = dbExpenseToKey(e);
+    const arr = dbPool.get(key);
+    if (arr) {
+      arr.push(e);
+    } else {
+      dbPool.set(key, [e]);
+    }
+  }
+
+  // Full-key set for exact match tracking
+  const exactMatched = new Set<number>(); // DB expense IDs that matched exactly
+
+  // Pass 1: exact matches (key + comment + eurAmount)
+  const unmatchedSheetRows: Array<{
+    row: SheetRow;
+    parsed: ReturnType<typeof sheetRowToKey> & {};
+  }> = [];
+
   for (const row of sheetExpenses) {
     const parsed = sheetRowToKey(row);
     if (!parsed) continue;
 
-    sheetKeys.add(parsed.key);
-    const existing = dbByKey.get(parsed.key);
+    const candidates = dbPool.get(parsed.key);
+    if (!candidates || candidates.length === 0) {
+      unmatchedSheetRows.push({ row, parsed });
+      continue;
+    }
 
-    if (!existing) {
-      // New expense — add to DB
+    // Find exact match
+    const exactIdx = candidates.findIndex(
+      (e) => e.comment === row.comment && Math.abs(e.eur_amount - row.eurAmount) <= 0.01,
+    );
+
+    if (exactIdx !== -1) {
+      const matched = candidates.splice(exactIdx, 1)[0];
+      if (matched) exactMatched.add(matched.id);
+      result.unchanged++;
+    } else {
+      unmatchedSheetRows.push({ row, parsed });
+    }
+  }
+
+  // Pass 2: unmatched sheet rows — try partial match (update) or add
+  for (const { row, parsed } of unmatchedSheetRows) {
+    const candidates = dbPool.get(parsed.key);
+
+    if (candidates && candidates.length > 0) {
+      // Partial match — this is an update
+      const existing = candidates.shift();
+      if (!existing) continue;
+
+      const changes: string[] = [];
+      if (Math.abs(existing.eur_amount - row.eurAmount) > 0.01) {
+        changes.push(`EUR: ${existing.eur_amount}→${row.eurAmount}`);
+      }
+      if (existing.comment !== row.comment) {
+        changes.push(`"${existing.comment || ''}"→"${row.comment || ''}"`);
+      }
+
+      database.expenses.delete(existing.id);
+      database.expenses.create({
+        group_id: groupId,
+        user_id: existing.user_id,
+        date: row.date,
+        category: row.category,
+        comment: row.comment,
+        amount: parsed.amount,
+        currency: parsed.currency,
+        eur_amount: row.eurAmount,
+      });
+      result.updated.push({
+        date: row.date,
+        amount: parsed.amount,
+        currency: parsed.currency,
+        category: row.category,
+        comment: row.comment,
+        field: changes.join(', '),
+      });
+    } else {
+      // No match at all — new expense
       database.expenses.create({
         group_id: groupId,
         user_id: defaultUserId,
@@ -156,46 +215,13 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
         category: row.category,
         comment: row.comment,
       });
-    } else {
-      // Exists — check for updates
-      const changes: string[] = [];
-      if (Math.abs(existing.eur_amount - row.eurAmount) > 0.01) {
-        changes.push(`EUR: ${existing.eur_amount}→${row.eurAmount}`);
-      }
-      if (existing.comment !== row.comment) {
-        changes.push('комментарий');
-      }
-
-      if (changes.length > 0) {
-        // Update
-        database.expenses.delete(existing.id);
-        database.expenses.create({
-          group_id: groupId,
-          user_id: existing.user_id,
-          date: row.date,
-          category: row.category,
-          comment: row.comment,
-          amount: parsed.amount,
-          currency: parsed.currency,
-          eur_amount: row.eurAmount,
-        });
-        result.updated.push({
-          date: row.date,
-          amount: parsed.amount,
-          currency: parsed.currency,
-          category: row.category,
-          comment: row.comment,
-          field: changes.join(', '),
-        });
-      } else {
-        result.unchanged++;
-      }
     }
   }
 
-  // Find deleted (in DB but not in sheet)
-  for (const [key, expense] of dbByKey.entries()) {
-    if (!sheetKeys.has(key)) {
+  // Pass 3: remaining unmatched DB expenses — deleted from sheet
+  for (const candidates of dbPool.values()) {
+    for (const expense of candidates) {
+      if (exactMatched.has(expense.id)) continue;
       database.expenses.delete(expense.id);
       result.deleted.push({
         date: expense.date,
@@ -257,27 +283,39 @@ function formatSyncResult(result: SyncResult): string {
 
 // ── Auto-sync with cooldown ──
 
-const lastSyncByGroup = new Map<number, number>();
+const lastExpenseSyncByGroup = new Map<number, number>();
 const SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
- * Run sync if last sync was more than SYNC_COOLDOWN ago.
- * Non-blocking — logs errors but doesn't throw.
+ * Sync expenses if stale. Blocking — caller awaits fresh data.
+ * Sends notification to chat only if there were changes.
  */
-export async function maybeSyncExpenses(groupId: number): Promise<void> {
-  const last = lastSyncByGroup.get(groupId) || 0;
+export async function ensureFreshExpenses(
+  groupId: number,
+  telegramGroupId?: number,
+  bot?: BotInstance,
+): Promise<void> {
+  const last = lastExpenseSyncByGroup.get(groupId) || 0;
   if (Date.now() - last < SYNC_COOLDOWN_MS) return;
 
   try {
-    lastSyncByGroup.set(groupId, Date.now());
+    lastExpenseSyncByGroup.set(groupId, Date.now());
     const result = await syncExpenses(groupId);
-    if (result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0) {
-      logger.info(
-        `[AUTO-SYNC] Group ${groupId}: +${result.added.length} -${result.deleted.length} ~${result.updated.length}`,
-      );
+    const hasChanges =
+      result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0;
+
+    if (hasChanges && telegramGroupId && bot) {
+      const parts: string[] = [];
+      if (result.added.length > 0) parts.push(`+${result.added.length}`);
+      if (result.deleted.length > 0) parts.push(`-${result.deleted.length}`);
+      if (result.updated.length > 0) parts.push(`~${result.updated.length}`);
+      await bot.api.sendMessage({
+        chat_id: telegramGroupId,
+        text: `🔄 Авто-синк расходов: ${parts.join(', ')}`,
+      });
     }
   } catch (err) {
-    logger.error({ err }, `[AUTO-SYNC] Failed for group ${groupId}`);
+    logger.error({ err }, `[AUTO-SYNC] Expenses failed for group ${groupId}`);
   }
 }
 
@@ -314,9 +352,8 @@ export async function handleSyncCommand(ctx: Ctx['Command']): Promise<void> {
 
   try {
     const result = await syncExpenses(group.id);
-    lastSyncByGroup.set(group.id, Date.now());
+    lastExpenseSyncByGroup.set(group.id, Date.now());
 
-    // Report multi-currency errors separately
     if (result.errors.length > 0) {
       const errorLines = result.errors.map(
         (e) => `• Строка ${e.row}: ${e.date} ${e.category} — валюты: ${e.currencies.join(', ')}`,

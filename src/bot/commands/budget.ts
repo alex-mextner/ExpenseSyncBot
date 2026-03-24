@@ -12,10 +12,146 @@ import {
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
 const logger = createLogger('budget');
+
+// ── Auto-sync budgets with cooldown ──
+
+const lastBudgetSyncByGroup = new Map<number, number>();
+const BUDGET_SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
+export interface BudgetSyncResult {
+  unchanged: number;
+  added: Array<{ month: string; category: string; limit: number; currency: CurrencyCode }>;
+  updated: Array<{
+    month: string;
+    category: string;
+    limit: number;
+    currency: CurrencyCode;
+    oldLimit: number;
+  }>;
+  deleted: Array<{ month: string; category: string; limit: number; currency: CurrencyCode }>;
+  createdCategories: string[];
+}
+
+/**
+ * Diff-based budget sync — compare sheet budgets with DB and apply changes.
+ */
+export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult> {
+  const group = database.groups.findById(groupId);
+  if (!group?.spreadsheet_id || !group?.google_refresh_token) {
+    throw new Error('Group not configured for Google Sheets');
+  }
+
+  const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+  if (!hasSheet) {
+    return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
+  }
+
+  const sheetBudgets = await readBudgetData(group.google_refresh_token, group.spreadsheet_id);
+
+  const result: BudgetSyncResult = {
+    unchanged: 0,
+    added: [],
+    updated: [],
+    deleted: [],
+    createdCategories: [],
+  };
+
+  // Build set of sheet budget keys
+  const sheetKeys = new Set<string>();
+  for (const b of sheetBudgets) {
+    sheetKeys.add(`${b.month}|${b.category}`);
+  }
+
+  // Process sheet budgets
+  for (const b of sheetBudgets) {
+    if (!database.categories.exists(groupId, b.category)) {
+      database.categories.create({ group_id: groupId, name: b.category });
+      result.createdCategories.push(b.category);
+    }
+
+    const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, b.month);
+
+    if (!existing) {
+      database.budgets.setBudget({
+        group_id: groupId,
+        category: b.category,
+        month: b.month,
+        limit_amount: b.limit,
+        currency: b.currency,
+      });
+      result.added.push(b);
+    } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
+      database.budgets.setBudget({
+        group_id: groupId,
+        category: b.category,
+        month: b.month,
+        limit_amount: b.limit,
+        currency: b.currency,
+      });
+      result.updated.push({ ...b, oldLimit: existing.limit_amount });
+    } else {
+      result.unchanged++;
+    }
+  }
+
+  // Find deleted (in DB but not in sheet) — only for current month
+  const currentMonth = format(new Date(), 'yyyy-MM');
+  const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+  for (const db of dbBudgets) {
+    const key = `${db.month}|${db.category}`;
+    if (!sheetKeys.has(key)) {
+      database.budgets.delete(db.id);
+      result.deleted.push({
+        month: db.month,
+        category: db.category,
+        limit: db.limit_amount,
+        currency: db.currency,
+      });
+    }
+  }
+
+  logger.info(
+    `[BUDGET-SYNC] +${result.added.length} -${result.deleted.length} ~${result.updated.length} =${result.unchanged}`,
+  );
+
+  return result;
+}
+
+/**
+ * Sync budgets if stale. Blocking. Notifies chat only if changes detected.
+ */
+export async function ensureFreshBudgets(
+  groupId: number,
+  telegramGroupId?: number,
+  bot?: BotInstance,
+): Promise<void> {
+  const last = lastBudgetSyncByGroup.get(groupId) || 0;
+  if (Date.now() - last < BUDGET_SYNC_COOLDOWN_MS) return;
+
+  try {
+    lastBudgetSyncByGroup.set(groupId, Date.now());
+    const result = await syncBudgetsDiff(groupId);
+    const hasChanges =
+      result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0;
+
+    if (hasChanges && telegramGroupId && bot) {
+      const parts: string[] = [];
+      if (result.added.length > 0) parts.push(`+${result.added.length}`);
+      if (result.deleted.length > 0) parts.push(`-${result.deleted.length}`);
+      if (result.updated.length > 0) parts.push(`~${result.updated.length}`);
+      await bot.api.sendMessage({
+        chat_id: telegramGroupId,
+        text: `🔄 Авто-синк бюджетов: ${parts.join(', ')}`,
+      });
+    }
+  } catch (err) {
+    logger.error({ err }, `[AUTO-SYNC] Budgets failed for group ${groupId}`);
+  }
+}
 
 /**
  * Parse budget amount with optional currency

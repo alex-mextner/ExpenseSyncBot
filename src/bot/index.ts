@@ -25,6 +25,7 @@ import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
+import type { Ctx } from './types';
 
 const logger = createLogger('index');
 
@@ -47,41 +48,63 @@ export function createBot(): Bot {
   // Cache bot username
   let botUsername: string | undefined;
 
-  // Commands
+  /**
+   * Pre-sync wrapper for commands that need fresh data from Google Sheets.
+   * Syncs expenses and/or budgets before the handler runs (blocking, with cooldown).
+   */
+  function withSync(
+    handler: (ctx: Ctx['Command']) => Promise<void>,
+    opts: { expenses?: boolean; budgets?: boolean } = {},
+  ) {
+    return async (ctx: Ctx['Command']) => {
+      const chatId = ctx.chat?.id;
+      const isGrp = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+      if (isGrp && chatId) {
+        const grp = database.groups.findByTelegramGroupId(chatId);
+        if (grp?.spreadsheet_id && grp?.google_refresh_token) {
+          if (opts.expenses) {
+            const { ensureFreshExpenses } = await import('./commands/sync');
+            await ensureFreshExpenses(grp.id, chatId, bot);
+          }
+          if (opts.budgets) {
+            const { ensureFreshBudgets } = await import('./commands/budget');
+            await ensureFreshBudgets(grp.id, chatId, bot);
+          }
+        }
+      }
+      return handler(ctx);
+    };
+  }
+
+  // Commands — no sync needed
   bot.command('start', handleStartCommand);
   bot.command('help', handleHelpCommand);
   bot.command('connect', handleConnectCommand);
   bot.command('spreadsheet', handleSpreadsheetCommand);
-  bot.command('stats', handleStatsCommand);
-  bot.command('sum', handleSumCommand);
-  bot.command('total', handleSumCommand);
-  bot.command('sync', handleSyncCommand);
-  bot.command('push', handlePushCommand);
-  bot.command('budget', handleBudgetCommand);
-  bot.command('categories', handleCategoriesCommand);
   bot.command('settings', handleSettingsCommand);
   bot.command('reconnect', handleReconnectCommand);
-  bot.command('advice', handleAdviceCommand);
   bot.command('prompt', handlePromptCommand);
   bot.command('topic', handleTopicCommand);
   bot.command('dev', handleDevCommand);
   bot.command('ping', handlePingCommand);
+  bot.command('sync', handleSyncCommand);
+
+  // Commands — need fresh expenses
+  bot.command('stats', withSync(handleStatsCommand, { expenses: true }));
+  bot.command('sum', withSync(handleSumCommand, { expenses: true }));
+  bot.command('total', withSync(handleSumCommand, { expenses: true }));
+  bot.command('push', withSync(handlePushCommand, { expenses: true }));
+  bot.command('categories', withSync(handleCategoriesCommand, { expenses: true }));
+
+  // Commands — need fresh expenses + budgets
+  bot.command('advice', withSync(handleAdviceCommand, { expenses: true, budgets: true }));
+  bot.command('budget', withSync(handleBudgetCommand, { budgets: true }));
 
   // Callback queries (inline keyboard buttons)
   bot.on('callback_query', (ctx) => handleCallbackQuery(ctx, bot));
 
   // Text messages (expense entries or questions)
   bot.on('message', async (ctx) => {
-    // Auto-sync from sheet (non-blocking, 10 min cooldown)
-    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-    if (isGroup) {
-      const group = database.groups.findByTelegramGroupId(ctx.chat.id);
-      if (group?.spreadsheet_id && group?.google_refresh_token) {
-        const { maybeSyncExpenses } = await import('./commands/sync');
-        maybeSyncExpenses(group.id).catch(() => {});
-      }
-    }
-
     // Handle photo messages (receipts with QR codes)
     if (ctx.photo && ctx.photo.length > 0) {
       await handlePhotoMessage(ctx);

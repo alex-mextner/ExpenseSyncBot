@@ -27,6 +27,19 @@ export async function executeTool(
   ctx: AgentContext,
 ): Promise<ToolResult> {
   try {
+    // Pre-sync for tools that read expense/budget data
+    const needsExpenseSync = ['get_expenses', 'add_expense', 'delete_expense'].includes(name);
+    const needsBudgetSync = ['get_budgets', 'set_budget', 'delete_budget'].includes(name);
+
+    if (needsExpenseSync) {
+      const { ensureFreshExpenses } = await import('../../bot/commands/sync');
+      await ensureFreshExpenses(ctx.groupId);
+    }
+    if (needsBudgetSync) {
+      const { ensureFreshBudgets } = await import('../../bot/commands/budget');
+      await ensureFreshBudgets(ctx.groupId);
+    }
+
     switch (name) {
       case 'get_expenses':
         return await executeGetExpenses(input, ctx);
