@@ -2,7 +2,7 @@
 import { env } from '../../config/env';
 import type { Ctx } from '../types';
 
-function buildHelpText(): string {
+export function buildHelpText(): string {
   const bot = env.BOT_USERNAME;
   return `\
 <b>📚 Что умеет бот</b>

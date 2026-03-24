@@ -190,7 +190,7 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 
 - `/start` - Welcome & setup status
 - `/connect` - OAuth & initial setup
-- `/spreadsheet` (aliases: `/table`, `/sheet`, `/t`) - View spreadsheet URL
+- `/spreadsheet` - View spreadsheet URL
 - `/stats` - Expense statistics
 - `/sum` (alias: `/total`) - Sum expenses by filters
 - `/sync` - Manual sync to sheets

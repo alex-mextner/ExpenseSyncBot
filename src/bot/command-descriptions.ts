@@ -8,7 +8,7 @@ export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'start', description: 'Статус настройки' },
   { command: 'help', description: 'Справка по возможностям' },
   { command: 'connect', description: 'Подключить Google таблицу' },
-  { command: 'spreadsheet', description: 'Ссылка на таблицу (алиасы: /table, /sheet, /t)' },
+  { command: 'spreadsheet', description: 'Ссылка на Google-таблицу' },
   { command: 'stats', description: 'Статистика расходов' },
   { command: 'sum', description: 'Сумма расходов с фильтрами (алиас: /total)' },
   { command: 'sync', description: 'Загрузить расходы из таблицы в бота' },

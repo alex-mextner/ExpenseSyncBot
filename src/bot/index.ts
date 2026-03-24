@@ -51,9 +51,6 @@ export function createBot(): Bot {
   bot.command('help', handleHelpCommand);
   bot.command('connect', handleConnectCommand);
   bot.command('spreadsheet', handleSpreadsheetCommand);
-  bot.command('table', handleSpreadsheetCommand);
-  bot.command('sheet', handleSpreadsheetCommand);
-  bot.command('t', handleSpreadsheetCommand);
   bot.command('stats', handleStatsCommand);
   bot.command('sum', handleSumCommand);
   bot.command('total', handleSumCommand);
