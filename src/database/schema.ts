@@ -13,6 +13,8 @@ export function initDatabase(): Database {
   // Enable WAL mode for better concurrency
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
+  // Retry for up to 5 seconds instead of failing immediately on SQLITE_BUSY
+  db.exec('PRAGMA busy_timeout = 5000;');
 
   return db;
 }
