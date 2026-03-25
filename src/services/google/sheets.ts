@@ -168,34 +168,22 @@ export async function appendExpenseRow(
 
   logger.info({ data: row }, `[SHEETS] Final row`);
 
-  // Find last row with data in column A
-  const dataResponse = await sheets.spreadsheets.values.get({
+  // Append atomically — the API finds the next empty row and writes in one call,
+  // eliminating the race condition between reading last row and writing.
+  const response = await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
-  });
-
-  const existingRows = dataResponse.data.values || [];
-  const nextRow = existingRows.length + 1; // +1 because rows are 1-indexed
-
-  logger.info(`[SHEETS] Last row with data: ${existingRows.length}, inserting at row ${nextRow}`);
-
-  // Calculate last column letter dynamically based on row length
-  const lastColLetter = String.fromCharCode(64 + row.length); // 1=A, 2=B, ..., 9=I, etc.
-
-  // Update specific row instead of append
-  const response = await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:${lastColLetter}${nextRow}`,
     valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
     requestBody: {
       values: [row],
     },
   });
 
   // Log API response for debugging
-  const updatedRange = response.data.updatedRange;
-  const updatedRows = response.data.updatedRows;
-  const updatedCells = response.data.updatedCells;
+  const updatedRange = response.data.updates?.updatedRange;
+  const updatedRows = response.data.updates?.updatedRows;
+  const updatedCells = response.data.updates?.updatedCells;
 
   logger.info(
     `[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`,
@@ -203,7 +191,7 @@ export async function appendExpenseRow(
 
   if (!updatedRows || updatedRows === 0) {
     logger.error(
-      `[SHEETS] ⚠️ No rows were updated! Full response: ${JSON.stringify(response.data, null, 2)}`,
+      `[SHEETS] No rows were appended! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
   }
 }
