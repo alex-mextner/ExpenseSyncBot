@@ -164,6 +164,8 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
   logger.info(`[BUDGET] Args: ${args}`);
   logger.info(`[BUDGET] Args length: ${args.length}`);
 
+  await ctx.sendChatAction('typing');
+
   // Silent sync budgets from Google Sheets
   if (group.google_refresh_token && group.spreadsheet_id) {
     const syncedCount = await silentSyncBudgets(

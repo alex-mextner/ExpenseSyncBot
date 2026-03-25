@@ -36,6 +36,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     return;
   }
 
+  await ctx.sendChatAction('typing');
+
   // Silent sync budgets from Google Sheets
   if (group.google_refresh_token && group.spreadsheet_id) {
     const syncedCount = await silentSyncBudgets(
