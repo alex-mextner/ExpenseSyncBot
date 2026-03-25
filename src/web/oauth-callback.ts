@@ -54,7 +54,12 @@ export function startOAuthServer(): void {
       }
 
       if (url.pathname === '/health') {
-        return new Response('OK', { status: 200 });
+        try {
+          database.groups.findById(1);
+          return Response.json({ status: 'ok', uptime: process.uptime() });
+        } catch {
+          return Response.json({ status: 'error' }, { status: 503 });
+        }
       }
 
       // Serve temporary images for OCR processing
