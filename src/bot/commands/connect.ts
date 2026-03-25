@@ -4,7 +4,6 @@ import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { registerOAuthPromise, unregisterOAuthPromise } from '../../web/oauth-callback';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import type { Ctx } from '../types';
 
@@ -74,59 +73,11 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
       `Один из участников группы должен:\n` +
       `1. Нажать на кнопку ниже\n` +
       `2. Разрешить доступ к Google Sheets\n\n` +
-      `После авторизации вернись сюда, я продолжу настройку.`,
+      `После авторизации бот автоматически продолжит настройку.`,
     { reply_markup: authKeyboard },
   );
 
-  // Wait for OAuth callback
-  logger.info(`[CMD] Waiting for OAuth callback for group ${group.id}...`);
-  const groupId = group.id;
-  const refreshToken = await new Promise<string>((resolve, reject) => {
-    registerOAuthPromise(groupId, resolve, reject);
-
-    // Timeout after 5 minutes
-    setTimeout(
-      () => {
-        unregisterOAuthPromise(groupId);
-        reject(new Error('OAuth timeout'));
-      },
-      5 * 60 * 1000,
-    );
-  }).catch((err) => {
-    logger.error({ err: err }, '[CMD] ❌ OAuth error');
-    return null;
-  });
-
-  if (!refreshToken) {
-    // Check if token was saved to DB by the callback anyway (race condition)
-    const updatedGroup = database.groups.findByTelegramGroupId(chatId);
-    if (updatedGroup?.google_refresh_token && updatedGroup?.spreadsheet_id) {
-      // Group is fully configured — silently ignore the timeout
-      logger.info(`[CMD] OAuth timeout but group ${groupId} already configured, ignoring`);
-      return;
-    }
-    if (updatedGroup?.google_refresh_token) {
-      logger.info(`[CMD] ✅ OAuth token found in DB despite timeout for group ${groupId}`);
-      // Continue to currency selection below
-    } else {
-      logger.info(`[CMD] ❌ OAuth failed for group ${groupId}`);
-      await ctx.send('❌ Не удалось подключить Google аккаунт. Попробуй еще раз: /connect');
-      return;
-    }
-  } else {
-    logger.info(`[CMD] ✅ OAuth successful for group ${groupId}`);
-    await ctx.send(MESSAGES.authSuccess);
-  }
-
-  // Show currency set selection keyboard (Step 1)
-  const keyboard = createCurrencyKeyboard();
-  await ctx.send(
-    '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
-      '• Можно выбрать несколько\n' +
-      '• Эти валюты будут столбцами в таблице\n' +
-      '• Нажми ✅ Далее когда закончишь',
-    { reply_markup: keyboard },
-  );
+  logger.info(`[CMD] Auth URL sent for group ${group.id}, returning immediately`);
 }
 
 /**

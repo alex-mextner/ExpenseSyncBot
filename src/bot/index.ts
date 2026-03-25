@@ -2,6 +2,7 @@ import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
+import { setBotInstance } from '../web/oauth-callback';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBudgetCommand } from './commands/budget';
 import { handleCategoriesCommand } from './commands/categories';
@@ -131,6 +132,9 @@ export async function startBot(): Promise<Bot> {
   logger.info('🤖 Starting bot...');
   await bot.start();
   logger.info('✓ Bot started successfully');
+
+  // Register bot instance for OAuth callback to send Telegram messages
+  setBotInstance(bot);
 
   // Register commands in Telegram menu
   await bot.api.setMyCommands({

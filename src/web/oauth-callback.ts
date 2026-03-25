@@ -1,4 +1,7 @@
 // OAuth callback HTTP server — handles Google OAuth redirects and token exchange.
+import type { Bot } from 'gramio';
+import { createCurrencyKeyboard } from '../bot/keyboards';
+import { MESSAGES } from '../config/constants';
 import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode, resolveOAuthState } from '../services/google/oauth';
@@ -9,35 +12,15 @@ import { handleTempImage } from './temp-image.handler';
 
 const logger = createLogger('oauth-callback');
 
-/**
- * Pending OAuth promises (groupId -> resolve/reject functions).
- * Keyed by numeric groupId so connect.ts can cancel on timeout.
- */
-const pendingOAuthPromises = new Map<
-  number,
-  {
-    resolve: (refreshToken: string) => void;
-    reject: (error: Error) => void;
-  }
->();
+/** Bot instance for sending messages after OAuth completes (set via setBotInstance) */
+let botInstance: Bot | null = null;
 
 /**
- * Register a promise callback for a pending OAuth flow.
- * Called by connect.ts after generating the auth URL.
+ * Register the bot instance so the OAuth callback can send Telegram messages.
+ * Called from startBot() after the bot is created and started.
  */
-export function registerOAuthPromise(
-  groupId: number,
-  resolve: (refreshToken: string) => void,
-  reject: (error: Error) => void,
-): void {
-  pendingOAuthPromises.set(groupId, { resolve, reject });
-}
-
-/**
- * Remove a pending OAuth promise (e.g. on timeout).
- */
-export function unregisterOAuthPromise(groupId: number): void {
-  pendingOAuthPromises.delete(groupId);
+export function setBotInstance(bot: Bot): void {
+  botInstance = bot;
 }
 
 /**
@@ -90,11 +73,9 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
     if (state) {
       const groupId = resolveOAuthState(state);
       if (groupId !== null) {
-        const pending = pendingOAuthPromises.get(groupId);
-        if (pending) {
-          pending.reject(new Error(errorDescription));
-          pendingOAuthPromises.delete(groupId);
-        }
+        notifyTelegramError(groupId, errorDescription).catch((notifyErr) => {
+          logger.error({ err: notifyErr }, '[OAuth] Failed to send error to Telegram');
+        });
       }
     }
 
@@ -211,16 +192,12 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       google_refresh_token: encryptedToken,
     });
 
-    // Resolve pending OAuth promise
-    const pending = pendingOAuthPromises.get(groupId);
-    if (pending) {
-      pending.resolve(tokens.refresh_token);
-      pendingOAuthPromises.delete(groupId);
-    } else {
-      logger.info(`[OAuth] No pending promise for group ${groupId} (token saved to DB anyway)`);
-    }
-
     logger.info(`✓ OAuth successful for group ${groupId}`);
+
+    // Send success message + currency keyboard to Telegram (background, non-blocking for HTTP response)
+    notifyTelegramSuccess(group.telegram_group_id, group.active_topic_id).catch((notifyErr) => {
+      logger.error({ err: notifyErr }, '[OAuth] Failed to send success message to Telegram');
+    });
 
     return new Response(
       `
@@ -267,11 +244,11 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
   } catch (err) {
     logger.error({ err: err }, 'Error handling OAuth callback');
 
-    const pending = pendingOAuthPromises.get(groupId);
-    if (pending) {
-      pending.reject(err as Error);
-      pendingOAuthPromises.delete(groupId);
-    }
+    notifyTelegramError(groupId, err instanceof Error ? err.message : 'Unknown error').catch(
+      (notifyErr) => {
+        logger.error({ err: notifyErr }, '[OAuth] Failed to send error to Telegram');
+      },
+    );
 
     return new Response(
       `
@@ -316,4 +293,63 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       },
     );
   }
+}
+
+/**
+ * Send success message + currency selection keyboard to Telegram chat.
+ * Runs as a background operation (outside handler context), so message_thread_id is passed explicitly.
+ */
+async function notifyTelegramSuccess(
+  telegramGroupId: number,
+  activeTopicId: number | null,
+): Promise<void> {
+  if (!botInstance) {
+    logger.error('[OAuth] Bot instance not set — cannot send success message');
+    return;
+  }
+
+  const topicParams = activeTopicId ? { message_thread_id: activeTopicId } : {};
+
+  await botInstance.api.sendMessage({
+    chat_id: telegramGroupId,
+    text: MESSAGES.authSuccess,
+    ...topicParams,
+  });
+
+  const keyboard = createCurrencyKeyboard();
+  await botInstance.api.sendMessage({
+    chat_id: telegramGroupId,
+    text:
+      '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
+      '• Можно выбрать несколько\n' +
+      '• Эти валюты будут столбцами в таблице\n' +
+      '• Нажми ✅ Далее когда закончишь',
+    reply_markup: keyboard,
+    ...topicParams,
+  });
+}
+
+/**
+ * Send error message to Telegram chat after failed OAuth.
+ * Looks up the group by DB id to get the telegram_group_id.
+ */
+async function notifyTelegramError(groupId: number, errorMessage: string): Promise<void> {
+  if (!botInstance) {
+    logger.error('[OAuth] Bot instance not set — cannot send error message');
+    return;
+  }
+
+  const group = database.groups.findById(groupId);
+  if (!group) {
+    logger.error(`[OAuth] Group ${groupId} not found — cannot send error message`);
+    return;
+  }
+
+  const topicParams = group.active_topic_id ? { message_thread_id: group.active_topic_id } : {};
+
+  await botInstance.api.sendMessage({
+    chat_id: group.telegram_group_id,
+    text: `❌ Не удалось подключить Google аккаунт: ${errorMessage}\n\nПопробуй еще раз: /connect`,
+    ...topicParams,
+  });
 }
