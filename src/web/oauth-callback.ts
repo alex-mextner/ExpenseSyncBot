@@ -2,6 +2,7 @@ import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode } from '../services/google/oauth';
 import { createLogger } from '../utils/logger.ts';
+import { handleTempImage } from './temp-image.handler';
 
 const logger = createLogger('oauth-callback');
 
@@ -253,38 +254,5 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       },
     );
-  }
-}
-
-/**
- * Handle temporary image serving for OCR
- */
-async function handleTempImage(url: URL): Promise<Response> {
-  const filename = url.pathname.split('/temp-images/')[1];
-
-  if (!filename) {
-    return new Response('Not Found', { status: 404 });
-  }
-
-  const path = await import('node:path');
-
-  const filepath = path.join(process.cwd(), 'temp-images', filename);
-
-  try {
-    const file = Bun.file(filepath);
-
-    if (!(await file.exists())) {
-      return new Response('Not Found', { status: 404 });
-    }
-
-    return new Response(file, {
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-      },
-    });
-  } catch (error) {
-    logger.error({ err: error }, '[TEMP_IMAGE] Error serving image');
-    return new Response('Internal Server Error', { status: 500 });
   }
 }
