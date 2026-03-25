@@ -378,4 +378,23 @@ export class ExpenseRepository {
     const result = query.get(groupId, startDate, endDate);
     return result?.count || 0;
   }
+
+  /**
+   * Sum eur_amount for a given category and date range (SQL-level aggregation)
+   */
+  sumByCategory(
+    groupId: number,
+    category: string,
+    dateFrom: string,
+    dateTo: string,
+  ): number {
+    const result = this.db
+      .query<{ total: number }, [number, string, string, string]>(
+        `SELECT COALESCE(SUM(eur_amount), 0) as total
+         FROM expenses
+         WHERE group_id = ? AND category = ? AND date >= ? AND date <= ?`,
+      )
+      .get(groupId, category, dateFrom, dateTo);
+    return result?.total ?? 0;
+  }
 }

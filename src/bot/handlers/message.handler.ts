@@ -417,11 +417,8 @@ async function checkBudgetLimit(
     return;
   }
 
-  // Calculate total spending in category for current month
-  const expenses = database.expenses.findByDateRange(groupId, monthStart, monthEnd);
-  const categorySpending = expenses
-    .filter((exp) => exp.category === category)
-    .reduce((sum, exp) => sum + exp.eur_amount, 0);
+  // Calculate total spending in category for current month (SQL SUM)
+  const categorySpending = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
 
   const percentage =
     budget.limit_amount > 0 ? Math.round((categorySpending / budget.limit_amount) * 100) : 0;
