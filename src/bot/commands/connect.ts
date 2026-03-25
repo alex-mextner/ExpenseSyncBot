@@ -4,7 +4,7 @@ import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { registerOAuthState, unregisterOAuthState } from '../../web/oauth-callback';
+import { registerOAuthPromise, unregisterOAuthPromise } from '../../web/oauth-callback';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import type { Ctx } from '../types';
 
@@ -63,7 +63,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     }
   }
 
-  // Generate OAuth URL - use group ID as state
+  // Generate OAuth URL — state is a UUID mapped to group ID server-side
   logger.info(`[CMD] Generating OAuth URL for group ${group.id}`);
   const authUrl = generateAuthUrl(group.id);
 
@@ -82,12 +82,12 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
   logger.info(`[CMD] Waiting for OAuth callback for group ${group.id}...`);
   const groupId = group.id;
   const refreshToken = await new Promise<string>((resolve, reject) => {
-    registerOAuthState(groupId, resolve, reject);
+    registerOAuthPromise(groupId, resolve, reject);
 
     // Timeout after 5 minutes
     setTimeout(
       () => {
-        unregisterOAuthState(groupId);
+        unregisterOAuthPromise(groupId);
         reject(new Error('OAuth timeout'));
       },
       5 * 60 * 1000,

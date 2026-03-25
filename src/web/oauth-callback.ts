@@ -1,7 +1,7 @@
 // OAuth callback HTTP server — handles Google OAuth redirects and token exchange.
 import { env } from '../config/env';
 import { database } from '../database';
-import { getTokensFromCode } from '../services/google/oauth';
+import { getTokensFromCode, resolveOAuthState } from '../services/google/oauth';
 import { encryptToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
 import { escapeHtml } from './html-escape';
@@ -10,10 +10,11 @@ import { handleTempImage } from './temp-image.handler';
 const logger = createLogger('oauth-callback');
 
 /**
- * Pending OAuth states (groupId -> resolve/reject functions)
+ * Pending OAuth promises (groupId -> resolve/reject functions).
+ * Keyed by numeric groupId so connect.ts can cancel on timeout.
  */
-const pendingOAuthStates = new Map<
-  string,
+const pendingOAuthPromises = new Map<
+  number,
   {
     resolve: (refreshToken: string) => void;
     reject: (error: Error) => void;
@@ -21,21 +22,22 @@ const pendingOAuthStates = new Map<
 >();
 
 /**
- * Register pending OAuth state
+ * Register a promise callback for a pending OAuth flow.
+ * Called by connect.ts after generating the auth URL.
  */
-export function registerOAuthState(
+export function registerOAuthPromise(
   groupId: number,
   resolve: (refreshToken: string) => void,
   reject: (error: Error) => void,
 ): void {
-  pendingOAuthStates.set(groupId.toString(), { resolve, reject });
+  pendingOAuthPromises.set(groupId, { resolve, reject });
 }
 
 /**
- * Remove pending OAuth state (e.g. on timeout)
+ * Remove a pending OAuth promise (e.g. on timeout).
  */
-export function unregisterOAuthState(groupId: number): void {
-  pendingOAuthStates.delete(groupId.toString());
+export function unregisterOAuthPromise(groupId: number): void {
+  pendingOAuthPromises.delete(groupId);
 }
 
 /**
@@ -72,19 +74,22 @@ export function startOAuthServer(): void {
  */
 async function handleOAuthCallback(url: URL): Promise<Response> {
   const code = url.searchParams.get('code');
-  const state = url.searchParams.get('state'); // groupId
+  const state = url.searchParams.get('state'); // UUID token
   const error = url.searchParams.get('error');
 
-  // Handle OAuth error
+  // Handle OAuth error from Google
   if (error) {
     const errorDescription = url.searchParams.get('error_description') || 'Unknown error';
     logger.error(`OAuth error: ${error} ${errorDescription}`);
 
     if (state) {
-      const pending = pendingOAuthStates.get(state);
-      if (pending) {
-        pending.reject(new Error(errorDescription));
-        pendingOAuthStates.delete(state);
+      const groupId = resolveOAuthState(state);
+      if (groupId !== null) {
+        const pending = pendingOAuthPromises.get(groupId);
+        if (pending) {
+          pending.reject(new Error(errorDescription));
+          pendingOAuthPromises.delete(groupId);
+        }
       }
     }
 
@@ -137,12 +142,59 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
     return new Response('Missing code or state parameter', { status: 400 });
   }
 
+  // Resolve UUID state to groupId — returns null for unknown or expired tokens
+  const groupId = resolveOAuthState(state);
+  if (groupId === null) {
+    logger.error(`OAuth callback: invalid or expired state token`);
+    return new Response(
+      `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Authorization Error</title>
+          <style>
+            body {
+              font-family: system-ui, -apple-system, sans-serif;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              min-height: 100vh;
+              margin: 0;
+              background: #f5f5f5;
+            }
+            .container {
+              background: white;
+              padding: 2rem;
+              border-radius: 8px;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+              max-width: 400px;
+              text-align: center;
+            }
+            .error { color: #dc3545; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1 class="error">❌ Authorization Failed</h1>
+            <p>Invalid or expired authorization request.</p>
+            <p>Please return to Telegram and try again.</p>
+          </div>
+        </body>
+      </html>
+      `,
+      {
+        status: 400,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      },
+    );
+  }
+
   try {
     // Exchange code for tokens
     const tokens = await getTokensFromCode(code);
 
     // Update group in database
-    const groupId = parseInt(state, 10);
     const group = database.groups.findById(groupId);
 
     if (!group) {
@@ -155,12 +207,12 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
     });
 
     // Resolve pending OAuth promise
-    const pending = pendingOAuthStates.get(state);
+    const pending = pendingOAuthPromises.get(groupId);
     if (pending) {
       pending.resolve(tokens.refresh_token);
-      pendingOAuthStates.delete(state);
+      pendingOAuthPromises.delete(groupId);
     } else {
-      logger.info(`[OAuth] ⚠️ No pending state for group ${state} (token saved to DB anyway)`);
+      logger.info(`[OAuth] No pending promise for group ${groupId} (token saved to DB anyway)`);
     }
 
     logger.info(`✓ OAuth successful for group ${groupId}`);
@@ -210,10 +262,10 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
   } catch (err) {
     logger.error({ err: err }, 'Error handling OAuth callback');
 
-    const pending = pendingOAuthStates.get(state);
+    const pending = pendingOAuthPromises.get(groupId);
     if (pending) {
       pending.reject(err as Error);
-      pendingOAuthStates.delete(state);
+      pendingOAuthPromises.delete(groupId);
     }
 
     return new Response(

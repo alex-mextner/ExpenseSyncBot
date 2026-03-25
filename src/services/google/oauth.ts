@@ -1,8 +1,43 @@
+// Google OAuth2 client, URL generation, and secure state management
+
 import { google } from 'googleapis';
 import { GOOGLE_SCOPES } from '../../config/constants';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger.ts';
 import { decryptToken, isEncryptedToken } from './token-encryption';
+
+/** Ten-minute TTL for OAuth state tokens */
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+/** In-memory map of UUID state → { groupId, expiresAt } */
+const pendingStates = new Map<string, { groupId: number; expiresAt: number }>();
+
+/**
+ * Register an OAuth state token for a group.
+ * Returns the UUID to embed in the OAuth URL state param.
+ * Accepts an optional ttlMs override (primarily for testing).
+ */
+export function registerOAuthState(groupId: number, ttlMs: number = STATE_TTL_MS): string {
+  const uuid = crypto.randomUUID();
+  pendingStates.set(uuid, { groupId, expiresAt: Date.now() + ttlMs });
+  return uuid;
+}
+
+/**
+ * Resolve a UUID state token to a groupId.
+ * One-time use: the entry is deleted on first successful lookup.
+ * Returns null if the state is unknown or expired.
+ */
+export function resolveOAuthState(state: string): number | null {
+  const entry = pendingStates.get(state);
+  if (!entry) return null;
+
+  pendingStates.delete(state);
+
+  if (Date.now() > entry.expiresAt) return null;
+
+  return entry.groupId;
+}
 
 /**
  * OAuth2 client instance
@@ -14,13 +49,15 @@ export const oauth2Client = new google.auth.OAuth2(
 );
 
 /**
- * Generate OAuth URL for user authorization
+ * Generate OAuth URL for group authorization.
+ * Embeds a random UUID as the state param (maps to groupId server-side).
  */
-export function generateAuthUrl(userId: number): string {
+export function generateAuthUrl(groupId: number): string {
+  const state = registerOAuthState(groupId);
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: GOOGLE_SCOPES,
-    state: userId.toString(), // Pass user ID to retrieve after callback
+    state,
     prompt: 'consent', // Force consent screen to get refresh token
   });
 }
