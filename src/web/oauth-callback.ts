@@ -1,8 +1,10 @@
+// OAuth callback HTTP server — handles Google OAuth redirects and token exchange.
 import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode } from '../services/google/oauth';
 import { encryptToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
+import { escapeHtml } from './html-escape';
 import { handleTempImage } from './temp-image.handler';
 
 const logger = createLogger('oauth-callback');
@@ -117,7 +119,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         <body>
           <div class="container">
             <h1 class="error">❌ Authorization Failed</h1>
-            <p>${errorDescription}</p>
+            <p>${escapeHtml(errorDescription)}</p>
             <p>Please return to Telegram and try again.</p>
           </div>
         </body>
@@ -245,7 +247,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         <body>
           <div class="container">
             <h1 class="error">❌ Error</h1>
-            <p>${err instanceof Error ? err.message : 'Unknown error occurred'}</p>
+            <p>${escapeHtml(err instanceof Error ? err.message : 'Unknown error occurred')}</p>
             <p>Please return to Telegram and try again.</p>
           </div>
         </body>
