@@ -16,6 +16,10 @@ export function initDatabase(): Database {
   db.exec('PRAGMA foreign_keys = ON;');
   // Retry for up to 5 seconds instead of failing immediately on SQLITE_BUSY
   db.exec('PRAGMA busy_timeout = 5000;');
+  // Performance PRAGMAs
+  db.exec('PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA cache_size = -8000;'); // 8MB
+  db.exec('PRAGMA temp_store = MEMORY;');
 
   return db;
 }
@@ -698,6 +702,18 @@ export function runMigrations(db: Database): void {
           );
         `);
         logger.info('✓ Created sync_snapshots table');
+      },
+    },
+    {
+      name: '023_add_composite_indexes',
+      up: () => {
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_expenses_group_category ON expenses(group_id, category);',
+        );
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_expenses_group_date ON expenses(group_id, date);',
+        );
+        logger.info('✓ Added composite indexes on expenses');
       },
     },
   ];
