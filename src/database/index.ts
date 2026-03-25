@@ -31,8 +31,8 @@ export class DatabaseService {
   public adviceLogs: AdviceLogRepository;
   public devTasks: DevTaskRepository;
 
-  constructor() {
-    this.db = setupDatabase();
+  constructor(db?: Database) {
+    this.db = db ?? setupDatabase();
     this.groups = new GroupRepository(this.db);
     this.users = new UserRepository(this.db);
     this.categories = new CategoryRepository(this.db);
@@ -45,6 +45,13 @@ export class DatabaseService {
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);
     this.devTasks = new DevTaskRepository(this.db);
+  }
+
+  /**
+   * Run a function inside a SQLite transaction — rolls back on error
+   */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   /**
