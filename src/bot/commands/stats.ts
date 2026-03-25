@@ -1,12 +1,17 @@
 import { CURRENCY_SYMBOLS } from '../../config/constants';
 import { database } from '../../database';
+import { createLogger } from '../../utils/logger.ts';
+import { formatErrorForUser } from '../bot-error-formatter';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
+
+const logger = createLogger('cmd-stats');
 
 /**
  * /stats command handler
  */
 export async function handleStatsCommand(ctx: Ctx['Command']): Promise<void> {
+  try {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
 
@@ -57,4 +62,8 @@ export async function handleStatsCommand(ctx: Ctx['Command']): Promise<void> {
 
   // Maybe send daily advice (20% probability)
   await maybeSmartAdvice(ctx, group.id);
+  } catch (error) {
+    logger.error({ err: error }, '[CMD] Error in /stats');
+    await ctx.send(formatErrorForUser(error));
+  }
 }
