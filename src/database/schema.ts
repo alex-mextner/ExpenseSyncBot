@@ -684,6 +684,22 @@ export function runMigrations(db: Database): void {
         logger.info(`Encrypted ${encrypted} plaintext refresh tokens`);
       },
     },
+    {
+      name: '022_create_sync_snapshots_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS sync_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            snapshot_data TEXT NOT NULL,
+            expense_count INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (group_id) REFERENCES groups(id)
+          );
+        `);
+        logger.info('✓ Created sync_snapshots table');
+      },
+    },
   ];
 
   // Check and run migrations

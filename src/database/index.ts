@@ -10,6 +10,7 @@ import { GroupRepository } from './repositories/group.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
+import { SyncSnapshotRepository } from './repositories/sync-snapshot.repository';
 import { UserRepository } from './repositories/user.repository';
 import { setupDatabase } from './schema';
 
@@ -29,6 +30,7 @@ export class DatabaseService {
   public receiptItems: ReceiptItemsRepository;
   public expenseItems: ExpenseItemsRepository;
   public adviceLogs: AdviceLogRepository;
+  public syncSnapshots: SyncSnapshotRepository;
   public devTasks: DevTaskRepository;
 
   constructor(db?: Database) {
@@ -44,6 +46,7 @@ export class DatabaseService {
     this.receiptItems = new ReceiptItemsRepository(this.db);
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);
+    this.syncSnapshots = new SyncSnapshotRepository(this.db);
     this.devTasks = new DevTaskRepository(this.db);
   }
 
