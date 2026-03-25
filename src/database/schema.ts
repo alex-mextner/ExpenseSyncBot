@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { env } from '../config/env';
+import { encryptToken, isEncryptedToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
 
 const logger = createLogger('schema');
@@ -655,6 +656,32 @@ export function runMigrations(db: Database): void {
       up: () => {
         db.exec(`ALTER TABLE dev_tasks ADD COLUMN failed_at_state TEXT`);
         logger.info('✓ Added failed_at_state column to dev_tasks');
+      },
+    },
+    {
+      name: '021_encrypt_existing_refresh_tokens',
+      up: () => {
+        const rows = db
+          .query<{ id: number; google_refresh_token: string | null }, []>(
+            'SELECT id, google_refresh_token FROM groups WHERE google_refresh_token IS NOT NULL',
+          )
+          .all();
+
+        let encrypted = 0;
+        for (const row of rows) {
+          if (!row.google_refresh_token) continue;
+          // Skip already-encrypted tokens
+          if (isEncryptedToken(row.google_refresh_token)) continue;
+
+          const encryptedValue = encryptToken(row.google_refresh_token, env.ENCRYPTION_KEY);
+          db.query('UPDATE groups SET google_refresh_token = ? WHERE id = ?').run(
+            encryptedValue,
+            row.id,
+          );
+          encrypted++;
+        }
+
+        logger.info(`Encrypted ${encrypted} plaintext refresh tokens`);
       },
     },
   ];

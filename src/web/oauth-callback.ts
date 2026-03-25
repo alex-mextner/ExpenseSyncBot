@@ -1,6 +1,7 @@
 import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode } from '../services/google/oauth';
+import { encryptToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
 import { handleTempImage } from './temp-image.handler';
 
@@ -146,8 +147,9 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       throw new Error('Group not found');
     }
 
+    const encryptedToken = encryptToken(tokens.refresh_token, env.ENCRYPTION_KEY);
     database.groups.update(group.telegram_group_id, {
-      google_refresh_token: tokens.refresh_token,
+      google_refresh_token: encryptedToken,
     });
 
     // Resolve pending OAuth promise

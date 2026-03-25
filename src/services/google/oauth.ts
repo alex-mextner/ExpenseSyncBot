@@ -1,6 +1,8 @@
 import { google } from 'googleapis';
 import { GOOGLE_SCOPES } from '../../config/constants';
 import { env } from '../../config/env';
+import { createLogger } from '../../utils/logger.ts';
+import { decryptToken, isEncryptedToken } from './token-encryption';
 
 /**
  * OAuth2 client instance
@@ -48,10 +50,25 @@ export async function getTokensFromCode(code: string): Promise<{
   };
 }
 
+const logger = createLogger('oauth');
+
 /**
- * Get OAuth2 client with refresh token
+ * Get OAuth2 client with refresh token.
+ * Automatically decrypts the token if it's in encrypted format (iv:authTag:ciphertext).
+ * Supports plaintext tokens for backward compatibility during migration.
  */
 export function getAuthenticatedClient(refreshToken: string) {
+  let plainToken = refreshToken;
+
+  if (isEncryptedToken(refreshToken)) {
+    try {
+      plainToken = decryptToken(refreshToken, env.ENCRYPTION_KEY);
+    } catch (err) {
+      logger.error({ err }, 'Failed to decrypt refresh token');
+      throw new Error('Failed to decrypt stored refresh token');
+    }
+  }
+
   const client = new google.auth.OAuth2(
     env.GOOGLE_CLIENT_ID,
     env.GOOGLE_CLIENT_SECRET,
@@ -59,7 +76,7 @@ export function getAuthenticatedClient(refreshToken: string) {
   );
 
   client.setCredentials({
-    refresh_token: refreshToken,
+    refresh_token: plainToken,
   });
 
   return client;
