@@ -10,46 +10,24 @@ export class BudgetRepository {
   setBudget(data: CreateBudgetData): Budget {
     const currency = data.currency || 'EUR';
 
-    // Check if budget already exists
-    const existing = this.findByGroupCategoryMonth(data.group_id, data.category, data.month);
-
-    if (existing) {
-      // Update existing budget (including currency)
-      const query = this.db.query<void, [number, string, number, string, string]>(`
-        UPDATE budgets
-        SET limit_amount = ?, currency = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE group_id = ? AND category = ? AND month = ?
-      `);
-
-      query.run(data.limit_amount, currency, data.group_id, data.category, data.month);
-
-      const updated = this.findById(existing.id);
-      if (!updated) {
-        throw new Error('Failed to retrieve updated budget');
-      }
-      return updated;
-    }
-
-    // Insert new budget
-    const query = this.db.query<{ id: number }, [number, string, string, number, string]>(`
-      INSERT INTO budgets (group_id, category, month, limit_amount, currency)
-      VALUES (?, ?, ?, ?, ?)
-      RETURNING id
-    `);
-
-    const result = query.get(data.group_id, data.category, data.month, data.limit_amount, currency);
+    // Atomic UPSERT — no TOCTOU race between check and insert/update
+    const result = this.db
+      .query<Budget, [number, string, string, number, string]>(
+        `INSERT INTO budgets (group_id, category, month, limit_amount, currency)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (group_id, category, month) DO UPDATE SET
+           limit_amount = excluded.limit_amount,
+           currency = excluded.currency,
+           updated_at = CURRENT_TIMESTAMP
+         RETURNING *`,
+      )
+      .get(data.group_id, data.category, data.month, data.limit_amount, currency);
 
     if (!result) {
-      throw new Error('Failed to create budget');
+      throw new Error('Failed to upsert budget');
     }
 
-    const budget = this.findById(result.id);
-
-    if (!budget) {
-      throw new Error('Failed to retrieve created budget');
-    }
-
-    return budget;
+    return result;
   }
 
   /**

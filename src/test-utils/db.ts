@@ -19,6 +19,7 @@ export function createTestDb(): Database {
  */
 export function clearTestDb(db: Database): void {
   db.exec(`
+    DELETE FROM sync_snapshots;
     DELETE FROM advice_log;
     DELETE FROM expense_items;
     DELETE FROM chat_messages;

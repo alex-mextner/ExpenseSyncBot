@@ -12,42 +12,31 @@ const logger = createLogger('main');
  * Main application entry point
  */
 async function main() {
-  console.log('🚀 Starting ExpenseSyncBot...\n');
+  logger.info('Starting ExpenseSyncBot...');
 
   try {
-    // Initialize database
-    console.log('📦 Initializing database...');
+    logger.info('Initializing database...');
     // Database is initialized on import
-    console.log('✓ Database ready\n');
+    logger.info('Database ready');
 
-    // Update exchange rates
-    console.log('💱 Updating exchange rates...');
+    logger.info('Updating exchange rates...');
     await updateExchangeRates();
-    console.log('✓ Exchange rates updated\n');
+    logger.info('Exchange rates updated');
 
-    // Start OAuth callback server
-    console.log('🌐 Starting OAuth server...');
+    logger.info('Starting OAuth server...');
     startOAuthServer();
-    console.log('');
 
-    // Start temp image cleanup
-    console.log('🧹 Starting temp image cleanup...');
+    logger.info('Starting temp image cleanup...');
     startTempImageCleanup();
-    console.log('');
 
-    // Start Telegram bot
-    console.log('🤖 Starting Telegram bot...');
+    logger.info('Starting Telegram bot...');
     const bot = await startBot();
-    console.log('');
 
-    // Schedule news broadcast
     scheduleNewsBroadcast(bot);
-    console.log('');
 
-    console.log('✅ ExpenseSyncBot is running!\n');
-    console.log('Press Ctrl+C to stop\n');
+    logger.info('ExpenseSyncBot is running');
   } catch (error) {
-    console.error('❌ Fatal error:', error);
+    logger.fatal({ err: error }, 'Fatal startup error');
     process.exit(1);
   }
 }
@@ -63,18 +52,16 @@ process.on('uncaughtException', (error) => {
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n\n🛑 Shutting down...');
+  logger.info('Shutting down...');
   database.close();
-  console.log('✓ Database closed');
-  console.log('Goodbye! 👋');
+  logger.info('Database closed. Goodbye.');
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('\n\n🛑 Shutting down...');
+  logger.info('Shutting down (SIGTERM)...');
   database.close();
-  console.log('✓ Database closed');
-  console.log('Goodbye! 👋');
+  logger.info('Database closed. Goodbye.');
   process.exit(0);
 });
 

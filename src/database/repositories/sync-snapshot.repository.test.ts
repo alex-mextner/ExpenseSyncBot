@@ -21,7 +21,6 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  db.exec('DELETE FROM sync_snapshots;');
   clearTestDb(db);
   const group = groups.create({ telegram_group_id: Date.now() });
   groupId = group.id;
