@@ -1,6 +1,7 @@
 // src/services/dev-pipeline/dev-agent.ts
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { AI_BASE_URL, AI_MODEL } from '../ai/agent';
 import { deleteFile, fileExists, listDirectory, readFile, searchCode, writeFile } from './file-ops';
@@ -304,7 +305,7 @@ export class DevAgent {
           return `Unknown tool: ${name}`;
       }
     } catch (error) {
-      return `Error: ${error instanceof Error ? error.message : String(error)}`;
+      return `Error: ${getErrorMessage(error)}`;
     }
   }
 }

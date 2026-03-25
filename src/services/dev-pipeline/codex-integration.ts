@@ -6,6 +6,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { AI_BASE_URL, AI_MODEL } from '../ai/agent';
 
@@ -64,6 +65,6 @@ ${truncatedDiff}
     return review.trim() || 'No review comments.';
   } catch (error) {
     logger.error({ err: error }, '[REVIEW] Failed');
-    return `Review failed: ${error instanceof Error ? error.message : String(error)}`;
+    return `Review failed: ${getErrorMessage(error)}`;
   }
 }

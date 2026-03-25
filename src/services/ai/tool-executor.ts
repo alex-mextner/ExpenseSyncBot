@@ -3,6 +3,7 @@
  * Maps tool calls to database operations and services
  */
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
+import { getErrorMessage } from '../../utils/error';
 import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
@@ -65,7 +66,7 @@ export async function executeTool(
     logger.error({ err: error }, `[TOOL] Error executing ${name}`);
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: getErrorMessage(error),
     };
   }
 }

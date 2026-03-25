@@ -6,6 +6,7 @@ import { parseExpenseMessage, validateParsedExpense } from '../../services/curre
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { silentSyncBudgets } from '../commands/budget';
@@ -145,7 +146,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
           await pl.editDesign(pendingTaskId, text);
         }
       } catch (error) {
-        await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+        await ctx.send(`Failed: ${getErrorMessage(error)}`);
       }
     }
     return;

@@ -16,6 +16,7 @@ import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
 import { DevTaskState, STATE_EMOJI, STATE_LABELS } from '../../services/dev-pipeline/types';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
 
@@ -234,7 +235,7 @@ async function handleNewTask(
   } catch (error) {
     logger.error({ err: error }, '[DEV-CMD] Failed to start task');
     await ctx.send(
-      `Failed to start task: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to start task: ${getErrorMessage(error)}`,
     );
   }
 }
@@ -307,7 +308,7 @@ async function handleApprove(ctx: Ctx['Command'], args: string[], groupId: numbe
     await pl.approveTask(taskId);
     // Pipeline sends its own notification
   } catch (error) {
-    await ctx.send(`Failed to approve: ${error instanceof Error ? error.message : String(error)}`);
+    await ctx.send(`Failed to approve: ${getErrorMessage(error)}`);
   }
 }
 
@@ -344,7 +345,7 @@ async function handleCancel(ctx: Ctx['Command'], args: string[], groupId: number
 
     await pl.cancelTask(taskId);
   } catch (error) {
-    await ctx.send(`Failed to cancel: ${error instanceof Error ? error.message : String(error)}`);
+    await ctx.send(`Failed to cancel: ${getErrorMessage(error)}`);
   }
 }
 
@@ -422,7 +423,7 @@ async function handleAnswer(ctx: Ctx['Command'], args: string[], groupId: number
 
     await pl.answerTask(taskId, answer);
   } catch (error) {
-    await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+    await ctx.send(`Failed: ${getErrorMessage(error)}`);
   }
 }
 
@@ -458,7 +459,7 @@ async function handleContinue(ctx: Ctx['Command'], args: string[], groupId: numb
 
     await pl.continueTask(taskId, message);
   } catch (error) {
-    await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+    await ctx.send(`Failed: ${getErrorMessage(error)}`);
   }
 }
 
@@ -669,7 +670,7 @@ export async function handleDevCallback(
     if (!answered) {
       try {
         await ctx.answerCallbackQuery({
-          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          text: `Error: ${getErrorMessage(error)}`,
         });
       } catch {}
     }

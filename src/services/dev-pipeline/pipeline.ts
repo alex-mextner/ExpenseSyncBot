@@ -19,6 +19,7 @@ import {
 } from '../../bot/keyboards';
 import { database } from '../../database';
 import { escapeHtml } from '../../utils/html';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { runCodexReview } from './codex-integration';
 import { AgentAbortedError, DevAgent } from './dev-agent';
@@ -274,7 +275,7 @@ export class DevPipeline {
       }
 
       logger.error({ err: error }, `[DEV-PIPELINE] Error processing task #${task.id}`);
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = getErrorMessage(error);
 
       // Re-read task from DB to get the actual current state (task object may be stale)
       const freshTask = database.devTasks.findById(task.id);
