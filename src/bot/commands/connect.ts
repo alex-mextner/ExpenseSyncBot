@@ -22,7 +22,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 
   if (!telegramId || !chatId) {
     logger.info(`[CMD] Error: missing telegramId or chatId`);
-    await ctx.send('Error: Unable to identify user or chat');
+    await ctx.send('❌ Не удалось определить пользователя или чат');
     return;
   }
 

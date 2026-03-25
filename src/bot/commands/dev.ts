@@ -93,7 +93,7 @@ export async function handleDevCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
 
   if (!chatId || !telegramId) {
-    await ctx.send('Error: Unable to identify chat or user');
+    await ctx.send('❌ Не удалось определить чат или пользователя');
     return;
   }
 

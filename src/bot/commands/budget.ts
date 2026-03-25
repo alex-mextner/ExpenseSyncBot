@@ -125,7 +125,7 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
   const chatType = ctx.chat?.type;
 
   if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
+    await ctx.send('❌ Не удалось определить чат');
     return;
   }
 
