@@ -4,6 +4,9 @@ import { database } from './src/database';
 import { updateExchangeRates } from './src/services/currency/converter';
 import { startTempImageCleanup } from './src/services/receipt/ocr-extractor';
 import { scheduleNewsBroadcast } from './src/services/broadcast';
+import { createLogger } from './src/utils/logger';
+
+const logger = createLogger('main');
 
 /**
  * Main application entry point
@@ -48,6 +51,15 @@ async function main() {
     process.exit(1);
   }
 }
+
+// Catch unhandled promise rejections and uncaught exceptions
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason }, '[PROCESS] Unhandled rejection');
+});
+process.on('uncaughtException', (error) => {
+  logger.error({ err: error }, '[PROCESS] Uncaught exception');
+  process.exit(1);
+});
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {

@@ -114,6 +114,11 @@ export function createBot(): Bot {
     await handleExpenseMessage(ctx, bot);
   });
 
+  // Global error handler — catches unhandled errors in bot middleware/handlers
+  bot.onError(({ kind, error }) => {
+    logger.error({ err: error, kind }, '[BOT] Unhandled error');
+  });
+
   return bot;
 }
 
