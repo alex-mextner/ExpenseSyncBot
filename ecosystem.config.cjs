@@ -18,6 +18,8 @@ module.exports = {
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       time: true,
+      max_size: '10M',
+      retain: 10,
     },
   ],
 };
