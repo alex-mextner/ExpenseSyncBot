@@ -711,29 +711,30 @@ export async function saveReceiptExpenses(
       continue;
     }
 
-    // Create expense in database
-    const expense = database.expenses.create({
-      group_id: groupId,
-      user_id: userId,
-      date: currentDate,
-      category,
-      comment,
-      amount: totalAmount,
-      currency,
-      eur_amount: eurAmount,
-    });
-
-    // Create expense items for each item in this category
-    for (const item of items) {
-      database.expenseItems.create({
-        expense_id: expense.id,
-        name_ru: item.name_ru,
-        name_original: item.name_original || null,
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total,
+    // Create expense + items atomically in a transaction
+    database.transaction(() => {
+      const expense = database.expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: currentDate,
+        category,
+        comment,
+        amount: totalAmount,
+        currency,
+        eur_amount: eurAmount,
       });
-    }
+
+      for (const item of items) {
+        database.expenseItems.create({
+          expense_id: expense.id,
+          name_ru: item.name_ru,
+          name_original: item.name_original || null,
+          quantity: item.quantity,
+          price: item.price,
+          total: item.total,
+        });
+      }
+    });
   }
 
   // Delete all processed receipt items (confirmed + skipped)

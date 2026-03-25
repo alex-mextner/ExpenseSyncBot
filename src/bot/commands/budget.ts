@@ -459,41 +459,44 @@ export async function silentSyncBudgets(
       return 0;
     }
 
-    let syncedCount = 0;
+    // Wrap all DB writes in a transaction for atomicity
+    const syncedCount = database.transaction(() => {
+      let count = 0;
 
-    for (const budgetData of budgetsFromSheet) {
-      // Check if category exists, if not - create it
-      const categoryExists = database.categories.exists(groupId, budgetData.category);
-      if (!categoryExists) {
-        database.categories.create({
-          group_id: groupId,
-          name: budgetData.category,
-        });
+      for (const budgetData of budgetsFromSheet) {
+        const categoryExists = database.categories.exists(groupId, budgetData.category);
+        if (!categoryExists) {
+          database.categories.create({
+            group_id: groupId,
+            name: budgetData.category,
+          });
+        }
+
+        const existing = database.budgets.findByGroupCategoryMonth(
+          groupId,
+          budgetData.category,
+          budgetData.month,
+        );
+
+        const hasChanged =
+          !existing ||
+          existing.limit_amount !== budgetData.limit ||
+          existing.currency !== budgetData.currency;
+
+        if (hasChanged) {
+          database.budgets.setBudget({
+            group_id: groupId,
+            category: budgetData.category,
+            month: budgetData.month,
+            limit_amount: budgetData.limit,
+            currency: budgetData.currency,
+          });
+          count++;
+        }
       }
 
-      // Get existing budget to check if it changed
-      const existing = database.budgets.findByGroupCategoryMonth(
-        groupId,
-        budgetData.category,
-        budgetData.month,
-      );
-
-      const hasChanged =
-        !existing ||
-        existing.limit_amount !== budgetData.limit ||
-        existing.currency !== budgetData.currency;
-
-      if (hasChanged) {
-        database.budgets.setBudget({
-          group_id: groupId,
-          category: budgetData.category,
-          month: budgetData.month,
-          limit_amount: budgetData.limit,
-          currency: budgetData.currency,
-        });
-        syncedCount++;
-      }
-    }
+      return count;
+    });
 
     return syncedCount;
   } catch (err) {
