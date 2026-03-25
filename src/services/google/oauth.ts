@@ -120,6 +120,22 @@ export function getAuthenticatedClient(refreshToken: string) {
 }
 
 /**
+ * Check if an error indicates an expired or revoked OAuth token.
+ * Matches HTTP 401, invalid_grant, and common Google OAuth error messages.
+ */
+export function isTokenExpiredError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes('invalid_grant') ||
+    msg.includes('token has been expired or revoked') ||
+    msg.includes('token has been revoked') ||
+    msg.includes('unauthorized') ||
+    msg.includes('401')
+  );
+}
+
+/**
  * Refresh access token
  */
 export async function refreshAccessToken(refreshToken: string): Promise<string> {

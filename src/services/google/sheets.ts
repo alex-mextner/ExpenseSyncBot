@@ -1,11 +1,13 @@
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
 import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';
+import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
-import { getAuthenticatedClient } from './oauth';
+import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
 
 const logger = createLogger('sheets');
+
 
 /**
  * Row data from spreadsheet
@@ -227,7 +229,14 @@ export async function verifySpreadsheetAccess(
     await sheets.spreadsheets.get({ spreadsheetId });
     return true;
   } catch (err) {
-    logger.error({ err: err }, 'Failed to verify spreadsheet access');
+    if (isTokenExpiredError(err)) {
+      throw new OAuthError(
+        'Токен доступа истёк или был отозван. Используй /reconnect',
+        'TOKEN_EXPIRED',
+        err,
+      );
+    }
+    logger.error({ err }, 'Failed to verify spreadsheet access');
     return false;
   }
 }

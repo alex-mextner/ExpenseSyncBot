@@ -4,6 +4,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   generateAuthUrl,
   getAuthenticatedClient,
+  isTokenExpiredError,
   registerOAuthState,
   resolveOAuthState,
 } from './oauth';
@@ -150,5 +151,30 @@ describe('getAuthenticatedClient', () => {
   it('returned client has setCredentials method', () => {
     const client = getAuthenticatedClient('token');
     expect(typeof client.setCredentials).toBe('function');
+  });
+});
+
+describe('isTokenExpiredError', () => {
+  it('detects invalid_grant', () => {
+    expect(isTokenExpiredError(new Error('invalid_grant'))).toBe(true);
+  });
+
+  it('detects Token has been expired or revoked', () => {
+    expect(isTokenExpiredError(new Error('Token has been expired or revoked'))).toBe(true);
+  });
+
+  it('detects 401 Unauthorized', () => {
+    expect(isTokenExpiredError(new Error('Request failed with status 401'))).toBe(true);
+  });
+
+  it('does not match unrelated errors', () => {
+    expect(isTokenExpiredError(new Error('Network timeout'))).toBe(false);
+    expect(isTokenExpiredError(new Error('ECONNREFUSED'))).toBe(false);
+  });
+
+  it('returns false for non-Error values', () => {
+    expect(isTokenExpiredError('string')).toBe(false);
+    expect(isTokenExpiredError(null)).toBe(false);
+    expect(isTokenExpiredError(42)).toBe(false);
   });
 });
