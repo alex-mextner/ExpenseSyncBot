@@ -2,6 +2,7 @@
  * Tool execution routing and implementation
  * Maps tool calls to database operations and services
  */
+import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
@@ -572,20 +573,19 @@ function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext
 }
 
 /**
- * Format a calculator result number.
- * Numbers >= 1,000,000 use scientific notation (e.g. 1.26e8).
- * Smaller numbers are rounded to 2 decimal places.
+ * Format a calculator result.
+ * Values >= 1,000,000 use scientific notation (e.g. 1.26e8).
+ * Smaller values are rounded to 2 decimal places with trailing zeros stripped.
  */
-function formatCalculatorResult(n: number): string {
-  if (!Number.isFinite(n)) return 'Ошибка вычисления';
-  if (Math.abs(n) >= 1_000_000) {
+function formatCalculatorResult(n: Big): string {
+  if (n.abs().gte(1_000_000)) {
     // 4 significant figures, strip trailing zeros and normalize exponent sign
     return n
       .toExponential(3)
       .replace(/\.?0+(e)/, '$1')
       .replace('e+', 'e');
   }
-  return String(Math.round(n * 100) / 100);
+  return n.toFixed(2).replace(/\.?0+$/, '');
 }
 
 function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): ToolResult {

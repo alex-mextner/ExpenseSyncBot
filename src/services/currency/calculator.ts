@@ -1,9 +1,10 @@
 /**
  * Currency-aware expression evaluator — used by the AI calculate tool
  */
+import Big from 'big.js';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 import { convertCurrency } from './converter';
-import { evaluateMathExpression } from './parser';
+import { evaluateMathExpressionBig } from './parser';
 
 // All currency aliases, sorted longest-first (prevents partial matches on shorter entries)
 const SORTED_ALIASES: Array<[string, CurrencyCode]> = (
@@ -30,7 +31,7 @@ const AMOUNT_RE = new RegExp(`(${CURR})(${NUM})|(${NUM})\\s*(${CURR})`, 'gi');
  * hasCurrency=true when the expression contained currency amounts (output should show currency).
  */
 export interface CurrencyExpressionResult {
-  value: number;
+  value: Big;
   hasCurrency: boolean;
 }
 
@@ -90,20 +91,21 @@ export function evaluateCurrencyExpression(
   if (pctMatch) {
     const baseExpr = pctMatch[1]?.trim() ?? '';
     const op = pctMatch[2];
-    const pct = parseFloat((pctMatch[3] ?? '0').replace(',', '.'));
-    if (Number.isNaN(pct)) return null;
+    const pctStr = (pctMatch[3] ?? '0').replace(',', '.');
+    if (Number.isNaN(parseFloat(pctStr))) return null;
 
     // Evaluate base — could be a single converted amount or a full expression
-    let baseValue: number | null;
+    let baseValue: Big | null;
     if (/^\d+(?:\.\d+)?$/.test(baseExpr)) {
-      baseValue = parseFloat(baseExpr);
+      baseValue = new Big(baseExpr);
     } else {
-      baseValue = evaluateMathExpression(baseExpr);
+      baseValue = evaluateMathExpressionBig(baseExpr);
     }
     if (baseValue === null) return null;
 
-    const delta = baseValue * (pct / 100);
-    const result = op === '+' ? baseValue + delta : baseValue - delta;
+    const pct = new Big(pctStr);
+    const delta = baseValue.times(pct).div(100);
+    const result = op === '+' ? baseValue.plus(delta) : baseValue.minus(delta);
     return { value: result, hasCurrency: anyCurrencyReplaced };
   }
 
@@ -111,10 +113,9 @@ export function evaluateCurrencyExpression(
 
   // Single currency amount (e.g. "100$", "70 EUR") → plain conversion, no operator needed
   if (anyCurrencyReplaced && /^\d+(?:\.\d+)?$/.test(trimmed)) {
-    const value = parseFloat(trimmed);
-    return { value, hasCurrency: true };
+    return { value: new Big(trimmed), hasCurrency: true };
   }
 
-  const mathResult = evaluateMathExpression(trimmed);
+  const mathResult = evaluateMathExpressionBig(trimmed);
   return mathResult === null ? null : { value: mathResult, hasCurrency: anyCurrencyReplaced };
 }
