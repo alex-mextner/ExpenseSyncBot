@@ -1,3 +1,4 @@
+/** Expense repository — CRUD and query operations for expense records */
 import type { Database } from 'bun:sqlite';
 import type {
   CategoryTotal,
@@ -42,14 +43,15 @@ export class ExpenseRepository {
   /**
    * Find expenses by date range
    */
-  findByDateRange(groupId: number, startDate: string, endDate: string): Expense[] {
-    const query = this.db.query<Expense, [number, string, string]>(`
+  findByDateRange(groupId: number, startDate: string, endDate: string, limit = 1000): Expense[] {
+    const query = this.db.query<Expense, [number, string, string, number]>(`
       SELECT * FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
       ORDER BY date DESC
+      LIMIT ?
     `);
 
-    return query.all(groupId, startDate, endDate);
+    return query.all(groupId, startDate, endDate, limit);
   }
 
   /**
@@ -148,14 +150,15 @@ export class ExpenseRepository {
   /**
    * Get expenses by category
    */
-  findByCategory(groupId: number, category: string): Expense[] {
-    const query = this.db.query<Expense, [number, string]>(`
+  findByCategory(groupId: number, category: string, limit = 1000): Expense[] {
+    const query = this.db.query<Expense, [number, string, number]>(`
       SELECT * FROM expenses
       WHERE group_id = ? AND category = ?
       ORDER BY date DESC
+      LIMIT ?
     `);
 
-    return query.all(groupId, category);
+    return query.all(groupId, category, limit);
   }
 
   /**
