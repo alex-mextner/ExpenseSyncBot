@@ -103,7 +103,8 @@ function evaluateTokens(tokens: MathToken[]): number | null {
  * Supports: +, -, *, ×, /
  * Does NOT support: parentheses
  *
- * Returns null for invalid expressions, single numbers, overflow, or division by zero.
+ * Returns null for invalid expressions, single numbers, or division by zero.
+ * No upper bound on the result — callers apply their own limits as needed.
  *
  * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35, "100-70" → 30
  */
@@ -128,13 +129,7 @@ export function evaluateMathExpression(expr: string): number | null {
   const opCount = tokens.filter((t) => typeof t === 'string').length;
   if (opCount > 10) return null;
 
-  // Evaluate with operator precedence (* / before +)
-  const result = evaluateTokens(tokens);
-
-  // Safety: reject unreasonable amounts
-  if (result === null || result >= 10_000_000) return null;
-
-  return result;
+  return evaluateTokens(tokens);
 }
 
 // ── End math expression evaluator ─────────────────────────────────────
@@ -279,7 +274,7 @@ function parseAmount(amountStr: string): number | null {
     // Check if this is a math expression (contains operator)
     if (/[+\-*×/]/.test(cleaned)) {
       const result = evaluateMathExpression(cleaned);
-      if (result === null || result <= 0) return null;
+      if (result === null || result <= 0 || result > 1_000_000) return null;
       // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
       return Math.round(result * 100) / 100;
     }

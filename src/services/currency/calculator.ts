@@ -26,21 +26,31 @@ const CURR = SORTED_ALIASES.map(([alias]) => alias.replace(/[.*+?^${}()|[\]\\]/g
 const AMOUNT_RE = new RegExp(`(${CURR})(${NUM})|(${NUM})\\s*(${CURR})`, 'gi');
 
 /**
+ * Result of evaluating a currency-aware expression.
+ * hasCurrency=true when the expression contained currency amounts (output should show currency).
+ */
+export interface CurrencyExpressionResult {
+  value: number;
+  hasCurrency: boolean;
+}
+
+/**
  * Evaluate a math expression containing optional currency amounts.
  * All currency amounts are converted to targetCurrency before evaluation.
  *
  * Examples:
- *   "100$ - 70EUR"   in USD → converts 70 EUR→USD, evaluates 100 − result
- *   "100$-70eur"     in USD → same, compact form
- *   "1500 RSD + 10€" in EUR → converts 1500 RSD→EUR, evaluates result + 10
- *   "100 - 70"       in USD → pure math, returns 30
+ *   "100$ - 70EUR"       in USD → converts 70 EUR→USD, evaluates 100 − result
+ *   "100$-70eur"         in USD → same, compact form
+ *   "1500 RSD + 10€"     in EUR → converts 1500 RSD→EUR, evaluates result + 10
+ *   "100 - 70"           in USD → pure math, hasCurrency=false
+ *   "63000000 / 0.5"     in EUR → pure math, hasCurrency=false
  *
- * Returns null for invalid or unevaluable expressions (single value, unknown syntax).
+ * Returns null for invalid or unevaluable expressions.
  */
 export function evaluateCurrencyExpression(
   expr: string,
   targetCurrency: CurrencyCode,
-): number | null {
+): CurrencyExpressionResult | null {
   if (!expr || expr.trim().length === 0) return null;
 
   let anyCurrencyReplaced = false;
@@ -94,8 +104,7 @@ export function evaluateCurrencyExpression(
 
     const delta = baseValue * (pct / 100);
     const result = op === '+' ? baseValue + delta : baseValue - delta;
-    if (result >= 10_000_000) return null;
-    return result;
+    return { value: result, hasCurrency: anyCurrencyReplaced };
   }
 
   const trimmed = converted.trim();
@@ -103,9 +112,9 @@ export function evaluateCurrencyExpression(
   // Single currency amount (e.g. "100$", "70 EUR") → plain conversion, no operator needed
   if (anyCurrencyReplaced && /^\d+(?:\.\d+)?$/.test(trimmed)) {
     const value = parseFloat(trimmed);
-    if (value >= 10_000_000) return null;
-    return value;
+    return { value, hasCurrency: true };
   }
 
-  return evaluateMathExpression(trimmed);
+  const mathResult = evaluateMathExpression(trimmed);
+  return mathResult === null ? null : { value: mathResult, hasCurrency: anyCurrencyReplaced };
 }

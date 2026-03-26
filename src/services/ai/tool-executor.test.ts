@@ -754,13 +754,13 @@ describe('calculate tool', () => {
   test('result is rounded to 2 decimal places', async () => {
     const result = await executeTool('calculate', { expression: '100 / 3' }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toMatch(/^33\.33 /); // not 33.333333...
+    expect(result.output).toBe('33.33'); // pure math — no currency suffix
   });
 
-  test('uses group default currency when target_currency omitted', async () => {
+  test('pure math omits currency from output', async () => {
     const result = await executeTool('calculate', { expression: '50 + 50' }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('EUR'); // group default_currency is EUR
+    expect(result.output).toBe('100'); // no EUR suffix for currency-free expressions
   });
 
   test('returns error for unknown target_currency', async () => {
@@ -802,6 +802,27 @@ describe('calculate tool', () => {
     const value = parseFloat(result.output ?? '');
     expect(value).toBeGreaterThan(-200);
     expect(value).toBeLessThan(200);
+  });
+
+  test('large pure math result uses scientific notation', async () => {
+    const result = await executeTool('calculate', { expression: '63000000 / 0.5' }, ctx);
+    expect(result.success).toBe(true);
+    // 126000000 → 1.26e8
+    expect(result.output).toMatch(/e\d+/);
+    expect(result.output).not.toContain('EUR');
+  });
+
+  test('result under 1M uses decimal notation', async () => {
+    const result = await executeTool('calculate', { expression: '999999 * 1' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toBe('999999');
+    expect(result.output).not.toMatch(/e\d+/);
+  });
+
+  test('negative large result uses scientific notation with minus sign', async () => {
+    const result = await executeTool('calculate', { expression: '0 - 63000000 / 0.5' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/^-.*e\d+/);
   });
 });
 

@@ -279,9 +279,9 @@ describe('evaluateMathExpression', () => {
   // Single number is not an expression
   test('100 → null (not an expression)', () => expect(evaluateMathExpression('100')).toBeNull());
 
-  // Overflow
-  test('999999*999999 → null (too large)', () =>
-    expect(evaluateMathExpression('999999*999999')).toBeNull());
+  // Large result — no upper bound, evaluateMathExpression returns the value
+  test('999999*999999 → 999998000001 (no overflow limit)', () =>
+    expect(evaluateMathExpression('999999*999999')).toBe(999998000001));
 
   // Division precision
   test('100/3 → ~33.333', () => {
@@ -414,8 +414,8 @@ describe('math expressions in expenses', () => {
     expect(r).toBeNull();
   });
 
-  // Overflow → null
-  test('999999*999999 food → null (too large)', () => {
+  // Expense amounts > 1,000,000 are rejected in parseAmount
+  test('999999*999999 food → null (expense limit exceeded)', () => {
     const r = parseExpenseMessage('999999*999999 food', 'EUR');
     expect(r).toBeNull();
   });

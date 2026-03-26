@@ -50,6 +50,8 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
       return [input['action'], input['name']].filter(Boolean).join(' ');
     case 'set_custom_prompt':
       return input['prompt'] ? `${String(input['prompt']).length} символов` : 'очистка';
+    case 'calculate':
+      return input['expression'] ? String(input['expression']) : '';
     default:
       return '';
   }
@@ -64,7 +66,7 @@ export class TelegramStreamWriter {
   private placeholderMessageId: number | null = null;
   private fullText = ''; // current round's accumulated text
   private historyText = ''; // clean final AI text for chat history
-  private lastFlushTime = 0;
+  private lastFlushTime = Date.now();
   private lastSentText = ''; // last display text actually sent
   private lastErrorTime = 0;
   private flushInProgress = false; // mutex: prevents concurrent API calls
@@ -214,6 +216,7 @@ export class TelegramStreamWriter {
     }
     this.fullText = '';
     this.lastSentText = '';
+    this.lastFlushTime = Date.now();
   }
 
   /**

@@ -571,6 +571,23 @@ function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext
   return { success: false, error: `Unknown action: ${action}` };
 }
 
+/**
+ * Format a calculator result number.
+ * Numbers >= 1,000,000 use scientific notation (e.g. 1.26e8).
+ * Smaller numbers are rounded to 2 decimal places.
+ */
+function formatCalculatorResult(n: number): string {
+  if (!Number.isFinite(n)) return 'Ошибка вычисления';
+  if (Math.abs(n) >= 1_000_000) {
+    // 4 significant figures, strip trailing zeros and normalize exponent sign
+    return n
+      .toExponential(3)
+      .replace(/\.?0+(e)/, '$1')
+      .replace('e+', 'e');
+  }
+  return String(Math.round(n * 100) / 100);
+}
+
 function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const expression = input['expression'] as string;
   if (!expression) {
@@ -593,6 +610,7 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
     return { success: false, error: `Cannot evaluate expression: "${expression}"` };
   }
 
-  const rounded = Math.round(result * 100) / 100;
-  return { success: true, output: `${rounded} ${targetCurrency}` };
+  const formatted = formatCalculatorResult(result.value);
+  const output = result.hasCurrency ? `${formatted} ${targetCurrency}` : formatted;
+  return { success: true, output };
 }
