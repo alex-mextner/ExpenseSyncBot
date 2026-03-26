@@ -1,3 +1,4 @@
+/** /settings and /reconnect command handlers — show current config and re-authorize Google OAuth */
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';

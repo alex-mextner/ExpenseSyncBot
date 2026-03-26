@@ -1,3 +1,4 @@
+/** OCR extractor — sends receipt images to Hugging Face vision model and extracts text */
 import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { InferenceClient } from '@huggingface/inference';

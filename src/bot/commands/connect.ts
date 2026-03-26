@@ -1,3 +1,4 @@
+/** /connect command handler — initiates Google OAuth flow and spreadsheet setup */
 import { InlineKeyboard } from 'gramio';
 import { type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';

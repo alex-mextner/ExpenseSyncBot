@@ -1,3 +1,4 @@
+/** Group repository — manages Telegram group records, OAuth tokens, and spreadsheet settings */
 import type { Database } from 'bun:sqlite';
 import type { CurrencyCode } from '../../config/constants';
 import type { CreateGroupData, Group, UpdateGroupData } from '../types';

@@ -1,3 +1,4 @@
+/** /categories command handler — lists all expense categories for the group */
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';

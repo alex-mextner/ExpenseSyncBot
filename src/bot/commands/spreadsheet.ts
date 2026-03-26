@@ -1,3 +1,4 @@
+/** /spreadsheet command handler — sends the Google Sheets URL for the group */
 import { database } from '../../database';
 import { getSpreadsheetUrl } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';

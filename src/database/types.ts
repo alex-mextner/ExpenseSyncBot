@@ -1,3 +1,4 @@
+/** Database model types — TypeScript interfaces for all SQLite table rows */
 import type { CurrencyCode } from '../config/constants';
 
 /**

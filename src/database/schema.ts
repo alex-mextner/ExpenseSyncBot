@@ -1,3 +1,4 @@
+/** Database schema migrations — runs on startup, applies pending migrations to the SQLite database */
 import { Database } from 'bun:sqlite';
 import { env } from '../config/env';
 import { encryptToken, isEncryptedToken } from '../services/google/token-encryption';

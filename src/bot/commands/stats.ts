@@ -1,3 +1,4 @@
+/** /stats command handler — shows per-currency expense totals and category breakdown */
 import { CURRENCY_SYMBOLS } from '../../config/constants';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';

@@ -1,4 +1,4 @@
-// src/services/dev-pipeline/dev-agent.ts
+// AI-powered dev agent — uses Anthropic tool calling to implement tasks via file and git operations
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env';
 import { getErrorMessage } from '../../utils/error';

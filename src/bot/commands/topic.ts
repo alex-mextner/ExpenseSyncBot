@@ -1,3 +1,4 @@
+/** /topic command handler — restrict the bot to a specific Telegram forum topic */
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';

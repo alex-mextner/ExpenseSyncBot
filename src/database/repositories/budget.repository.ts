@@ -1,3 +1,4 @@
+/** Budget repository — CRUD and progress tracking for per-category spending budgets */
 import type { Database } from 'bun:sqlite';
 import type { Budget, BudgetProgress, CreateBudgetData, UpdateBudgetData } from '../types';
 

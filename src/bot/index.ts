@@ -1,3 +1,4 @@
+/** Bot entry point — creates the GramIO Bot instance, registers all commands and middleware */
 import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';

@@ -1,3 +1,4 @@
+/** Receipt link analyzer — extracts URLs from messages and processes payment links into expenses */
 import type { BotInstance } from '../../bot/types';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
@@ -42,7 +43,9 @@ export async function processPaymentLinks(
         message_id: messageId,
         reaction: [{ type: 'emoji', emoji: '👀' }],
       });
-    } catch {}
+    } catch {
+      // Expected: reaction API may be unavailable in some chat types
+    }
 
     // Fetch and analyze
     const result = await analyzeLink(url, group.id);
@@ -78,7 +81,9 @@ export async function processPaymentLinks(
         message_id: messageId,
         reaction: [],
       });
-    } catch {}
+    } catch {
+      // Expected: reaction API may be unavailable in some chat types
+    }
   }
 
   return found;
@@ -109,7 +114,7 @@ async function analyzeLink(
       currency: result.currency || group?.default_currency || 'EUR',
     };
   } catch (error) {
-    logger.error(`[LINK] Error: ${error}`);
+    logger.error({ err: error }, '[LINK] Failed to analyze link');
     return null;
   }
 }

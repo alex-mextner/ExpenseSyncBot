@@ -1,3 +1,4 @@
+/** Pending expense repository — holds expenses awaiting user confirmation before saving */
 import type { Database } from 'bun:sqlite';
 import type { CreatePendingExpenseData, PendingExpense, UpdatePendingExpenseData } from '../types';
 

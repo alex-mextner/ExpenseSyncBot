@@ -1,3 +1,4 @@
+/** Google Sheets service — creates spreadsheets, appends expense rows, and syncs budget data */
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
 import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';

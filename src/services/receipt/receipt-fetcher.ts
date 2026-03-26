@@ -1,3 +1,4 @@
+/** Receipt fetcher — uses Playwright (headless Chromium) to fetch and extract text from receipt URLs */
 import { type Browser, chromium } from 'playwright';
 import { NetworkError } from '../../errors';
 import { isURL } from './qr-scanner';

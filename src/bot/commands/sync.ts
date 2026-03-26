@@ -1,3 +1,4 @@
+/** /sync command handler — imports expenses from Google Sheets into the local database */
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { readExpensesFromSheet } from '../../services/google/sheets';

@@ -1,3 +1,4 @@
+/** AI receipt extractor — uses Hugging Face inference to parse receipt items from HTML text */
 import { InferenceClient } from '@huggingface/inference';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';

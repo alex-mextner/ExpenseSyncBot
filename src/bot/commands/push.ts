@@ -1,3 +1,4 @@
+/** /push command handler — writes local expenses to Google Sheets and reconciles missing rows */
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';

@@ -1,3 +1,4 @@
+/** Database singleton — initializes all repositories and exposes them via a shared `database` object */
 import type { Database } from 'bun:sqlite';
 import { AdviceLogRepository } from './repositories/advice-log.repository';
 import { BudgetRepository } from './repositories/budget.repository';

@@ -1,3 +1,4 @@
+/** /budget command handler — create, view, and edit spending budgets per category */
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';

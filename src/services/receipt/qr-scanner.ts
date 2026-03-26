@@ -1,3 +1,4 @@
+/** QR code scanner — decodes QR codes from image buffers to extract payment URLs from receipts */
 import type { Image } from 'qr';
 import decodeQR, { type DecodeOpts, type FinderPoints } from 'qr/decode.js';
 import sharp from 'sharp';

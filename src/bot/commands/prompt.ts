@@ -1,3 +1,4 @@
+/** /prompt command handler — view or set the custom AI system prompt for a group */
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';

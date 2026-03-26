@@ -1,3 +1,4 @@
+/** Analytics formatters — converts financial snapshots into LLM-readable text for advice prompts */
 import type {
   BudgetBurnRate,
   BudgetUtilization,

@@ -1,3 +1,4 @@
+/** Photo processor — background worker that dequeues receipt photos and runs OCR + AI extraction */
 import type { Bot } from 'gramio';
 import { createReceiptSummaryKeyboard } from '../../bot/keyboards';
 import type { CurrencyCode } from '../../config/constants';
@@ -169,8 +170,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
         receiptData = await extractTextFromImage(photoBuffer);
         logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
       } catch (ocrError) {
-        const ocrErrorMessage = ocrError instanceof Error ? ocrError.message : 'Unknown error';
-        logger.error(`[PHOTO_PROCESSOR] OCR also failed: ${ocrErrorMessage}`);
+        logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
 
         // Both QR and OCR failed - mark as done and set reaction
         database.photoQueue.update(queueItemId, { status: 'done' });
@@ -201,7 +201,8 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         logger.error(
-          `[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback: ${errorMessage}`,
+          { err: error },
+          '[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback',
         );
 
         // Try OCR as fallback when QR fetch fails
@@ -211,8 +212,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
           logger.info(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
         } catch (ocrError) {
           // Both QR fetch and OCR failed
-          const ocrErrorMessage = ocrError instanceof Error ? ocrError.message : 'Unknown error';
-          logger.error(`[PHOTO_PROCESSOR] OCR also failed: ${ocrErrorMessage}`);
+          logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
 
           database.photoQueue.update(queueItemId, {
             status: 'error',
@@ -241,7 +241,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       extractionResult = await extractExpensesFromReceipt(receiptData, categoryNames);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      logger.error(`[PHOTO_PROCESSOR] Failed to extract expenses: ${errorMessage}`);
+      logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to extract expenses');
       database.photoQueue.update(queueItemId, {
         status: 'error',
         error_message: `❌ AI не распознал чек: ${errorMessage}`,
@@ -351,7 +351,7 @@ export async function showReceiptConfirmationOptions(
   // More than 5 items - show summary with options
   const group = database.groups.findById(groupId);
   if (!group) {
-    logger.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    logger.error({ groupId }, '[PHOTO_PROCESSOR] Group not found');
     return;
   }
 
@@ -413,7 +413,7 @@ export async function showNextItemForConfirmation(
   const group = database.groups.findById(groupId);
 
   if (!group) {
-    logger.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    logger.error({ groupId }, '[PHOTO_PROCESSOR] Group not found');
     return;
   }
 
@@ -523,7 +523,7 @@ async function notifyUser(
   const group = database.groups.findById(groupId);
 
   if (!group) {
-    logger.error(`[PHOTO_PROCESSOR] Group not found: ${groupId}`);
+    logger.error({ groupId }, '[PHOTO_PROCESSOR] Group not found');
     return;
   }
 
