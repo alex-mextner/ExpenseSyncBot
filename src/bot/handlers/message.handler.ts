@@ -1,4 +1,4 @@
-import { format } from 'date-fns';
+/** Text message handler — parses expense messages, handles receipt links, and routes AI mentions */
 import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
@@ -9,9 +9,9 @@ import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
-import { silentSyncBudgets } from '../commands/budget';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { createCategoryConfirmKeyboard } from '../keyboards';
+import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
@@ -293,165 +293,6 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
 }
 
 /**
- * Save expense to Google Sheet
- */
-export async function saveExpenseToSheet(
-  userId: number,
-  groupId: number,
-  pendingExpenseId: number,
-  telegramGroupId?: number,
-  bot?: BotInstance,
-): Promise<void> {
-  logger.info(`[SAVE] Starting save to sheet...`);
-
-  const user = database.users.findById(userId);
-  const group = database.groups.findById(groupId);
-  const pendingExpense = database.pendingExpenses.findById(pendingExpenseId);
-
-  if (!user || !group || !pendingExpense || !group.spreadsheet_id || !group.google_refresh_token) {
-    logger.error(
-      {
-        data: {
-          user: !!user,
-          group: !!group,
-          pendingExpense: !!pendingExpense,
-          spreadsheet_id: !!group?.spreadsheet_id,
-          refresh_token: !!group?.google_refresh_token,
-        },
-      },
-      `[SAVE] ❌ Validation failed`,
-    );
-    throw new Error('Invalid user, group or pending expense');
-  }
-
-  const { convertToEUR } = await import('../../services/currency/converter');
-  const { appendExpenseRow } = await import('../../services/google/sheets');
-
-  // Silent sync budgets from Google Sheets
-  await silentSyncBudgets(group.google_refresh_token, group.spreadsheet_id, group.id);
-
-  // Calculate EUR amount
-  const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);
-
-  logger.info(
-    `[SAVE] Converted ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
-  );
-
-  // Prepare amounts for each currency
-  const amounts: Record<string, number | null> = {};
-  for (const currency of group.enabled_currencies) {
-    amounts[currency] =
-      currency === pendingExpense.parsed_currency ? pendingExpense.parsed_amount : null;
-  }
-
-  // Append to sheet
-  const currentDate = format(new Date(), 'yyyy-MM-dd');
-  const category = pendingExpense.detected_category || 'Без категории';
-
-  logger.info(
-    { data: { date: currentDate, category, comment: pendingExpense.comment, amounts, eurAmount } },
-    `[SAVE] Writing to Google Sheet`,
-  );
-
-  try {
-    await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
-      date: currentDate,
-      category,
-      comment: pendingExpense.comment,
-      amounts,
-      eurAmount,
-    });
-
-    logger.info(`[SAVE] ✅ Successfully wrote to Google Sheet`);
-  } catch (error) {
-    logger.error({ err: error }, '[SAVE] ❌ Failed to write to Google Sheet');
-    throw error;
-  }
-
-  // Save to expenses table
-  logger.info(`[SAVE] Saving to local database...`);
-  database.expenses.create({
-    group_id: groupId,
-    user_id: userId,
-    date: currentDate,
-    category,
-    comment: pendingExpense.comment,
-    amount: pendingExpense.parsed_amount,
-    currency: pendingExpense.parsed_currency,
-    eur_amount: eurAmount,
-  });
-
-  // Delete pending expense
-  database.pendingExpenses.delete(pendingExpenseId);
-  logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
-
-  // Check budget limits
-  if (telegramGroupId && bot) {
-    await checkBudgetLimit(groupId, category, currentDate, telegramGroupId, bot);
-  }
-}
-
-/**
- * Check if budget limit is exceeded or approaching for a category
- */
-async function checkBudgetLimit(
-  groupId: number,
-  category: string,
-  currentDate: string,
-  telegramGroupId: number,
-  bot: BotInstance,
-): Promise<void> {
-  const { startOfMonth, endOfMonth, format } = await import('date-fns');
-  const { getCategoryEmoji } = await import('../../config/category-emojis');
-
-  const now = new Date(currentDate);
-  const currentMonth = format(now, 'yyyy-MM');
-  const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-  const monthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-
-  // Get budget for category
-  const budget = database.budgets.getBudgetForMonth(groupId, category, currentMonth);
-
-  if (!budget) {
-    // No budget set for this category
-    return;
-  }
-
-  // Calculate total spending in category for current month (SQL SUM)
-  const categorySpending = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
-
-  const percentage =
-    budget.limit_amount > 0 ? Math.round((categorySpending / budget.limit_amount) * 100) : 0;
-
-  // Check if warning or exceeded
-  const isExceeded = categorySpending > budget.limit_amount;
-  const isWarning = percentage >= 90 && !isExceeded;
-
-  if (isExceeded || isWarning) {
-    const emoji = getCategoryEmoji(category);
-    let message = '';
-
-    if (isExceeded) {
-      message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
-    } else if (isWarning) {
-      message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
-    }
-
-    try {
-      await bot.api.sendMessage({
-        chat_id: telegramGroupId,
-        text: message,
-      });
-      logger.info(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
-    } catch (error) {
-      logger.error({ err: error }, '[BUDGET] Failed to send warning');
-    }
-  }
-}
-
-/**
  * Handle category text input from user
  */
 async function handleCategoryTextInput(
@@ -497,7 +338,7 @@ async function handleCategoryTextInput(
 
       if (allConfirmed) {
         // Save all items
-        const { saveReceiptExpenses } = await import('./callback.handler');
+
         const user = database.users.findByTelegramId(ctx.from.id);
         if (user) {
           const group = database.groups.findById(groupId);
@@ -573,7 +414,6 @@ async function handleCategoryTextInput(
 
     if (allConfirmed) {
       // Save all items
-      const { saveReceiptExpenses } = await import('./callback.handler');
       const user = database.users.findByTelegramId(ctx.from.id);
       if (user) {
         const group = database.groups.findById(groupId);
@@ -647,7 +487,9 @@ async function handleBulkCorrectionInput(
   if (queueItem.correction_history) {
     try {
       correctionHistory = JSON.parse(queueItem.correction_history);
-    } catch {}
+    } catch {
+      // Expected: invalid JSON means no prior corrections
+    }
   }
 
   try {
