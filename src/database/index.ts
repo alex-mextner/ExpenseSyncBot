@@ -18,7 +18,7 @@ import { setupDatabase } from './schema';
  * Database instance and repositories
  */
 export class DatabaseService {
-  public db: Database;
+  private db: Database;
   public groups: GroupRepository;
   public users: UserRepository;
   public categories: CategoryRepository;
