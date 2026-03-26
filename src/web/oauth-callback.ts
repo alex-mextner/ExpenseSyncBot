@@ -68,7 +68,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
   // Handle OAuth error from Google
   if (error) {
     const errorDescription = url.searchParams.get('error_description') || 'Unknown error';
-    logger.error(`OAuth error: ${error} ${errorDescription}`);
+    logger.error({ error, errorDescription }, '[OAuth] Google returned error');
 
     if (state) {
       const groupId = resolveOAuthState(state);
@@ -131,7 +131,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
   // Resolve UUID state to groupId — returns null for unknown or expired tokens
   const groupId = resolveOAuthState(state);
   if (groupId === null) {
-    logger.error(`OAuth callback: invalid or expired state token`);
+    logger.error('[OAuth] Invalid or expired state token');
     return new Response(
       `
       <!DOCTYPE html>
@@ -341,7 +341,7 @@ async function notifyTelegramError(groupId: number, errorMessage: string): Promi
 
   const group = database.groups.findById(groupId);
   if (!group) {
-    logger.error(`[OAuth] Group ${groupId} not found — cannot send error message`);
+    logger.error({ groupId }, '[OAuth] Group not found — cannot send error message');
     return;
   }
 

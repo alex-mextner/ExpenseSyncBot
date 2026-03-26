@@ -285,9 +285,10 @@ export class DevPipeline {
             error_log: errorMsg,
             failed_at_state: freshTask.state,
           });
-        } catch {
+        } catch (transitionErr) {
           logger.error(
-            `[DEV-PIPELINE] Cannot transition task #${task.id} from ${freshTask.state} to FAILED`,
+            { err: transitionErr, taskId: task.id, fromState: freshTask.state },
+            '[DEV-PIPELINE] Cannot transition task to FAILED',
           );
         }
       }
@@ -906,6 +907,7 @@ WORKFLOW:
       const result = await $`git -C ${worktreePath} log main..HEAD --oneline`.quiet().nothrow();
       return result.text().trim().length > 0;
     } catch {
+      // Expected: git command may fail if worktree is gone
       return false;
     }
   }

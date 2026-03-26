@@ -150,7 +150,9 @@ export class ExpenseBotAgent {
             chat_id: this.ctx.chatId,
             text: timeoutMsg,
           });
-        } catch {}
+        } catch {
+          // Best-effort timeout notification to user
+        }
         return timeoutMsg;
       }
 
@@ -162,7 +164,7 @@ export class ExpenseBotAgent {
           errorMsg = '\u26a1 AI сервер перегружен. Попробуйте позже.';
         } else {
           errorMsg = '\u274c Ошибка AI. Попробуйте позже.';
-          logger.error('[AGENT] Anthropic API error:', error.status, error.message);
+          logger.error({ err: error }, `[AGENT] Anthropic API error: ${error.status}`);
         }
 
         try {
@@ -170,7 +172,9 @@ export class ExpenseBotAgent {
             chat_id: this.ctx.chatId,
             text: errorMsg,
           });
-        } catch {}
+        } catch {
+          // Best-effort error notification to user
+        }
         return errorMsg;
       }
 

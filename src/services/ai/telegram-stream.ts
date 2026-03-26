@@ -314,7 +314,7 @@ export class TelegramStreamWriter {
       if (err instanceof TelegramError) {
         if (err.code === 429) {
           const retryAfter = err.payload?.retry_after ?? 5;
-          logger.error(`[STREAM] Rate limited, retrying after ${retryAfter}s`);
+          logger.error({ retryAfter }, '[STREAM] Rate limited, retrying after delay');
           await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
           // Retry once — rate limiter middleware will also delay the call
           try {

@@ -620,7 +620,9 @@ export async function handleDevCallback(
         if (messageId && chatId) {
           try {
             await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-          } catch {}
+          } catch {
+            // Expected: message may already be deleted
+          }
         }
         return;
 
@@ -672,7 +674,9 @@ export async function handleDevCallback(
         await ctx.answerCallbackQuery({
           text: `Error: ${getErrorMessage(error)}`,
         });
-      } catch {}
+      } catch {
+        // Best-effort error notification — original error already logged above
+      }
     }
   }
 
@@ -680,6 +684,8 @@ export async function handleDevCallback(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 }
