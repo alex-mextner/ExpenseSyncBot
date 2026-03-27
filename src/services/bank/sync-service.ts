@@ -101,6 +101,9 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       transactions.push(...(setResultData.transactions ?? []));
     }
 
+    // Clean up global shim after data collection is complete
+    delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+
     // Upsert accounts
     for (const account of accounts) {
       database.bankAccounts.upsert({
@@ -127,7 +130,7 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       if (amount === 0) continue;
 
       const signType = determineSignType(tx);
-      const status = signType === 'reversal' ? 'skipped_reversal' : 'pending';
+      const status: BankTransaction['status'] = 'pending';
 
       // Apply merchant normalization
       const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
@@ -218,7 +221,7 @@ async function handleSyncError(
   }
 }
 
-function determineSignType(tx: ZenTransaction): 'debit' | 'credit' | 'reversal' {
+function determineSignType(tx: ZenTransaction): 'debit' | 'credit' {
   if (tx.sum < 0) return 'debit';
   return 'credit';
 }
