@@ -146,6 +146,14 @@ export class BankTransactionsRepository {
       .run(flag ? 1 : 0, id);
   }
 
+  setPrefill(id: number, category: string, comment: string): void {
+    this.db
+      .query<void, [string, string, number]>(
+        'UPDATE bank_transactions SET prefill_category = ?, prefill_comment = ? WHERE id = ?',
+      )
+      .run(category, comment, id);
+  }
+
   updateMerchantNormalized(id: number, merchantNormalized: string): void {
     this.db
       .query<void, [string, number]>(

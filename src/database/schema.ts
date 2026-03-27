@@ -828,6 +828,22 @@ export function runMigrations(db: Database): void {
       },
     },
     {
+      name: '028_add_prefill_to_bank_transactions',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions')
+          WHERE name = 'prefill_category'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE bank_transactions ADD COLUMN prefill_category TEXT;
+            ALTER TABLE bank_transactions ADD COLUMN prefill_comment TEXT;
+          `);
+          logger.info('✓ Added prefill_category/prefill_comment to bank_transactions');
+        }
+      },
+    },
+    {
       name: '027_add_bank_panel_summary_to_groups',
       up: () => {
         const check = db.query<{ count: number }, []>(`

@@ -1,11 +1,13 @@
 // Bank sync service — runs as a separate PM2 process.
 // Polls bank APIs every 30 min, upserts accounts/transactions, sends confirmation cards.
 import { subDays } from 'date-fns';
+import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
+import { convertToEUR } from '../currency/converter';
 import { preFillTransaction } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
@@ -16,6 +18,9 @@ const logger = createLogger('sync-service');
 
 const SYNC_INTERVAL_MS = 30 * 60 * 1000;
 const MAX_CONSECUTIVE_FAILURES = 3;
+
+// Mutex that serializes ZenPlugin execution — globalThis.ZenMoney is not concurrency-safe.
+let shimMutex: Promise<void> = Promise.resolve();
 
 export function startSyncService(): void {
   const connections = database.bankConnections.findAllActive();
@@ -75,34 +80,44 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     const fromDate = conn.last_sync_at ? new Date(conn.last_sync_at) : subDays(new Date(), 30);
     const toDate = new Date();
 
-    // Set up ZenMoney shim and run scrape
-    const shim = createZenMoneyShim(connectionId, database.db, preferences);
-    (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
+    // Serialize plugin execution — globalThis.ZenMoney is shared and not concurrency-safe.
+    const prevMutex = shimMutex;
+    let releaseMutex!: () => void;
+    shimMutex = new Promise<void>((resolve) => {
+      releaseMutex = resolve;
+    });
+    await prevMutex;
 
-    const { scrape } = await plugin.plugin();
-    const rawResult = (await scrape({ preferences, fromDate, toDate })) as
-      | Partial<ScrapeResult>
-      | undefined;
+    let accounts: ZenAccount[] = [];
+    let transactions: ZenTransaction[] = [];
 
-    // Merge results from both scrape() return and accumulated addAccount/addTransaction calls
-    const accounts: ZenAccount[] = [
-      ...(rawResult?.accounts ?? []),
-      ...(shim._getCollectedAccounts() as ZenAccount[]),
-    ];
-    const transactions: ZenTransaction[] = [
-      ...(rawResult?.transactions ?? []),
-      ...(shim._getCollectedTransactions() as ZenTransaction[]),
-    ];
+    try {
+      const shim = createZenMoneyShim(connectionId, database.db, preferences);
+      (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
 
-    // Check for setResult fallback (legacy plugins)
-    const setResultData = shim._getSetResult() as Partial<ScrapeResult> | undefined;
-    if (setResultData) {
-      accounts.push(...(setResultData.accounts ?? []));
-      transactions.push(...(setResultData.transactions ?? []));
+      const { scrape } = await plugin.plugin();
+      const rawResult = (await scrape({ preferences, fromDate, toDate })) as
+        | Partial<ScrapeResult>
+        | undefined;
+
+      accounts = [
+        ...(rawResult?.accounts ?? []),
+        ...(shim._getCollectedAccounts() as ZenAccount[]),
+      ];
+      transactions = [
+        ...(rawResult?.transactions ?? []),
+        ...(shim._getCollectedTransactions() as ZenTransaction[]),
+      ];
+
+      const setResultData = shim._getSetResult() as Partial<ScrapeResult> | undefined;
+      if (setResultData) {
+        accounts.push(...(setResultData.accounts ?? []));
+        transactions.push(...(setResultData.transactions ?? []));
+      }
+    } finally {
+      delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+      releaseMutex();
     }
-
-    // Clean up global shim after data collection is complete
-    delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
 
     // Upsert accounts
     for (const account of accounts) {
@@ -130,7 +145,9 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       if (amount === 0) continue;
 
       const signType = determineSignType(tx);
-      const status: BankTransaction['status'] = 'pending';
+      // Credit/incoming transactions are stored for reference but not confirmed as expenses
+      const status: BankTransaction['status'] =
+        signType === 'debit' ? 'pending' : 'skipped_reversal';
 
       // Apply merchant normalization
       const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
@@ -151,10 +168,13 @@ async function runSyncCycle(connectionId: number): Promise<void> {
 
       if (!inserted || status !== 'pending') continue;
 
-      // AI pre-fill and send confirmation card
+      // AI pre-fill and persist so the confirm callback can read it back
       const prefilled = await preFillTransaction(inserted);
+      database.bankTransactions.setPrefill(inserted.id, prefilled.category, prefilled.comment);
 
-      const isLarge = tx.currency === 'EUR' ? amount >= env.LARGE_TX_THRESHOLD_EUR : false;
+      // Large transaction: compare EUR equivalent to threshold
+      const amountInEur = convertToEUR(amount, tx.currency as CurrencyCode);
+      const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
 
       const cardText = formatConfirmationCard(inserted, prefilled, conn.display_name, isLarge);
 
@@ -215,15 +235,19 @@ async function handleSyncError(
       await sendMessage(
         env.BOT_TOKEN,
         group.telegram_group_id,
-        `⚠️ ${conn.display_name} — ошибка синхронизации\n\nНе удаётся подключиться 3 раза подряд.\nПоследняя ошибка: ${message}\n\nВозможно, изменился пароль или истекла сессия.\n/bank ${conn.bank_name} — переподключить`,
+        `⚠️ ${escapeHtml(conn.display_name)} — ошибка синхронизации\n\nНе удаётся подключиться 3 раза подряд.\nПоследняя ошибка: ${escapeHtml(message)}\n\nВозможно, изменился пароль или истекла сессия.\n/bank ${escapeHtml(conn.bank_name)} — переподключить`,
       ).catch((e) => logger.error({ err: e }, 'Failed to send escalation alert'));
     }
   }
 }
 
-function determineSignType(tx: ZenTransaction): 'debit' | 'credit' {
+function determineSignType(tx: ZenTransaction): 'debit' | 'credit' | 'reversal' {
   if (tx.sum < 0) return 'debit';
   return 'credit';
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function applyMerchantRules(
@@ -251,11 +275,11 @@ function formatConfirmationCard(
   isLarge: boolean,
 ): string {
   const prefix = isLarge ? '⚠️ Крупная транзакция' : '💳';
-  const merchant = tx.merchant_normalized ?? tx.merchant ?? 'Неизвестно';
+  const merchant = escapeHtml(tx.merchant_normalized ?? tx.merchant ?? 'Неизвестно');
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
 
-  return `${prefix} ${bankName} — ${tx.amount.toFixed(2)} ${tx.currency}
+  return `${prefix} ${escapeHtml(bankName)} — ${tx.amount.toFixed(2)} ${escapeHtml(tx.currency)}
 📍 ${merchant}
-🗂 Категория: ${prefilled.category}
-💬 Комментарий: ${prefilled.comment}${mccLine}`;
+🗂 Категория: ${escapeHtml(prefilled.category)}
+💬 Комментарий: ${escapeHtml(prefilled.comment)}${mccLine}`;
 }

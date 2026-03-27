@@ -76,12 +76,21 @@ async function startWizard(ctx: Ctx['Message'], groupId: number, bankKey: string
     database.bankConnections.deleteById(existing.id);
   }
 
-  database.bankConnections.create({
+  const newConn = database.bankConnections.create({
     group_id: groupId,
     bank_name: bankKey,
     display_name: plugin.name,
     status: 'setup',
   });
+
+  // Banks with no credential fields activate immediately
+  if (plugin.fields.length === 0) {
+    database.bankConnections.update(newConn.id, { status: 'active' });
+    await ctx.send(
+      `✅ ${plugin.name} подключён!\n\nПервая синхронизация начнётся в течение нескольких минут.`,
+    );
+    return;
+  }
 
   const firstField = plugin.fields[0];
   const prompt = resolveFieldPrompt(firstField);
@@ -311,8 +320,9 @@ export async function handleBankConfirmCallback(
     return;
   }
 
-  const category = tx.merchant_normalized ?? tx.merchant ?? 'прочее';
-  const comment = tx.merchant_normalized ?? tx.merchant ?? '';
+  // Use AI pre-filled category/comment if available (persisted during sync)
+  const category = tx.prefill_category ?? tx.merchant_normalized ?? tx.merchant ?? 'прочее';
+  const comment = tx.prefill_comment ?? tx.merchant_normalized ?? tx.merchant ?? '';
 
   if (!ctx.from) {
     await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
@@ -340,13 +350,16 @@ export async function handleBankConfirmCallback(
   database.bankTransactions.updateStatus(txId, group.id, 'confirmed');
   database.bankTransactions.setMatchedExpense(txId, group.id, expense.id);
 
-  database.merchantRules.insertRuleRequest({
-    merchant_raw: tx.merchant ?? '',
-    mcc: tx.mcc,
-    group_id: group.id,
-    user_category: category,
-    user_comment: comment,
-  });
+  // Only create rule request if there's a meaningful merchant string to normalize
+  if (tx.merchant) {
+    database.merchantRules.insertRuleRequest({
+      merchant_raw: tx.merchant,
+      mcc: tx.mcc,
+      group_id: group.id,
+      user_category: category,
+      user_comment: comment,
+    });
+  }
 
   await ctx.answerCallbackQuery({ text: '✅ Расход записан' });
 
@@ -400,28 +413,37 @@ export async function handleBankEditCallback(
   await ctx.answerCallbackQuery();
 
   const replyToMsgId = tx.telegram_message_id ?? undefined;
-  await bot.api.sendMessage({
+  const promptMsg = await bot.api.sendMessage({
     chat_id: chatId,
     text: `✏️ Ответь на это сообщение и напиши что исправить.\n\nФормат: категория — комментарий\nИли только категория.`,
     ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
   });
+  // Store the prompt's message_id so handleBankEditReply can verify the reply is to this message
+  if (promptMsg?.message_id) {
+    database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
+  }
 }
 
 export async function handleBankEditReply(
   ctx: Ctx['Message'],
   chatId: number,
   text: string,
+  replyToMessageId: number,
 ): Promise<boolean> {
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group) return false;
 
-  // Find any transaction with edit_in_progress=1 across all active connections
+  if (!ctx.from) return false;
+
+  // Find the transaction with edit_in_progress=1 that the user is replying to
   const connections = database.bankConnections.findActiveByGroupId(group.id);
   let editTx: import('../../database/types').BankTransaction | null = null;
 
   for (const conn of connections) {
     const pending = database.bankTransactions.findPendingByConnectionId(conn.id);
-    editTx = pending.find((t) => t.edit_in_progress === 1) ?? null;
+    editTx =
+      pending.find((t) => t.edit_in_progress === 1 && t.telegram_message_id === replyToMessageId) ??
+      null;
     if (editTx) break;
   }
 
@@ -453,13 +475,15 @@ export async function handleBankEditReply(
   database.bankTransactions.setMatchedExpense(editTx.id, group.id, expense.id);
   database.bankTransactions.setEditInProgress(editTx.id, false);
 
-  database.merchantRules.insertRuleRequest({
-    merchant_raw: editTx.merchant ?? '',
-    mcc: editTx.mcc,
-    group_id: group.id,
-    user_category: category,
-    user_comment: comment,
-  });
+  if (editTx.merchant) {
+    database.merchantRules.insertRuleRequest({
+      merchant_raw: editTx.merchant,
+      mcc: editTx.mcc,
+      group_id: group.id,
+      user_category: category,
+      user_comment: comment,
+    });
+  }
 
   await ctx.send(
     `✅ Расход записан: ${category} — ${comment} (${editTx.amount} ${editTx.currency})`,
@@ -515,18 +539,31 @@ export async function handleBankSetupCallback(
   // Clean up stale setup sessions before starting a new one
   database.bankConnections.deleteStaleSetup(group.id);
 
-  // Delete existing connection for this bank if present
+  // Only replace setup connections — active/disconnected connections require explicit disconnect
   const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
   if (existing) {
+    if (existing.status !== 'setup') {
+      await ctx.answerCallbackQuery({ text: `${plugin.name} уже подключён` });
+      return;
+    }
     database.bankConnections.deleteById(existing.id);
   }
 
-  database.bankConnections.create({
+  const newConn = database.bankConnections.create({
     group_id: group.id,
     bank_name: bankKey,
     display_name: plugin.name,
     status: 'setup',
   });
+
+  // Banks with no credential fields (e.g., PDF upload) activate immediately
+  if (plugin.fields.length === 0) {
+    database.bankConnections.update(newConn.id, { status: 'active' });
+    await ctx.send(
+      `✅ ${plugin.name} подключён!\n\nПервая синхронизация начнётся в течение нескольких минут.`,
+    );
+    return;
+  }
 
   const firstField = plugin.fields[0];
   const prompt = resolveFieldPrompt(firstField);

@@ -358,6 +358,8 @@ export interface BankTransaction {
   matched_expense_id: number | null;
   telegram_message_id: number | null;
   edit_in_progress: number;
+  prefill_category: string | null;
+  prefill_comment: string | null;
   status: 'pending' | 'confirmed' | 'skipped' | 'skipped_reversal';
   created_at: string;
 }

@@ -60,9 +60,17 @@ export async function processMerchantRequests(): Promise<void> {
 
     if (!request) continue;
 
-    database.merchantRules.markRequestProcessed(request.id);
-
+    // Don't mark as processed if AI returned no suggestion — retry next cycle
     if (!suggestion) continue;
+
+    // Validate AI-generated regex before persisting — rejects catastrophically long or broken patterns
+    if (!isValidPattern(suggestion.pattern)) {
+      logger.warn({ pattern: suggestion.pattern }, 'AI generated invalid regex pattern, skipping');
+      database.merchantRules.markRequestProcessed(request.id);
+      continue;
+    }
+
+    database.merchantRules.markRequestProcessed(request.id);
 
     // Insert rule with pending_review status
     const rule = database.merchantRules.insert({
@@ -143,6 +151,16 @@ ${existingList || '(пусто)'}
   } catch (error) {
     logger.error({ err: error }, 'AI merchant rule generation failed');
     return requests.map(() => null);
+  }
+}
+
+function isValidPattern(pattern: string): boolean {
+  if (pattern.length > 200) return false;
+  try {
+    new RegExp(pattern, 'i');
+    return true;
+  } catch {
+    return false;
   }
 }
 
