@@ -1,10 +1,48 @@
 /**
  * Tests for currency-aware expression evaluator
  */
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import Big from 'big.js';
+import type { CurrencyCode } from '../../config/constants';
 import { evaluateCurrencyExpression } from './calculator';
-import { convertCurrencyBig } from './converter';
+import * as converter from './converter';
+
+// Fixed rates for tests — decoupled from FALLBACK_RATES_STR so production rate
+// changes don't silently break test expectations (1 X = Y EUR)
+const TEST_RATES: Record<string, string> = {
+  EUR: '1',
+  USD: '0.93',
+  RSD: '0.0086',
+  GBP: '1.18',
+  BYN: '0.28',
+  CHF: '1.05',
+  JPY: '0.0062',
+  CNY: '0.13',
+  INR: '0.011',
+  LKR: '0.0028',
+  AED: '0.25',
+  RUB: '0.0093',
+};
+
+function testConvertBig(amount: Big, from: CurrencyCode, to: CurrencyCode): Big {
+  if (from === to) return amount;
+  const fromRate = TEST_RATES[from] ?? '1';
+  const toRate = TEST_RATES[to] ?? '1';
+  return amount.times(new Big(fromRate)).div(new Big(toRate));
+}
+
+// NOTE: spyOn works here because Bun uses ESM live bindings — mutating
+// converter.convertCurrencyBig propagates to the binding calculator.ts holds.
+// This is a property of Bun's module system, not a Jest-style magic hoist.
+let convertSpy: { mockRestore(): void };
+
+beforeEach(() => {
+  convertSpy = spyOn(converter, 'convertCurrencyBig').mockImplementation(testConvertBig);
+});
+
+afterEach(() => {
+  convertSpy.mockRestore();
+});
 
 describe('evaluateCurrencyExpression', () => {
   // Pure math — no currency tokens
@@ -57,35 +95,27 @@ describe('evaluateCurrencyExpression', () => {
     expect(r?.hasCurrency).toBe(true);
   });
 
-  // Cross-currency — use convertCurrencyBig to derive expected (same path as the evaluator)
+  // Cross-currency — use testConvertBig to derive expected (same path as the evaluator)
   test('100 USD - 70 EUR in USD', () => {
-    const expected = new Big('100')
-      .minus(convertCurrencyBig(new Big('70'), 'EUR', 'USD'))
-      .toNumber();
+    const expected = new Big('100').minus(testConvertBig(new Big('70'), 'EUR', 'USD')).toNumber();
     const r = evaluateCurrencyExpression('100 USD - 70 EUR', 'USD');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 1);
     expect(r?.hasCurrency).toBe(true);
   });
   test('$100 - 70EUR in USD (no spaces, mixed formats)', () => {
-    const expected = new Big('100')
-      .minus(convertCurrencyBig(new Big('70'), 'EUR', 'USD'))
-      .toNumber();
+    const expected = new Big('100').minus(testConvertBig(new Big('70'), 'EUR', 'USD')).toNumber();
     const r = evaluateCurrencyExpression('$100-70EUR', 'USD');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 1);
     expect(r?.hasCurrency).toBe(true);
   });
   test('100$-70eur compact (user-typed format)', () => {
-    const expected = new Big('100')
-      .minus(convertCurrencyBig(new Big('70'), 'EUR', 'USD'))
-      .toNumber();
+    const expected = new Big('100').minus(testConvertBig(new Big('70'), 'EUR', 'USD')).toNumber();
     const r = evaluateCurrencyExpression('100$-70eur', 'USD');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 1);
     expect(r?.hasCurrency).toBe(true);
   });
   test('1500 RSD + 10 EUR in EUR', () => {
-    const expected = convertCurrencyBig(new Big('1500'), 'RSD', 'EUR')
-      .plus(new Big('10'))
-      .toNumber();
+    const expected = testConvertBig(new Big('1500'), 'RSD', 'EUR').plus(new Big('10')).toNumber();
     const r = evaluateCurrencyExpression('1500 RSD + 10 EUR', 'EUR');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 1);
     expect(r?.hasCurrency).toBe(true);
@@ -93,9 +123,7 @@ describe('evaluateCurrencyExpression', () => {
 
   // Single-char Russian aliases
   test('100е - 30д in EUR (Russian aliases)', () => {
-    const expected = new Big('100')
-      .minus(convertCurrencyBig(new Big('30'), 'USD', 'EUR'))
-      .toNumber();
+    const expected = new Big('100').minus(testConvertBig(new Big('30'), 'USD', 'EUR')).toNumber();
     const r = evaluateCurrencyExpression('100е - 30д', 'EUR');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 1);
     expect(r?.hasCurrency).toBe(true);
@@ -108,19 +136,19 @@ describe('evaluateCurrencyExpression', () => {
     expect(r?.hasCurrency).toBe(true);
   });
   test('70 EUR in USD → converted value', () => {
-    const expected = convertCurrencyBig(new Big('70'), 'EUR', 'USD').toNumber();
+    const expected = testConvertBig(new Big('70'), 'EUR', 'USD').toNumber();
     const r = evaluateCurrencyExpression('70 EUR', 'USD');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 2);
     expect(r?.hasCurrency).toBe(true);
   });
   test('1500 RSD in EUR → converted value', () => {
-    const expected = convertCurrencyBig(new Big('1500'), 'RSD', 'EUR').toNumber();
+    const expected = testConvertBig(new Big('1500'), 'RSD', 'EUR').toNumber();
     const r = evaluateCurrencyExpression('1500 RSD', 'EUR');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 2);
     expect(r?.hasCurrency).toBe(true);
   });
   test('100е in USD → converted from EUR', () => {
-    const expected = convertCurrencyBig(new Big('100'), 'EUR', 'USD').toNumber();
+    const expected = testConvertBig(new Big('100'), 'EUR', 'USD').toNumber();
     const r = evaluateCurrencyExpression('100е', 'USD');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 2);
     expect(r?.hasCurrency).toBe(true);
@@ -156,7 +184,7 @@ describe('evaluateCurrencyExpression', () => {
   test('100 EUR + 100 EUR + 100 EUR in USD → three-operand cross-currency works', () => {
     const r = evaluateCurrencyExpression('100 EUR + 100 EUR + 100 EUR', 'USD');
     // All three are the same currency, so result = 3 × (100 EUR in USD)
-    const singleInUSD = convertCurrencyBig(new Big('100'), 'EUR', 'USD').toNumber();
+    const singleInUSD = testConvertBig(new Big('100'), 'EUR', 'USD').toNumber();
     expect(r).not.toBeNull();
     expect(r?.hasCurrency).toBe(true);
     expect(r?.value.toNumber()).toBeCloseTo(singleInUSD * 3, 0);
@@ -217,7 +245,7 @@ describe('evaluateCurrencyExpression', () => {
 
   // Percentage — with cross-currency base
   test('100$ + 50€ - 10% in USD', () => {
-    const base = new Big('100').plus(convertCurrencyBig(new Big('50'), 'EUR', 'USD')).toNumber();
+    const base = new Big('100').plus(testConvertBig(new Big('50'), 'EUR', 'USD')).toNumber();
     const expected = base - base * 0.1;
     const r = evaluateCurrencyExpression('100$ + 50€ - 10%', 'USD');
     expect(r?.value.toNumber()).toBeCloseTo(expected, 1);

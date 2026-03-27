@@ -31,6 +31,8 @@ const FALLBACK_RATES: Record<CurrencyCode, number> = Object.fromEntries(
  * Cache for API exchange rates
  */
 let cachedRates: Record<CurrencyCode, number> | null = null;
+// String-precision rates derived from API response via Big.js division (used by convertCurrencyBig)
+let cachedRatesStr: Record<CurrencyCode, string> | null = null;
 let cacheTimestamp: number = 0;
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
@@ -83,6 +85,26 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
       AED: 1 / (data.rates['AED'] || 1),
     };
 
+    // Build string-precision rates for Big.js arithmetic.
+    // API gives "1 EUR = X currency" → we compute "1 currency = 1/X EUR" via Big.js division
+    // to avoid float imprecision in convertCurrencyBig.
+    const toRateStr = (apiKey: string): string =>
+      new Big(1).div(new Big(String(data.rates[apiKey] || 1))).toFixed(15);
+    cachedRatesStr = {
+      EUR: '1',
+      USD: toRateStr('USD'),
+      RUB: toRateStr('RUB'),
+      RSD: toRateStr('RSD'),
+      GBP: toRateStr('GBP'),
+      BYN: toRateStr('BYN'),
+      CHF: toRateStr('CHF'),
+      JPY: toRateStr('JPY'),
+      CNY: toRateStr('CNY'),
+      INR: toRateStr('INR'),
+      LKR: toRateStr('LKR'),
+      AED: toRateStr('AED'),
+    };
+
     logger.info('[CURRENCY] ✅ Successfully fetched exchange rates from API');
     logger.info('[CURRENCY] Exchange rates (to EUR):');
     logger.info(`  /1 USD = €${(1 / rates.USD).toFixed(4)}`);
@@ -124,6 +146,10 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
     cacheTimestamp = now;
     return apiRates;
   }
+
+  // API failed — reset string cache so convertCurrencyBig also falls back to FALLBACK_RATES_STR,
+  // keeping the two caches in sync (both null → both use hardcoded fallbacks)
+  cachedRatesStr = null;
 
   // Fallback to hardcoded rates
   logger.info('[CURRENCY] Using fallback exchange rates');
@@ -209,17 +235,16 @@ export function getAllExchangeRates(): Record<CurrencyCode, number> {
 /**
  * Convert amount between currencies using exact Big.js arithmetic.
  * Preserves full decimal precision — no intermediate rounding.
- * Uses string fallback rates so Big.js receives exact decimal representations.
+ * Uses live API rates (as precise strings via Big.js division) when available,
+ * falls back to FALLBACK_RATES_STR otherwise.
  * Intended for the AI calculator where intermediate rounding causes visible errors.
- *
- * NOTE: Always uses FALLBACK_RATES_STR (hardcoded). Does NOT use live API rates,
- * even if cachedRates is populated. Use convertCurrency() when live rates matter.
  */
 export function convertCurrencyBig(amount: Big, from: CurrencyCode, to: CurrencyCode): Big {
   if (from === to) return amount;
 
-  const fromRateStr = FALLBACK_RATES_STR[from];
-  const toRateStr = FALLBACK_RATES_STR[to];
+  const rateTable = cachedRatesStr ?? FALLBACK_RATES_STR;
+  const fromRateStr = rateTable[from];
+  const toRateStr = rateTable[to];
 
   if (!fromRateStr || !toRateStr) {
     throw new Error(`Exchange rate not found for ${from} or ${to}`);

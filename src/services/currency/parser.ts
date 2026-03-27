@@ -133,7 +133,8 @@ export function evaluateMathExpressionBig(expr: string): Big | null {
   const tokens = tokenize(cleaned);
   if (!tokens) return null;
 
-  // No operator-count limit — the 500-char length check is sufficient.
+  // No operator-count limit: 500 chars allow ~83 two-digit operands with operators,
+  // which exceeds any realistic user input or post-conversion expression.
 
   return evaluateTokens(tokens);
 }
