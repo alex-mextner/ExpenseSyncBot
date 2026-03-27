@@ -12,6 +12,7 @@ export interface Group {
   enabled_currencies: CurrencyCode[];
   custom_prompt: string | null;
   active_topic_id: number | null;
+  bank_panel_summary_message_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -28,6 +29,7 @@ export interface UpdateGroupData {
   enabled_currencies?: CurrencyCode[];
   custom_prompt?: string | null;
   active_topic_id?: number | null;
+  bank_panel_summary_message_id?: number | null;
 }
 
 /**
