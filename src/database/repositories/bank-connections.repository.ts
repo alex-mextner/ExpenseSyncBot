@@ -102,6 +102,16 @@ export class BankConnectionsRepository {
   /**
    * Delete setup-status rows older than 10 minutes for a group (stale wizard sessions).
    */
+  findSetupByGroupId(groupId: number): BankConnection | null {
+    return (
+      this.db
+        .query<BankConnection, [number]>(
+          "SELECT * FROM bank_connections WHERE group_id = ? AND status = 'setup' ORDER BY created_at DESC LIMIT 1",
+        )
+        .get(groupId) ?? null
+    );
+  }
+
   deleteStaleSetup(groupId: number): void {
     this.db
       .query<void, [number]>(`

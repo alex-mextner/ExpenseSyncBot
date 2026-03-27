@@ -4,6 +4,7 @@ import { database } from '../database';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
+import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
 import { handleCategoriesCommand } from './commands/categories';
 import { handleConnectCommand } from './commands/connect';
@@ -88,6 +89,7 @@ export function createBot(): Bot {
   bot.command('dev', handleDevCommand);
   bot.command('ping', handlePingCommand);
   bot.command('sync', handleSyncCommand);
+  bot.command('bank', (ctx) => handleBankCommand(ctx, bot));
 
   // Commands — need fresh expenses
   bot.command('stats', withSync(handleStatsCommand, { expenses: true }));
