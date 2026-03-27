@@ -6,6 +6,10 @@ export interface ToolResult {
   success: boolean;
   output?: string;
   error?: string;
+  /** Structured payload for tools that return machine-readable data (bank tools). */
+  data?: unknown;
+  /** Human-readable summary appended alongside data. */
+  summary?: string;
 }
 
 export type AgentEvent =
