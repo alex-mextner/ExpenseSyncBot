@@ -121,9 +121,11 @@ export function evaluateMathExpressionBig(expr: string): Big | null {
   // e.g. "107.526881720430107526..."), which can be 24+ chars per token.
   if (cleaned.length > 500) return null;
 
-  // Validate: only digits, dots, commas, and operators +*/×
-  // Must have at least one operator (single numbers are not expressions)
-  if (!/^[\d.,]+([+\-*×/][\d.,]+)+$/.test(cleaned)) {
+  // Validate: only digits, optional single decimal separator, and operators +*/×
+  // Must have at least one operator (single numbers are not expressions).
+  // \d+(?:[.,]\d+)? prevents multi-separator tokens like 1.2.3 (tokenize would catch via isNaN,
+  // but explicit validation is clearer)
+  if (!/^\d+(?:[.,]\d+)?([+\-*×/]\d+(?:[.,]\d+)?)+$/.test(cleaned)) {
     return null;
   }
 
@@ -131,15 +133,13 @@ export function evaluateMathExpressionBig(expr: string): Big | null {
   const tokens = tokenize(cleaned);
   if (!tokens) return null;
 
-  // Safety: max 10 operators
-  const opCount = tokens.filter((t) => isOperator(t as string)).length;
-  if (opCount > 10) return null;
+  // No operator-count limit — the 500-char length check is sufficient.
 
   return evaluateTokens(tokens);
 }
 
 /** Convenience wrapper that converts the Big result to a JS number. */
-export function evaluateMathExpression(expr: string): number | null {
+function evaluateMathExpression(expr: string): number | null {
   return evaluateMathExpressionBig(expr)?.toNumber() ?? null;
 }
 

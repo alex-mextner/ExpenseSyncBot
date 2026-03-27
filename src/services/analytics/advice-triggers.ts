@@ -44,7 +44,7 @@ export function checkSmartTriggers(
 
   // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
   for (const br of snap.burnRates) {
-    if (br.status === 'exceeded') {
+    if (br.status === 'exceeded' && br.budget_limit > 0) {
       const topic = `budget_threshold:${br.category}:exceeded`;
       if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
         if (canSendAdvice(groupId, 'alert')) {

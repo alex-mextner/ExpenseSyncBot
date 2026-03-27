@@ -223,8 +223,7 @@ async function executeGetBudgets(
   }
 
   const lines = [`Budgets for ${month}:`, ''];
-  let totalLimit = 0;
-  let totalSpent = 0;
+  const totalsByCurrency: Record<string, { spent: number; limit: number }> = {};
 
   for (const budget of budgets) {
     const spentEur = spendingByCategory[budget.category] || 0;
@@ -238,14 +237,20 @@ async function executeGetBudgets(
       `${budget.category}: ${spentInCurrency.toFixed(2)}/${budget.limit_amount.toFixed(2)} ${budget.currency} (${percent}%) [${status}]`,
     );
 
-    totalLimit += budget.limit_amount;
-    totalSpent += spentInCurrency;
+    const existing = totalsByCurrency[budget.currency];
+    if (existing) {
+      existing.spent += spentInCurrency;
+      existing.limit += budget.limit_amount;
+    } else {
+      totalsByCurrency[budget.currency] = { spent: spentInCurrency, limit: budget.limit_amount };
+    }
   }
 
   lines.push('');
-  lines.push(
-    `Total: ${totalSpent.toFixed(2)}/${totalLimit.toFixed(2)} (${Math.round((totalSpent / totalLimit) * 100)}%)`,
-  );
+  for (const [currency, { spent, limit }] of Object.entries(totalsByCurrency)) {
+    const pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
+    lines.push(`Total (${currency}): ${spent.toFixed(2)}/${limit.toFixed(2)} (${pct}%)`);
+  }
 
   return { success: true, output: lines.join('\n') };
 }
@@ -295,8 +300,14 @@ async function executeSetBudget(
   const amount = input['amount'] as number;
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
-  if (!category || !amount || amount <= 0) {
-    return { success: false, error: 'Invalid category or amount' };
+  if (!category) {
+    return { success: false, error: 'category is required' };
+  }
+  if (amount === undefined || amount === null || amount < 0 || Number.isNaN(amount)) {
+    return {
+      success: false,
+      error: `Invalid amount "${amount}" — must be a non-negative number (0 to disable a budget category)`,
+    };
   }
 
   const group = database.groups.findById(ctx.groupId);
@@ -607,7 +618,23 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
 
   const result = evaluateCurrencyExpression(expression, targetCurrency);
   if (result === null) {
-    return { success: false, error: `Cannot evaluate expression: "${expression}"` };
+    const cleaned = expression.replace(/\s+/g, '');
+    let hint: string;
+    if (cleaned.length > 500) {
+      hint = 'expression too long (max 500 chars)';
+    } else if (!/\d/.test(expression)) {
+      hint = 'no numbers found in expression';
+    } else if (!/[+\-*/×]/.test(expression) && !/\d\s+\d/.test(expression)) {
+      // Single number with optional currency — might just need no operator
+      hint =
+        'single value with no operator; if this is a currency conversion (e.g. "90000 RSD"), it should work — check currency spelling';
+    } else if (/[^0-9+\-*/×÷.,% A-Za-zА-Яа-яёЁ$€£¥₽₸₴₼฿]/.test(expression)) {
+      hint = 'expression contains unsupported characters';
+    } else {
+      hint =
+        'check that operators (+−×÷) are between numbers, no parentheses, currency codes are correct';
+    }
+    return { success: false, error: `Cannot evaluate: "${expression}" — ${hint}` };
   }
 
   const formatted = formatCalculatorResult(result.value);

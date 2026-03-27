@@ -130,11 +130,13 @@ export class TelegramStreamWriter {
   /**
    * Reset writer state for a retry pass (validation rejection).
    * Keeps the existing Telegram message ID so edits continue in-place.
+   * Clears error cooldown so the retry can flush tool indicators immediately.
    */
   reset(): void {
     this.fullText = '';
     this.historyText = '';
     this.lastSentText = '';
+    this.lastErrorTime = 0;
     this.toolLabel = null;
     this.pendingIndicators = [];
     this.toolLines = [];
@@ -144,8 +146,13 @@ export class TelegramStreamWriter {
 
   /**
    * Append text delta from streaming — triggers a rate-limited flush automatically.
+   * Resets the throttle window at the start of each round so the first flush waits
+   * 1 second from when streaming actually begins, not from when the writer was created.
    */
   appendText(delta: string): void {
+    if (this.fullText === '') {
+      this.lastFlushTime = Date.now();
+    }
     this.fullText += delta;
     void this.flush(false);
   }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { evaluateMathExpression, parseExpenseMessage, validateParsedExpense } from './parser';
+import { evaluateMathExpressionBig, parseExpenseMessage, validateParsedExpense } from './parser';
 
 describe('parseExpenseMessage', () => {
   describe('valid formats', () => {
@@ -250,54 +250,63 @@ describe('validateParsedExpense', () => {
 
 // ── Math expression evaluator tests ───────────────────────────────────
 
-describe('evaluateMathExpression', () => {
+describe('evaluateMathExpressionBig', () => {
   // Basic operations
-  test('10*3 → 30', () => expect(evaluateMathExpression('10*3')).toBe(30));
-  test('100/4 → 25', () => expect(evaluateMathExpression('100/4')).toBe(25));
-  test('10+5 → 15', () => expect(evaluateMathExpression('10+5')).toBe(15));
-  test('10×3 → 30 (unicode multiplication)', () => expect(evaluateMathExpression('10×3')).toBe(30));
+  test('10*3 → 30', () => expect(evaluateMathExpressionBig('10*3')?.toNumber()).toBe(30));
+  test('100/4 → 25', () => expect(evaluateMathExpressionBig('100/4')?.toNumber()).toBe(25));
+  test('10+5 → 15', () => expect(evaluateMathExpressionBig('10+5')?.toNumber()).toBe(15));
+  test('10×3 → 30 (unicode multiplication)', () =>
+    expect(evaluateMathExpressionBig('10×3')?.toNumber()).toBe(30));
 
   // Combined (operator precedence)
-  test('10*3+5 → 35', () => expect(evaluateMathExpression('10*3+5')).toBe(35));
-  test('5+10*3 → 35', () => expect(evaluateMathExpression('5+10*3')).toBe(35));
-  test('100/4+10 → 35', () => expect(evaluateMathExpression('100/4+10')).toBe(35));
-  test('10*2*3 → 60', () => expect(evaluateMathExpression('10*2*3')).toBe(60));
-  test('2+3+5 → 10', () => expect(evaluateMathExpression('2+3+5')).toBe(10));
+  test('10*3+5 → 35', () => expect(evaluateMathExpressionBig('10*3+5')?.toNumber()).toBe(35));
+  test('5+10*3 → 35', () => expect(evaluateMathExpressionBig('5+10*3')?.toNumber()).toBe(35));
+  test('100/4+10 → 35', () => expect(evaluateMathExpressionBig('100/4+10')?.toNumber()).toBe(35));
+  test('10*2*3 → 60', () => expect(evaluateMathExpressionBig('10*2*3')?.toNumber()).toBe(60));
+  test('2+3+5 → 10', () => expect(evaluateMathExpressionBig('2+3+5')?.toNumber()).toBe(10));
 
   // Decimals
-  test('10.5*2 → 21', () => expect(evaluateMathExpression('10.5*2')).toBe(21));
-  test('10,5*2 → 21 (comma as decimal)', () => expect(evaluateMathExpression('10,5*2')).toBe(21));
+  test('10.5*2 → 21', () => expect(evaluateMathExpressionBig('10.5*2')?.toNumber()).toBe(21));
+  test('10,5*2 → 21 (comma as decimal)', () =>
+    expect(evaluateMathExpressionBig('10,5*2')?.toNumber()).toBe(21));
 
   // Errors
-  test('10/0 → null (division by zero)', () => expect(evaluateMathExpression('10/0')).toBeNull());
-  test('10**3 → null (double operator)', () => expect(evaluateMathExpression('10**3')).toBeNull());
-  test('*10 → null (leading operator)', () => expect(evaluateMathExpression('*10')).toBeNull());
-  test('10* → null (trailing operator)', () => expect(evaluateMathExpression('10*')).toBeNull());
-  test('abc → null (non-numeric)', () => expect(evaluateMathExpression('abc')).toBeNull());
-  test('empty string → null', () => expect(evaluateMathExpression('')).toBeNull());
+  test('10/0 → null (division by zero)', () =>
+    expect(evaluateMathExpressionBig('10/0')).toBeNull());
+  test('10**3 → null (double operator)', () =>
+    expect(evaluateMathExpressionBig('10**3')).toBeNull());
+  test('*10 → null (leading operator)', () => expect(evaluateMathExpressionBig('*10')).toBeNull());
+  test('10* → null (trailing operator)', () => expect(evaluateMathExpressionBig('10*')).toBeNull());
+  test('abc → null (non-numeric)', () => expect(evaluateMathExpressionBig('abc')).toBeNull());
+  test('empty string → null', () => expect(evaluateMathExpressionBig('')).toBeNull());
 
   // Single number is not an expression
-  test('100 → null (not an expression)', () => expect(evaluateMathExpression('100')).toBeNull());
+  test('100 → null (not an expression)', () => expect(evaluateMathExpressionBig('100')).toBeNull());
 
-  // Large result — no upper bound, evaluateMathExpression returns the value
+  // Large result — no upper bound
   test('999999*999999 → 999998000001 (no overflow limit)', () =>
-    expect(evaluateMathExpression('999999*999999')).toBe(999998000001));
+    expect(evaluateMathExpressionBig('999999*999999')?.toNumber()).toBe(999998000001));
 
   // Division precision
   test('100/3 → ~33.333', () => {
-    const result = evaluateMathExpression('100/3');
+    const result = evaluateMathExpressionBig('100/3');
     expect(result).not.toBeNull();
-    expect(result as number).toBeCloseTo(33.333, 2);
+    expect(result?.toNumber()).toBeCloseTo(33.333, 2);
   });
 
   // Mixed decimal separators
-  test('10.5+2,5 → 13', () => expect(evaluateMathExpression('10.5+2,5')).toBe(13));
+  test('10.5+2,5 → 13', () => expect(evaluateMathExpressionBig('10.5+2,5')?.toNumber()).toBe(13));
 
   // Trailing operator
-  test('10+ → null', () => expect(evaluateMathExpression('10+')).toBeNull());
+  test('10+ → null', () => expect(evaluateMathExpressionBig('10+')).toBeNull());
 
-  // Spaces (evaluateMathExpression strips spaces)
-  test('10 * 3 → 30 (spaces stripped)', () => expect(evaluateMathExpression('10 * 3')).toBe(30));
+  // Spaces (stripped before evaluation)
+  test('10 * 3 → 30 (spaces stripped)', () =>
+    expect(evaluateMathExpressionBig('10 * 3')?.toNumber()).toBe(30));
+
+  // Multi-separator token rejected
+  test('1.2.3*2 → null (double decimal)', () =>
+    expect(evaluateMathExpressionBig('1.2.3*2')).toBeNull());
 });
 
 // ── Math expressions in expense messages (integration) ────────────────
