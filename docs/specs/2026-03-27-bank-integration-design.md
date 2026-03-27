@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-27
 **Branch:** feature/bank-integration
-**Status:** Draft
+**Status:** Draft v2
 
 ---
 
@@ -21,30 +21,45 @@ Integrates ZenPlugins-compatible bank adapters into ExpenseSyncBot via a separat
 │           ExpenseSyncBot (main)         │    │   bank-sync service          │
 │                                         │    │                              │
 │  /bank command handler                  │    │  ZenPlugin runner            │
-│  AI agent (+ bank tools)                │◄──►│  cron scheduler              │
+│  AI agent (+ bank tools)                │    │  cron scheduler (30 min)     │
 │  Confirmation flow (callback handler)   │    │  bank_transactions table     │
-│  Edit(AI) router (message handler)      │    │  merchant_rules table        │
-│  Notification poller (60s)              │    │  merchant normalization agent │
+│  Edit(AI) flow (reply-based routing)    │    │  merchant normalization agent │
 └─────────────────────────────────────────┘    └──────────────────────────────┘
                          │                                    │
                          └──────────────┬─────────────────────┘
                                         │
                                    SQLite (shared DB)
+                                        │
+                              bank-sync calls Telegram API
+                              directly to send notifications
+                              (same BOT_TOKEN, send-only)
 ```
 
-The bank-sync service runs as a **separate PM2 process** (`bank-sync.ts` entry point) and shares the same SQLite database. Communication is entirely through the DB — no HTTP between processes. The main bot reads bank data on demand; the sync service writes it in the background.
+The bank-sync service runs as a **separate PM2 process** (`bank-sync.ts` entry point) and shares the same SQLite database. For notifications, bank-sync **calls the Telegram Bot API directly** (send-only, using the same `BOT_TOKEN`) instead of going through the main bot process. The main bot owns incoming updates (long-polling/webhook); bank-sync only sends. No polling-on-polling.
 
 ### Why separate process
 
 - Crash isolation: a bank plugin error or network hang doesn't affect the main bot
 - Simpler concurrency: sync service owns its own event loop and scheduling
-- Same SQLite DB, so no serialization overhead or message queue needed
+- No serialization overhead — shared SQLite DB for reads/writes
 
 ---
 
 ## ZenPlugin Adapter
 
-### Runtime API implementation
+### Plugin source — git submodule
+
+ZenPlugins repository is added as a **git submodule** at `src/services/bank/ZenPlugins/`:
+
+```bash
+git submodule add https://github.com/zenmoney/ZenPlugins.git src/services/bank/ZenPlugins
+```
+
+Updating to latest: `git submodule update --remote src/services/bank/ZenPlugins`.
+
+This gives access to all 72+ plugins without manual copying. The submodule is pinned to a specific commit in our repo; updates are explicit and reviewable.
+
+### Runtime API
 
 ZenPlugins (new TypeScript style) export a single function:
 
@@ -56,25 +71,22 @@ async function scrape(args: {
 }): Promise<{ accounts: Account[]; transactions: Transaction[] }>
 ```
 
-We implement a thin runtime shim that:
-1. Provides `fetch` (native in Bun — no shim needed)
-2. Provides persistent key-value store per plugin instance (`ZenMoney.getData` / `ZenMoney.saveData` legacy API) backed by a `bank_plugin_state` SQLite table
+We implement a thin runtime shim (`src/services/bank/runtime.ts`) that:
+1. Provides `fetch` — native in Bun, no shim needed
+2. Implements `ZenMoney.getData` / `ZenMoney.saveData` legacy API backed by `bank_plugin_state` SQLite table
 3. Passes credentials from `bank_credentials` table as `preferences`
-
-Plugins are **vendored** into `src/services/bank/plugins/<name>/` — copied from ZenPlugins repo, TypeScript as-is. Adding a new bank = copy the plugin folder + register in `BANK_REGISTRY`.
 
 ### BANK_REGISTRY
 
 ```ts
 // src/services/bank/registry.ts
 export const BANK_REGISTRY: Record<string, BankPlugin> = {
-  tbc:   { name: 'TBC Bank',   plugin: () => import('./plugins/tbc/index.ts'),   fields: ['username', 'password'] },
-  kaspi: { name: 'Kaspi Bank', plugin: () => import('./plugins/kaspi/index.ts'), fields: ['phone', 'password'] },
-  // ...
+  tbc:   { name: 'TBC Bank',   plugin: () => import('./ZenPlugins/src/plugins/TBC/index.ts'),   fields: ['username', 'password'] },
+  kaspi: { name: 'Kaspi Bank', plugin: () => import('./ZenPlugins/src/plugins/Kaspi/index.ts'), fields: ['phone', 'password'] },
 };
 ```
 
-Each entry declares what credential fields the plugin needs, used to build the setup wizard.
+Each entry declares credential fields needed, used to build the setup wizard. New bank = add one entry.
 
 ---
 
@@ -88,10 +100,10 @@ CREATE TABLE bank_connections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
   bank_name TEXT NOT NULL,          -- registry key, e.g. "tbc"
-  display_name TEXT NOT NULL,        -- "TBC Bank"
+  display_name TEXT NOT NULL,       -- "TBC Bank"
   is_active INTEGER NOT NULL DEFAULT 1,
-  last_sync_at TEXT,                 -- ISO8601
-  last_error TEXT,                   -- last sync error message if any
+  last_sync_at TEXT,                -- ISO8601
+  last_error TEXT,                  -- last sync error message if any
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(group_id, bank_name)
 );
@@ -99,10 +111,10 @@ CREATE TABLE bank_connections (
 -- Encrypted credentials per connection
 CREATE TABLE bank_credentials (
   connection_id INTEGER PRIMARY KEY REFERENCES bank_connections(id),
-  encrypted_data TEXT NOT NULL       -- AES-256-GCM, same key as Google tokens
+  encrypted_data TEXT NOT NULL      -- AES-256-GCM, same key as Google tokens
 );
 
--- Persistent plugin state (replaces ZenMoney.getData/saveData)
+-- Persistent plugin state (ZenMoney.getData/saveData shim)
 CREATE TABLE bank_plugin_state (
   connection_id INTEGER NOT NULL REFERENCES bank_connections(id),
   key TEXT NOT NULL,
@@ -110,35 +122,47 @@ CREATE TABLE bank_plugin_state (
   PRIMARY KEY(connection_id, key)
 );
 
--- Raw transactions from bank (source of truth for reconciliation)
+-- Raw transactions from bank
 CREATE TABLE bank_transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   connection_id INTEGER NOT NULL REFERENCES bank_connections(id),
-  external_id TEXT NOT NULL,         -- bank's own transaction ID
-  date TEXT NOT NULL,                -- YYYY-MM-DD
+  external_id TEXT NOT NULL,        -- bank's own transaction ID
+  date TEXT NOT NULL,               -- YYYY-MM-DD
   amount REAL NOT NULL,
   currency TEXT NOT NULL,
-  merchant TEXT,                     -- raw merchant string from bank
-  merchant_normalized TEXT,          -- after applying merchant_rules
-  mcc INTEGER,                       -- merchant category code if provided
-  raw_data TEXT NOT NULL,            -- full JSON from bank plugin
+  merchant TEXT,                    -- raw merchant string from bank
+  merchant_normalized TEXT,         -- after applying merchant_rules
+  mcc INTEGER,                      -- merchant category code if available
+  raw_data TEXT NOT NULL,           -- full JSON from bank plugin
   matched_expense_id INTEGER REFERENCES expenses(id),
-  status TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | ignored
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | skipped
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(connection_id, external_id)
 );
 
--- Shared regexp rules for merchant normalization (all groups contribute)
+-- Global shared merchant normalization rules
 CREATE TABLE merchant_rules (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pattern TEXT NOT NULL,             -- regexp source
-  flags TEXT NOT NULL DEFAULT 'i',   -- regexp flags
-  replacement TEXT NOT NULL,         -- replacement string (may use capture groups)
-  category TEXT,                     -- suggested category if matched
+  pattern TEXT NOT NULL,            -- regexp source, e.g. "GLOVO.*"
+  flags TEXT NOT NULL DEFAULT 'i',  -- regexp flags
+  replacement TEXT NOT NULL,        -- normalized name, e.g. "Glovo"
+  category TEXT,                    -- suggested category, e.g. "food"
   confidence REAL NOT NULL DEFAULT 1.0,
-  source TEXT NOT NULL DEFAULT 'ai', -- 'ai' | 'manual'
+  status TEXT NOT NULL DEFAULT 'pending_review',  -- pending_review | approved | rejected
+  source TEXT NOT NULL DEFAULT 'ai',              -- 'ai' | 'manual'
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Signals from main bot to bank-sync that a new rule is needed
+CREATE TABLE merchant_rule_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  merchant_raw TEXT NOT NULL,
+  mcc INTEGER,
+  user_category TEXT,               -- category the user confirmed/edited
+  user_comment TEXT,
+  processed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
 
@@ -150,98 +174,139 @@ CREATE TABLE merchant_rules (
 
 Runs as separate PM2 process. On startup:
 1. Loads all active `bank_connections`
-2. Schedules a polling loop per connection (default: every 30 min, staggered to avoid simultaneous requests)
-3. On each tick: calls `scrape({ preferences, fromDate: lastSyncAt ?? 30daysAgo, toDate: now })`
-4. Upserts results into `bank_transactions` (ON CONFLICT IGNORE on `external_id`)
-5. Updates `last_sync_at` and `last_error`
-6. Writes a notification record to `bank_notifications` table (picked up by main bot)
+2. Schedules polling per connection (default: every 30 min, staggered starts to avoid bursts)
+3. On each tick:
+   a. Calls `scrape({ preferences, fromDate: lastSyncAt ?? 30daysAgo, toDate: now })`
+   b. Upserts into `bank_transactions` (`ON CONFLICT(connection_id, external_id) DO NOTHING`)
+   c. Applies `merchant_rules` (approved only) to set `merchant_normalized`
+   d. Updates `last_sync_at` / `last_error`
+   e. For each new `pending` transaction: calls AI pre-fill, then sends confirmation card to group **via Telegram API directly**
 
-### Notification delivery
+### Notification delivery — direct Telegram calls
 
-```sql
-CREATE TABLE bank_notifications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL REFERENCES groups(id),
-  type TEXT NOT NULL,  -- 'new_transactions' | 'sync_error'
-  payload TEXT NOT NULL,  -- JSON
-  delivered INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-```
+bank-sync sends confirmation cards by calling `https://api.telegram.org/bot{BOT_TOKEN}/sendMessage` directly with the group's `telegram_group_id` and `message_thread_id`. The main bot handles all callback_query updates (button presses).
 
-Main bot polls this table every 60s (lightweight SELECT) and delivers pending notifications to Telegram.
+Both processes share the same `BOT_TOKEN`. There is no conflict: only one process polls for updates (main bot); bank-sync is send-only.
 
 ---
 
-## Merchant Rules & AI Agent
+## Merchant Rules & Admin Approval
 
-### Merchant correction table
+### Global merchant table
 
-`merchant_rules` is a **shared, global table** — not per-group. All groups contribute to and benefit from it.
-
-Each rule is a (pattern, replacement, category) tuple:
-- `pattern`: regexp, e.g. `"glovo.*"` or `"NETFLIX\\.COM"`
-- `replacement`: normalized name, e.g. `"Glovo"`
-- `category`: suggested expense category, e.g. `"food"`
+`merchant_rules` is **shared across all groups**. Rules produced by the AI agent start with `status = 'pending_review'` and are **not applied** until an admin approves them.
 
 ### Merchant normalization AI agent
 
-A **separate background agent** (`src/services/bank/merchant-agent.ts`) runs after each sync cycle and after each user-confirmed transaction. It:
-1. Collects all `merchant` strings that have no match in `merchant_rules`
-2. Sends them in batch to AI (Claude) with context: existing rules, MCC codes, known patterns
-3. AI returns new rules in structured JSON
-4. Rules are inserted into `merchant_rules` with `source = 'ai'`, `confidence < 1.0`
-5. High-confidence rules (≥ 0.9) are applied immediately; low-confidence ones wait for manual review
+Lives in bank-sync service (`src/services/bank/merchant-agent.ts`). After each scrape cycle and when a new `merchant_rule_requests` row appears:
+1. Collects unmatched `merchant` strings with no approved rule
+2. Sends batch to AI with context: existing approved rules, MCC codes, amounts, user-confirmed categories
+3. AI returns structured JSON: `[{ pattern, replacement, category, confidence }]`
+4. Rules inserted with `status = 'pending_review'`, `source = 'ai'`
+5. For each proposed rule, sends an **admin approval card** to `BOT_ADMIN_CHAT_ID` (env var):
 
-The merchant normalization agent lives in the **bank-sync service**, not the main bot. It writes rules to `merchant_rules` table; the main bot reads them on demand. The agent is triggered by the sync service after each scrape cycle and also when a new rule is needed (signaled via a `merchant_rule_requests` table row written by the main bot after user confirms a transaction).
+```
+🔧 Новое правило для мерчанта
+
+Паттерн: GLOVO.*
+→ Glovo
+🗂 Категория: еда
+📊 Уверенность: 87%
+
+Примеры совпадений:
+• "GLOVO*ORDER 1234" → "Glovo"
+• "GLOVO DELIVERY" → "Glovo"
+
+[✅ Принять] [✏️ Исправить] [❌ Отклонить]
+```
+
+Admin approves/rejects via buttons. "Исправить" opens an AI edit flow (same reply-based mechanism as transaction edits). Approved rules immediately apply to existing unmatched transactions.
 
 ---
 
-## Confirmation Flow (Idea 2 / 9)
+## Security — Swiss Cheese Model
 
-When new bank transactions arrive, for each unmatched `pending` transaction:
+Multiple independent layers; all must be breached simultaneously to leak data.
 
-1. **AI pre-fill**: call AI with merchant_normalized, amount, currency, MCC → get `{ category, comment, confidence }`
-2. **Send confirmation card** to group:
-   ```
-   💳 TBC Bank — 45.00 GEL
-   📍 Glovo (доставка еды)
-   🗂 Категория: food
-   💬 Комментарий: заказ еды
+**Layer 1 — Repository isolation**: Every `BankTransactionRepository` method requires `group_id` as a mandatory parameter. Queries always include `WHERE bt.connection_id IN (SELECT id FROM bank_connections WHERE group_id = ?)`. No method accepts a bare `transaction_id` without a `group_id`.
 
-   [✅ Принять] [✏️ Edit (AI)] [🚫 Игнор]
-   ```
-3. **Accept**: saves expense with pre-filled data, marks transaction as `confirmed`
-4. **Edit (AI)**: bot writes a `bank_pending_edits` row linking `(group_id, bank_transaction_id)`, then sends "Напиши как исправить — я обновлю категорию и комментарий". The next text message from any group member is routed by `message.handler.ts` to the bank edit flow if a pending edit exists for that group. AI receives the original transaction + user's correction, returns updated `{ category, comment }`, bot re-sends the confirmation card.
-5. **Ignore**: marks transaction as `ignored`, won't appear again
+**Layer 2 — Connection ownership check**: Before any read or write on a `bank_connection`, verify `connection.group_id === requestingGroupId`. This check is in the repository, not the caller.
 
-For **large transactions** (configurable threshold, default: 100 in group's default currency):
-- Notification is immediate (next delivery cycle, ≤60s)
-- Card is identical but with a `⚠️ Крупная транзакция` header
+**Layer 3 — AI tool isolation**: `get_bank_transactions`, `get_bank_balances`, `find_missing_expenses` tools always scope to `ctx.groupId` (from `AgentContext`). No tool parameter can override the group scope.
+
+**Layer 4 — Credentials never leak**: `bank_credentials` table is never read in any AI tool, never serialized to logs, never included in any response payload. Decryption happens only in bank-sync service, never in main bot.
+
+**Layer 5 — Raw data never in AI context**: `bank_transactions.raw_data` (full bank JSON) is never passed to the AI. Only normalized fields (amount, currency, merchant_normalized, date, category suggestion) are included.
+
+---
+
+## Confirmation Flow
+
+When bank-sync sends a new transaction, AI pre-fills category and comment, then sends the card:
+
+```
+💳 TBC Bank — 45.00 GEL
+📍 Glovo
+🗂 Категория: еда
+💬 Комментарий: заказ еды
+🏷 MCC: 5812 (Рестораны)
+
+[✅ Принять] [✏️ Исправить]
+```
+
+- **Принять**: saves expense with pre-filled data, marks transaction `confirmed`, writes `merchant_rule_requests` row so agent learns from this confirmation
+- **Исправить**: bot replies to the card: "Ответь на это сообщение и напиши что исправить". User replies to **this specific bot message** using Telegram's reply feature. The reply is routed to edit flow by `message_thread_id` + `reply_to_message_id` — unambiguous even when multiple transactions are pending simultaneously.
+
+No "Пропустить" button: transactions stay `pending` until explicitly confirmed or ignored via `/bank` management panel.
+
+### Large transactions
+
+Amount exceeds `LARGE_TX_THRESHOLD` (configurable, default: group default currency equivalent of 100 EUR):
+
+```
+⚠️ Крупная транзакция — 1 200.00 GEL
+...same card...
+```
+
+Sent within ≤30s of sync (next scheduled tick or immediate trigger).
 
 ---
 
 ## AI Tools for Bank Data
 
-New tools added to `TOOL_DEFINITIONS`:
+New tools in `TOOL_DEFINITIONS`:
 
 ```ts
 {
   name: 'get_bank_transactions',
-  description: 'Get raw bank transactions for a period. Use to compare with recorded expenses or find unrecorded spending.',
-  // params: period, bank_name, status
+  description: 'Get bank transactions for a period. All results are scoped to this group only.',
+  input_schema: {
+    properties: {
+      period: { type: 'string', description: '"current_month" | "last_month" | "YYYY-MM"' },
+      bank_name: { type: 'string', description: 'Filter by bank registry key (e.g. "tbc")' },
+      status: { type: 'string', description: '"pending" | "confirmed" | "skipped" | omit for all' },
+    }
+  }
 }
 
 {
   name: 'get_bank_balances',
-  description: 'Get current account balances from all connected banks.',
-  // params: bank_name (optional filter)
+  description: 'Get current account balances from all connected banks. Returns per-bank and total in group default currency.',
+  input_schema: {
+    properties: {
+      bank_name: { type: 'string', description: 'Optional: filter to specific bank' }
+    }
+  }
 }
 
 {
   name: 'find_missing_expenses',
-  description: 'Compare bank transactions vs recorded expenses for a period. Returns unmatched bank transactions (potential missing expenses).',
-  // params: period
+  description: 'Compare bank transactions vs recorded expenses. Returns unmatched bank transactions that may be missing from the expense log.',
+  input_schema: {
+    properties: {
+      period: { type: 'string', description: '"current_month" | "last_month" | "YYYY-MM"' }
+    }
+  }
 }
 ```
 
@@ -251,60 +316,70 @@ New tools added to `TOOL_DEFINITIONS`:
 
 ### `/bank` — no connected banks
 
-Starts interactive wizard:
 ```
 Ни одного банка не подключено.
 
 Выбери банк:
-[TBC Bank] [Kaspi] [Raiffeisen] [Другой...]
+[TBC Bank] [Kaspi] [Raiffeisen] [...]
 ```
 
-Each bank button triggers a multi-step credential input flow (one field per message, using GramIO scenes or conversation state).
+Starts multi-step credential wizard: one message per credential field, state tracked in `bank_connections` + `bank_credentials` as they're filled in.
 
 ### `/bank` — banks connected
 
 ```
 🏦 Подключённые банки
 
-TBC Bank · последняя синхр. 5 мин назад · ✅
-  Баланс: 1 240.50 GEL | Транзакций сегодня: 3
+TBC Bank · 5 мин назад · ✅
+Баланс: 1 240.50 GEL (~620 EUR)
 
-[➕ Добавить банк] [⚙️ TBC Bank ▼]
+Последние операции:
+• 45.00 GEL — Glovo · ✅ записано
+• 12.00 GEL — Shell · ⏳ ожидает
+• 200.00 GEL — ATM · ✅ записано
 
-⚙️ TBC Bank:
+[➕ Добавить банк] [⚙️ TBC Bank]
+```
+
+"⚙️ TBC Bank" expands inline:
+
+```
 [🔄 Синхронизировать] [🔌 Отключить]
 ```
 
 ### `/bank <name>` — specific bank
 
-If not connected: jumps straight to that bank's setup wizard.
-If connected: shows status + management panel for that bank only + last 5 transactions summary.
+Not connected → jumps straight to setup wizard for that bank.
+Connected → shows status card for that bank with last 3 transactions + manage buttons.
 
 ---
 
-## Multi-Bank Summary (Idea 13)
+## Multi-Bank Summary
 
-Available via `/bank` summary card and `get_bank_balances` AI tool:
-- Total balance across all accounts, converted to group default currency
-- Per-bank breakdown with local currency + equivalent
-- Money flow: income vs spending this month per bank
+`/bank` with multiple banks connected shows each bank's card (last 3 ops each) plus a combined total row:
+
+```
+Итого: ~2 300 EUR (TBC: ~620 + Kaspi: ~1 680)
+```
+
+`get_bank_balances` AI tool returns the same data for use in AI responses.
 
 ---
 
-## Security
+## Pattern Analytics / /advice Integration
 
-- Bank credentials encrypted with same `ENCRYPTION_KEY` used for Google OAuth tokens (AES-256-GCM)
-- Credentials never logged (same conventions as Google refresh tokens)
-- Plugin code runs in same process trust level as rest of bot — no sandbox. Only trusted, audited plugins from ZenPlugins repo are vendored.
-- `bank_credentials` table never returned in any AI tool response
+Bank transaction data is incorporated into `spending-analytics.ts` and `/advice` triggers:
+
+- **New analytics source**: `bank_transactions` (confirmed + pending) alongside manual `expenses`
+- **New trigger**: daily reconciliation — if `pending` bank transactions exist at end of day, trigger advice suggesting to review them
+- **New spending patterns**: day-of-week analysis, recurring charges detection (subscriptions), merchant frequency — based on bank data since it's more complete than manual entries
+- **`formatSnapshotForPrompt`** extended to include bank balance per account and recent confirmed bank transactions
+- MCC codes used to enrich category suggestions in analytics context
 
 ---
 
 ## Out of Scope (for this spec)
 
-- Auto-sync to Google Sheets on bank import (explicitly excluded)
-- Pattern analytics / /advice integration (separate task, uses bank data once available)
-- MCC-based auto-categorization without confirmation (all confirmation required per user request)
+- Auto-sync confirmed bank transactions to Google Sheets (explicitly excluded)
 - Web UI for managing merchant rules
-- Manual review UI for low-confidence AI-generated rules (confidence < 0.9) — rules are stored but not applied until a future admin tool is built
-- Deduplication logic for bank_pending_edits when multiple transactions are pending simultaneously (first one wins)
+- Multiple simultaneous active edit flows per group — one active edit at a time; if a second "Исправить" is clicked while one is in progress, bot replies "Сначала заверши текущее исправление"
