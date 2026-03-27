@@ -8,7 +8,7 @@ import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants'
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
-import { convertCurrency, formatExchangeRatesForAI } from '../currency/converter';
+import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import {
   createBudgetSheet,
   hasBudgetSheet,
@@ -161,13 +161,19 @@ async function executeGetExpenses(
 
     const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
 
-    const lines = [`Period: ${startDate} to ${endDate}`, `Total: EUR ${totalEur.toFixed(2)}`, ''];
+    const lines = [
+      `Period: ${startDate} to ${endDate}`,
+      `Total: ${formatAmount(totalEur, 'EUR', true)}`,
+      '',
+    ];
     const sorted = Object.entries(totals).sort((a, b) => b[1].eur_total - a[1].eur_total);
     for (const [cat, data] of sorted) {
       const amountParts = Object.entries(data.amounts)
-        .map(([c, a]) => `${a.toFixed(2)} ${c}`)
+        .map(([c, a]) => formatAmount(a, c as CurrencyCode, true))
         .join(', ');
-      lines.push(`${cat}: EUR ${data.eur_total.toFixed(2)} (${data.count} ops) [${amountParts}]`);
+      lines.push(
+        `${cat}: ${formatAmount(data.eur_total, 'EUR', true)} (${data.count} ops) [${amountParts}]`,
+      );
     }
 
     const output = lines.join('\n');
@@ -185,7 +191,7 @@ async function executeGetExpenses(
   ];
   for (const e of pageItems) {
     lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${e.amount} ${e.currency} (EUR ${e.eur_amount.toFixed(2)}) | ${e.comment.trim() || '(no comment)'}`,
+      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, 'EUR', true)}) | ${e.comment.trim() || '(no comment)'}`,
     );
   }
 
@@ -234,7 +240,7 @@ async function executeGetBudgets(
     const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
 
     lines.push(
-      `${budget.category}: ${spentInCurrency.toFixed(2)}/${budget.limit_amount.toFixed(2)} ${budget.currency} (${percent}%) [${status}]`,
+      `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${percent}%) [${status}]`,
     );
 
     const existing = totalsByCurrency[budget.currency];
@@ -249,7 +255,9 @@ async function executeGetBudgets(
   lines.push('');
   for (const [currency, { spent, limit }] of Object.entries(totalsByCurrency)) {
     const pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-    lines.push(`Total (${currency}): ${spent.toFixed(2)}/${limit.toFixed(2)} (${pct}%)`);
+    lines.push(
+      `Total (${currency}): ${formatAmount(spent, currency as CurrencyCode, true)}/${formatAmount(limit, currency as CurrencyCode, true)} (${pct}%)`,
+    );
   }
 
   return { success: true, output: lines.join('\n') };
@@ -359,7 +367,7 @@ async function executeSetBudget(
 
   return {
     success: true,
-    output: `Budget set: ${category} = ${amount.toFixed(2)} ${currency} for ${month}`,
+    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}`,
   };
 }
 
@@ -419,7 +427,7 @@ async function executeAddExpense(
 
     return {
       success: true,
-      output: `Expense added: ${amount.toFixed(2)} ${currency} (EUR ${eurAmount.toFixed(2)}) in ${category} on ${date}. ID: ${expense.id}`,
+      output: `Expense added: ${formatAmount(amount, currency, true)} (EUR ${formatAmount(eurAmount, 'EUR', true)}) in ${category} on ${date}. ID: ${expense.id}`,
     };
   } catch (err) {
     logger.error({ err: err }, '[TOOL] Failed to add expense');

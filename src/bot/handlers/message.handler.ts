@@ -2,6 +2,7 @@ import { format } from 'date-fns';
 import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
+import { formatAmount } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
@@ -424,10 +425,10 @@ async function checkBudgetLimit(
 
     if (isExceeded) {
       message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
+      message += `${emoji} ${category}: ${formatAmount(categorySpending, 'EUR')} / ${formatAmount(budget.limit_amount, 'EUR')} (${percentage}%)`;
     } else if (isWarning) {
       message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
+      message += `${emoji} ${category}: ${formatAmount(categorySpending, 'EUR')} / ${formatAmount(budget.limit_amount, 'EUR')} (${percentage}%)`;
     }
 
     try {
