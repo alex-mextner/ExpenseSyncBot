@@ -5,42 +5,27 @@ import { createLogger } from '../../utils/logger.ts';
 const logger = createLogger('converter');
 
 /**
- * Fallback exchange rates (to EUR)
- * Used when API is unavailable
- */
-const FALLBACK_RATES: Record<CurrencyCode, number> = {
-  EUR: 1.0,
-  USD: 0.93, // 1 USD = 0.93 EUR
-  RUB: 0.0093, // 1 RUB = 0.0093 EUR (approx 108 RUB = 1 EUR)
-  RSD: 0.0086, // 1 RSD = 0.0086 EUR (approx 117 RSD = 1 EUR)
-  GBP: 1.18, // 1 GBP = 1.18 EUR
-  BYN: 0.28, // 1 BYN = 0.28 EUR (approx 3.5 BYN = 1 EUR)
-  CHF: 1.05, // 1 CHF = 1.05 EUR
-  JPY: 0.0062, // 1 JPY = 0.0062 EUR (approx 161 JPY = 1 EUR)
-  CNY: 0.13, // 1 CNY = 0.13 EUR (approx 7.7 CNY = 1 EUR)
-  INR: 0.011, // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
-  LKR: 0.0028, // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
-  AED: 0.25, // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
-};
-
-/**
- * Fallback rates as decimal strings for exact Big.js arithmetic.
- * Mirrors FALLBACK_RATES — keep in sync when updating rates.
+ * Fallback exchange rates (to EUR), stored as strings for exact decimal representation.
+ * Used when API is unavailable. Numbers derived from this via parseFloat.
  */
 const FALLBACK_RATES_STR: Record<CurrencyCode, string> = {
   EUR: '1',
-  USD: '0.93',
-  RUB: '0.0093',
-  RSD: '0.0086',
-  GBP: '1.18',
-  BYN: '0.28',
-  CHF: '1.05',
-  JPY: '0.0062',
-  CNY: '0.13',
-  INR: '0.011',
-  LKR: '0.0028',
-  AED: '0.25',
+  USD: '0.93', // 1 USD = 0.93 EUR
+  RUB: '0.0093', // 1 RUB = 0.0093 EUR (approx 108 RUB = 1 EUR)
+  RSD: '0.0086', // 1 RSD = 0.0086 EUR (approx 117 RSD = 1 EUR)
+  GBP: '1.18', // 1 GBP = 1.18 EUR
+  BYN: '0.28', // 1 BYN = 0.28 EUR (approx 3.5 BYN = 1 EUR)
+  CHF: '1.05', // 1 CHF = 1.05 EUR
+  JPY: '0.0062', // 1 JPY = 0.0062 EUR (approx 161 JPY = 1 EUR)
+  CNY: '0.13', // 1 CNY = 0.13 EUR (approx 7.7 CNY = 1 EUR)
+  INR: '0.011', // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
+  LKR: '0.0028', // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
+  AED: '0.25', // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
 };
+
+const FALLBACK_RATES: Record<CurrencyCode, number> = Object.fromEntries(
+  Object.entries(FALLBACK_RATES_STR).map(([k, v]) => [k, parseFloat(v)]),
+) as Record<CurrencyCode, number>;
 
 /**
  * Cache for API exchange rates
