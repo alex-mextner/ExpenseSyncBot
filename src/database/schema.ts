@@ -1,4 +1,6 @@
 import { Database } from 'bun:sqlite';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger.ts';
 
@@ -8,6 +10,7 @@ const logger = createLogger('schema');
  * Initialize database connection
  */
 export function initDatabase(): Database {
+  mkdirSync(dirname(env.DATABASE_PATH), { recursive: true });
   const db = new Database(env.DATABASE_PATH, { create: true });
 
   // Enable WAL mode for better concurrency
