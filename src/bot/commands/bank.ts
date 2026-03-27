@@ -415,7 +415,7 @@ export async function handleBankEditReply(
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group) return false;
 
-  // Find a transaction with edit_in_progress=1 whose telegram_message_id matches
+  // Find any transaction with edit_in_progress=1 across all active connections
   const connections = database.bankConnections.findActiveByGroupId(group.id);
   let editTx: import('../../database/types').BankTransaction | null = null;
 
