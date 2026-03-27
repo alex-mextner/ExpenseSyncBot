@@ -166,6 +166,26 @@ export function checkSmartTriggers(
     }
   }
 
+  // === Trigger 6: Pending bank transactions need review ===
+  const pendingConnections = database.bankConnections.findActiveByGroupId(groupId);
+  let totalPending = 0;
+  for (const conn of pendingConnections) {
+    totalPending += database.bankTransactions.findPendingByConnectionId(conn.id).length;
+  }
+  if (totalPending > 0) {
+    const topic = `pending_bank_transactions:${today}`;
+    if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+      if (canSendAdvice(groupId, 'quick')) {
+        return {
+          type: 'pending_bank_transactions',
+          tier: 'quick',
+          topic,
+          data: { count: totalPending },
+        };
+      }
+    }
+  }
+
   return null;
 }
 

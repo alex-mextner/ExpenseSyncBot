@@ -13,10 +13,26 @@ const mockExpenses = {
   getCountForRange: mock(() => 0),
 };
 
+const mockBankConnections = {
+  findActiveByGroupId: mock(() => []),
+};
+
+const mockBankTransactions = {
+  findPendingByConnectionId: mock(() => []),
+  findByGroupId: mock(() => []),
+};
+
+const mockBankAccounts = {
+  findByGroupId: mock(() => []),
+};
+
 mock.module('../../database', () => ({
   database: {
     adviceLogs: mockAdviceLogs,
     expenses: mockExpenses,
+    bankConnections: mockBankConnections,
+    bankTransactions: mockBankTransactions,
+    bankAccounts: mockBankAccounts,
   },
 }));
 

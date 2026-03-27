@@ -1,3 +1,4 @@
+import { database } from '../../database';
 import type {
   BudgetBurnRate,
   BudgetUtilization,
@@ -13,7 +14,7 @@ import type {
 /**
  * Format full financial snapshot into text for LLM prompt
  */
-export function formatSnapshotForPrompt(snapshot: FinancialSnapshot): string {
+export function formatSnapshotForPrompt(snapshot: FinancialSnapshot, groupId: number): string {
   const sections: string[] = [];
 
   // Section 1: Budget Burn Rates
@@ -49,7 +50,32 @@ export function formatSnapshotForPrompt(snapshot: FinancialSnapshot): string {
     sections.push(formatStreak(snapshot.streak));
   }
 
-  return sections.join('\n\n');
+  let result = sections.join('\n\n');
+
+  // Add bank balances if any connections exist
+  const bankAccounts = database.bankAccounts.findByGroupId(groupId);
+  if (bankAccounts.length > 0) {
+    const balanceLines = bankAccounts
+      .map((a) => `${a.title}: ${a.balance.toFixed(2)} ${a.currency}`)
+      .join('\n');
+    result += `\n\n## Банковские балансы\n${balanceLines}`;
+  }
+
+  // Add recent confirmed bank transactions (last 20)
+  const recentBankTxs = database.bankTransactions
+    .findByGroupId(groupId, { status: 'confirmed' })
+    .slice(0, 20);
+  if (recentBankTxs.length > 0) {
+    const txLines = recentBankTxs
+      .map(
+        (tx) =>
+          `${tx.date} ${tx.amount} ${tx.currency} — ${tx.merchant_normalized ?? tx.merchant ?? '—'}`,
+      )
+      .join('\n');
+    result += `\n\n## Подтверждённые банковские транзакции\n${txLines}`;
+  }
+
+  return result;
 }
 
 /**

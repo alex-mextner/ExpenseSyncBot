@@ -242,7 +242,7 @@ async function sendSmartAdvice(
   try {
     const tier = trigger.tier;
     const severity = computeOverallSeverity(snapshot);
-    const snapshotText = formatSnapshotForPrompt(snapshot);
+    const snapshotText = formatSnapshotForPrompt(snapshot, groupId);
 
     // Get recent advice topics for anti-repetition
     const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);
