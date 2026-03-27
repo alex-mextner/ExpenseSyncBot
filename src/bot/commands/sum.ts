@@ -1,6 +1,7 @@
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { database } from '../../database';
+import { formatAmount } from '../../services/currency/converter';
 import { createBudgetSheet, hasBudgetSheet } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
@@ -170,15 +171,15 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
 
   // Build message
   let message = `📊 Расходы за ${format(now, 'LLLL yyyy')}\n\n`;
-  message += `💰 Всего: €${currentMonthTotal.toFixed(2)}\n`;
+  message += `💰 Всего: ${formatAmount(currentMonthTotal, 'EUR')}\n`;
 
   if (monthsCount > 0) {
-    message += `📈 Средняя: €${averagePerMonth.toFixed(2)}\n`;
+    message += `📈 Средняя: ${formatAmount(averagePerMonth, 'EUR')}\n`;
 
     if (difference > 0) {
-      message += `📊 Разница: +€${difference.toFixed(2)} (+${percentDifference.toFixed(1)}%)\n`;
+      message += `📊 Разница: +${formatAmount(difference, 'EUR')} (+${percentDifference.toFixed(1)}%)\n`;
     } else if (difference < 0) {
-      message += `📊 Разница: €${difference.toFixed(2)} (${percentDifference.toFixed(1)}%)\n`;
+      message += `📊 Разница: ${formatAmount(difference, 'EUR')} (${percentDifference.toFixed(1)}%)\n`;
     } else {
       message += `📊 Разница: точно в среднем\n`;
     }
@@ -191,7 +192,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     const above = categoryDifferences.filter((c) => c.percent > 5);
     if (above.length > 0) {
       for (const { category, diff, percent } of above.slice(0, 3)) {
-        message += `  • ${category}: +€${diff.toFixed(2)} (+${percent.toFixed(1)}%)\n`;
+        message += `  • ${category}: +${formatAmount(diff, 'EUR')} (+${percent.toFixed(1)}%)\n`;
       }
     } else {
       message += `  • Нет категорий\n`;
@@ -203,7 +204,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
       // Sort by percent ascending (most negative first)
       below.sort((a, b) => a.percent - b.percent);
       for (const { category, diff, percent } of below.slice(0, 3)) {
-        message += `  • ${category}: €${diff.toFixed(2)} (${percent.toFixed(1)}%)\n`;
+        message += `  • ${category}: ${formatAmount(diff, 'EUR')} (${percent.toFixed(1)}%)\n`;
       }
     } else {
       message += `  • Нет категорий\n`;
@@ -298,9 +299,7 @@ async function addBudgetInfo(
 
   // Build budget section
   let budgetMessage = `\n\n💰 Бюджет:\n`;
-  budgetMessage += `Всего: €${totalSpent.toFixed(2)} / €${totalBudget.toFixed(
-    2,
-  )} (${totalPercentage}%)\n\n`;
+  budgetMessage += `Всего: ${formatAmount(totalSpent, 'EUR')} / ${formatAmount(totalBudget, 'EUR')} (${totalPercentage}%)\n\n`;
 
   // Show only exceeded and warning categories
   const importantCategories = budgetProgress.filter((bp) => bp.is_exceeded || bp.is_warning);
@@ -309,9 +308,7 @@ async function addBudgetInfo(
     for (const bp of importantCategories) {
       const emoji = getCategoryEmoji(bp.category);
       const status = bp.is_exceeded ? '🔴' : '⚠️';
-      budgetMessage += `${status} ${emoji} ${bp.category}: €${bp.spent.toFixed(
-        2,
-      )} / €${bp.limit.toFixed(2)} (${bp.percentage}%)\n`;
+      budgetMessage += `${status} ${emoji} ${bp.category}: ${formatAmount(bp.spent, 'EUR')} / ${formatAmount(bp.limit, 'EUR')} (${bp.percentage}%)\n`;
     }
   }
 

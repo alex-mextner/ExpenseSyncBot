@@ -1,5 +1,6 @@
-import { CURRENCY_SYMBOLS } from '../../config/constants';
+import { CURRENCY_SYMBOLS, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import { formatAmount } from '../../services/currency/converter';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
@@ -40,11 +41,10 @@ export async function handleStatsCommand(ctx: Ctx['Command']): Promise<void> {
   // Total by currency
   message += '**По валютам:**\n';
   for (const [currency, total] of Object.entries(totalsByCurrency)) {
-    const symbol = CURRENCY_SYMBOLS[currency as keyof typeof CURRENCY_SYMBOLS] || currency;
-    message += `• ${symbol} ${total.toFixed(2)}\n`;
+    message += `• ${formatAmount(total, currency as CurrencyCode)}\n`;
   }
 
-  message += `\n**Всего (EUR):** €${totalEUR.toFixed(2)}\n`;
+  message += `\n**Всего (EUR):** ${formatAmount(totalEUR, 'EUR')}\n`;
 
   message += `\n**Последние ${recentExpenses.length} расходов:**\n`;
   for (const expense of recentExpenses) {

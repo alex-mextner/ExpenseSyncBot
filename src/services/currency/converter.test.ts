@@ -311,6 +311,40 @@ describe('formatAmount', () => {
   });
 });
 
+describe('formatAmount (aiContext=true)', () => {
+  it('small amount: exact decimal with currency', () => {
+    expect(formatAmount(1234.56, 'RSD', true)).toBe('1234.56 RSD');
+  });
+
+  it('just below 1M: no suffix', () => {
+    expect(formatAmount(999_999.99, 'RSD', true)).toBe('999999.99 RSD');
+  });
+
+  it('exactly 1M: adds млн suffix', () => {
+    expect(formatAmount(1_000_000, 'RSD', true)).toBe('1000000.00 (1 млн) RSD');
+  });
+
+  it('1.5M: exact + suffix', () => {
+    expect(formatAmount(1_500_000, 'RSD', true)).toBe('1500000.00 (1.5 млн) RSD');
+  });
+
+  it('1.234M: suffix rounded to 2 decimal places', () => {
+    expect(formatAmount(1_234_567.89, 'EUR', true)).toBe('1234567.89 (1.23 млн) EUR');
+  });
+
+  it('2M: no trailing zeros in suffix', () => {
+    expect(formatAmount(2_000_000, 'USD', true)).toBe('2000000.00 (2 млн) USD');
+  });
+
+  it('exactly 1B: млрд suffix', () => {
+    expect(formatAmount(1_000_000_000, 'RUB', true)).toBe('1000000000.00 (1 млрд) RUB');
+  });
+
+  it('2.5B: exact + млрд suffix', () => {
+    expect(formatAmount(2_500_000_000, 'EUR', true)).toBe('2500000000.00 (2.5 млрд) EUR');
+  });
+});
+
 describe('getAllExchangeRates', () => {
   it('returns object with all 12 currencies', () => {
     const rates = getAllExchangeRates();
