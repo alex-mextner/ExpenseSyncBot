@@ -432,7 +432,10 @@ export async function handleBankEditReply(
   const comment = parts[1] ?? editTx.merchant_normalized ?? editTx.merchant ?? '';
 
   const user = database.users.findByTelegramId(ctx.from.id);
-  if (!user) return false;
+  if (!user) {
+    database.bankTransactions.setEditInProgress(editTx.id, false);
+    return false;
+  }
 
   const editCurrency = editTx.currency as import('../../config/constants').CurrencyCode;
   const expense = database.expenses.create({
