@@ -44,6 +44,8 @@ describe('bank AI tools', () => {
     };
     const result = await executeTool('get_bank_balances', {}, ctx);
     expect(result.success).toBe(true);
+    expect(Array.isArray(result.data)).toBe(true);
+    expect(result.data).toEqual([]);
   });
 
   test('get_bank_transactions returns empty list when no transactions', async () => {
@@ -58,6 +60,8 @@ describe('bank AI tools', () => {
     };
     const result = await executeTool('get_bank_transactions', { period: 'current_month' }, ctx);
     expect(result.success).toBe(true);
+    expect(Array.isArray(result.data)).toBe(true);
+    expect(result.data).toEqual([]);
   });
 
   test('find_missing_expenses returns no missing when no transactions', async () => {
@@ -72,6 +76,8 @@ describe('bank AI tools', () => {
     };
     const result = await executeTool('find_missing_expenses', { period: 'current_month' }, ctx);
     expect(result.success).toBe(true);
+    expect(Array.isArray(result.data)).toBe(true);
+    expect(result.data).toEqual([]);
   });
 });
 

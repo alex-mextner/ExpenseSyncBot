@@ -6,6 +6,7 @@ import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
+import type { BankTransaction, BankTransactionFilters } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatExchangeRatesForAI } from '../currency/converter';
@@ -651,11 +652,11 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
 // === Bank tools ===
 
 function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const filters: import('../../database/types').BankTransactionFilters = {};
+  const filters: BankTransactionFilters = {};
   if (typeof input['period'] === 'string') filters.period = input['period'];
   if (typeof input['bank_name'] === 'string') filters.bank_name = input['bank_name'];
   if (typeof input['status'] === 'string') {
-    filters.status = input['status'] as import('../../database/types').BankTransaction['status'];
+    filters.status = input['status'] as BankTransaction['status'];
   }
 
   const transactions = database.bankTransactions.findByGroupId(ctx.groupId, filters);
@@ -718,7 +719,6 @@ async function executeFindMissingExpenses(
     );
 
     if (exactMatch) {
-      database.bankTransactions.setMatchedExpense(tx.id, ctx.groupId, exactMatch.id);
       return null; // matched
     }
 
