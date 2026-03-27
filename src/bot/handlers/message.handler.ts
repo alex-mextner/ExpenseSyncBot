@@ -1,8 +1,8 @@
 import { format } from 'date-fns';
-import { MESSAGES } from '../../config/constants';
+import { type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
-import { formatAmount } from '../../services/currency/converter';
+import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
@@ -412,23 +412,22 @@ async function checkBudgetLimit(
     .filter((exp) => exp.category === category)
     .reduce((sum, exp) => sum + exp.eur_amount, 0);
 
-  const percentage =
-    budget.limit_amount > 0 ? Math.round((categorySpending / budget.limit_amount) * 100) : 0;
-
-  // Check if warning or exceeded
-  const isExceeded = categorySpending > budget.limit_amount;
-  const isWarning = percentage >= 90 && !isExceeded;
+  const { spentInCurrency, percentage, isExceeded, isWarning } = buildBudgetAlertStatus(
+    categorySpending,
+    budget,
+  );
 
   if (isExceeded || isWarning) {
     const emoji = getCategoryEmoji(category);
+    const budgetCurrency = budget.currency as import('../../config/constants').CurrencyCode;
     let message = '';
 
     if (isExceeded) {
       message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: ${formatAmount(categorySpending, 'EUR')} / ${formatAmount(budget.limit_amount, 'EUR')} (${percentage}%)`;
+      message += `${emoji} ${category}: ${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${percentage}%)`;
     } else if (isWarning) {
       message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: ${formatAmount(categorySpending, 'EUR')} / ${formatAmount(budget.limit_amount, 'EUR')} (${percentage}%)`;
+      message += `${emoji} ${category}: ${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${percentage}%)`;
     }
 
     try {
@@ -703,4 +702,21 @@ async function handleBulkCorrectionInput(
       { parse_mode: 'HTML' },
     );
   }
+}
+
+/**
+ * Compute budget alert status for a category.
+ * spentEur — total spending in EUR; budget — with limit in budget.currency.
+ * Returns spending converted to budget currency, percentage, and alert flags.
+ */
+export function buildBudgetAlertStatus(
+  spentEur: number,
+  budget: { limit_amount: number; currency: string },
+): { spentInCurrency: number; percentage: number; isExceeded: boolean; isWarning: boolean } {
+  const spentInCurrency = convertCurrency(spentEur, 'EUR', budget.currency as CurrencyCode);
+  const percentage =
+    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+  const isExceeded = spentInCurrency > budget.limit_amount;
+  const isWarning = percentage >= 90 && !isExceeded;
+  return { spentInCurrency, percentage, isExceeded, isWarning };
 }

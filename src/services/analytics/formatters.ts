@@ -1,5 +1,5 @@
 import type { CurrencyCode } from '../../config/constants';
-import { formatAmount } from '../currency/converter';
+import { convertCurrency, formatAmount } from '../currency/converter';
 import type {
   BudgetBurnRate,
   BudgetUtilization,
@@ -13,9 +13,13 @@ import type {
 } from './types';
 
 /**
- * Format full financial snapshot into text for LLM prompt
+ * Format full financial snapshot into text for LLM prompt.
+ * displayCurrency — group's default currency; all EUR amounts are converted for user context.
  */
-export function formatSnapshotForPrompt(snapshot: FinancialSnapshot): string {
+export function formatSnapshotForPrompt(
+  snapshot: FinancialSnapshot,
+  displayCurrency: CurrencyCode,
+): string {
   const sections: string[] = [];
 
   // Section 1: Budget Burn Rates
@@ -25,30 +29,30 @@ export function formatSnapshotForPrompt(snapshot: FinancialSnapshot): string {
 
   // Section 2: Budget Utilization
   if (snapshot.budgetUtilization) {
-    sections.push(formatBudgetUtilization(snapshot.budgetUtilization));
+    sections.push(formatBudgetUtilization(snapshot.budgetUtilization, displayCurrency));
   }
 
   // Section 3: Trends
-  sections.push(formatTrends(snapshot.weekTrend, snapshot.monthTrend));
+  sections.push(formatTrends(snapshot.weekTrend, snapshot.monthTrend, displayCurrency));
 
   // Section 4: Anomalies (only if present)
   if (snapshot.anomalies.length > 0) {
-    sections.push(formatAnomalies(snapshot.anomalies));
+    sections.push(formatAnomalies(snapshot.anomalies, displayCurrency));
   }
 
   // Section 5: Projection
   if (snapshot.projection) {
-    sections.push(formatProjection(snapshot.projection));
+    sections.push(formatProjection(snapshot.projection, displayCurrency));
   }
 
   // Section 6: Velocity (only if not stable)
   if (snapshot.velocity.trend !== 'stable') {
-    sections.push(formatVelocity(snapshot.velocity));
+    sections.push(formatVelocity(snapshot.velocity, displayCurrency));
   }
 
   // Section 7: Streak (only if >= 3 days)
   if (snapshot.streak.current_streak_days >= 3) {
-    sections.push(formatStreak(snapshot.streak));
+    sections.push(formatStreak(snapshot.streak, displayCurrency));
   }
 
   return sections.join('\n\n');
@@ -107,14 +111,17 @@ function formatBurnRates(burnRates: BudgetBurnRate[]): string {
   return lines.join('\n');
 }
 
-function formatBudgetUtilization(util: BudgetUtilization): string {
+function formatBudgetUtilization(util: BudgetUtilization, displayCurrency: CurrencyCode): string {
   const lines = ['=== ИСПОЛЬЗОВАНИЕ БЮДЖЕТА ==='];
-  lines.push(`- Общий бюджет (EUR): ${formatAmount(util.total_budget, 'EUR', true)}`);
+  const totalBudgetDisplay = convertCurrency(util.total_budget, 'EUR', displayCurrency);
+  const totalSpentDisplay = convertCurrency(util.total_spent, 'EUR', displayCurrency);
+  const remainingDisplay = convertCurrency(util.remaining, 'EUR', displayCurrency);
+  lines.push(`- Общий бюджет: ${formatAmount(totalBudgetDisplay, displayCurrency, true)}`);
   lines.push(
-    `- Потрачено: ${formatAmount(util.total_spent, 'EUR', true)} (${util.utilization_percent.toFixed(1)}%)`,
+    `- Потрачено: ${formatAmount(totalSpentDisplay, displayCurrency, true)} (${util.utilization_percent.toFixed(1)}%)`,
   );
   lines.push(
-    `- Остаток: ${formatAmount(util.remaining, 'EUR', true)} (${util.remaining_percent.toFixed(1)}%)`,
+    `- Остаток: ${formatAmount(remainingDisplay, displayCurrency, true)} (${util.remaining_percent.toFixed(1)}%)`,
   );
 
   if (util.utilization_percent > 100) {
@@ -126,14 +133,19 @@ function formatBudgetUtilization(util: BudgetUtilization): string {
   return lines.join('\n');
 }
 
-function formatTrends(weekTrend: SpendingTrend, monthTrend: SpendingTrend): string {
+function formatTrends(
+  weekTrend: SpendingTrend,
+  monthTrend: SpendingTrend,
+  displayCurrency: CurrencyCode,
+): string {
   const lines = ['=== ТРЕНДЫ ==='];
+  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
 
   // Week
   const weekArrow = weekTrend.direction === 'up' ? '↑' : weekTrend.direction === 'down' ? '↓' : '→';
   lines.push(
     `- Неделя: ${weekArrow} ${weekTrend.change_percent > 0 ? '+' : ''}${weekTrend.change_percent.toFixed(1)}% ` +
-      `(${formatAmount(weekTrend.current_total, 'EUR', true)} vs ${formatAmount(weekTrend.previous_total, 'EUR', true)} прошлая неделя)`,
+      `(${formatAmount(cv(weekTrend.current_total), displayCurrency, true)} vs ${formatAmount(cv(weekTrend.previous_total), displayCurrency, true)} прошлая неделя)`,
   );
 
   // Top category changes for week
@@ -143,7 +155,7 @@ function formatTrends(weekTrend: SpendingTrend, monthTrend: SpendingTrend): stri
   for (const c of significantWeekChanges) {
     lines.push(
       `  - ${c.category}: ${c.change_percent > 0 ? '+' : ''}${c.change_percent.toFixed(0)}% ` +
-        `(${formatAmount(c.current, 'EUR', true)} vs ${formatAmount(c.previous, 'EUR', true)})`,
+        `(${formatAmount(cv(c.current), displayCurrency, true)} vs ${formatAmount(cv(c.previous), displayCurrency, true)})`,
     );
   }
 
@@ -152,21 +164,23 @@ function formatTrends(weekTrend: SpendingTrend, monthTrend: SpendingTrend): stri
     monthTrend.direction === 'up' ? '↑' : monthTrend.direction === 'down' ? '↓' : '→';
   lines.push(
     `- Месяц (пропорциональное сравнение): ${monthArrow} ${monthTrend.change_percent > 0 ? '+' : ''}${monthTrend.change_percent.toFixed(1)}% ` +
-      `(${formatAmount(monthTrend.current_total, 'EUR', true)} vs ${formatAmount(monthTrend.previous_total, 'EUR', true)} прошлый месяц)`,
+      `(${formatAmount(cv(monthTrend.current_total), displayCurrency, true)} vs ${formatAmount(cv(monthTrend.previous_total), displayCurrency, true)} прошлый месяц)`,
   );
 
   return lines.join('\n');
 }
 
-function formatAnomalies(anomalies: CategoryAnomaly[]): string {
+function formatAnomalies(anomalies: CategoryAnomaly[], displayCurrency: CurrencyCode): string {
   const lines = ['=== АНОМАЛИИ ==='];
 
   for (const a of anomalies) {
     const severityLabel =
       a.severity === 'extreme' ? 'EXTREME' : a.severity === 'significant' ? 'SIGNIFICANT' : 'MILD';
 
+    const currentDisplay = convertCurrency(a.current_month_total, 'EUR', displayCurrency);
+    const avgDisplay = convertCurrency(a.avg_3_month, 'EUR', displayCurrency);
     lines.push(
-      `- ${a.category}: ${formatAmount(a.current_month_total, 'EUR', true)} за текущий месяц vs среднее ${formatAmount(a.avg_3_month, 'EUR', true)}/мес за 3 месяца. ` +
+      `- ${a.category}: ${formatAmount(currentDisplay, displayCurrency, true)} за текущий месяц vs среднее ${formatAmount(avgDisplay, displayCurrency, true)}/мес за 3 месяца. ` +
         `Отклонение: ${a.deviation_ratio.toFixed(2)}x (траты в ${a.deviation_ratio.toFixed(1)} раза выше среднего за 3 мес). [${severityLabel}]`,
     );
   }
@@ -174,8 +188,9 @@ function formatAnomalies(anomalies: CategoryAnomaly[]): string {
   return lines.join('\n');
 }
 
-function formatProjection(projection: MonthlyProjection): string {
+function formatProjection(projection: MonthlyProjection, displayCurrency: CurrencyCode): string {
   const lines = ['=== ПРОГНОЗ НА КОНЕЦ МЕСЯЦА ==='];
+  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
 
   const confidenceLabel =
     projection.confidence === 'low'
@@ -185,8 +200,10 @@ function formatProjection(projection: MonthlyProjection): string {
         : '(высокая точность)';
 
   lines.push(`- День ${projection.days_elapsed}/${projection.days_in_month} ${confidenceLabel}`);
-  lines.push(`- Текущая сумма: ${formatAmount(projection.current_total, 'EUR', true)}`);
-  lines.push(`- Прогноз: ${formatAmount(projection.projected_total, 'EUR', true)}`);
+  lines.push(
+    `- Текущая сумма: ${formatAmount(cv(projection.current_total), displayCurrency, true)}`,
+  );
+  lines.push(`- Прогноз: ${formatAmount(cv(projection.projected_total), displayCurrency, true)}`);
 
   if (projection.projected_vs_last_month > 0) {
     lines.push(`- vs прошлый месяц: ${projection.projected_vs_last_month.toFixed(1)}%`);
@@ -198,7 +215,7 @@ function formatProjection(projection: MonthlyProjection): string {
     lines.push('- Категории, которые превысят бюджет:');
     for (const cp of exceeding) {
       lines.push(
-        `  - ${cp.category}: прогноз ${formatAmount(cp.projected, 'EUR', true)} при бюджете ${cp.budget_limit != null ? formatAmount(cp.budget_limit, 'EUR', true) : '—'}`,
+        `  - ${cp.category}: прогноз ${formatAmount(cv(cp.projected), displayCurrency, true)} при бюджете ${cp.budget_limit != null ? formatAmount(cv(cp.budget_limit), displayCurrency, true) : '—'}`,
       );
     }
   }
@@ -206,25 +223,27 @@ function formatProjection(projection: MonthlyProjection): string {
   return lines.join('\n');
 }
 
-function formatVelocity(velocity: SpendingVelocity): string {
+function formatVelocity(velocity: SpendingVelocity, displayCurrency: CurrencyCode): string {
   const lines = ['=== СКОРОСТЬ ТРАТ ==='];
+  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
 
   const trend = velocity.trend === 'accelerating' ? 'Ускорение' : 'Замедление';
   lines.push(
     `- ${trend}: ${velocity.acceleration > 0 ? '+' : ''}${velocity.acceleration.toFixed(1)}% ` +
-      `(${formatAmount(velocity.period_2_daily_avg, 'EUR', true)}/день последние 7 дней vs ${formatAmount(velocity.period_1_daily_avg, 'EUR', true)}/день ранее)`,
+      `(${formatAmount(cv(velocity.period_2_daily_avg), displayCurrency, true)}/день последние 7 дней vs ${formatAmount(cv(velocity.period_1_daily_avg), displayCurrency, true)}/день ранее)`,
   );
 
   return lines.join('\n');
 }
 
-function formatStreak(streak: SpendingStreak): string {
+function formatStreak(streak: SpendingStreak, displayCurrency: CurrencyCode): string {
   const lines = ['=== СЕРИЯ ТРАТ ==='];
+  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
 
   const type = streak.streak_type === 'above_average' ? 'выше среднего' : 'ниже среднего';
   lines.push(`- ${streak.current_streak_days} дней подряд ${type}`);
   lines.push(
-    `- Среднее в серии: ${formatAmount(streak.avg_daily_during_streak, 'EUR', true)}/день vs общее среднее ${formatAmount(streak.overall_daily_average, 'EUR', true)}/день`,
+    `- Среднее в серии: ${formatAmount(cv(streak.avg_daily_during_streak), displayCurrency, true)}/день vs общее среднее ${formatAmount(cv(streak.overall_daily_average), displayCurrency, true)}/день`,
   );
 
   return lines.join('\n');

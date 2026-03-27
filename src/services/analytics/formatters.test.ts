@@ -160,7 +160,7 @@ describe('formatSnapshotForPrompt — burn rates section', () => {
         }),
       ],
     });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
 
     expect(output).toContain('BURN RATE');
     expect(output).toContain('food');
@@ -175,7 +175,7 @@ describe('formatSnapshotForPrompt — burn rates section', () => {
 
   test('empty burn rates — section omitted', () => {
     const snapshot = makeSnapshot({ burnRates: [] });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
     expect(output).not.toContain('BURN RATE');
   });
 });
@@ -191,7 +191,7 @@ describe('formatSnapshotForPrompt — trends section', () => {
         previous_total: 100,
       }),
     });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
     expect(output).toContain('↑');
     expect(output).toContain('+25.3%');
   });
@@ -206,7 +206,7 @@ describe('formatSnapshotForPrompt — trends section', () => {
         previous_total: 100,
       }),
     });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
     expect(output).toContain('↓');
     expect(output).toContain('-15.7%');
   });
@@ -225,7 +225,7 @@ describe('formatSnapshotForPrompt — anomalies section', () => {
         }),
       ],
     });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
 
     expect(output).toContain('АНОМАЛИИ');
     expect(output).toContain('taxi');
@@ -237,7 +237,7 @@ describe('formatSnapshotForPrompt — anomalies section', () => {
 
   test('empty anomalies — section omitted', () => {
     const snapshot = makeSnapshot({ anomalies: [] });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
     expect(output).not.toContain('АНОМАЛИИ');
   });
 });
@@ -253,7 +253,7 @@ describe('formatSnapshotForPrompt — projection section', () => {
         confidence: 'high',
       }),
     });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
 
     expect(output).toContain('ПРОГНОЗ');
     expect(output).toContain('1850.50');
@@ -281,7 +281,7 @@ describe('formatSnapshotForPrompt — full snapshot', () => {
         remaining_percent: 25,
       },
     });
-    const output = formatSnapshotForPrompt(snapshot);
+    const output = formatSnapshotForPrompt(snapshot, 'EUR');
 
     expect(output.length).toBeGreaterThan(0);
     expect(output).toContain('BURN RATE');

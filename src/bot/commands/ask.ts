@@ -242,13 +242,13 @@ async function sendSmartAdvice(
   try {
     const tier = trigger.tier;
     const severity = computeOverallSeverity(snapshot);
-    const snapshotText = formatSnapshotForPrompt(snapshot);
+
+    // Get group for custom prompt and display currency
+    const group = database.groups.findById(groupId);
+    const snapshotText = formatSnapshotForPrompt(snapshot, group?.default_currency ?? 'EUR');
 
     // Get recent advice topics for anti-repetition
     const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);
-
-    // Get group for custom prompt
-    const group = database.groups.findById(groupId);
 
     // Build tier-specific prompt
     const advicePrompt = buildTieredPrompt(tier, severity, snapshotText, recentTopics, trigger);

@@ -160,10 +160,13 @@ async function executeGetExpenses(
     }
 
     const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
+    const group = database.groups.findById(ctx.groupId);
+    const displayCurrency = group?.default_currency ?? 'EUR';
+    const totalDisplay = convertCurrency(totalEur, 'EUR', displayCurrency);
 
     const lines = [
       `Period: ${startDate} to ${endDate}`,
-      `Total: ${formatAmount(totalEur, 'EUR', true)}`,
+      `Total: ${formatAmount(totalDisplay, displayCurrency, true)}`,
       '',
     ];
     const sorted = Object.entries(totals).sort((a, b) => b[1].eur_total - a[1].eur_total);
@@ -171,8 +174,9 @@ async function executeGetExpenses(
       const amountParts = Object.entries(data.amounts)
         .map(([c, a]) => formatAmount(a, c as CurrencyCode, true))
         .join(', ');
+      const catDisplay = convertCurrency(data.eur_total, 'EUR', displayCurrency);
       lines.push(
-        `${cat}: ${formatAmount(data.eur_total, 'EUR', true)} (${data.count} ops) [${amountParts}]`,
+        `${cat}: ${formatAmount(catDisplay, displayCurrency, true)} (${data.count} ops) [${amountParts}]`,
       );
     }
 
@@ -252,13 +256,25 @@ async function executeGetBudgets(
     }
   }
 
-  lines.push('');
-  for (const [currency, { spent, limit }] of Object.entries(totalsByCurrency)) {
-    const pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-    lines.push(
-      `Total (${currency}): ${formatAmount(spent, currency as CurrencyCode, true)}/${formatAmount(limit, currency as CurrencyCode, true)} (${pct}%)`,
-    );
+  // Grand total in display currency
+  const group = database.groups.findById(ctx.groupId);
+  const displayCurrency = group?.default_currency ?? 'EUR';
+  let grandSpentEur = 0;
+  let grandLimitEur = 0;
+  for (const budget of budgets) {
+    const spentEur = spendingByCategory[budget.category] || 0;
+    grandSpentEur += spentEur;
+    grandLimitEur += convertCurrency(budget.limit_amount, budget.currency as CurrencyCode, 'EUR');
   }
+  const grandSpentDisplay = convertCurrency(grandSpentEur, 'EUR', displayCurrency);
+  const grandLimitDisplay = convertCurrency(grandLimitEur, 'EUR', displayCurrency);
+  const grandPct =
+    grandLimitDisplay > 0 ? Math.round((grandSpentDisplay / grandLimitDisplay) * 100) : 0;
+
+  lines.push('');
+  lines.push(
+    `Grand Total: ${formatAmount(grandSpentDisplay, displayCurrency, true)}/${formatAmount(grandLimitDisplay, displayCurrency, true)} (${grandPct}%)`,
+  );
 
   return { success: true, output: lines.join('\n') };
 }
