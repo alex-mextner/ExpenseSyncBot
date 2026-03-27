@@ -1,6 +1,6 @@
 import type { Bot } from 'gramio';
 import { createReceiptSummaryKeyboard } from '../../bot/keyboards';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { escapeHtml } from '../../utils/html';
@@ -275,7 +275,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
     // Get group default currency if AI didn't detect it
     const group = database.groups.findById(queueItem.group_id);
-    const currency = extractionResult.currency || group?.default_currency || 'EUR';
+    const currency = extractionResult.currency || group?.default_currency || BASE_CURRENCY;
 
     // Save receipt items to database
     saveExtractedItems(queueItemId, extractionResult.items, currency);
