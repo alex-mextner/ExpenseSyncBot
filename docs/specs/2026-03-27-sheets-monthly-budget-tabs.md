@@ -79,10 +79,17 @@ Steps:
 1. **Backup**: create a full copy of the Google Spreadsheet via Drive API
    (`files.copy`). Name: `"Expenses Tracker — backup YYYY-MM-DD"`. Log the backup URL.
 2. **Migrate**: read all rows from the "Budget" flat sheet
-   (Month | Category | Limit | Currency). Group rows by month. For each distinct month:
+   (Month | Category | Limit | Currency). Collect all distinct months and all distinct
+   categories. For each distinct month, for each category:
+   - If an explicit row exists for (month, category) → use it.
+   - Otherwise apply inheritance: find the latest month before this one that has an
+     explicit entry for this category → use that limit and currency (same logic as
+     the current `getLatestBudget` fallback).
+   - If no prior entry exists for the category at all → skip (don't create a row).
+   Then for each distinct month:
    - Derive the tab name (e.g. `"2026-03"` → `"Mar"`).
    - Create the monthly tab if it does not already exist.
-   - Write the Category / Limit / Currency rows into it.
+   - Write the resolved Category / Limit / Currency rows into it.
 3. **Delete** the old "Budget" flat sheet.
 4. Mark migration as done in DB (new boolean flag `budget_migrated` on `group_spreadsheets`
    row, or a row in the `migrations` table) so it never runs again.
