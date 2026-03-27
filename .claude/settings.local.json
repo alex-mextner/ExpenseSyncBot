@@ -21,7 +21,8 @@
       "Bash(node_modules/.bin/biome format:*)",
       "Bash(/Users/ultra/.bun/bin/bunx knip:*)",
       "Bash(./scripts/backup-db.sh 2>&1)",
-      "Bash(bunx knip:*)"
+      "Bash(bunx knip:*)",
+      "Bash(npm view:*)"
     ],
     "deny": [],
     "ask": []
