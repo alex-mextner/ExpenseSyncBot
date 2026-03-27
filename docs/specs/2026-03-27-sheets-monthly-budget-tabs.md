@@ -70,11 +70,24 @@ Category | Limit | Currency
 
 Unchanged — still named "Expenses" with the existing column structure.
 
-### Old "Budget" flat sheet
+### Migration of old "Budget" flat sheet
 
-Renamed to `Budget_old` the first time `syncBudgetsDiff()` runs on an existing group
-that still has a sheet named "Budget". Bot no longer reads or writes it.
-Not deleted — user keeps the data visible for reference.
+Runs once per group, triggered at bot startup (or on first `/budget` command) if a sheet named
+"Budget" still exists in the current year's spreadsheet.
+
+Steps:
+1. **Backup**: create a full copy of the Google Spreadsheet via Drive API
+   (`files.copy`). Name: `"Expenses Tracker — backup YYYY-MM-DD"`. Log the backup URL.
+2. **Migrate**: read all rows from the "Budget" flat sheet
+   (Month | Category | Limit | Currency). Group rows by month. For each distinct month:
+   - Derive the tab name (e.g. `"2026-03"` → `"Mar"`).
+   - Create the monthly tab if it does not already exist.
+   - Write the Category / Limit / Currency rows into it.
+3. **Delete** the old "Budget" flat sheet.
+4. Mark migration as done in DB (new boolean flag `budget_migrated` on `group_spreadsheets`
+   row, or a row in the `migrations` table) so it never runs again.
+
+If the backup step fails, the migration is aborted and the user is notified.
 
 ## New Functions in `sheets.ts`
 
@@ -105,6 +118,12 @@ createEmptyMonthTab(refreshToken, spreadsheetId, month: MonthAbbr): void
 
 Old Budget sheet functions (`createBudgetSheet`, `createEmptyBudgetSheet`, `readBudgetData`,
 `writeBudgetRow`, `hasBudgetSheet`) are removed.
+
+One-time migration function (in `sheets.ts` or a dedicated `budget-migration.ts`):
+```ts
+// Returns backup spreadsheet URL
+migrateBudgetSheetToMonthlyTabs(refreshToken, spreadsheetId): Promise<string>
+```
 
 ## Budget Sync Changes
 
@@ -171,5 +190,6 @@ Group that has a `google_refresh_token` AND at least one entry in `group_spreads
 | `src/services/google/sheets.ts` | Add month tab functions; remove Budget flat-sheet functions |
 | `src/bot/commands/budget.ts` | Use month tab functions; remove old Budget sheet calls |
 | `src/database/repositories/budget.repository.ts` | Remove `getLatestBudget` and fallback |
+| `src/services/google/budget-migration.ts` (new file) | One-time Budget→monthly tabs migration |
 | `src/bot/cron.ts` (new file) | Monthly auto-clone cron job |
-| `src/bot/index.ts` | Register cron |
+| `src/bot/index.ts` | Register cron; trigger migration on startup |
