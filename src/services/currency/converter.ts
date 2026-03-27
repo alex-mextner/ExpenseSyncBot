@@ -211,6 +211,9 @@ export function getAllExchangeRates(): Record<CurrencyCode, number> {
  * Preserves full decimal precision — no intermediate rounding.
  * Uses string fallback rates so Big.js receives exact decimal representations.
  * Intended for the AI calculator where intermediate rounding causes visible errors.
+ *
+ * NOTE: Always uses FALLBACK_RATES_STR (hardcoded). Does NOT use live API rates,
+ * even if cachedRates is populated. Use convertCurrency() when live rates matter.
  */
 export function convertCurrencyBig(amount: Big, from: CurrencyCode, to: CurrencyCode): Big {
   if (from === to) return amount;

@@ -140,6 +140,17 @@ describe('evaluateCurrencyExpression', () => {
     expect(r?.hasCurrency).toBe(true);
   });
 
+  // Multi-operand cross-currency: post-conversion strings are 24+ chars each;
+  // the evaluator must not reject them on the length check
+  test('100 EUR + 100 EUR + 100 EUR in USD → three-operand cross-currency works', () => {
+    const r = evaluateCurrencyExpression('100 EUR + 100 EUR + 100 EUR', 'USD');
+    // All three are the same currency, so result = 3 × (100 EUR in USD)
+    const singleInUSD = convertCurrency(100, 'EUR', 'USD');
+    expect(r).not.toBeNull();
+    expect(r?.hasCurrency).toBe(true);
+    expect(r?.value.toNumber()).toBeCloseTo(singleInUSD * 3, 0);
+  });
+
   // Large numbers — no upper limit, single-currency conversion still works
   test('large single currency amount → converted, not null', () => {
     const r = evaluateCurrencyExpression('99999999 USD', 'USD');

@@ -116,8 +116,10 @@ export function evaluateMathExpressionBig(expr: string): Big | null {
   // Remove spaces
   const cleaned = expr.replace(/\s+/g, '');
 
-  // Safety: reject overly long expressions
-  if (cleaned.length > 50) return null;
+  // Safety: reject overly long expressions.
+  // 500 chars accommodates post-currency-conversion strings (full-precision Big decimals,
+  // e.g. "107.526881720430107526..."), which can be 24+ chars per token.
+  if (cleaned.length > 500) return null;
 
   // Validate: only digits, dots, commas, and operators +*/×
   // Must have at least one operator (single numbers are not expressions)
