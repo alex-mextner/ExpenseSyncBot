@@ -714,7 +714,7 @@ describe('executeDeleteBudget', () => {
   test('rejects missing category', async () => {
     const result = await executeTool('delete_budget', {}, ctx);
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Category is required');
+    expect(result.error).toContain('category is required');
   });
 });
 
