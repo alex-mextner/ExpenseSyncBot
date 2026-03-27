@@ -124,4 +124,41 @@ describe('BankTransactionsRepository', () => {
     repo.setEditInProgress(tx.id, false);
     expect(repo.findById(tx.id, groupId)?.edit_in_progress).toBe(0);
   });
+
+  test('confirm-claim transaction prevents duplicate expense on concurrent calls (TOCTOU)', () => {
+    const tx = repo.insertIgnore({ ...baseTx, connection_id: connectionId });
+    expect(tx).not.toBeNull();
+    if (!tx) return;
+
+    // Mirrors the handleBankConfirmCallback atomic claim pattern.
+    const claimTx = db.transaction(() => {
+      const freshTx = repo.findById(tx.id, groupId);
+      if (!freshTx) return null;
+      if (freshTx.status !== 'pending') return false as const;
+      repo.updateStatus(tx.id, groupId, 'confirmed');
+      return freshTx;
+    });
+
+    // First caller claims the transaction successfully.
+    const first = claimTx();
+    expect(first).not.toBeNull();
+    expect(first).not.toBe(false);
+    expect(first !== null && first !== false && first.id).toBe(tx.id);
+
+    // Second caller sees status='confirmed' — returns false, no duplicate.
+    const second = claimTx();
+    expect(second).toBe(false);
+  });
+
+  test('confirm-claim transaction returns null for nonexistent tx', () => {
+    const claimTx = db.transaction(() => {
+      const freshTx = repo.findById(999999, groupId);
+      if (!freshTx) return null;
+      if (freshTx.status !== 'pending') return false as const;
+      repo.updateStatus(999999, groupId, 'confirmed');
+      return freshTx;
+    });
+
+    expect(claimTx()).toBeNull();
+  });
 });

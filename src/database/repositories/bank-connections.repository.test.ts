@@ -100,4 +100,27 @@ describe('BankConnectionsRepository', () => {
     repo.deleteStaleSetup(groupId);
     expect(repo.findById(conn.id)).not.toBeNull();
   });
+
+  test('consecutive_failures resets to 0 after disconnect and reconnect', () => {
+    const conn = repo.create({
+      group_id: groupId,
+      bank_name: 'tbc',
+      display_name: 'TBC Bank',
+      status: 'active',
+    });
+    repo.update(conn.id, { consecutive_failures: 3 });
+    expect(repo.findById(conn.id)?.consecutive_failures).toBe(3);
+
+    // Disconnect: row is deleted.
+    repo.deleteById(conn.id);
+
+    // Reconnect: brand new row — counter starts at 0.
+    const newConn = repo.create({
+      group_id: groupId,
+      bank_name: 'tbc',
+      display_name: 'TBC Bank',
+      status: 'active',
+    });
+    expect(newConn.consecutive_failures).toBe(0);
+  });
 });
