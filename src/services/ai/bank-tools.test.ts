@@ -7,7 +7,7 @@ mock.module('../../database', () => ({
   database: {
     bankAccounts: { findByGroupId: () => [] },
     bankTransactions: { findByGroupId: () => [], findUnmatched: () => [] },
-    bankConnections: { findById: () => null },
+    bankConnections: { findById: () => null, findActiveByGroupId: () => [] },
     expenses: { findByDateRange: () => [] },
   },
 }));

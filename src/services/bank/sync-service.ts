@@ -1,6 +1,8 @@
-// Bank sync service — runs as a separate PM2 process.
-// Polls bank APIs every 30 min, upserts accounts/transactions, sends confirmation cards.
+// Bank sync service — periodic sync via node-cron every 30 min.
+// Upserts accounts/transactions from connected banks, sends confirmation cards.
+
 import { subDays } from 'date-fns';
+import cron from 'node-cron';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
@@ -8,51 +10,73 @@ import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
+import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
 import { preFillTransaction } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
 import { createZenMoneyShim } from './runtime';
-import { sendMessage } from './telegram-sender';
+import { editMessageText, sendMessage } from './telegram-sender';
 
 const logger = createLogger('sync-service');
 
-const SYNC_INTERVAL_MS = 30 * 60 * 1000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 // Mutex that serializes ZenPlugin execution — globalThis.ZenMoney is not concurrency-safe.
 let shimMutex: Promise<void> = Promise.resolve();
 
+// Per-connection lock — prevents overlapping sync cycles for the same connection.
+const syncingConnections = new Set<number>();
+
 export function startSyncService(): void {
+  // Run initial sync for all existing active connections immediately on startup.
   const connections = database.bankConnections.findAllActive();
-  logger.info({ count: connections.length }, 'Bank sync service starting');
-
+  logger.info({ count: connections.length }, 'Bank sync service starting — running initial sync');
   for (const conn of connections) {
-    scheduleConnection(conn);
-  }
-}
-
-function scheduleConnection(conn: BankConnection): void {
-  const initialDelayMs = (conn.id % 30) * 60 * 1000;
-
-  logger.info(
-    { connectionId: conn.id, bank: conn.bank_name, delayMin: conn.id % 30 },
-    'Scheduling connection',
-  );
-
-  setTimeout(() => {
     runSyncCycle(conn.id).catch((err) =>
-      logger.error({ err, connectionId: conn.id }, 'Unhandled sync cycle error'),
+      logger.error({ err, connectionId: conn.id }, 'Initial startup sync failed'),
     );
+  }
 
-    setInterval(() => {
+  // Schedule periodic sync every 30 min.
+  // Queries active connections at each tick so new connections are picked up automatically.
+  cron.schedule('*/30 * * * *', () => {
+    const active = database.bankConnections.findAllActive();
+    logger.info({ count: active.length }, 'Cron sync tick');
+    for (const conn of active) {
       runSyncCycle(conn.id).catch((err) =>
         logger.error({ err, connectionId: conn.id }, 'Unhandled sync cycle error'),
       );
-    }, SYNC_INTERVAL_MS);
-  }, initialDelayMs);
+    }
+  });
+
+  logger.info('Bank sync cron scheduled (every 30 min)');
+}
+
+export function triggerManualSync(connectionId: number): Promise<void> {
+  return runSyncCycle(connectionId);
+}
+
+/**
+ * Called after a new bank connection is activated during runtime.
+ * Runs the initial sync immediately; subsequent syncs are handled by the cron job.
+ */
+export function activateNewConnection(connectionId: number): void {
+  const conn = database.bankConnections.findById(connectionId);
+  if (!conn || conn.status !== 'active') return;
+
+  logger.info({ connectionId, bank: conn.bank_name }, 'New connection — running initial sync');
+
+  runSyncCycle(connectionId).catch((err) =>
+    logger.error({ err, connectionId }, 'Initial sync failed'),
+  );
 }
 
 async function runSyncCycle(connectionId: number): Promise<void> {
+  if (syncingConnections.has(connectionId)) {
+    logger.info({ connectionId }, 'Sync already in progress — skipping');
+    return;
+  }
+
   const conn = database.bankConnections.findById(connectionId);
   if (!conn || conn.status !== 'active') return;
 
@@ -62,6 +86,7 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     return;
   }
 
+  syncingConnections.add(connectionId);
   logger.info({ connectionId, bank: conn.bank_name }, 'Starting sync cycle');
 
   try {
@@ -208,8 +233,26 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       { connectionId, accounts: accounts.length, transactions: transactions.length },
       'Sync cycle completed',
     );
+
+    // Update panel message with fresh status
+    const freshConn = database.bankConnections.findById(connectionId);
+    if (freshConn?.panel_message_id && group) {
+      const panelText = buildBankStatusText(freshConn);
+      const keyboard = buildBankManageKeyboard(freshConn);
+      await editMessageText(
+        env.BOT_TOKEN,
+        group.telegram_group_id,
+        freshConn.panel_message_id,
+        panelText,
+        {
+          reply_markup: { inline_keyboard: keyboard },
+        },
+      ).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
+    }
   } catch (error) {
     await handleSyncError(connectionId, conn, error);
+  } finally {
+    syncingConnections.delete(connectionId);
   }
 }
 

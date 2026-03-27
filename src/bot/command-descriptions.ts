@@ -20,6 +20,7 @@ export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'advice', description: 'AI-анализ расходов с советами' },
   { command: 'prompt', description: 'Настроить AI-промпт группы' },
   { command: 'topic', description: 'Привязать бота к топику форума' },
+  { command: 'bank', description: 'Импорт транзакций из банка' },
 ];
 
 /**

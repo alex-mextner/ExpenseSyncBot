@@ -715,6 +715,23 @@ function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContex
       })
     : accounts;
 
+  if (filtered.length === 0) {
+    const connections = database.bankConnections.findActiveByGroupId(ctx.groupId);
+    if (connections.length === 0) {
+      return {
+        success: true,
+        data: [],
+        summary:
+          'No bank connections configured. Use /bank to connect a bank (NOT /connect — that is for Google Sheets).',
+      };
+    }
+    return {
+      success: true,
+      data: [],
+      summary: `Banks are connected (${connections.map((c) => c.display_name).join(', ')}) but the first sync has not completed yet. Balances will appear after sync. Do NOT say the bank is not connected.`,
+    };
+  }
+
   return {
     success: true,
     data: filtered.map((a) => ({

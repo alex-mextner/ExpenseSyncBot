@@ -5,9 +5,15 @@ import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import {
+  handleBankAddCallback,
   handleBankConfirmCallback,
+  handleBankDisconnectCallback,
+  handleBankDisconnectCancelCallback,
+  handleBankDisconnectConfirmCallback,
   handleBankEditCallback,
+  handleBankSettingsCallback,
   handleBankSetupCallback,
+  handleBankSyncCallback,
 } from '../commands/bank';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
@@ -205,6 +211,65 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankSetupCallback(ctx, bankKey, chatId);
+        break;
+      }
+
+      case 'bank_settings': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSettingsCallback(ctx, connId, chatId);
+        break;
+      }
+
+      case 'bank_sync': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSyncCallback(ctx, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect_confirm': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectConfirmCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect_cancel': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectCancelCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_add': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAddCallback(ctx, chatId);
         break;
       }
 
