@@ -1,6 +1,6 @@
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
-import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -425,7 +425,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
       budgetsByCurrency[currency] = { totalBudget: 0, totalSpent: 0 };
     }
     const spentEur = categorySpending[budget.category] || 0;
-    const spentInCurrency = convertCurrency(spentEur, 'EUR', currency);
+    const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
     budgetsByCurrency[currency].totalBudget += budget.limit_amount;
     budgetsByCurrency[currency].totalSpent += spentInCurrency;
@@ -444,7 +444,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
   // Sort budgets by percentage descending (exceeded first)
   const budgetProgress = budgets.map((budget) => {
     const spentEur = categorySpending[budget.category] || 0;
-    const spent = convertCurrency(spentEur, 'EUR', budget.currency);
+    const spent = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
     const percentage =
       budget.limit_amount > 0 ? Math.round((spent / budget.limit_amount) * 100) : 0;
 

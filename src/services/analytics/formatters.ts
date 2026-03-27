@@ -1,4 +1,4 @@
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { convertCurrency, formatAmount } from '../currency/converter';
 import type {
   BudgetBurnRate,
@@ -24,7 +24,7 @@ export function formatSnapshotForPrompt(
 
   // Section 1: Budget Burn Rates
   if (snapshot.burnRates.length > 0) {
-    sections.push(formatBurnRates(snapshot.burnRates));
+    sections.push(formatBurnRates(snapshot.burnRates, displayCurrency));
   }
 
   // Section 2: Budget Utilization
@@ -84,7 +84,7 @@ export function computeOverallSeverity(snapshot: FinancialSnapshot): OverallSeve
   return 'good';
 }
 
-function formatBurnRates(burnRates: BudgetBurnRate[]): string {
+function formatBurnRates(burnRates: BudgetBurnRate[], displayCurrency: CurrencyCode): string {
   const lines = ['=== BURN RATE (скорость сжигания бюджета) ==='];
 
   for (const br of burnRates) {
@@ -98,11 +98,13 @@ function formatBurnRates(burnRates: BudgetBurnRate[]): string {
             ? 'ВНИМАНИЕ'
             : 'ОК';
 
-    const cur = br.currency as CurrencyCode;
+    // br amounts are in br.currency; convert to displayCurrency for consistent AI context
+    const budgetCur = br.currency as CurrencyCode;
+    const cv = (v: number) => convertCurrency(v, budgetCur, displayCurrency);
     lines.push(
-      `- ${br.category}: ТОЧНО ${formatAmount(br.spent, cur, true)} потрачено из ${formatAmount(br.budget_limit, cur, true)} (${percent}%). ` +
-        `Темп: ${formatAmount(br.daily_burn_rate, cur, true)}/день. ` +
-        `Прогноз к концу месяца: ${formatAmount(br.projected_total, cur, true)}. ` +
+      `- ${br.category}: ТОЧНО ${formatAmount(cv(br.spent), displayCurrency, true)} потрачено из ${formatAmount(cv(br.budget_limit), displayCurrency, true)} (${percent}%). ` +
+        `Темп: ${formatAmount(cv(br.daily_burn_rate), displayCurrency, true)}/день. ` +
+        `Прогноз к концу месяца: ${formatAmount(cv(br.projected_total), displayCurrency, true)}. ` +
         `Запас: ${br.runway_days < 999 ? `${br.runway_days.toFixed(0)} дней` : '∞'}. ` +
         `[${statusLabel}]`,
     );
@@ -113,9 +115,9 @@ function formatBurnRates(burnRates: BudgetBurnRate[]): string {
 
 function formatBudgetUtilization(util: BudgetUtilization, displayCurrency: CurrencyCode): string {
   const lines = ['=== ИСПОЛЬЗОВАНИЕ БЮДЖЕТА ==='];
-  const totalBudgetDisplay = convertCurrency(util.total_budget, 'EUR', displayCurrency);
-  const totalSpentDisplay = convertCurrency(util.total_spent, 'EUR', displayCurrency);
-  const remainingDisplay = convertCurrency(util.remaining, 'EUR', displayCurrency);
+  const totalBudgetDisplay = convertCurrency(util.total_budget, BASE_CURRENCY, displayCurrency);
+  const totalSpentDisplay = convertCurrency(util.total_spent, BASE_CURRENCY, displayCurrency);
+  const remainingDisplay = convertCurrency(util.remaining, BASE_CURRENCY, displayCurrency);
   lines.push(`- Общий бюджет: ${formatAmount(totalBudgetDisplay, displayCurrency, true)}`);
   lines.push(
     `- Потрачено: ${formatAmount(totalSpentDisplay, displayCurrency, true)} (${util.utilization_percent.toFixed(1)}%)`,
@@ -139,7 +141,7 @@ function formatTrends(
   displayCurrency: CurrencyCode,
 ): string {
   const lines = ['=== ТРЕНДЫ ==='];
-  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
+  const cv = (eur: number) => convertCurrency(eur, BASE_CURRENCY, displayCurrency);
 
   // Week
   const weekArrow = weekTrend.direction === 'up' ? '↑' : weekTrend.direction === 'down' ? '↓' : '→';
@@ -177,8 +179,8 @@ function formatAnomalies(anomalies: CategoryAnomaly[], displayCurrency: Currency
     const severityLabel =
       a.severity === 'extreme' ? 'EXTREME' : a.severity === 'significant' ? 'SIGNIFICANT' : 'MILD';
 
-    const currentDisplay = convertCurrency(a.current_month_total, 'EUR', displayCurrency);
-    const avgDisplay = convertCurrency(a.avg_3_month, 'EUR', displayCurrency);
+    const currentDisplay = convertCurrency(a.current_month_total, BASE_CURRENCY, displayCurrency);
+    const avgDisplay = convertCurrency(a.avg_3_month, BASE_CURRENCY, displayCurrency);
     lines.push(
       `- ${a.category}: ${formatAmount(currentDisplay, displayCurrency, true)} за текущий месяц vs среднее ${formatAmount(avgDisplay, displayCurrency, true)}/мес за 3 месяца. ` +
         `Отклонение: ${a.deviation_ratio.toFixed(2)}x (траты в ${a.deviation_ratio.toFixed(1)} раза выше среднего за 3 мес). [${severityLabel}]`,
@@ -190,7 +192,7 @@ function formatAnomalies(anomalies: CategoryAnomaly[], displayCurrency: Currency
 
 function formatProjection(projection: MonthlyProjection, displayCurrency: CurrencyCode): string {
   const lines = ['=== ПРОГНОЗ НА КОНЕЦ МЕСЯЦА ==='];
-  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
+  const cv = (eur: number) => convertCurrency(eur, BASE_CURRENCY, displayCurrency);
 
   const confidenceLabel =
     projection.confidence === 'low'
@@ -225,7 +227,7 @@ function formatProjection(projection: MonthlyProjection, displayCurrency: Curren
 
 function formatVelocity(velocity: SpendingVelocity, displayCurrency: CurrencyCode): string {
   const lines = ['=== СКОРОСТЬ ТРАТ ==='];
-  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
+  const cv = (eur: number) => convertCurrency(eur, BASE_CURRENCY, displayCurrency);
 
   const trend = velocity.trend === 'accelerating' ? 'Ускорение' : 'Замедление';
   lines.push(
@@ -238,7 +240,7 @@ function formatVelocity(velocity: SpendingVelocity, displayCurrency: CurrencyCod
 
 function formatStreak(streak: SpendingStreak, displayCurrency: CurrencyCode): string {
   const lines = ['=== СЕРИЯ ТРАТ ==='];
-  const cv = (eur: number) => convertCurrency(eur, 'EUR', displayCurrency);
+  const cv = (eur: number) => convertCurrency(eur, BASE_CURRENCY, displayCurrency);
 
   const type = streak.streak_type === 'above_average' ? 'выше среднего' : 'ниже среднего';
   lines.push(`- ${streak.current_streak_days} дней подряд ${type}`);

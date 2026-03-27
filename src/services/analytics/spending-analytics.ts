@@ -1,5 +1,5 @@
 import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency } from '../currency/converter';
 import type {
@@ -82,7 +82,7 @@ export class SpendingAnalytics {
       const currency = budget.currency as CurrencyCode;
       const spentEur = categorySpentEur[budget.category] || 0;
       // Convert EUR spent to budget currency for comparison
-      const spent = convertCurrency(spentEur, 'EUR', currency);
+      const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
       const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
       const projectedTotal = dailyBurnRate * daysInMonth;
@@ -428,7 +428,11 @@ export class SpendingAnalytics {
     // Sum all budgets in EUR
     let totalBudgetEur = 0;
     for (const budget of budgets) {
-      const limitEur = convertCurrency(budget.limit_amount, budget.currency as CurrencyCode, 'EUR');
+      const limitEur = convertCurrency(
+        budget.limit_amount,
+        budget.currency as CurrencyCode,
+        BASE_CURRENCY,
+      );
       totalBudgetEur += limitEur;
     }
 
@@ -585,7 +589,11 @@ export class SpendingAnalytics {
       let budgetLimitEur: number | null = null;
       let willExceed = false;
       if (budget) {
-        budgetLimitEur = convertCurrency(budget.limit, budget.currency as CurrencyCode, 'EUR');
+        budgetLimitEur = convertCurrency(
+          budget.limit,
+          budget.currency as CurrencyCode,
+          BASE_CURRENCY,
+        );
         willExceed = catProjected > budgetLimitEur;
       }
 

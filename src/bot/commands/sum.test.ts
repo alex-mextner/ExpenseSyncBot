@@ -121,4 +121,14 @@ describe('buildBudgetTotals — cross-currency totals in display currency', () =
     expect(totals.totalSpentDisplay).toBe(0);
     expect(totals.percentage).toBe(0);
   });
+
+  it('zero limit_amount returns 0% without division by zero', () => {
+    const totals = buildBudgetTotals(
+      { Еда: 50 },
+      [{ category: 'Еда', limit_amount: 0, currency: 'EUR' }],
+      'EUR',
+    );
+    expect(totals.percentage).toBe(0);
+    expect(totals.totalBudgetDisplay).toBe(0);
+  });
 });

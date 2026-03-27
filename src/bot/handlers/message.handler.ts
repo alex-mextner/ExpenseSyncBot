@@ -1,5 +1,5 @@
 import { format } from 'date-fns';
-import { type CurrencyCode, MESSAGES } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -419,7 +419,7 @@ async function checkBudgetLimit(
 
   if (isExceeded || isWarning) {
     const emoji = getCategoryEmoji(category);
-    const budgetCurrency = budget.currency as import('../../config/constants').CurrencyCode;
+    const budgetCurrency = budget.currency as CurrencyCode;
     let message = '';
 
     if (isExceeded) {
@@ -713,7 +713,7 @@ export function buildBudgetAlertStatus(
   spentEur: number,
   budget: { limit_amount: number; currency: string },
 ): { spentInCurrency: number; percentage: number; isExceeded: boolean; isWarning: boolean } {
-  const spentInCurrency = convertCurrency(spentEur, 'EUR', budget.currency as CurrencyCode);
+  const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency as CurrencyCode);
   const percentage =
     budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
   const isExceeded = spentInCurrency > budget.limit_amount;

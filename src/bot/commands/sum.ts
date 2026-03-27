@@ -1,6 +1,6 @@
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { createBudgetSheet, hasBudgetSheet } from '../../services/google/sheets';
@@ -113,9 +113,13 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
 
   // Convert EUR totals to group's display currency for user output
   const displayCurrency = group.default_currency;
-  const currentMonthTotalDisplay = convertCurrency(currentMonthTotal, 'EUR', displayCurrency);
-  const averagePerMonthDisplay = convertCurrency(averagePerMonth, 'EUR', displayCurrency);
-  const differenceDisplay = convertCurrency(difference, 'EUR', displayCurrency);
+  const currentMonthTotalDisplay = convertCurrency(
+    currentMonthTotal,
+    BASE_CURRENCY,
+    displayCurrency,
+  );
+  const averagePerMonthDisplay = convertCurrency(averagePerMonth, BASE_CURRENCY, displayCurrency);
+  const differenceDisplay = convertCurrency(difference, BASE_CURRENCY, displayCurrency);
 
   // Calculate category statistics for current month
   const categoryTotals: Record<string, number> = {};
@@ -199,7 +203,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     const above = categoryDifferences.filter((c) => c.percent > 5);
     if (above.length > 0) {
       for (const { category, diff, percent } of above.slice(0, 3)) {
-        const diffDisplay = convertCurrency(diff, 'EUR', displayCurrency);
+        const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
         message += `  • ${category}: +${formatAmount(diffDisplay, displayCurrency)} (+${percent.toFixed(1)}%)\n`;
       }
     } else {
@@ -212,7 +216,7 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
       // Sort by percent ascending (most negative first)
       below.sort((a, b) => a.percent - b.percent);
       for (const { category, diff, percent } of below.slice(0, 3)) {
-        const diffDisplay = convertCurrency(diff, 'EUR', displayCurrency);
+        const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
         message += `  • ${category}: ${formatAmount(diffDisplay, displayCurrency)} (${percent.toFixed(1)}%)\n`;
       }
     } else {
@@ -338,7 +342,7 @@ export function buildBudgetProgressEntry(
   is_warning: boolean;
 } {
   const currency = budget.currency as CurrencyCode;
-  const spentInCurrency = convertCurrency(spentEur, 'EUR', currency);
+  const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
   const percentage =
     budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
   return {
@@ -365,10 +369,15 @@ export function buildBudgetTotals(
   let totalBudgetEur = 0;
   for (const budget of budgets) {
     totalSpentEur += categorySpendingEur[budget.category] ?? 0;
-    totalBudgetEur += convertCurrency(budget.limit_amount, budget.currency as CurrencyCode, 'EUR');
+    totalBudgetEur += convertCurrency(
+      budget.limit_amount,
+      budget.currency as CurrencyCode,
+      BASE_CURRENCY,
+    );
   }
-  const totalSpentDisplay = convertCurrency(totalSpentEur, 'EUR', displayCurrency);
-  const totalBudgetDisplay = convertCurrency(totalBudgetEur, 'EUR', displayCurrency);
+  const totalSpentDisplay = convertCurrency(totalSpentEur, BASE_CURRENCY, displayCurrency);
+  const totalBudgetDisplay = convertCurrency(totalBudgetEur, BASE_CURRENCY, displayCurrency);
+  // Guard on display value: if all budgets have limit_amount=0, totalBudgetDisplay is 0 → return 0% not NaN
   const percentage =
     totalBudgetDisplay > 0 ? Math.round((totalSpentDisplay / totalBudgetDisplay) * 100) : 0;
   return { totalSpentDisplay, totalBudgetDisplay, percentage };

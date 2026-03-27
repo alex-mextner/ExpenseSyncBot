@@ -113,6 +113,9 @@ export const SUPPORTED_CURRENCIES = [
 
 export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
 
+/** Internal calculation base: all expenses are stored as eur_amount, conversions go through EUR */
+export const BASE_CURRENCY = 'EUR' as const satisfies CurrencyCode;
+
 /**
  * Currency symbols for display
  */

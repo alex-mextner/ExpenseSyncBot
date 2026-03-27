@@ -1,5 +1,5 @@
 import { InferenceClient } from '@huggingface/inference';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import type { ReceiptItem } from '../../database/types';
 import { formatAmount } from '../../services/currency/converter';
@@ -98,7 +98,7 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
       items: catItems.map((i) => ({ name: i.name_ru, total: i.total })),
     })),
     totalAmount: items.reduce((sum, i) => sum + i.total, 0),
-    currency: items[0]?.currency || 'EUR',
+    currency: items[0]?.currency || BASE_CURRENCY,
   };
 }
 

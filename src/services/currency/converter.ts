@@ -1,5 +1,5 @@
 import Big from 'big.js';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('converter');
@@ -160,7 +160,7 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
  * Convert amount to EUR
  */
 export function convertToEUR(amount: number, fromCurrency: CurrencyCode): number {
-  if (fromCurrency === 'EUR') {
+  if (fromCurrency === BASE_CURRENCY) {
     return amount;
   }
 
@@ -294,7 +294,7 @@ export function formatExchangeRatesForAI(): string {
   };
 
   for (const currency of Object.keys(rates) as CurrencyCode[]) {
-    if (currency !== 'EUR') {
+    if (currency !== BASE_CURRENCY) {
       lines.push(formatRate(currency));
     }
   }

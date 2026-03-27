@@ -1,4 +1,4 @@
-import { CURRENCY_SYMBOLS, type CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, CURRENCY_SYMBOLS, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import type { Ctx } from '../types';
@@ -44,7 +44,7 @@ export async function handleStatsCommand(ctx: Ctx['Command']): Promise<void> {
     message += `• ${formatAmount(total, currency as CurrencyCode)}\n`;
   }
 
-  const totalDisplay = convertCurrency(totalEUR, 'EUR', group.default_currency);
+  const totalDisplay = convertCurrency(totalEUR, BASE_CURRENCY, group.default_currency);
   message += `\n**Всего:** ${formatAmount(totalDisplay, group.default_currency)}\n`;
 
   message += `\n**Последние ${recentExpenses.length} расходов:**\n`;

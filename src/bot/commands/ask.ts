@@ -4,6 +4,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import { BASE_CURRENCY } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
@@ -245,7 +246,10 @@ async function sendSmartAdvice(
 
     // Get group for custom prompt and display currency
     const group = database.groups.findById(groupId);
-    const snapshotText = formatSnapshotForPrompt(snapshot, group?.default_currency ?? 'EUR');
+    const snapshotText = formatSnapshotForPrompt(
+      snapshot,
+      group?.default_currency ?? BASE_CURRENCY,
+    );
 
     // Get recent advice topics for anti-repetition
     const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);

@@ -4,7 +4,7 @@
  */
 import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
-import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
@@ -161,8 +161,8 @@ async function executeGetExpenses(
 
     const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
     const group = database.groups.findById(ctx.groupId);
-    const displayCurrency = group?.default_currency ?? 'EUR';
-    const totalDisplay = convertCurrency(totalEur, 'EUR', displayCurrency);
+    const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
+    const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
 
     const lines = [
       `Period: ${startDate} to ${endDate}`,
@@ -174,7 +174,7 @@ async function executeGetExpenses(
       const amountParts = Object.entries(data.amounts)
         .map(([c, a]) => formatAmount(a, c as CurrencyCode, true))
         .join(', ');
-      const catDisplay = convertCurrency(data.eur_total, 'EUR', displayCurrency);
+      const catDisplay = convertCurrency(data.eur_total, BASE_CURRENCY, displayCurrency);
       lines.push(
         `${cat}: ${formatAmount(catDisplay, displayCurrency, true)} (${data.count} ops) [${amountParts}]`,
       );
@@ -195,7 +195,7 @@ async function executeGetExpenses(
   ];
   for (const e of pageItems) {
     lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, 'EUR', true)}) | ${e.comment.trim() || '(no comment)'}`,
+      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${e.comment.trim() || '(no comment)'}`,
     );
   }
 
@@ -237,7 +237,7 @@ async function executeGetBudgets(
 
   for (const budget of budgets) {
     const spentEur = spendingByCategory[budget.category] || 0;
-    const spentInCurrency = convertCurrency(spentEur, 'EUR', budget.currency);
+    const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
     const remaining = budget.limit_amount - spentInCurrency;
     const percent =
       budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
@@ -258,16 +258,20 @@ async function executeGetBudgets(
 
   // Grand total in display currency
   const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = group?.default_currency ?? 'EUR';
+  const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
   let grandSpentEur = 0;
   let grandLimitEur = 0;
   for (const budget of budgets) {
     const spentEur = spendingByCategory[budget.category] || 0;
     grandSpentEur += spentEur;
-    grandLimitEur += convertCurrency(budget.limit_amount, budget.currency as CurrencyCode, 'EUR');
+    grandLimitEur += convertCurrency(
+      budget.limit_amount,
+      budget.currency as CurrencyCode,
+      BASE_CURRENCY,
+    );
   }
-  const grandSpentDisplay = convertCurrency(grandSpentEur, 'EUR', displayCurrency);
-  const grandLimitDisplay = convertCurrency(grandLimitEur, 'EUR', displayCurrency);
+  const grandSpentDisplay = convertCurrency(grandSpentEur, BASE_CURRENCY, displayCurrency);
+  const grandLimitDisplay = convertCurrency(grandLimitEur, BASE_CURRENCY, displayCurrency);
   const grandPct =
     grandLimitDisplay > 0 ? Math.round((grandSpentDisplay / grandLimitDisplay) * 100) : 0;
 
@@ -443,7 +447,7 @@ async function executeAddExpense(
 
     return {
       success: true,
-      output: `Expense added: ${formatAmount(amount, currency, true)} (EUR ${formatAmount(eurAmount, 'EUR', true)}) in ${category} on ${date}. ID: ${expense.id}`,
+      output: `Expense added: ${formatAmount(amount, currency, true)} (EUR ${formatAmount(eurAmount, BASE_CURRENCY, true)}) in ${category} on ${date}. ID: ${expense.id}`,
     };
   } catch (err) {
     logger.error({ err: err }, '[TOOL] Failed to add expense');
@@ -634,7 +638,7 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
     return { success: false, error: 'Group not found' };
   }
   const rawCurrency =
-    (input['target_currency'] as string | undefined) || group.default_currency || 'EUR';
+    (input['target_currency'] as string | undefined) || group.default_currency || BASE_CURRENCY;
   if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode)) {
     return { success: false, error: `Unknown currency: "${rawCurrency}"` };
   }
