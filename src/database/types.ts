@@ -283,3 +283,148 @@ export interface CreateExpenseItemData {
   price: number;
   total: number;
 }
+
+// ─── Bank Integration Types ─────────────────────────────────────────────────
+
+export interface BankConnection {
+  id: number;
+  group_id: number;
+  bank_name: string;
+  display_name: string;
+  status: 'setup' | 'active' | 'disconnected';
+  consecutive_failures: number;
+  last_sync_at: string | null;
+  last_error: string | null;
+  panel_message_id: number | null;
+  panel_message_thread_id: number | null;
+  created_at: string;
+}
+
+export interface CreateBankConnectionData {
+  group_id: number;
+  bank_name: string;
+  display_name: string;
+  status?: BankConnection['status'];
+}
+
+export interface UpdateBankConnectionData {
+  status?: BankConnection['status'];
+  consecutive_failures?: number;
+  last_sync_at?: string | null;
+  last_error?: string | null;
+  panel_message_id?: number | null;
+  panel_message_thread_id?: number | null;
+}
+
+export interface BankCredential {
+  connection_id: number;
+  encrypted_data: string;
+}
+
+export interface BankAccount {
+  id: number;
+  connection_id: number;
+  account_id: string;
+  title: string;
+  balance: number;
+  currency: string;
+  type: string | null;
+  updated_at: string;
+}
+
+export interface UpsertBankAccountData {
+  connection_id: number;
+  account_id: string;
+  title: string;
+  balance: number;
+  currency: string;
+  type?: string | null;
+}
+
+export interface BankTransaction {
+  id: number;
+  connection_id: number;
+  external_id: string;
+  date: string;
+  amount: number;
+  sign_type: 'debit' | 'credit' | 'reversal';
+  currency: string;
+  merchant: string | null;
+  merchant_normalized: string | null;
+  mcc: number | null;
+  raw_data: string;
+  matched_expense_id: number | null;
+  telegram_message_id: number | null;
+  edit_in_progress: number;
+  status: 'pending' | 'confirmed' | 'skipped' | 'skipped_reversal';
+  created_at: string;
+}
+
+export interface CreateBankTransactionData {
+  connection_id: number;
+  external_id: string;
+  date: string;
+  amount: number;
+  sign_type: BankTransaction['sign_type'];
+  currency: string;
+  merchant?: string | null;
+  merchant_normalized?: string | null;
+  mcc?: number | null;
+  raw_data: string;
+  status: BankTransaction['status'];
+}
+
+export interface BankTransactionFilters {
+  period?: string;
+  bank_name?: string;
+  status?: BankTransaction['status'];
+}
+
+export interface MerchantRule {
+  id: number;
+  pattern: string;
+  flags: string;
+  replacement: string;
+  category: string | null;
+  confidence: number;
+  status: 'pending_review' | 'approved' | 'rejected';
+  source: 'ai' | 'manual';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMerchantRuleData {
+  pattern: string;
+  flags?: string;
+  replacement: string;
+  category?: string | null;
+  confidence?: number;
+  source?: MerchantRule['source'];
+}
+
+export interface UpdateMerchantRuleData {
+  pattern?: string;
+  replacement?: string;
+  category?: string | null;
+  confidence?: number;
+  status?: MerchantRule['status'];
+}
+
+export interface MerchantRuleRequest {
+  id: number;
+  merchant_raw: string;
+  mcc: number | null;
+  group_id: number | null;
+  user_category: string | null;
+  user_comment: string | null;
+  processed: number;
+  created_at: string;
+}
+
+export interface CreateMerchantRuleRequestData {
+  merchant_raw: string;
+  mcc?: number | null;
+  group_id?: number | null;
+  user_category?: string | null;
+  user_comment?: string | null;
+}
