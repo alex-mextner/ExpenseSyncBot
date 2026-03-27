@@ -3,7 +3,7 @@
  */
 import Big from 'big.js';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
-import { convertCurrency } from './converter';
+import { convertCurrencyBig } from './converter';
 import { evaluateMathExpressionBig } from './parser';
 
 // All currency aliases, sorted longest-first (prevents partial matches on shorter entries)
@@ -78,11 +78,12 @@ export function evaluateCurrencyExpression(
         | undefined;
       if (!fromCurrency) return match;
 
-      const amount = parseFloat(rawAmount.replace(',', '.'));
-      if (Number.isNaN(amount)) return match;
+      const amountStr = rawAmount.replace(',', '.');
+      if (Number.isNaN(parseFloat(amountStr))) return match;
 
       anyCurrencyReplaced = true;
-      return String(convertCurrency(amount, fromCurrency, targetCurrency));
+      // Use Big for exact decimal arithmetic — no intermediate 2-decimal rounding
+      return convertCurrencyBig(new Big(amountStr), fromCurrency, targetCurrency).toString();
     },
   );
 

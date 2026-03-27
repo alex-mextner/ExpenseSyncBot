@@ -1,3 +1,4 @@
+import Big from 'big.js';
 import type { CurrencyCode } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 
@@ -20,6 +21,25 @@ const FALLBACK_RATES: Record<CurrencyCode, number> = {
   INR: 0.011, // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
   LKR: 0.0028, // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
   AED: 0.25, // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
+};
+
+/**
+ * Fallback rates as decimal strings for exact Big.js arithmetic.
+ * Mirrors FALLBACK_RATES — keep in sync when updating rates.
+ */
+const FALLBACK_RATES_STR: Record<CurrencyCode, string> = {
+  EUR: '1',
+  USD: '0.93',
+  RUB: '0.0093',
+  RSD: '0.0086',
+  GBP: '1.18',
+  BYN: '0.28',
+  CHF: '1.05',
+  JPY: '0.0062',
+  CNY: '0.13',
+  INR: '0.011',
+  LKR: '0.0028',
+  AED: '0.25',
 };
 
 /**
@@ -199,6 +219,26 @@ export async function updateExchangeRates(): Promise<void> {
  */
 export function getAllExchangeRates(): Record<CurrencyCode, number> {
   return { ...(cachedRates || FALLBACK_RATES) };
+}
+
+/**
+ * Convert amount between currencies using exact Big.js arithmetic.
+ * Preserves full decimal precision — no intermediate rounding.
+ * Uses string fallback rates so Big.js receives exact decimal representations.
+ * Intended for the AI calculator where intermediate rounding causes visible errors.
+ */
+export function convertCurrencyBig(amount: Big, from: CurrencyCode, to: CurrencyCode): Big {
+  if (from === to) return amount;
+
+  const fromRateStr = FALLBACK_RATES_STR[from];
+  const toRateStr = FALLBACK_RATES_STR[to];
+
+  if (!fromRateStr || !toRateStr) {
+    throw new Error(`Exchange rate not found for ${from} or ${to}`);
+  }
+
+  // rates[X] = "1 X = Y EUR" → from→EUR→to
+  return amount.times(new Big(fromRateStr)).div(new Big(toRateStr));
 }
 
 /**

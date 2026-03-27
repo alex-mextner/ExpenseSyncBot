@@ -1,8 +1,10 @@
 // Tests for currency conversion logic
 
 import { describe, expect, it } from 'bun:test';
+import Big from 'big.js';
 import {
   convertCurrency,
+  convertCurrencyBig,
   convertToEUR,
   formatAmount,
   formatExchangeRatesForAI,
@@ -403,5 +405,43 @@ describe('formatExchangeRatesForAI', () => {
   it('has multiple lines', () => {
     const lines = formatExchangeRatesForAI().split('\n');
     expect(lines.length).toBeGreaterThan(5);
+  });
+});
+
+describe('convertCurrencyBig', () => {
+  it('returns a Big instance', () => {
+    const r = convertCurrencyBig(new Big('100'), 'USD', 'EUR');
+    expect(r).toBeInstanceOf(Big);
+  });
+
+  it('identity: same currency returns same amount', () => {
+    const r = convertCurrencyBig(new Big('100'), 'USD', 'USD');
+    expect(r.toFixed(2)).toBe('100.00');
+  });
+
+  it('USD→EUR exact (no intermediate rounding)', () => {
+    // 1.005 * 0.93 = 0.93465 — preserves all decimal places
+    const r = convertCurrencyBig(new Big('1.005'), 'USD', 'EUR');
+    expect(r.toFixed(5)).toBe('0.93465');
+  });
+
+  it('EUR→USD exact', () => {
+    // 100 * 1 / 0.93 = 107.52688...
+    const r = convertCurrencyBig(new Big('100'), 'EUR', 'USD');
+    expect(r.gt(new Big('100'))).toBe(true); // USD weaker than EUR
+  });
+
+  it('RSD→EUR no premature rounding', () => {
+    // 1500 * 0.0086 = 12.9 exactly
+    const r = convertCurrencyBig(new Big('1500'), 'RSD', 'EUR');
+    expect(r.toFixed(10)).toBe('12.9000000000');
+  });
+
+  it('USD→GBP via EUR exact', () => {
+    // 1.005 USD → EUR: 1.005*0.93 = 0.93465 → GBP: 0.93465/1.18 = 0.7920762...
+    const r = convertCurrencyBig(new Big('1.005'), 'USD', 'GBP');
+    // Key: no intermediate Math.round applied
+    const expected = new Big('1.005').times('0.93').div('1.18');
+    expect(r.toFixed(8)).toBe(expected.toFixed(8));
   });
 });

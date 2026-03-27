@@ -115,6 +115,31 @@ describe('evaluateCurrencyExpression', () => {
     expect(r?.hasCurrency).toBe(true);
   });
 
+  // Precision: no intermediate 2-decimal rounding on converted amounts
+  // Without exact Big arithmetic: convertCurrency(1.005, 'USD', 'EUR') = 0.93 (Math.round truncates 0.93465→0.93)
+  // With exact Big arithmetic: 1.005 * 0.93 = 0.93465 preserved through the whole expression
+  test('1.005$ * 3 in EUR — no intermediate rounding (exact: 2.80)', () => {
+    const r = evaluateCurrencyExpression('1.005$ * 3', 'EUR');
+    // Exact: 1.005 * 0.93 * 3 = 2.80395 → toFixed(2) = "2.80"
+    // With intermediate Math.round: 0.93 * 3 = 2.79 ← wrong
+    expect(r?.value.toFixed(2)).toBe('2.80');
+    expect(r?.hasCurrency).toBe(true);
+  });
+  test('1.005$ + 1.005$ in EUR — no intermediate rounding (exact: 1.87)', () => {
+    const r = evaluateCurrencyExpression('1.005$ + 1.005$', 'EUR');
+    // Exact: 0.93465 + 0.93465 = 1.8693 → "1.87"
+    // With intermediate Math.round: 0.93 + 0.93 = 1.86 ← wrong
+    expect(r?.value.toFixed(2)).toBe('1.87');
+    expect(r?.hasCurrency).toBe(true);
+  });
+  test('1.005$ - 1% in EUR — no intermediate rounding on percentage base (exact: 0.93)', () => {
+    const r = evaluateCurrencyExpression('1.005$ - 1%', 'EUR');
+    // Exact: base=0.93465, delta=0.0093465, result=0.9253035 → "0.93"
+    // With intermediate Math.round: base=0.93, delta=0.0093, result=0.9207 → "0.92" ← wrong
+    expect(r?.value.toFixed(2)).toBe('0.93');
+    expect(r?.hasCurrency).toBe(true);
+  });
+
   // Large numbers — no upper limit, single-currency conversion still works
   test('large single currency amount → converted, not null', () => {
     const r = evaluateCurrencyExpression('99999999 USD', 'USD');
