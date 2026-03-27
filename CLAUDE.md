@@ -226,7 +226,51 @@ Uses `date-fns` library. Spreadsheet dates are in `DD.MM.YYYY` format (European)
 
 ### Currency Formatting
 
-Uses `currency.js` library. Display format matches currency (e.g., `$100.50`, `€50,00`, `1 900 RSD`).
+Uses `formatAmount(amount, currency)` from `src/services/currency/converter.ts`.
+For amounts ≥ 1 million, it outputs suffix form: `1.5 млн RSD`, `2 млрд RUB`.
+
+### EUR vs Default Currency — Critical Rules
+
+**EUR is the internal calculation currency only.** It is used for:
+- `eur_amount` field on every expense (cross-currency normalization)
+- Analytics calculations in `spending-analytics.ts`
+- AI context strings in `formatters.ts` and `tool-executor.ts`
+- Logs
+
+**Never display EUR to the user unless `group.default_currency === 'EUR'`.**
+
+Every group has `default_currency: CurrencyCode` — use it for all user-facing aggregate amounts.
+
+#### Display rules by context
+
+| What | Display currency |
+|------|-----------------|
+| Aggregate totals (`/sum`, `/stats`) | `group.default_currency` |
+| Budget spent / limit | `budget.currency` (user set this explicitly) |
+| Per-currency breakdown (`/stats`) | own currency (by definition) |
+| Receipt total | `summary.currency` (from receipt) |
+| AI financial context (`formatters.ts`) | `group.default_currency` |
+| AI tool results (`tool-executor.ts`) | `group.default_currency` for aggregates; original currency for individual expenses |
+| Logs | EUR (internal) |
+
+#### Pattern: aggregate total → default currency
+
+```ts
+const display = convertCurrency(eurTotal, 'EUR', group.default_currency);
+formatAmount(display, group.default_currency)
+```
+
+#### Pattern: budget progress → budget currency
+
+```ts
+// spending is always stored as EUR — convert to budget's currency before comparing
+const spentInCurrency = convertCurrency(spentEur, 'EUR', budget.currency as CurrencyCode);
+const percentage = budget.limit_amount > 0
+  ? Math.round((spentInCurrency / budget.limit_amount) * 100)
+  : 0;
+// display
+`${formatAmount(spentInCurrency, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%)`
+```
 
 ### Topic-Aware Messaging
 
