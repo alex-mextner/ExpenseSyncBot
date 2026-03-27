@@ -305,7 +305,9 @@ export class ExpenseBotAgent {
             type: 'tool_result' as const,
             tool_use_id: tr.id,
             content: tr.result.success
-              ? tr.result.output || 'Success'
+              ? tr.result.data !== undefined
+                ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
+                : tr.result.output || 'Success'
               : `Error: ${tr.result.error}`,
           })),
         });

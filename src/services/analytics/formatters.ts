@@ -1,4 +1,5 @@
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../currency/converter';
 import type {
   BudgetBurnRate,
@@ -18,7 +19,8 @@ import type {
  */
 export function formatSnapshotForPrompt(
   snapshot: FinancialSnapshot,
-  displayCurrency: CurrencyCode,
+  groupId: number,
+  displayCurrency: CurrencyCode = BASE_CURRENCY,
 ): string {
   const sections: string[] = [];
 
@@ -55,7 +57,32 @@ export function formatSnapshotForPrompt(
     sections.push(formatStreak(snapshot.streak, displayCurrency));
   }
 
-  return sections.join('\n\n');
+  let result = sections.join('\n\n');
+
+  // Add bank balances if any connections exist
+  const bankAccounts = database.bankAccounts.findByGroupId(groupId);
+  if (bankAccounts.length > 0) {
+    const balanceLines = bankAccounts
+      .map((a) => `${a.title}: ${a.balance.toFixed(2)} ${a.currency}`)
+      .join('\n');
+    result += `\n\n## Банковские балансы\n${balanceLines}`;
+  }
+
+  // Add recent confirmed bank transactions (last 20)
+  const recentBankTxs = database.bankTransactions
+    .findByGroupId(groupId, { status: 'confirmed' })
+    .slice(0, 20);
+  if (recentBankTxs.length > 0) {
+    const txLines = recentBankTxs
+      .map(
+        (tx) =>
+          `${tx.date} ${tx.amount} ${tx.currency} — ${tx.merchant_normalized ?? tx.merchant ?? '—'}`,
+      )
+      .join('\n');
+    result += `\n\n## Подтверждённые банковские транзакции\n${txLines}`;
+  }
+
+  return result;
 }
 
 /**

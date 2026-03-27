@@ -1,5 +1,9 @@
 import type { Database } from 'bun:sqlite';
 import { AdviceLogRepository } from './repositories/advice-log.repository';
+import { BankAccountsRepository } from './repositories/bank-accounts.repository';
+import { BankConnectionsRepository } from './repositories/bank-connections.repository';
+import { BankCredentialsRepository } from './repositories/bank-credentials.repository';
+import { BankTransactionsRepository } from './repositories/bank-transactions.repository';
 import { BudgetRepository } from './repositories/budget.repository';
 import { CategoryRepository } from './repositories/category.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
@@ -7,6 +11,7 @@ import { DevTaskRepository } from './repositories/dev-task.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
 import { ExpenseItemsRepository } from './repositories/expense-items.repository';
 import { GroupRepository } from './repositories/group.repository';
+import { MerchantRulesRepository } from './repositories/merchant-rules.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
@@ -30,6 +35,11 @@ export class DatabaseService {
   public expenseItems: ExpenseItemsRepository;
   public adviceLogs: AdviceLogRepository;
   public devTasks: DevTaskRepository;
+  public bankConnections: BankConnectionsRepository;
+  public bankCredentials: BankCredentialsRepository;
+  public bankAccounts: BankAccountsRepository;
+  public bankTransactions: BankTransactionsRepository;
+  public merchantRules: MerchantRulesRepository;
 
   constructor() {
     this.db = setupDatabase();
@@ -45,6 +55,11 @@ export class DatabaseService {
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);
     this.devTasks = new DevTaskRepository(this.db);
+    this.bankConnections = new BankConnectionsRepository(this.db);
+    this.bankCredentials = new BankCredentialsRepository(this.db);
+    this.bankAccounts = new BankAccountsRepository(this.db);
+    this.bankTransactions = new BankTransactionsRepository(this.db);
+    this.merchantRules = new MerchantRulesRepository(this.db);
   }
 
   /**

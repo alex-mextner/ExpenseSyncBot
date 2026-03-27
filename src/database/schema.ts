@@ -1,4 +1,6 @@
 import { Database } from 'bun:sqlite';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger.ts';
 
@@ -8,11 +10,13 @@ const logger = createLogger('schema');
  * Initialize database connection
  */
 export function initDatabase(): Database {
+  mkdirSync(dirname(env.DATABASE_PATH), { recursive: true });
   const db = new Database(env.DATABASE_PATH, { create: true });
 
   // Enable WAL mode for better concurrency
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
+  db.exec('PRAGMA busy_timeout = 5000;');
 
   return db;
 }
@@ -653,6 +657,205 @@ export function runMigrations(db: Database): void {
       up: () => {
         db.exec(`ALTER TABLE dev_tasks ADD COLUMN failed_at_state TEXT`);
         logger.info('✓ Added failed_at_state column to dev_tasks');
+      },
+    },
+    {
+      name: '021_create_bank_connections',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS bank_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            bank_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'setup'
+              CHECK(status IN ('setup', 'active', 'disconnected')),
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            last_sync_at TEXT,
+            last_error TEXT,
+            panel_message_id INTEGER,
+            panel_message_thread_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(group_id, bank_name)
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_bank_connections_group_id
+          ON bank_connections(group_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_bank_connections_status
+          ON bank_connections(status);
+        `);
+        logger.info('✓ Created bank_connections table');
+      },
+    },
+    {
+      name: '022_create_bank_credentials',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS bank_credentials (
+            connection_id INTEGER PRIMARY KEY
+              REFERENCES bank_connections(id) ON DELETE CASCADE,
+            encrypted_data TEXT NOT NULL
+          );
+        `);
+        logger.info('✓ Created bank_credentials table');
+      },
+    },
+    {
+      name: '023_create_bank_plugin_state',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS bank_plugin_state (
+            connection_id INTEGER NOT NULL
+              REFERENCES bank_connections(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY(connection_id, key)
+          );
+        `);
+        logger.info('✓ Created bank_plugin_state table');
+      },
+    },
+    {
+      name: '024_create_bank_accounts',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS bank_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id INTEGER NOT NULL
+              REFERENCES bank_connections(id) ON DELETE CASCADE,
+            account_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            balance REAL NOT NULL,
+            currency TEXT NOT NULL,
+            type TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(connection_id, account_id)
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_bank_accounts_connection_id
+          ON bank_accounts(connection_id);
+        `);
+        logger.info('✓ Created bank_accounts table');
+      },
+    },
+    {
+      name: '025_create_bank_transactions',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS bank_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id INTEGER NOT NULL
+              REFERENCES bank_connections(id) ON DELETE CASCADE,
+            external_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            amount REAL NOT NULL,
+            sign_type TEXT NOT NULL DEFAULT 'debit'
+              CHECK(sign_type IN ('debit', 'credit', 'reversal')),
+            currency TEXT NOT NULL,
+            merchant TEXT,
+            merchant_normalized TEXT,
+            mcc INTEGER,
+            raw_data TEXT NOT NULL,
+            matched_expense_id INTEGER REFERENCES expenses(id) ON DELETE SET NULL,
+            telegram_message_id INTEGER,
+            edit_in_progress INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending'
+              CHECK(status IN ('pending', 'confirmed', 'skipped', 'skipped_reversal')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(connection_id, external_id)
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_bank_transactions_connection_id
+          ON bank_transactions(connection_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_bank_transactions_status
+          ON bank_transactions(status);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_bank_transactions_date
+          ON bank_transactions(date);
+        `);
+        logger.info('✓ Created bank_transactions table');
+      },
+    },
+    {
+      name: '026_create_merchant_tables',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS merchant_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern TEXT NOT NULL,
+            flags TEXT NOT NULL DEFAULT 'i',
+            replacement TEXT NOT NULL,
+            category TEXT,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            status TEXT NOT NULL DEFAULT 'pending_review'
+              CHECK(status IN ('pending_review', 'approved', 'rejected')),
+            source TEXT NOT NULL DEFAULT 'ai'
+              CHECK(source IN ('ai', 'manual')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_merchant_rules_status
+          ON merchant_rules(status);
+        `);
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS merchant_rule_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            merchant_raw TEXT NOT NULL,
+            mcc INTEGER,
+            group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
+            user_category TEXT,
+            user_comment TEXT,
+            processed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(merchant_raw)
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_merchant_rule_requests_processed
+          ON merchant_rule_requests(processed);
+        `);
+        logger.info('✓ Created merchant_rules and merchant_rule_requests tables');
+      },
+    },
+    {
+      name: '028_add_prefill_to_bank_transactions',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions')
+          WHERE name = 'prefill_category'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE bank_transactions ADD COLUMN prefill_category TEXT;
+            ALTER TABLE bank_transactions ADD COLUMN prefill_comment TEXT;
+          `);
+          logger.info('✓ Added prefill_category/prefill_comment to bank_transactions');
+        }
+      },
+    },
+    {
+      name: '027_add_bank_panel_summary_to_groups',
+      up: () => {
+        const check = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('groups')
+          WHERE name = 'bank_panel_summary_message_id'
+        `);
+        if (check.get()?.count === 0) {
+          db.exec(`
+            ALTER TABLE groups ADD COLUMN bank_panel_summary_message_id INTEGER;
+          `);
+          logger.info('✓ Added bank_panel_summary_message_id to groups');
+        }
       },
     },
   ];

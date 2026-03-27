@@ -28,5 +28,8 @@
     "noUnusedParameters": true,
     "noPropertyAccessFromIndexSignature": true,
     "exactOptionalPropertyTypes": true
-  }
+  },
+  "exclude": [
+    "src/services/bank/ZenPlugins"
+  ]
 }

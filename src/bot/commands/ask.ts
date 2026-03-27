@@ -248,6 +248,7 @@ async function sendSmartAdvice(
     const group = database.groups.findById(groupId);
     const snapshotText = formatSnapshotForPrompt(
       snapshot,
+      groupId,
       group?.default_currency ?? BASE_CURRENCY,
     );
 

@@ -6,6 +6,7 @@ import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
+import type { BankTransaction, BankTransactionFilters } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
@@ -70,6 +71,12 @@ export async function executeTool(
         return executeManageCategory(input, ctx);
       case 'calculate':
         return executeCalculate(input, ctx);
+      case 'get_bank_transactions':
+        return executeGetBankTransactions(input, ctx);
+      case 'get_bank_balances':
+        return executeGetBankBalances(input, ctx);
+      case 'find_missing_expenses':
+        return await executeFindMissingExpenses(input, ctx);
       default:
         return { success: false, error: `Unknown tool: ${name}` };
     }
@@ -668,4 +675,132 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
   const formatted = formatCalculatorResult(result.value);
   const output = result.hasCurrency ? `${formatted} ${targetCurrency}` : formatted;
   return { success: true, output };
+}
+
+// === Bank tools ===
+
+function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+  const filters: BankTransactionFilters = {};
+  if (typeof input['period'] === 'string') filters.period = input['period'];
+  if (typeof input['bank_name'] === 'string') filters.bank_name = input['bank_name'];
+  if (typeof input['status'] === 'string') {
+    filters.status = input['status'] as BankTransaction['status'];
+  }
+
+  const transactions = database.bankTransactions.findByGroupId(ctx.groupId, filters);
+
+  return {
+    success: true,
+    data: transactions.map((tx) => ({
+      id: tx.id,
+      date: tx.date,
+      amount: tx.amount,
+      currency: tx.currency,
+      merchant: tx.merchant_normalized ?? tx.merchant,
+      category_suggestion: null,
+      status: tx.status,
+      sign_type: tx.sign_type,
+    })),
+  };
+}
+
+function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+  const bankName = typeof input['bank_name'] === 'string' ? input['bank_name'] : undefined;
+
+  const accounts = database.bankAccounts.findByGroupId(ctx.groupId);
+  const filtered = bankName
+    ? accounts.filter((a) => {
+        const conn = database.bankConnections.findById(a.connection_id);
+        return conn?.bank_name === bankName;
+      })
+    : accounts;
+
+  return {
+    success: true,
+    data: filtered.map((a) => ({
+      bank_name: database.bankConnections.findById(a.connection_id)?.bank_name,
+      account_title: a.title,
+      balance: a.balance,
+      currency: a.currency,
+      type: a.type,
+    })),
+  };
+}
+
+async function executeFindMissingExpenses(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  const period = typeof input['period'] === 'string' ? input['period'] : 'current_month';
+  const { startDate, endDate } = resolvePeriodDates(period);
+
+  const unmatched = database.bankTransactions.findUnmatched(ctx.groupId, startDate, endDate);
+  const expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+
+  const results = unmatched.map((tx) => {
+    // Try exact match: same amount, currency, and within 2 days
+    const exactMatch = expenses.find(
+      (e) =>
+        Math.abs(e.amount - tx.amount) < 0.01 &&
+        e.currency === tx.currency &&
+        Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 2 * 86400 * 1000,
+    );
+
+    if (exactMatch) {
+      return null; // matched
+    }
+
+    // Try probable match: same amount, currency, within 5 days
+    const probableMatch = expenses.find(
+      (e) =>
+        Math.abs(e.amount - tx.amount) < 0.01 &&
+        e.currency === tx.currency &&
+        Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 5 * 86400 * 1000,
+    );
+
+    return {
+      tx_id: tx.id,
+      date: tx.date,
+      amount: tx.amount,
+      currency: tx.currency,
+      merchant: tx.merchant_normalized ?? tx.merchant,
+      status: probableMatch ? 'probable_match' : 'missing',
+      probable_expense_id: probableMatch?.id ?? null,
+    };
+  });
+
+  const missing = results.filter(Boolean);
+
+  return {
+    success: true,
+    data: missing,
+    summary: `${missing.length} транзакций без записи в расходах за период ${startDate}–${endDate}`,
+  };
+}
+
+function resolvePeriodDates(period: string): { startDate: string; endDate: string } {
+  const now = new Date();
+  if (period === 'current_month') {
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
+    return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${lastDay}` };
+  }
+  if (period === 'last_month') {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const lastDay = new Date(y, d.getMonth() + 1, 0).getDate();
+    return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${lastDay}` };
+  }
+  // Specific month "YYYY-MM"
+  const [year, month] = period.split('-').map(Number);
+  if (year && month) {
+    const lastDay = new Date(year, month, 0).getDate();
+    return {
+      startDate: `${year}-${String(month).padStart(2, '0')}-01`,
+      endDate: `${year}-${String(month).padStart(2, '0')}-${lastDay}`,
+    };
+  }
+  return { startDate: '2000-01-01', endDate: '2099-12-31' };
 }
