@@ -54,12 +54,15 @@ export async function processMerchantRequests(): Promise<void> {
 
   const suggestions = await callAiForRules(batch, existingRules);
 
-  batch.forEach((request, i) => {
+  for (let i = 0; i < batch.length; i++) {
+    const request = batch[i];
     const suggestion = suggestions[i];
+
+    if (!request) continue;
 
     database.merchantRules.markRequestProcessed(request.id);
 
-    if (!suggestion) return;
+    if (!suggestion) continue;
 
     // Insert rule with pending_review status
     const rule = database.merchantRules.insert({
@@ -77,9 +80,9 @@ export async function processMerchantRequests(): Promise<void> {
       suggestion.replacement,
     );
 
-    // Send admin approval card
-    void sendAdminApprovalCard(rule.id, suggestion, examples);
-  });
+    // Send admin approval card sequentially to avoid Telegram rate limits
+    await sendAdminApprovalCard(rule.id, suggestion, examples);
+  }
 
   // Prune old processed requests
   database.merchantRules.pruneOldRequests();
@@ -131,6 +134,11 @@ ${existingList || '(пусто)'}
     if (!match) throw new Error('No JSON array in response');
 
     const parsed = JSON.parse(match[0]) as AiRuleSuggestion[];
+    if (!Array.isArray(parsed) || parsed.length !== requests.length) {
+      throw new Error(
+        `AI returned ${Array.isArray(parsed) ? parsed.length : 'non-array'}, expected ${requests.length}`,
+      );
+    }
     return parsed;
   } catch (error) {
     logger.error({ err: error }, 'AI merchant rule generation failed');
