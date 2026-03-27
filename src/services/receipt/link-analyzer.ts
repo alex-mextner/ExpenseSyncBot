@@ -1,5 +1,5 @@
 import type { BotInstance } from '../../bot/types';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
@@ -106,7 +106,7 @@ async function analyzeLink(
     const group = database.groups.findById(groupId);
     return {
       items: result.items,
-      currency: result.currency || group?.default_currency || 'EUR',
+      currency: result.currency || group?.default_currency || BASE_CURRENCY,
     };
   } catch (error) {
     logger.error(`[LINK] Error: ${error}`);

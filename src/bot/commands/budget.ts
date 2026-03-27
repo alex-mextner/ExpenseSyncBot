@@ -1,9 +1,9 @@
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
-import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
-import { convertCurrency } from '../../services/currency/converter';
+import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import {
   createBudgetSheet,
   hasBudgetSheet,
@@ -425,7 +425,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
       budgetsByCurrency[currency] = { totalBudget: 0, totalSpent: 0 };
     }
     const spentEur = categorySpending[budget.category] || 0;
-    const spentInCurrency = convertCurrency(spentEur, 'EUR', currency);
+    const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
     budgetsByCurrency[currency].totalBudget += budget.limit_amount;
     budgetsByCurrency[currency].totalSpent += spentInCurrency;
@@ -436,16 +436,15 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
 
   // Display totals for each currency
   for (const [currency, { totalBudget, totalSpent }] of Object.entries(budgetsByCurrency)) {
-    const symbol = getCurrencySymbol(currency as CurrencyCode);
     const percentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
-    message += `💰 Всего (${currency}): ${symbol}${totalSpent.toFixed(2)} / ${symbol}${totalBudget.toFixed(2)} (${percentage}%)\n`;
+    message += `💰 Всего (${currency}): ${formatAmount(totalSpent, currency as CurrencyCode)} / ${formatAmount(totalBudget, currency as CurrencyCode)} (${percentage}%)\n`;
   }
   message += '\n';
 
   // Sort budgets by percentage descending (exceeded first)
   const budgetProgress = budgets.map((budget) => {
     const spentEur = categorySpending[budget.category] || 0;
-    const spent = convertCurrency(spentEur, 'EUR', budget.currency);
+    const spent = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
     const percentage =
       budget.limit_amount > 0 ? Math.round((spent / budget.limit_amount) * 100) : 0;
 
@@ -464,11 +463,8 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
   for (const { budget, spent, percentage, is_exceeded, is_warning } of budgetProgress) {
     const emoji = getCategoryEmoji(budget.category);
     const status = is_exceeded ? '🔴' : is_warning ? '⚠️' : '';
-    const symbol = getCurrencySymbol(budget.currency);
 
-    message += `${emoji} ${budget.category}: ${symbol}${spent.toFixed(
-      2,
-    )} / ${symbol}${budget.limit_amount.toFixed(2)} (${percentage}%) ${status}\n`;
+    message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
   await ctx.send(message);
@@ -523,9 +519,8 @@ async function setBudget(
 
   if (!group.google_refresh_token || !group.spreadsheet_id) {
     const emoji = getCategoryEmoji(normalizedCategory);
-    const currencySymbol = getCurrencySymbol(currency);
     await ctx.send(
-      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${currencySymbol}${amount.toFixed(2)}\n\n` +
+      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
         '⚠️ Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
     );
     return;
@@ -555,11 +550,8 @@ async function setBudget(
     });
 
     const emoji = getCategoryEmoji(normalizedCategory);
-    const currencySymbol = getCurrencySymbol(currency);
     await ctx.send(
-      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${currencySymbol}${amount.toFixed(
-        2,
-      )}`,
+      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
     );
   } catch (err) {
     logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');

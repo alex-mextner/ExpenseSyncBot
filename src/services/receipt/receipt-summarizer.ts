@@ -1,6 +1,8 @@
 import { InferenceClient } from '@huggingface/inference';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import type { ReceiptItem } from '../../database/types';
+import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 
@@ -96,7 +98,7 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
       items: catItems.map((i) => ({ name: i.name_ru, total: i.total })),
     })),
     totalAmount: items.reduce((sum, i) => sum + i.total, 0),
-    currency: items[0]?.currency || 'EUR',
+    currency: items[0]?.currency || BASE_CURRENCY,
   };
 }
 
@@ -125,7 +127,7 @@ export function formatSummaryMessage(summary: ReceiptSummary, itemCount: number)
     message += `${emoji} <b>${escapeHtml(category.name)}:</b> ${escapeHtml(itemsText)}\n`;
   }
 
-  message += `\n💰 <b>Итого:</b> ${summary.totalAmount.toFixed(2)} ${escapeHtml(summary.currency)}`;
+  message += `\n💰 <b>Итого:</b> ${formatAmount(summary.totalAmount, summary.currency as CurrencyCode)}`;
 
   return message;
 }

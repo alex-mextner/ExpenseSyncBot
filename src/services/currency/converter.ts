@@ -1,5 +1,5 @@
 import Big from 'big.js';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('converter');
@@ -160,7 +160,7 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
  * Convert amount to EUR
  */
 export function convertToEUR(amount: number, fromCurrency: CurrencyCode): number {
-  if (fromCurrency === 'EUR') {
+  if (fromCurrency === BASE_CURRENCY) {
     return amount;
   }
 
@@ -212,13 +212,26 @@ export function getExchangeRate(currency: CurrencyCode): number {
 
 /**
  * Format amount with currency code.
- * Amounts >= 1M are shown with Russian magnitude suffixes (млн, млрд) to avoid
- * long digit strings in messages.
+ *
+ * User-facing (default): amounts >= 1M shown as "1.5 млн RSD".
+ * AI context (aiContext=true): includes exact decimal plus suffix in parens,
+ * e.g. "1500000.00 (1.5 млн) RSD", so the model can use whichever form fits.
  */
-export function formatAmount(amount: number, currency: CurrencyCode): string {
+export function formatAmount(amount: number, currency: CurrencyCode, aiContext = false): string {
   const abs = Math.abs(amount);
-  let num: string;
 
+  if (aiContext) {
+    const exact = amount.toFixed(2);
+    if (abs >= 1_000_000_000) {
+      return `${exact} (${+(amount / 1_000_000_000).toFixed(2)} млрд) ${currency}`;
+    }
+    if (abs >= 1_000_000) {
+      return `${exact} (${+(amount / 1_000_000).toFixed(2)} млн) ${currency}`;
+    }
+    return `${exact} ${currency}`;
+  }
+
+  let num: string;
   if (abs >= 1_000_000_000) {
     num = `${+(amount / 1_000_000_000).toFixed(2)} млрд`;
   } else if (abs >= 1_000_000) {
@@ -226,7 +239,6 @@ export function formatAmount(amount: number, currency: CurrencyCode): string {
   } else {
     num = amount.toFixed(2);
   }
-
   return `${num} ${currency}`;
 }
 
@@ -282,7 +294,7 @@ export function formatExchangeRatesForAI(): string {
   };
 
   for (const currency of Object.keys(rates) as CurrencyCode[]) {
-    if (currency !== 'EUR') {
+    if (currency !== BASE_CURRENCY) {
       lines.push(formatRate(currency));
     }
   }
