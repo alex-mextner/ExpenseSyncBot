@@ -587,6 +587,49 @@ describe('edge cases', () => {
     expect(result?.type).toBe('velocity_spike');
   });
 
+  test('budget_limit=0 with status exceeded does NOT trigger (disabled category)', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({ status: 'exceeded', category: 'Путешествия', budget_limit: 0, spent: 0 }),
+      ],
+    });
+    const result = checkSmartTriggers(9001, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('budget_limit=0 with status warning does NOT trigger (disabled category)', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Путешествия',
+          budget_limit: 0,
+          projected_total: 0,
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9002, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('budget_limit=0 with status critical does NOT trigger (disabled category)', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Путешествия',
+          budget_limit: 0,
+          projected_total: 0,
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9003, snapshot);
+    expect(result).toBeNull();
+  });
+
   test('all trigger types return correct tier', () => {
     // alert tier
     const alertSnap = buildNeutralSnapshot({

@@ -211,10 +211,23 @@ export function getExchangeRate(currency: CurrencyCode): number {
 }
 
 /**
- * Format amount with currency symbol
+ * Format amount with currency code.
+ * Amounts >= 1M are shown with Russian magnitude suffixes (млн, млрд) to avoid
+ * long digit strings in messages.
  */
 export function formatAmount(amount: number, currency: CurrencyCode): string {
-  return `${amount.toFixed(2)} ${currency}`;
+  const abs = Math.abs(amount);
+  let num: string;
+
+  if (abs >= 1_000_000_000) {
+    num = `${+(amount / 1_000_000_000).toFixed(2)} млрд`;
+  } else if (abs >= 1_000_000) {
+    num = `${+(amount / 1_000_000).toFixed(2)} млн`;
+  } else {
+    num = amount.toFixed(2);
+  }
+
+  return `${num} ${currency}`;
 }
 
 /**

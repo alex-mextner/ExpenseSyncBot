@@ -423,10 +423,12 @@ describe('math expressions in expenses', () => {
     expect(r).toBeNull();
   });
 
-  // Expense amounts > 1,000,000 are rejected in parseAmount
-  test('999999*999999 food → null (expense limit exceeded)', () => {
+  // No upper limit on expense amounts — parseAmount accepts any positive result
+  test('999999*999999 food → valid expense (no limit)', () => {
     const r = parseExpenseMessage('999999*999999 food', 'EUR');
-    expect(r).toBeNull();
+    expect(r).not.toBeNull();
+    expect(r?.amount).toBe(999998000001);
+    expect(r?.category).toBe('Food');
   });
 
   // Division precision

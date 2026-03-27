@@ -286,8 +286,28 @@ describe('formatAmount', () => {
     expect(formatAmount(0.01, 'RUB')).toBe('0.01 RUB');
   });
 
-  it('formats large amount', () => {
-    expect(formatAmount(1_000_000, 'RSD')).toBe('1000000.00 RSD');
+  it('formats 1M with млн suffix', () => {
+    expect(formatAmount(1_000_000, 'RSD')).toBe('1 млн RSD');
+  });
+
+  it('formats 1.5M with млн suffix', () => {
+    expect(formatAmount(1_500_000, 'RSD')).toBe('1.5 млн RSD');
+  });
+
+  it('formats 1.23M with млн suffix (2 decimal places)', () => {
+    expect(formatAmount(1_234_567, 'EUR')).toBe('1.23 млн EUR');
+  });
+
+  it('formats 2M exactly as "2 млн" (no trailing zeros)', () => {
+    expect(formatAmount(2_000_000, 'USD')).toBe('2 млн USD');
+  });
+
+  it('formats 1B with млрд suffix', () => {
+    expect(formatAmount(1_000_000_000, 'RUB')).toBe('1 млрд RUB');
+  });
+
+  it('formats 2.5B with млрд suffix', () => {
+    expect(formatAmount(2_500_000_000, 'EUR')).toBe('2.5 млрд EUR');
   });
 });
 

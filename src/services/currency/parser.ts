@@ -276,7 +276,7 @@ function parseAmount(amountStr: string): number | null {
     // Check if this is a math expression (contains operator)
     if (/[+\-*×/]/.test(cleaned)) {
       const result = evaluateMathExpression(cleaned);
-      if (result === null || result <= 0 || result > 1_000_000) return null;
+      if (result === null || result <= 0) return null;
       // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
       return Math.round(result * 100) / 100;
     }
