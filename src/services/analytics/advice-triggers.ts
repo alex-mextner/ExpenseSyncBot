@@ -61,7 +61,7 @@ export function checkSmartTriggers(
           };
         }
       }
-    } else if (br.status === 'critical' || br.status === 'warning') {
+    } else if ((br.status === 'critical' || br.status === 'warning') && br.budget_limit > 0) {
       const threshold = br.status === 'critical' ? '100' : '80';
       const topic = `budget_threshold:${br.category}:${threshold}`;
       if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {

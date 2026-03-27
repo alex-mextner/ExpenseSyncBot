@@ -368,7 +368,7 @@ function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext):
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
   if (!category) {
-    return { success: false, error: 'Category is required' };
+    return { success: false, error: 'category is required' };
   }
 
   database.budgets.deleteByGroupCategoryMonth(ctx.groupId, category, month);

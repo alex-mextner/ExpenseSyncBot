@@ -20,7 +20,7 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
     case 'set_budget':
       return [
         input['category'],
-        input['amount'] && `${input['amount']} ${input['currency'] || ''}`.trim(),
+        input['amount'] != null && `${input['amount']} ${input['currency'] || ''}`.trim(),
       ]
         .filter(Boolean)
         .join(', ');
