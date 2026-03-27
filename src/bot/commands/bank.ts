@@ -3,6 +3,7 @@ import { database } from '../../database';
 import type { BankConnection, Group } from '../../database/types';
 import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList } from '../../services/bank/registry';
+import { convertToEUR } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
@@ -313,12 +314,18 @@ export async function handleBankConfirmCallback(
   const category = tx.merchant_normalized ?? tx.merchant ?? 'прочее';
   const comment = tx.merchant_normalized ?? tx.merchant ?? '';
 
+  if (!ctx.from) {
+    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+    return;
+  }
+
   const user = database.users.findByTelegramId(ctx.from.id);
   if (!user) {
     await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
     return;
   }
 
+  const txCurrency = tx.currency as import('../../config/constants').CurrencyCode;
   const expense = database.expenses.create({
     group_id: group.id,
     user_id: user.id,
@@ -326,8 +333,8 @@ export async function handleBankConfirmCallback(
     category,
     comment,
     amount: tx.amount,
-    currency: tx.currency as import('../../config/constants').CurrencyCode,
-    eur_amount: 0,
+    currency: txCurrency,
+    eur_amount: convertToEUR(tx.amount, txCurrency),
   });
 
   database.bankTransactions.updateStatus(txId, group.id, 'confirmed');
@@ -376,6 +383,11 @@ export async function handleBankEditCallback(
     return;
   }
 
+  if (!ctx.from) {
+    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+    return;
+  }
+
   // Check if another edit is in progress
   const pendingTxs = database.bankTransactions.findPendingByConnectionId(tx.connection_id);
   const otherEdit = pendingTxs.find((t) => t.id !== txId && t.edit_in_progress === 1);
@@ -397,7 +409,6 @@ export async function handleBankEditCallback(
 
 export async function handleBankEditReply(
   ctx: Ctx['Message'],
-  replyToMessageId: number,
   chatId: number,
   text: string,
 ): Promise<boolean> {
@@ -410,9 +421,7 @@ export async function handleBankEditReply(
 
   for (const conn of connections) {
     const pending = database.bankTransactions.findPendingByConnectionId(conn.id);
-    editTx =
-      pending.find((t) => t.telegram_message_id === replyToMessageId && t.edit_in_progress === 1) ??
-      null;
+    editTx = pending.find((t) => t.edit_in_progress === 1) ?? null;
     if (editTx) break;
   }
 
@@ -425,6 +434,7 @@ export async function handleBankEditReply(
   const user = database.users.findByTelegramId(ctx.from.id);
   if (!user) return false;
 
+  const editCurrency = editTx.currency as import('../../config/constants').CurrencyCode;
   const expense = database.expenses.create({
     group_id: group.id,
     user_id: user.id,
@@ -432,8 +442,8 @@ export async function handleBankEditReply(
     category,
     comment,
     amount: editTx.amount,
-    currency: editTx.currency as import('../../config/constants').CurrencyCode,
-    eur_amount: 0,
+    currency: editCurrency,
+    eur_amount: convertToEUR(editTx.amount, editCurrency),
   });
 
   database.bankTransactions.updateStatus(editTx.id, group.id, 'confirmed');
@@ -472,4 +482,50 @@ function timeSince(isoDate: string): string {
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins} мин`;
   return `${Math.floor(mins / 60)} ч`;
+}
+
+// ─── Callback entry points ────────────────────────────────────────────────────
+
+/**
+ * Called when user clicks a bank_setup button from the "no banks" panel.
+ * Starts the setup wizard for the selected bank.
+ */
+export async function handleBankSetupCallback(
+  ctx: Ctx['CallbackQuery'],
+  bankKey: string,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const plugin = BANK_REGISTRY[bankKey];
+  if (!plugin) {
+    await ctx.answerCallbackQuery({ text: 'Банк не найден' });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+
+  // Clean up stale setup sessions before starting a new one
+  database.bankConnections.deleteStaleSetup(group.id);
+
+  // Delete existing connection for this bank if present
+  const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
+  if (existing) {
+    database.bankConnections.deleteById(existing.id);
+  }
+
+  database.bankConnections.create({
+    group_id: group.id,
+    bank_name: bankKey,
+    display_name: plugin.name,
+    status: 'setup',
+  });
+
+  const firstField = plugin.fields[0];
+  const prompt = resolveFieldPrompt(firstField);
+  await ctx.send(`🏦 Подключение ${plugin.name}\n\n${prompt}:\n\n(Для отмены: /bank отмена)`);
 }

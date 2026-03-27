@@ -4,7 +4,11 @@ import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { handleBankConfirmCallback, handleBankEditCallback } from '../commands/bank';
+import {
+  handleBankConfirmCallback,
+  handleBankEditCallback,
+  handleBankSetupCallback,
+} from '../commands/bank';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
@@ -147,6 +151,17 @@ export async function handleCallbackQuery(
         }
         database.merchantRules.updateStatus(ruleId, 'approved');
         await ctx.answerCallbackQuery({ text: '✅ Правило принято' });
+        if (chatId && ctx.message?.id) {
+          try {
+            await bot.api.editMessageReplyMarkup({
+              chat_id: chatId,
+              message_id: ctx.message.id,
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // message may be too old to edit
+          }
+        }
         break;
       }
 
@@ -158,21 +173,38 @@ export async function handleCallbackQuery(
         }
         database.merchantRules.updateStatus(ruleId, 'rejected');
         await ctx.answerCallbackQuery({ text: '❌ Правило отклонено' });
+        if (chatId && ctx.message?.id) {
+          try {
+            await bot.api.editMessageReplyMarkup({
+              chat_id: chatId,
+              message_id: ctx.message.id,
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // message may be too old to edit
+          }
+        }
         break;
       }
 
       case 'merchant_edit': {
         const ruleId = Number(params[0]);
-        if (!ruleId) {
+        if (!ruleId || !chatId) {
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
         await ctx.answerCallbackQuery();
-        await bot.api.sendMessage({
-          chat_id: chatId ?? 0,
-          text: 'Ответь на это сообщение — напиши исправленное название (или "название|категория"):',
-        });
         // TODO: implement reply-based edit for merchant rules (out of scope for this task)
+        break;
+      }
+
+      case 'bank_setup': {
+        const bankKey = params[0];
+        if (!chatId || !bankKey) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSetupCallback(ctx, bankKey, chatId);
         break;
       }
 

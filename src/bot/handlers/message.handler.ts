@@ -192,7 +192,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   const replyToMessageId = ctx.update?.message?.reply_to_message?.message_id;
   if (replyToMessageId && text) {
     const { handleBankEditReply } = await import('../commands/bank');
-    const handled = await handleBankEditReply(ctx, replyToMessageId, telegramGroupId, text);
+    const handled = await handleBankEditReply(ctx, telegramGroupId, text);
     if (handled) return;
   }
 
