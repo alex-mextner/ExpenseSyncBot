@@ -1,5 +1,17 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { computeOverallSeverity, formatSnapshotForPrompt } from './formatters';
+
+mock.module('../../database', () => ({
+  database: {
+    bankAccounts: {
+      findByGroupId: () => [],
+    },
+    bankTransactions: {
+      findByGroupId: () => [],
+    },
+  },
+}));
+
 import type {
   BudgetBurnRate,
   CategoryAnomaly,

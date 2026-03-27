@@ -173,6 +173,7 @@ export function checkSmartTriggers(
     totalPending += database.bankTransactions.findPendingByConnectionId(conn.id).length;
   }
   if (totalPending > 0) {
+    // Embed today's date to allow daily reminders (unlike other triggers which use monthly dedup)
     const topic = `pending_bank_transactions:${today}`;
     if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
       if (canSendAdvice(groupId, 'quick')) {

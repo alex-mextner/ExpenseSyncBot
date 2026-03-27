@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
+import type { BankConnection, BankTransaction } from '../../database/types';
 import type { AdviceLog, BudgetBurnRate, CategoryAnomaly, FinancialSnapshot } from './types';
 
 // ── Mock database ──────────────────────────────────────────────────────
@@ -14,12 +15,12 @@ const mockExpenses = {
 };
 
 const mockBankConnections = {
-  findActiveByGroupId: mock(() => []),
+  findActiveByGroupId: mock(() => [] as BankConnection[]),
 };
 
 const mockBankTransactions = {
-  findPendingByConnectionId: mock(() => []),
-  findByGroupId: mock(() => []),
+  findPendingByConnectionId: mock(() => [] as BankTransaction[]),
+  findByGroupId: mock(() => [] as BankTransaction[]),
 };
 
 const mockBankAccounts = {
@@ -129,6 +130,8 @@ beforeEach(() => {
   mockAdviceLogs.hasTopicThisMonth.mockImplementation(() => false);
   mockAdviceLogs.getRecent.mockImplementation(() => []);
   mockExpenses.getCountForRange.mockImplementation(() => 0);
+  mockBankConnections.findActiveByGroupId.mockImplementation(() => []);
+  mockBankTransactions.findPendingByConnectionId.mockImplementation(() => []);
 
   // Clear cooldowns by recording a zeroed-out state:
   // Since cooldowns is a private Map, we can't clear it directly.
@@ -666,5 +669,38 @@ describe('edge cases', () => {
     });
     const quickResult = checkSmartTriggers(8016, quickSnap);
     expect(quickResult?.tier).toBe('quick');
+  });
+
+  test('pending_bank_transactions trigger fires when there are pending txs', () => {
+    // Tuesday — no weekly_check interference
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+
+    // 1 active connection with 3 pending transactions
+    mockBankConnections.findActiveByGroupId.mockImplementation(
+      () => [{ id: 42 }] as BankConnection[],
+    );
+    mockBankTransactions.findPendingByConnectionId.mockImplementation(
+      () => [{ id: 1 }, { id: 2 }, { id: 3 }] as BankTransaction[],
+    );
+
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8017, snapshot);
+
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('pending_bank_transactions');
+    expect(result?.tier).toBe('quick');
+    expect(result?.data['count']).toBe(3);
+    expect(result?.topic).toMatch(/^pending_bank_transactions:\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test('pending_bank_transactions does NOT fire when no pending txs', () => {
+    // Tuesday — no weekly_check interference
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+
+    // mockBankConnections returns [] by default (reset in beforeEach)
+    const snapshot = buildNeutralSnapshot();
+    const result = checkSmartTriggers(8018, snapshot);
+
+    expect(result).toBeNull();
   });
 });
