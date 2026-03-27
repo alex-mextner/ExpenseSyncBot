@@ -116,25 +116,15 @@ export function evaluateMathExpressionBig(expr: string): Big | null {
   // Remove spaces
   const cleaned = expr.replace(/\s+/g, '');
 
-  // Safety: reject overly long expressions.
-  // 500 chars accommodates post-currency-conversion strings (full-precision Big decimals,
-  // e.g. "107.526881720430107526..."), which can be 24+ chars per token.
-  if (cleaned.length > 500) return null;
-
   // Validate: only digits, optional single decimal separator, and operators +*/×
   // Must have at least one operator (single numbers are not expressions).
-  // \d+(?:[.,]\d+)? prevents multi-separator tokens like 1.2.3 (tokenize would catch via isNaN,
-  // but explicit validation is clearer)
+  // \d+(?:[.,]\d+)? prevents multi-separator tokens like 1.2.3
   if (!/^\d+(?:[.,]\d+)?([+\-*×/]\d+(?:[.,]\d+)?)+$/.test(cleaned)) {
     return null;
   }
 
-  // Tokenize
   const tokens = tokenize(cleaned);
   if (!tokens) return null;
-
-  // No operator-count limit: 500 chars allow ~83 two-digit operands with operators,
-  // which exceeds any realistic user input or post-conversion expression.
 
   return evaluateTokens(tokens);
 }
