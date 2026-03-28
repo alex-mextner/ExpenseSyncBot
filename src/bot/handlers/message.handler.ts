@@ -128,10 +128,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   // (the OTP prompt could land in a different thread than active_topic_id).
   if (text && !text.startsWith('/')) {
     const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
-    if (resolveOtpForGroup(telegramGroupId, text)) {
-      await ctx.send('🔄 Принято, синхронизируем...').catch(() => {});
-      return;
-    }
+    if (resolveOtpForGroup(telegramGroupId, text)) return;
   }
 
   // Check topic restriction

@@ -132,7 +132,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       const promptMsg = await sendMessage(
         env.BOT_TOKEN,
         group.telegram_group_id,
-        `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код из SMS сюда.`,
+        `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код из SMS в этот чат (есть 5 минут).`,
         otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
       );
 
@@ -169,6 +169,21 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
           ).catch(() => {});
         }
         throw err;
+      }
+
+      // Edit the OTP prompt to "accepted" and register it as the panel message so
+      // sync-service will update it to the real status when the sync completes.
+      if (promptMsg?.message_id) {
+        await editMessageText(
+          env.BOT_TOKEN,
+          group.telegram_group_id,
+          promptMsg.message_id,
+          '🔄 Принято, синхронизируем...',
+        ).catch(() => {});
+        database.bankConnections.update(connectionId, {
+          panel_message_id: promptMsg.message_id,
+          panel_message_thread_id: otpThreadId,
+        });
       }
 
       // Re-acquire the global shim mutex before the plugin resumes execution.
