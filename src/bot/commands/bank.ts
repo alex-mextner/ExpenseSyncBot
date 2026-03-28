@@ -816,8 +816,8 @@ export async function handleBankSettingsCallback(
   await ctx.answerCallbackQuery();
 
   const lastSync = conn.last_sync_at
-    ? `синхронизировано ${timeSince(conn.last_sync_at)} назад`
-    : 'первая синхронизация ещё не завершена';
+    ? `✅ Синхронизировано ${timeSince(conn.last_sync_at)} назад`
+    : '⌛ Первая синхронизация ещё не завершена';
   const errorLine =
     conn.last_error && conn.consecutive_failures > 0
       ? `\n⚠️ Последняя ошибка: ${conn.last_error}`
