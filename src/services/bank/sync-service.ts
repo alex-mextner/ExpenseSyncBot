@@ -3,13 +3,12 @@
 
 import { subDays } from 'date-fns';
 import cron from 'node-cron';
-import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
-import { convertToEUR } from '../currency/converter';
+import { convertAnyToEUR } from '../currency/converter';
 import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
@@ -361,7 +360,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       database.bankTransactions.setPrefill(inserted.id, prefilled.category, prefilled.comment);
 
       // Large transaction: compare EUR equivalent to threshold
-      const amountInEur = convertToEUR(amount, tx.currency as CurrencyCode);
+      const amountInEur = convertAnyToEUR(amount, tx.currency);
       const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
 
       const cardText = formatConfirmationCard(inserted, prefilled, conn.display_name, isLarge);
