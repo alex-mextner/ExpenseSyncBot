@@ -208,15 +208,32 @@ export function getBankList(): { key: string; name: string }[] {
 }
 
 /**
- * Finds a bank plugin by exact key or by prefix match (e.g. 'tbc' → 'tbc-ge').
- * Returns [resolvedKey, plugin] or null. Used for backward compatibility with DB
- * rows that may store the old short bank_name before auto-discovery renamed keys.
+ * Finds a bank plugin by key or display name. Tries in order:
+ * 1. Exact key match ('tbc-ge')
+ * 2. Key prefix match ('tbc' → 'tbc-ge')
+ * 3. Display name starts with query ('tbc' → 'TBC (GE)')
+ * 4. Display name contains query ('bank georgia' → 'TBC Bank Georgia...')
+ * Returns [resolvedKey, plugin] or null.
  */
 export function lookupBank(query: string): [string, BankPlugin] | null {
-  const exact = BANK_REGISTRY[query];
-  if (exact) return [query, exact];
-  const key = Object.keys(BANK_REGISTRY).find((k) => k.startsWith(`${query}-`));
-  const plugin = key ? BANK_REGISTRY[key] : undefined;
-  if (key && plugin) return [key, plugin];
+  const q = query.toLowerCase();
+  const entries = Object.entries(BANK_REGISTRY);
+
+  // 1. Exact key
+  const exact = BANK_REGISTRY[q];
+  if (exact) return [q, exact];
+
+  // 2. Key prefix ('tbc' → 'tbc-ge')
+  const byPrefix = entries.find(([k]) => k.startsWith(`${q}-`));
+  if (byPrefix) return byPrefix;
+
+  // 3. Display name starts with query
+  const byNameStart = entries.find(([, p]) => p.name.toLowerCase().startsWith(q));
+  if (byNameStart) return byNameStart;
+
+  // 4. Display name contains query
+  const byNameContains = entries.find(([, p]) => p.name.toLowerCase().includes(q));
+  if (byNameContains) return byNameContains;
+
   return null;
 }
