@@ -545,6 +545,44 @@ After each task (push, fix, review-and-fix, deploy — any unit of work), answer
 
 Also scan the conversation history for items explicitly deferred, noted as "pending", or silently dropped mid-discussion. Surface them as concrete suggestions.
 
+**At the end of each session**, document any new hard-won lessons in the relevant section of this file. If lessons don't fit an existing section, add a new one. This is mandatory — knowledge that lives only in chat history is lost.
+
+## Working with Third-Party Submodules
+
+### Before Writing Any Code
+
+Always read existing files in the target submodule first — especially existing tests and utility files — to understand its style conventions. Writing code without checking leads to a full rewrite.
+
+Checklist before touching a third-party submodule:
+1. Look at 2-3 existing test files to understand the test style
+2. Note: semicolons? TypeScript annotations in tests? `import from` or globals? Mock patterns?
+3. Check how the submodule installs deps (npm vs bun — some deps fail with bun)
+
+### Test Placement
+
+Tests for code inside a submodule belong **inside the submodule directory**, not in the parent project. Placing them in the parent pulls the submodule's `.ts` files into the parent's strict tsconfig, causing cascading type errors from pre-existing issues in third-party code.
+
+### Biome Exclusion
+
+Third-party submodules must be excluded from `biome.jsonc`. Biome v2+ syntax: use `!path/to/submodule` (no trailing `/**`).
+
+### Submodule Fork Workflow
+
+When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
+1. Fork the repo to your own account
+2. Commit the fix to the fork
+3. Update `.gitmodules` to point to the fork URL
+4. On the server: `git submodule update --remote` fetches from the fork
+5. Open a PR to upstream — when merged, revert `.gitmodules` to the upstream URL
+
+### ZenPlugins-Specific Conventions
+
+- **No trailing semicolons** (ASI style)
+- **Leading `;` guard** before `(expression)` when previous line has no `;`
+- **No `import from 'bun:test'`** — use Jest/bun globals (`describe`, `it`, `expect`, etc.) directly
+- **Mock pattern**: `global.fetch = async (url, init?) => new Response(...)` — real `Response`, not a cast
+- **Install deps**: `npm install --ignore-scripts` (bun fails on some git-sourced deps like `pdf-extraction`)
+
 ## Telegram Bot API Limits
 
 ### Message length
