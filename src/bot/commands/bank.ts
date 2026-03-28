@@ -45,8 +45,8 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
     wizardPromptMessages.delete(id);
   }
 
-  // Parse argument, e.g. /bank tbc
-  const arg = ctx.text?.split(' ')[1]?.toLowerCase();
+  // Parse argument, e.g. /bank tbc or /bank tbc-ge
+  const arg = ctx.text?.split(' ')[1]?.trim().toLowerCase();
 
   if (arg === 'отмена') {
     await handleWizardCancel(ctx, group.id);
@@ -55,16 +55,18 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
 
   if (arg) {
     const found = lookupBank(arg);
-    if (found) {
-      const [bankKey] = found;
-      const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
-      if (existing && existing.status !== 'setup') {
-        await showBankStatus(ctx, bot, existing, group);
-      } else {
-        await startWizard(ctx, bankKey, bot);
-      }
+    if (!found) {
+      await ctx.send(`Банк «${arg}» не найден. Используй /bank для выбора из списка.`);
       return;
     }
+    const [bankKey] = found;
+    const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
+    if (existing && existing.status !== 'setup') {
+      await showBankStatus(ctx, bot, existing, group);
+    } else {
+      await startWizard(ctx, bankKey, bot);
+    }
+    return;
   }
 
   const connections = database.bankConnections.findAllByGroupId(group.id);
