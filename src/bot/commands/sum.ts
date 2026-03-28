@@ -39,12 +39,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
   }
 
   // Silent sync budgets from Google Sheets
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    const syncedCount = await silentSyncBudgets(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      group.id,
-    );
+  if (group.google_refresh_token) {
+    const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
     if (syncedCount > 0) {
       await ctx.send(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }

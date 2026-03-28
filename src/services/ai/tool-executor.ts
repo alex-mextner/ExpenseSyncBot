@@ -488,7 +488,7 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
 
   try {
     const { silentSyncBudgets } = await import('../../bot/commands/budget');
-    await silentSyncBudgets(group.google_refresh_token, group.spreadsheet_id, ctx.groupId);
+    await silentSyncBudgets(group.google_refresh_token, ctx.groupId);
     return { success: true, output: 'Budgets synced to Google Sheets.' };
   } catch (err) {
     logger.error({ err }, '[TOOL] executeSyncBudgets failed');

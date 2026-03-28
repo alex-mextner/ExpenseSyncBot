@@ -263,9 +263,8 @@ export function createStartupMigration(bot: BotInstance) {
       } catch (err) {
         logger.error(
           { err },
-          `[STARTUP] Year-split migration FAILED for group ${group.id} — shutting down`,
+          `[STARTUP] Year-split migration FAILED for group ${group.id} — skipping`,
         );
-        process.exit(1);
       }
     }
   };

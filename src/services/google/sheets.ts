@@ -508,6 +508,11 @@ export async function createEmptyMonthTab(
   });
 
   const sheetId = addResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  if (sheetId === undefined || sheetId === null) {
+    throw new Error(
+      `Failed to get sheetId for new month tab "${month}" in spreadsheet ${spreadsheetId}`,
+    );
+  }
 
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
@@ -527,13 +532,13 @@ export async function createEmptyMonthTab(
               },
             ],
             fields: 'userEnteredValue,userEnteredFormat',
-            start: { sheetId: sheetId ?? 0, rowIndex: 0, columnIndex: 0 },
+            start: { sheetId, rowIndex: 0, columnIndex: 0 },
           },
         },
         {
           autoResizeDimensions: {
             dimensions: {
-              sheetId: sheetId ?? 0,
+              sheetId,
               dimension: 'COLUMNS',
               startIndex: 0,
               endIndex: 3,
@@ -687,6 +692,8 @@ const EXPENSES_TAB = 'Expenses';
 /**
  * Read all data rows from the Expenses tab as raw string arrays.
  * Skips the header row. Uses UNFORMATTED_VALUE to capture calculated values, not formulas.
+ * Note: formula cells (e.g. EUR calc column) become static values after a migration roundtrip.
+ * Row-relative formula references would break in the destination sheet anyway, so this is intentional.
  */
 export async function readExpenseRowsRaw(
   refreshToken: string,
@@ -716,7 +723,9 @@ export async function appendExpenseRowsRaw(
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${EXPENSES_TAB}!A2`,
-    valueInputOption: 'RAW',
+    // USER_ENTERED so numeric strings are parsed as numbers (not stored as text).
+    // Formulas are not preserved (see readExpenseRowsRaw doc for rationale).
+    valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: rows },
   });

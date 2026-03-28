@@ -84,7 +84,10 @@ function yearFromDateCell(cell: string): number | null {
 
 function normalizeMonth(month: string): string {
   const match = month.match(/^(\d{4})-(\d{1,2})$/);
-  if (!match) return month;
+  if (!match) {
+    logger.warn(`[MIGRATION] normalizeMonth: unexpected month format "${month}", passing through`);
+    return month;
+  }
   const [, year, m] = match;
   return `${year}-${(m ?? '').padStart(2, '0')}`;
 }

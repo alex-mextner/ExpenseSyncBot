@@ -33,6 +33,7 @@ export function registerMonthlyCron(bot: BotInstance): void {
 
       try {
         let spreadsheetId = database.groupSpreadsheets.getByYear(group.id, year);
+        let newYearUrl: string | null = null;
 
         if (!spreadsheetId) {
           // New year — create spreadsheet (Expenses tab only)
@@ -43,6 +44,7 @@ export function registerMonthlyCron(bot: BotInstance): void {
           );
           database.groupSpreadsheets.setYear(group.id, year, newId);
           spreadsheetId = newId;
+          newYearUrl = `https://docs.google.com/spreadsheets/d/${newId}`;
           logger.info(
             `[CRON] Created new spreadsheet for group ${group.id}, year ${year}: ${newId}`,
           );
@@ -81,8 +83,16 @@ export function registerMonthlyCron(bot: BotInstance): void {
           logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
         }
 
+        if (newYearUrl) {
+          notifyText += `\n\nНовая таблица ${year}: ${newYearUrl}`;
+        }
+
         await bot.api
-          .sendMessage({ chat_id: group.telegram_group_id, text: notifyText })
+          .sendMessage({
+            chat_id: group.telegram_group_id,
+            text: notifyText,
+            ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
+          })
           .catch((err: unknown) =>
             logger.error({ err }, `[CRON] Failed to notify group ${group.id}`),
           );

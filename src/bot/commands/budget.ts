@@ -317,18 +317,9 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
   // Remove command if it's present (e.g., "/budget" from "/budget sync")
   const args = parts[0]?.startsWith('/') ? parts.slice(1) : parts;
 
-  logger.info(`[BUDGET] Full text: ${fullText}`);
-  logger.info(`[BUDGET] Parts: ${parts}`);
-  logger.info(`[BUDGET] Args: ${args}`);
-  logger.info(`[BUDGET] Args length: ${args.length}`);
-
   // Silent sync budgets from Google Sheets
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    const syncedCount = await silentSyncBudgets(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      group.id,
-    );
+  if (group.google_refresh_token) {
+    const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
     if (syncedCount > 0) {
       await ctx.send(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
@@ -543,13 +534,16 @@ async function setBudget(
  */
 export async function silentSyncBudgets(
   googleRefreshToken: string,
-  spreadsheetId: string,
   groupId: number,
 ): Promise<number> {
   try {
     const now = new Date();
+    const currentYear = now.getFullYear();
     const currentMonth = format(now, 'yyyy-MM');
     const currentMonthAbbr = monthAbbrFromDate(now);
+
+    const spreadsheetId = database.groupSpreadsheets.getByYear(groupId, currentYear);
+    if (!spreadsheetId) return 0;
 
     const tabExists = await monthTabExists(googleRefreshToken, spreadsheetId, currentMonthAbbr);
     if (!tabExists) return 0;
