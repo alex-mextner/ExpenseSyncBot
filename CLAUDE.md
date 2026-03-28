@@ -283,6 +283,19 @@ Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/t
 - The middleware is registered in [src/bot/index.ts](src/bot/index.ts) before all handlers
 - Topic restriction checks still require extracting `message_thread_id` from context manually
 
+**Background workers: topic fallback pattern**
+
+When sending a message from a background worker (sync-service, cron jobs, etc.), use the bank panel thread with a fallback to the group's active topic:
+
+```ts
+const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
+await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text,
+  threadId !== null ? { message_thread_id: threadId } : undefined,
+);
+```
+
+Never send to the main chat (no thread) when the group has an `active_topic_id` — the user won't see messages from a topic-based group in the General channel.
+
 ### Testing
 
 Currently minimal tests. Test file example: [src/services/currency/parser.test.ts](src/services/currency/parser.test.ts)
