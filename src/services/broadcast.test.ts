@@ -68,11 +68,11 @@ describe('scheduleNewsBroadcast', () => {
     expect(cronSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('cron expression targets March 24 at 12:00', () => {
+  it('cron expression targets March 29 at 12:00', () => {
     const bot = makeMockBot();
     scheduleNewsBroadcast(bot as never);
     const [cronExpr] = cronSpy.mock.calls[0] as [string, ...unknown[]];
-    expect(cronExpr).toBe('0 12 24 3 *');
+    expect(cronExpr).toBe('0 12 29 3 *');
   });
 });
 
