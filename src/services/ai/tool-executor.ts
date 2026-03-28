@@ -10,6 +10,7 @@ import type { BankTransaction, BankTransactionFilters } from '../../database/typ
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
+import { renderTableToPng } from '../render/table-renderer.ts';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
@@ -71,6 +72,8 @@ export async function executeTool(
         return executeGetBankBalances(input, ctx);
       case 'find_missing_expenses':
         return await executeFindMissingExpenses(input, ctx);
+      case 'render_table':
+        return executeRenderTable(input, ctx);
       default:
         return { success: false, error: `Unknown tool: ${name}` };
     }
@@ -753,4 +756,28 @@ function resolvePeriodDates(period: string): { startDate: string; endDate: strin
     };
   }
   return { startDate: '2000-01-01', endDate: '2099-12-31' };
+}
+
+// === Render tools ===
+
+function executeRenderTable(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+  if (!ctx.sendPhoto) {
+    return { success: false, error: 'Image rendering not available in this context.' };
+  }
+
+  const title = input['title'] as string;
+  const markdown = input['markdown'] as string;
+  const caption = input['caption'] as string | undefined;
+
+  if (!title || !markdown) {
+    return { success: false, error: 'title and markdown are required' };
+  }
+
+  const sendPhoto = ctx.sendPhoto;
+
+  renderTableToPng({ title, markdown, ...(caption !== undefined ? { caption } : {}) })
+    .then((buffer: Buffer) => sendPhoto(buffer))
+    .catch((err: Error) => logger.error({ err }, 'render_table: failed to render or send'));
+
+  return { success: true, output: 'Таблица отрисовывается и будет отправлена в чат.' };
 }
