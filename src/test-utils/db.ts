@@ -29,6 +29,7 @@ export function clearTestDb(db: Database): void {
     DELETE FROM pending_expenses;
     DELETE FROM photo_processing_queue;
     DELETE FROM users;
+    DELETE FROM group_spreadsheets;
     DELETE FROM groups;
   `);
 }

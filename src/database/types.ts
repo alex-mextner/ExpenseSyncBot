@@ -262,6 +262,16 @@ export interface UpdateReceiptItemData {
 }
 
 /**
+ * Per-year spreadsheet mapping for a group
+ */
+export interface GroupSpreadsheet {
+  id: number;
+  group_id: number;
+  year: number;
+  spreadsheet_id: string;
+}
+
+/**
  * Expense item model (detailed items linked to expenses)
  */
 export interface ExpenseItem {
