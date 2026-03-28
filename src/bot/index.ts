@@ -1,6 +1,8 @@
 import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { database } from '../database';
+import { runYearSplitMigration } from '../services/google/budget-migration';
+import { createExpenseSpreadsheet } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
@@ -19,13 +21,14 @@ import { handleStatsCommand } from './commands/stats';
 import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
+import { registerMonthlyCron } from './cron';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
-import type { Ctx } from './types';
+import type { BotInstance, Ctx } from './types';
 
 const logger = createLogger('index');
 
@@ -145,6 +148,9 @@ export function createBot(): Bot {
     await handleExpenseMessage(ctx, bot);
   });
 
+  // Register monthly budget tab cron
+  registerMonthlyCron(bot);
+
   return bot;
 }
 
@@ -195,4 +201,72 @@ export async function startBot(): Promise<Bot> {
   logger.info('✓ Dev pipeline started');
 
   return bot;
+}
+
+/**
+ * One-time year-split migration: for each group whose existing spreadsheet pre-dates the
+ * current year, create a new current-year spreadsheet, copy current-year rows there,
+ * and clean up the old spreadsheet.
+ */
+export function createStartupMigration(bot: BotInstance) {
+  return async function runStartupYearSplitMigration(): Promise<void> {
+    const currentYear = new Date().getFullYear();
+    const groups = database.groups.findAll();
+
+    for (const group of groups) {
+      if (!group.google_refresh_token) continue;
+
+      const allSpreadsheets = database.groupSpreadsheets.listAll(group.id);
+      if (allSpreadsheets.length === 0) continue;
+
+      // Skip if current year already has a spreadsheet (migration already done or not needed)
+      const currentSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, currentYear);
+      if (currentSpreadsheetId) continue;
+
+      // Find the most recent prior-year spreadsheet to split from
+      const priorSpreadsheet = allSpreadsheets.find((s) => s.year < currentYear);
+      if (!priorSpreadsheet) continue;
+
+      try {
+        // 1. Create new current-year spreadsheet
+        const { spreadsheetId: newId, spreadsheetUrl: newUrl } = await createExpenseSpreadsheet(
+          group.google_refresh_token,
+          group.default_currency,
+          group.enabled_currencies,
+        );
+        database.groupSpreadsheets.setYear(group.id, currentYear, newId);
+        logger.info(`[STARTUP] Created ${currentYear} spreadsheet for group ${group.id}: ${newId}`);
+
+        // 2. Run year-split: move currentYear rows from old spreadsheet to new one
+        const backupUrl = await runYearSplitMigration(
+          group.google_refresh_token,
+          priorSpreadsheet.spreadsheetId,
+          newId,
+          currentYear,
+        );
+        if (backupUrl) {
+          logger.info(`[STARTUP] Year-split done for group ${group.id}. Backup: ${backupUrl}`);
+        }
+
+        // 3. Notify the group
+        await bot.api
+          .sendMessage({
+            chat_id: group.telegram_group_id,
+            text:
+              `Создана таблица ${currentYear}: ${newUrl}\n` +
+              `Данные за ${currentYear} перенесены из таблицы ${priorSpreadsheet.year}.`,
+            ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
+          })
+          .catch((err: unknown) =>
+            logger.error({ err }, `[STARTUP] Failed to notify group ${group.id}`),
+          );
+      } catch (err) {
+        logger.error(
+          { err },
+          `[STARTUP] Year-split migration FAILED for group ${group.id} — shutting down`,
+        );
+        process.exit(1);
+      }
+    }
+  };
 }
