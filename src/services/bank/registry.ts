@@ -8,9 +8,12 @@ import { fileURLToPath } from 'node:url';
 export interface ZenAccount {
   id: string;
   title: string;
-  balance: number;
-  currency: string;
+  balance?: number | null;
+  currency?: string;
+  // ZenPlugins convention: currency code is stored in 'instrument'
+  instrument?: string;
   type?: 'checking' | 'savings' | 'credit';
+  syncIds?: string[];
 }
 
 export interface ZenTransaction {

@@ -18,6 +18,11 @@ import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
 import { createZenMoneyShim } from './runtime';
 import { editMessageText, sendMessage } from './telegram-sender';
+import type {
+  AccountReferenceByData,
+  Merchant,
+  Transaction as ZenPluginsTransaction,
+} from './ZenPlugins/src/types/zenmoney';
 
 const logger = createLogger('sync-service');
 
@@ -147,22 +152,15 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       const hint = getOtpHint(conn.bank_name, prompt);
       const otpText = `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}${hint ? `\n\n💡 ${escapeHtml(hint)}` : ''}\n\nОтправь код сюда (есть 5 минут).`;
 
-      // Edit the existing panel in-place to avoid creating a second dangling message.
-      // Fall back to sendMessage if there is no panel yet.
-      let promptMsgId: number | null = conn.panel_message_id ?? null;
-      if (promptMsgId) {
-        await editMessageText(env.BOT_TOKEN, group.telegram_group_id, promptMsgId, otpText).catch(
-          () => {},
-        );
-      } else {
-        const sent = await sendMessage(
-          env.BOT_TOKEN,
-          group.telegram_group_id,
-          otpText,
-          otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
-        );
-        promptMsgId = sent?.message_id ?? null;
-      }
+      // Always send a new message for OTP prompts so it doesn't overwrite the
+      // credentials panel that is still visible above in the chat.
+      const sent = await sendMessage(
+        env.BOT_TOKEN,
+        group.telegram_group_id,
+        otpText,
+        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
+      );
+      const promptMsgId: number | null = sent?.message_id ?? null;
 
       // Release the global shim mutex while waiting for user OTP input so other sync
       // cycles are not blocked for the full 5-minute OTP wait window.
@@ -199,20 +197,14 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
         throw err;
       }
 
-      // Edit the OTP prompt to "accepted" and register it as the panel message so
-      // sync-service will update it to the real status when the sync completes.
-      if (promptMsgId) {
-        await editMessageText(
-          env.BOT_TOKEN,
-          group.telegram_group_id,
-          promptMsgId,
-          '⌛ Принято, синхронизируем...',
-        ).catch(() => {});
-        database.bankConnections.update(connectionId, {
-          panel_message_id: promptMsgId,
-          panel_message_thread_id: otpThreadId,
-        });
-      }
+      // Send a new "accepted" message — keep the original credentials panel intact
+      // so the final sync status continues to edit it.
+      await sendMessage(
+        env.BOT_TOKEN,
+        group.telegram_group_id,
+        '⌛ Принято, синхронизируем...',
+        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
+      ).catch(() => {});
 
       // Re-acquire the global shim mutex before the plugin resumes execution.
       const prevForReacquire = shimMutex;
@@ -300,14 +292,35 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       ).catch(() => {});
     }
 
+    // Build account currency map for ZenPlugins-format transaction normalization
+    const accountCurrencyMap = new Map<string, string>();
+    for (const acc of accounts) {
+      const currency = acc.instrument ?? acc.currency ?? '';
+      if (currency) accountCurrencyMap.set(acc.id, currency);
+    }
+
+    // Normalize transactions from ZenPlugins movements-based format to our flat ZenTransaction
+    const normalizedTransactions: ZenTransaction[] = [];
+    for (const rawTx of transactions) {
+      const normalized = normalizePluginsTransaction(rawTx, accountCurrencyMap);
+      if (normalized !== null) normalizedTransactions.push(normalized);
+      else logger.warn({ txId: 'unknown' }, 'Could not normalize transaction — skipping');
+    }
+    transactions = normalizedTransactions;
+
     // Upsert accounts
     for (const account of accounts) {
+      const currency = account.instrument ?? account.currency ?? '';
+      if (!currency) {
+        logger.warn({ accountId: account.id }, 'Account has no currency/instrument — skipping');
+        continue;
+      }
       database.bankAccounts.upsert({
         connection_id: connectionId,
         account_id: account.id,
         title: account.title,
-        balance: account.balance,
-        currency: account.currency,
+        balance: account.balance ?? 0,
+        currency,
         type: account.type ?? null,
       });
     }
@@ -517,6 +530,55 @@ async function handleSyncError(
       ).catch((e) => logger.error({ err: e }, 'Failed to send escalation alert'));
     }
   }
+}
+
+/** Converts ZenPlugins movements-based Transaction to our flat ZenTransaction.
+ *  Passes through objects that are already in ZenTransaction format. */
+function normalizePluginsTransaction(
+  raw: ZenTransaction | ZenPluginsTransaction,
+  accountCurrencyMap: Map<string, string>,
+): ZenTransaction | null {
+  if (!('movements' in raw)) return raw;
+
+  const movement = raw.movements[0];
+
+  // movement.id can be null for some transaction types (e.g. unresolved holds).
+  // Generate a deterministic synthetic ID so they are not silently dropped.
+  const acc = movement.account;
+  const accId = 'id' in acc ? acc.id : '';
+  const id =
+    movement.id ??
+    Buffer.from(
+      `synthetic:${movement.sum ?? 0}:${raw.date instanceof Date ? raw.date.getTime() : String(raw.date)}:${accId}`,
+    ).toString('base64');
+
+  const sum = movement.sum;
+  if (sum === null) return null;
+
+  const currency =
+    'instrument' in acc
+      ? (acc as AccountReferenceByData).instrument
+      : (accountCurrencyMap.get(acc.id) ?? '');
+
+  if (!currency) {
+    logger.warn({ txId: id }, 'No currency found for transaction — skipping');
+    return null;
+  }
+
+  const date = raw.date instanceof Date ? raw.date.toISOString() : String(raw.date);
+
+  const result: ZenTransaction = { id, sum, currency, date };
+
+  if (raw.merchant !== null && raw.merchant !== undefined) {
+    const title =
+      'title' in raw.merchant ? (raw.merchant as Merchant).title : raw.merchant.fullTitle;
+    if (title) result.merchant = title;
+    if (raw.merchant.mcc !== null) result.mcc = raw.merchant.mcc;
+  }
+
+  if (raw.comment) result.comment = raw.comment;
+
+  return result;
 }
 
 function determineSignType(tx: ZenTransaction): 'debit' | 'credit' | 'reversal' {
