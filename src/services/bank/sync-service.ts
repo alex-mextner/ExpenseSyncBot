@@ -1,7 +1,7 @@
 // Bank sync service — periodic sync via node-cron every 30 min.
 // Upserts accounts/transactions from connected banks, sends confirmation cards.
 
-import { subDays } from 'date-fns';
+import { format, subDays } from 'date-fns';
 import cron from 'node-cron';
 import { env } from '../../config/env';
 import { database } from '../../database';
@@ -12,7 +12,7 @@ import { convertAnyToEUR } from '../currency/converter';
 import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
-import { preFillTransaction } from './prefill';
+import { preFillTransactions } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
 import { createZenMoneyShim } from './runtime';
@@ -325,8 +325,10 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
     // Load approved merchant rules once for this cycle
     const approvedRules = database.merchantRules.findApproved();
+    const today = format(new Date(), 'yyyy-MM-dd');
 
-    // Process transactions
+    // Phase 1: insert all transactions into DB
+    const newPendingTxs: BankTransaction[] = [];
     for (const tx of transactions) {
       const amount = Math.abs(tx.sum);
       if (amount === 0) continue;
@@ -353,17 +355,40 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
         status,
       });
 
-      if (!inserted || status !== 'pending') continue;
+      if (inserted && status === 'pending') {
+        newPendingTxs.push(inserted);
+      }
+    }
 
-      // AI pre-fill and persist so the confirm callback can read it back
-      const prefilled = await preFillTransaction(inserted);
-      database.bankTransactions.setPrefill(inserted.id, prefilled.category, prefilled.comment);
+    // Phase 2: batch AI pre-fill for all new pending transactions
+    const prefillResults = await preFillTransactions(newPendingTxs, group.id);
+    for (let i = 0; i < newPendingTxs.length; i++) {
+      const tx = newPendingTxs[i];
+      const prefilled = prefillResults[i];
+      if (tx && prefilled) {
+        database.bankTransactions.setPrefill(tx.id, prefilled.category, '');
+      }
+    }
+
+    // Phase 3: send confirmation cards — only for today's transactions
+    for (let i = 0; i < newPendingTxs.length; i++) {
+      const inserted = newPendingTxs[i];
+      const prefilled = prefillResults[i];
+      if (!inserted || !prefilled) continue;
+
+      // Skip cards for old transactions — stored in DB but no card sent
+      if (inserted.date !== today) continue;
 
       // Large transaction: compare EUR equivalent to threshold
-      const amountInEur = convertAnyToEUR(amount, tx.currency);
+      const amountInEur = convertAnyToEUR(inserted.amount, inserted.currency);
       const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
 
-      const cardText = formatConfirmationCard(inserted, prefilled, conn.display_name, isLarge);
+      const cardText = formatConfirmationCard(
+        inserted,
+        prefilled.category,
+        conn.display_name,
+        isLarge,
+      );
 
       const result = await sendMessage(env.BOT_TOKEN, group.telegram_group_id, cardText, {
         ...(conn.panel_message_thread_id !== null
@@ -614,7 +639,7 @@ function applyMerchantRules(
 
 function formatConfirmationCard(
   tx: BankTransaction,
-  prefilled: { category: string; comment: string },
+  category: string,
   bankName: string,
   isLarge: boolean,
 ): string {
@@ -623,7 +648,7 @@ function formatConfirmationCard(
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
 
   return `${prefix} ${escapeHtml(bankName)} — ${tx.amount.toFixed(2)} ${escapeHtml(tx.currency)}
+📅 ${tx.date}
 📍 ${merchant}
-🗂 Категория: ${escapeHtml(prefilled.category)}
-💬 Комментарий: ${escapeHtml(prefilled.comment)}${mccLine}`;
+🗂 Категория: ${escapeHtml(category)}${mccLine}`;
 }
