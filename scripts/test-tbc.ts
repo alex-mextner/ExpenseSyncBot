@@ -179,6 +179,18 @@ if (setResultData) {
   transactions.push(...(setResultData.transactions ?? []));
 }
 
+// ─── Build account ID → currency map for transaction display ──────────────────
+
+type AnyObj = { [k: string]: unknown };
+const accountCurrencyMap = new Map<string, string>();
+for (const acc of accounts) {
+  const a = acc as AnyObj;
+  const id = a['id'] as string | undefined;
+  const currency =
+    (a['instrument'] as string | undefined) ?? (a['currency'] as string | undefined);
+  if (id && currency) accountCurrencyMap.set(id, currency);
+}
+
 // ─── Print results ─────────────────────────────────────────────────────────────
 
 console.log('\n=== ACCOUNTS ===');
@@ -186,14 +198,12 @@ if (accounts.length === 0) {
   console.log('  (none)');
 } else {
   for (const acc of accounts) {
-    const accAny = acc as { [k: string]: unknown };
-    const title = (accAny['title'] as string | undefined) ?? (accAny['id'] as string);
+    const a = acc as AnyObj;
+    const title = (a['title'] as string | undefined) ?? (a['id'] as string);
     const balance =
-      typeof accAny['balance'] === 'number' ? (accAny['balance'] as number).toFixed(2) : '?';
+      typeof a['balance'] === 'number' ? (a['balance'] as number).toFixed(2) : '?';
     const currency =
-      (accAny['instrument'] as string | undefined) ??
-      (accAny['currency'] as string | undefined) ??
-      '?';
+      (a['instrument'] as string | undefined) ?? (a['currency'] as string | undefined) ?? '?';
     console.log(`  ${title}: ${balance} ${currency}`);
   }
 }
@@ -205,8 +215,8 @@ if (transactions.length === 0) {
   const SAMPLE_SIZE = 20;
   const sample = transactions.slice(-SAMPLE_SIZE);
   for (const tx of sample) {
-    const txAny = tx as { [k: string]: unknown };
-    const movements = txAny['movements'] as Array<Record<string, unknown>> | undefined;
+    const txAny = tx as AnyObj;
+    const movements = txAny['movements'] as Array<AnyObj> | undefined;
     const firstMovement = movements?.[0];
     const sum =
       typeof firstMovement?.['sum'] === 'number'
@@ -214,17 +224,31 @@ if (transactions.length === 0) {
         : typeof txAny['sum'] === 'number'
           ? (txAny['sum'] as number).toFixed(2)
           : '?';
+
+    // Currency: try movement.account.instrument (AccountReferenceByData),
+    // then look up movement.account.id in accountCurrencyMap (AccountReferenceById),
+    // then fall back to top-level currency field.
+    const movementAccount = firstMovement?.['account'] as AnyObj | undefined;
     const currency =
-      (firstMovement?.['instrument'] as string | undefined) ??
+      (movementAccount?.['instrument'] as string | undefined) ??
+      (movementAccount?.['id'] !== undefined
+        ? accountCurrencyMap.get(movementAccount['id'] as string)
+        : undefined) ??
       (txAny['currency'] as string | undefined) ??
       '?';
+
+    const rawDate = txAny['date'];
     const date =
-      (txAny['date'] as string | undefined) ??
-      (movements?.[0]?.['date'] as string | undefined) ??
-      '?';
-    const merchant = txAny['merchant'] as Record<string, unknown> | undefined;
+      rawDate instanceof Date
+        ? rawDate.toISOString().split('T')[0]
+        : typeof rawDate === 'string'
+          ? rawDate.split('T')[0]
+          : '?';
+
+    const merchant = txAny['merchant'] as AnyObj | undefined;
     const label =
       (merchant?.['title'] as string | undefined) ??
+      (merchant?.['fullTitle'] as string | undefined) ??
       (txAny['comment'] as string | undefined) ??
       (txAny['id'] as string | undefined) ??
       '-';
