@@ -858,6 +858,54 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '029_create_group_spreadsheets',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS group_spreadsheets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id),
+            year INTEGER NOT NULL,
+            spreadsheet_id TEXT NOT NULL,
+            UNIQUE(group_id, year)
+          );
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_group_spreadsheets_group_year
+          ON group_spreadsheets(group_id, year);
+        `);
+
+        // Only migrate if groups.spreadsheet_id still exists (skip on dbs that ran the old 021).
+        const hasSpreadsheetCol = db
+          .query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('groups') WHERE name = 'spreadsheet_id'
+        `)
+          .get();
+
+        if (hasSpreadsheetCol?.count) {
+          // Migrate existing spreadsheet_id to the year of the group's earliest expense.
+          // Fallback: current_year - 1 (for groups with no expenses yet).
+          db.exec(`
+            INSERT OR IGNORE INTO group_spreadsheets (group_id, year, spreadsheet_id)
+            SELECT
+              g.id,
+              COALESCE(
+                (SELECT MIN(CAST(strftime('%Y', e.date) AS INTEGER)) FROM expenses e WHERE e.group_id = g.id),
+                CAST(strftime('%Y', 'now') AS INTEGER) - 1
+              ),
+              g.spreadsheet_id
+            FROM groups g
+            WHERE g.spreadsheet_id IS NOT NULL;
+          `);
+
+          // Drop the now-redundant column from groups
+          db.exec(`ALTER TABLE groups DROP COLUMN spreadsheet_id;`);
+        }
+
+        logger.info('✓ Created group_spreadsheets table, migrated existing spreadsheet_ids');
+      },
+    },
   ];
 
   // Check and run migrations

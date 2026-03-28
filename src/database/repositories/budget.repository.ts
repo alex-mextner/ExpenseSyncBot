@@ -76,57 +76,21 @@ export class BudgetRepository {
   }
 
   /**
-   * Get budget for month with fallback to latest available
+   * Get budget for exact month — no fallback
    */
   getBudgetForMonth(groupId: number, category: string, month: string): Budget | null {
-    // Try to get budget for specific month
-    const monthBudget = this.findByGroupCategoryMonth(groupId, category, month);
-
-    if (monthBudget) {
-      return monthBudget;
-    }
-
-    // Fallback to latest available budget for this category
-    return this.getLatestBudget(groupId, category);
+    return this.findByGroupCategoryMonth(groupId, category, month);
   }
 
   /**
-   * Get latest budget for category (fallback when month-specific doesn't exist)
-   */
-  getLatestBudget(groupId: number, category: string): Budget | null {
-    const query = this.db.query<Budget, [number, string]>(`
-      SELECT * FROM budgets
-      WHERE group_id = ? AND category = ?
-      ORDER BY month DESC
-      LIMIT 1
-    `);
-
-    return query.get(groupId, category) || null;
-  }
-
-  /**
-   * Get all budgets for specific month (with fallback to latest)
+   * Get all budgets for exact month — no inheritance loop
    */
   getAllBudgetsForMonth(groupId: number, month: string): Budget[] {
-    // Get all categories that have budgets
-    const categoriesQuery = this.db.query<{ category: string }, [number]>(`
-      SELECT DISTINCT category FROM budgets
-      WHERE group_id = ?
-    `);
-
-    const categories = categoriesQuery.all(groupId);
-
-    // For each category, get budget for month (with fallback)
-    const budgets: Budget[] = [];
-
-    for (const { category } of categories) {
-      const budget = this.getBudgetForMonth(groupId, category, month);
-      if (budget) {
-        budgets.push(budget);
-      }
-    }
-
-    return budgets;
+    return this.db
+      .query<Budget, [number, string]>(
+        'SELECT * FROM budgets WHERE group_id = ? AND month = ? ORDER BY category ASC',
+      )
+      .all(groupId, month);
   }
 
   /**
@@ -211,11 +175,8 @@ export class BudgetRepository {
     month: string,
     spentAmount: number,
   ): BudgetProgress | null {
-    const budget = this.getBudgetForMonth(groupId, category, month);
-
-    if (!budget) {
-      return null;
-    }
+    const budget = this.findByGroupCategoryMonth(groupId, category, month);
+    if (!budget) return null;
 
     const percentage =
       budget.limit_amount > 0 ? Math.round((spentAmount / budget.limit_amount) * 100) : 0;

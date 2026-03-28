@@ -178,64 +178,28 @@ describe('BudgetRepository', () => {
     });
   });
 
-  describe('getBudgetForMonth', () => {
-    test('returns exact month match', () => {
-      budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
-      const budget = budgetRepo.getBudgetForMonth(groupId, 'Food', '2024-01');
-      expect(budget).not.toBeNull();
-      expect(budget?.month).toBe('2024-01');
-    });
-
-    test('falls back to latest when exact month not found', () => {
-      budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
-      const budget = budgetRepo.getBudgetForMonth(groupId, 'Food', '2024-03');
-      expect(budget).not.toBeNull();
-      expect(budget?.month).toBe('2024-01');
-    });
-
-    test('returns null when no budget exists for category', () => {
-      expect(budgetRepo.getBudgetForMonth(groupId, 'NoCategory', '2024-01')).toBeNull();
-    });
-  });
-
-  describe('getLatestBudget', () => {
-    test('returns most recent budget by month', () => {
-      budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
+  describe('getBudgetForMonth (no inheritance)', () => {
+    test('returns budget for exact month match', () => {
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-03',
-        limit_amount: 350,
+        limit_amount: 500,
       });
+      const budget = budgetRepo.getBudgetForMonth(groupId, 'Food', '2024-03');
+      expect(budget).not.toBeNull();
+      expect(budget?.limit_amount).toBe(500);
+    });
+
+    test('returns null when no exact match — no fallback', () => {
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
-        month: '2024-02',
-        limit_amount: 320,
+        month: '2024-01',
+        limit_amount: 500,
       });
-
-      const latest = budgetRepo.getLatestBudget(groupId, 'Food');
-      expect(latest).not.toBeNull();
-      expect(latest?.month).toBe('2024-03');
-    });
-
-    test('returns null for non-existent category', () => {
-      expect(budgetRepo.getLatestBudget(groupId, 'NoSuch')).toBeNull();
+      const result = budgetRepo.getBudgetForMonth(groupId, 'Food', '2024-03');
+      expect(result).toBeNull();
     });
   });
 
@@ -282,40 +246,34 @@ describe('BudgetRepository', () => {
     });
   });
 
-  describe('getAllBudgetsForMonth', () => {
-    test('returns budgets for all categories for specified month', () => {
+  describe('getAllBudgetsForMonth (exact match only)', () => {
+    test('returns only budgets for the exact month', () => {
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount: 500,
       });
       budgetRepo.setBudget({
         group_id: groupId,
-        category: 'Rent',
-        month: '2024-01',
-        limit_amount: 1000,
+        category: 'Transport',
+        month: '2024-03',
+        limit_amount: 200,
       });
 
-      const budgets = budgetRepo.getAllBudgetsForMonth(groupId, '2024-01');
-      expect(budgets).toHaveLength(2);
-    });
-
-    test('uses fallback when month not available', () => {
-      budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
-      // No budget for 2024-03, should fall back to 2024-01
       const budgets = budgetRepo.getAllBudgetsForMonth(groupId, '2024-03');
       expect(budgets).toHaveLength(1);
-      expect(budgets[0]?.category).toBe('Food');
+      expect(budgets[0]?.category).toBe('Transport');
     });
 
-    test('returns empty array for group with no budgets', () => {
-      expect(budgetRepo.getAllBudgetsForMonth(groupId, '2024-01')).toEqual([]);
+    test('returns empty array when no budgets for month', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Food',
+        month: '2024-01',
+        limit_amount: 500,
+      });
+      expect(budgetRepo.getAllBudgetsForMonth(groupId, '2024-03')).toHaveLength(0);
     });
   });
 

@@ -370,7 +370,7 @@ export async function saveExpenseToSheet(
   }
 
   // Silent sync budgets from Google Sheets
-  await silentSyncBudgets(group.google_refresh_token, group.spreadsheet_id, group.id);
+  await silentSyncBudgets(group.google_refresh_token, group.id);
 
   const { getExpenseRecorder } = await import('../../services/expense-recorder');
   const recorder = getExpenseRecorder();

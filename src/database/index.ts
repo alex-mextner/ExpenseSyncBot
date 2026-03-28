@@ -11,6 +11,7 @@ import { DevTaskRepository } from './repositories/dev-task.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
 import { ExpenseItemsRepository } from './repositories/expense-items.repository';
 import { GroupRepository } from './repositories/group.repository';
+import { GroupSpreadsheetRepository } from './repositories/group-spreadsheet.repository';
 import { MerchantRulesRepository } from './repositories/merchant-rules.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
@@ -24,6 +25,7 @@ import { setupDatabase } from './schema';
 export class DatabaseService {
   public db: Database;
   public groups: GroupRepository;
+  public groupSpreadsheets: GroupSpreadsheetRepository;
   public users: UserRepository;
   public categories: CategoryRepository;
   public pendingExpenses: PendingExpenseRepository;
@@ -44,6 +46,7 @@ export class DatabaseService {
   constructor() {
     this.db = setupDatabase();
     this.groups = new GroupRepository(this.db);
+    this.groupSpreadsheets = new GroupSpreadsheetRepository(this.db);
     this.users = new UserRepository(this.db);
     this.categories = new CategoryRepository(this.db);
     this.pendingExpenses = new PendingExpenseRepository(this.db);

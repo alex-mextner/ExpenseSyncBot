@@ -10,12 +10,6 @@ import type { BankTransaction, BankTransactionFilters } from '../../database/typ
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
-import {
-  createBudgetSheet,
-  hasBudgetSheet,
-  readBudgetData,
-  writeBudgetRow,
-} from '../google/sheets';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
@@ -366,32 +360,6 @@ async function executeSetBudget(
     currency,
   });
 
-  // Sync to Google Sheets
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    try {
-      const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-      if (!hasSheet) {
-        const categories = database.categories.getCategoryNames(ctx.groupId);
-        await createBudgetSheet(
-          group.google_refresh_token,
-          group.spreadsheet_id,
-          categories,
-          100,
-          currency,
-        );
-      }
-      await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-        month,
-        category,
-        limit: amount,
-        currency,
-      });
-    } catch (err) {
-      logger.error({ err: err }, '[TOOL] Failed to write budget to Google Sheets');
-      // Non-fatal: budget is saved in DB
-    }
-  }
-
   return {
     success: true,
     output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}`,
@@ -525,49 +493,14 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
     return { success: false, error: 'Google Sheets not connected' };
   }
 
-  const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-  if (!hasSheet) {
-    return { success: false, error: 'Budget sheet not found in Google Sheets' };
+  try {
+    const { silentSyncBudgets } = await import('../../bot/commands/budget');
+    await silentSyncBudgets(group.google_refresh_token, ctx.groupId);
+    return { success: true, output: 'Budgets synced to Google Sheets.' };
+  } catch (err) {
+    logger.error({ err }, '[TOOL] executeSyncBudgets failed');
+    return { success: false, error: 'Sync failed' };
   }
-
-  const budgetsFromSheet = await readBudgetData(group.google_refresh_token, group.spreadsheet_id);
-  if (budgetsFromSheet.length === 0) {
-    return { success: true, output: 'No budgets found in Google Sheets.' };
-  }
-
-  let syncedCount = 0;
-  for (const budgetData of budgetsFromSheet) {
-    if (!database.categories.exists(ctx.groupId, budgetData.category)) {
-      database.categories.create({ group_id: ctx.groupId, name: budgetData.category });
-    }
-
-    const existing = database.budgets.findByGroupCategoryMonth(
-      ctx.groupId,
-      budgetData.category,
-      budgetData.month,
-    );
-
-    const hasChanged =
-      !existing ||
-      existing.limit_amount !== budgetData.limit ||
-      existing.currency !== budgetData.currency;
-
-    if (hasChanged) {
-      database.budgets.setBudget({
-        group_id: ctx.groupId,
-        category: budgetData.category,
-        month: budgetData.month,
-        limit_amount: budgetData.limit,
-        currency: budgetData.currency,
-      });
-      syncedCount++;
-    }
-  }
-
-  return {
-    success: true,
-    output: `Synced ${syncedCount} budget entries from Google Sheets.`,
-  };
 }
 
 // === Settings tools ===

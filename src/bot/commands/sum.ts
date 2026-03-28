@@ -3,7 +3,7 @@ import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
-import { createBudgetSheet, hasBudgetSheet } from '../../services/google/sheets';
+
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
@@ -39,12 +39,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
   }
 
   // Silent sync budgets from Google Sheets
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    const syncedCount = await silentSyncBudgets(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      group.id,
-    );
+  if (group.google_refresh_token) {
+    const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
     if (syncedCount > 0) {
       await ctx.send(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
@@ -247,28 +243,6 @@ async function addBudgetInfo(
 ): Promise<void> {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
-
-  // Ensure Budget sheet exists
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-    if (!hasSheet) {
-      const categories = database.categories.getCategoryNames(group.id);
-      if (categories.length > 0) {
-        try {
-          await createBudgetSheet(
-            group.google_refresh_token,
-            group.spreadsheet_id,
-            categories,
-            100,
-            group.default_currency,
-          );
-          logger.info('[SUM] Budget sheet created');
-        } catch (err) {
-          logger.error({ err: err }, '[SUM] Failed to create Budget sheet');
-        }
-      }
-    }
-  }
 
   // Get budgets for current month
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
