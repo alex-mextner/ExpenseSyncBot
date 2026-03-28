@@ -731,7 +731,7 @@ describe('executeSetCustomPrompt', () => {
       ctx,
     );
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Custom prompt set');
+    expect(result.output).toContain('Custom prompt updated');
     expect(mockGroups.update).toHaveBeenCalledWith(456, {
       custom_prompt: 'Always respond in Russian',
     });
