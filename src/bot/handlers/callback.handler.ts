@@ -19,6 +19,7 @@ import {
   handleBankSetupCallback,
   handleBankSyncCallback,
   handleBankWizardCancelCallback,
+  handleBankWizardStartCallback,
 } from '../commands/bank';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
@@ -226,6 +227,16 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankReconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_wizard_start': {
+        const bankKey = params.join(':');
+        if (!chatId || !bankKey) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankWizardStartCallback(ctx, bot, bankKey, chatId);
         break;
       }
 

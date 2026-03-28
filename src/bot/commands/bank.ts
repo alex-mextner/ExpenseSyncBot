@@ -1,5 +1,4 @@
 // /bank command — setup wizard, status panel, and confirmation flow handlers.
-import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankConnection, Group } from '../../database/types';
 import {
@@ -62,7 +61,7 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
       if (existing && existing.status !== 'setup') {
         await showBankStatus(ctx, bot, existing, group);
       } else {
-        await startWizard(ctx, group.id, bankKey, bot);
+        await startWizard(ctx, bankKey, bot);
       }
       return;
     }
@@ -98,57 +97,22 @@ async function showNoBanksPanel(ctx: Ctx['Message']): Promise<void> {
   });
 }
 
-async function startWizard(
-  ctx: Ctx['Message'],
-  groupId: number,
-  bankKey: string,
-  bot: BotInstance,
-): Promise<void> {
+async function startWizard(ctx: Ctx['Message'], bankKey: string, bot: BotInstance): Promise<void> {
   const plugin = BANK_REGISTRY[bankKey];
   if (!plugin) return;
 
-  // Check if there's already an active/disconnected connection for this bank
-  const existing = database.bankConnections.findByGroupAndBank(groupId, bankKey);
-  if (existing) {
-    wizardPromptMessages.delete(existing.id);
-    database.bankConnections.deleteById(existing.id);
-  }
-
-  const newConn = database.bankConnections.create({
-    group_id: groupId,
-    bank_name: bankKey,
-    display_name: plugin.name,
-    status: 'setup',
-  });
-
-  // Banks with no user-input fields: store defaults and activate immediately
-  if (plugin.fields.length === 0) {
-    if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
-      database.bankCredentials.upsert(newConn.id, encryptData(JSON.stringify(plugin.defaults)));
-    }
-    database.bankConnections.update(newConn.id, { status: 'active' });
-    activateNewConnection(newConn.id);
-    await ctx.send(buildConnectionCompleteText(plugin.name));
-    return;
-  }
-
-  const firstField = plugin.fields[0];
   const chatId = ctx.chat?.id;
-  if (chatId) {
-    const sent = await bot.api.sendMessage({
-      chat_id: chatId,
-      text: buildWizardStartText(plugin.name, firstField),
-      reply_markup: {
-        inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
-      },
-      link_preview_options: { is_disabled: true },
-    });
-    wizardPromptMessages.set(newConn.id, {
-      messageId: sent.message_id,
-      sensitive: isPasswordField(firstField),
-      fieldPrompt: resolveFieldPrompt(firstField),
-    });
-  }
+  if (!chatId) return;
+
+  // Show info screen first — the user clicks "🔓 Подключить" to proceed.
+  await bot.api.sendMessage({
+    chat_id: chatId,
+    text: buildWizardInfoText(plugin.name),
+    reply_markup: {
+      inline_keyboard: [[{ text: '🔓 Подключить', callback_data: `bank_wizard_start:${bankKey}` }]],
+    },
+    link_preview_options: { is_disabled: true },
+  });
 }
 
 async function handleWizardCancel(ctx: Ctx['Message'], groupId: number): Promise<void> {
@@ -252,22 +216,38 @@ export async function handleWizardInput(
     database.bankCredentials.upsert(setupConn.id, encryptData(JSON.stringify(merged)));
   }
 
-  // Wait up to 3 s for quick failures (auth errors surface within ~500 ms).
   wizardPromptMessages.delete(setupConn.id);
   database.bankConnections.update(setupConn.id, { status: 'active' });
-  await Promise.race([
-    activateNewConnection(setupConn.id),
-    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-  ]);
-  const freshConn = database.bankConnections.findById(setupConn.id);
-  if (freshConn && freshConn.consecutive_failures > 0 && freshConn.last_error) {
-    await ctx.send(
-      `❌ ${plugin.name} — ошибка при первой синхронизации:\n${freshConn.last_error}\n\n` +
-        `Проверь логин и пароль, затем нажми ⚙️ → 🔄 Переподключить`,
-    );
-  } else {
-    await ctx.send(buildConnectionCompleteText(plugin.name));
+
+  // Send the "connecting" panel and store its message ID so sync-service can update it.
+  const panelThreadId = (ctx.update?.message?.message_thread_id as number | undefined) ?? null;
+  if (chatId) {
+    if (setupConn.panel_message_id) {
+      // Reconnect path: edit the existing panel.
+      await bot.api
+        .editMessageText({
+          chat_id: chatId,
+          message_id: setupConn.panel_message_id,
+          text: buildConnectingText(plugin.name),
+        })
+        .catch(() => {});
+    } else {
+      // Fresh connection: send a new panel message.
+      const panelMsg = await bot.api.sendMessage({
+        chat_id: chatId,
+        text: buildConnectingText(plugin.name),
+        ...(panelThreadId !== null ? { message_thread_id: panelThreadId } : {}),
+      });
+      database.bankConnections.update(setupConn.id, {
+        panel_message_id: panelMsg.message_id,
+        panel_message_thread_id: panelThreadId,
+      });
+    }
   }
+
+  activateNewConnection(setupConn.id).catch((err) =>
+    logger.error({ err, connectionId: setupConn.id }, 'Background activation failed'),
+  );
 
   logger.info({ connectionId: setupConn.id, bank: setupConn.bank_name }, 'Bank wizard completed');
   return true;
@@ -598,31 +578,24 @@ function buildFieldPromptText(field: CredentialField | undefined): string {
   return `${prompt}:${isPasswordField(field) ? SECURITY_NOTE : ''}`;
 }
 
-function buildWizardStartText(bankName: string, firstField: CredentialField | undefined): string {
+function buildWizardInfoText(bankName: string): string {
   return (
-    `🏦 Подключение ${bankName}\n\n` +
+    `🏦 ${bankName}\n\n` +
     `После подключения бот будет автоматически:\n` +
     `• Получать транзакции каждые 30 минут\n` +
     `• Предлагать категорию через ИИ\n` +
     `• Ждать твоего подтверждения перед записью\n` +
     `• Синхронизировать с Google Sheets\n\n` +
-    `@${env.BOT_USERNAME} покажи баланс карты — узнать баланс через ИИ\n` +
-    `/bank — управление подключёнными банками\n\n` +
-    `Вводи данные для входа в интернет-банк:\n\n` +
-    `${buildFieldPromptText(firstField)}`
+    `Транзакции получаем через ZenPlugins — open-source: github.com/zenmoney/ZenPlugins`
   );
 }
 
-function buildConnectionCompleteText(bankName: string): string {
-  return (
-    `✅ ${bankName} подключён!\n\n` +
-    `Транзакции будут появляться здесь — каждая с предложением подтвердить:\n` +
-    `💳 ${bankName} — 45.50 GEL · Кафе\n` +
-    `[✅ Принять] [✏️ Исправить]\n\n` +
-    `Первая синхронизация запущена прямо сейчас.\n\n` +
-    `/bank — статус и управление\n` +
-    `@${env.BOT_USERNAME} покажи баланс карты — спросить ИИ`
-  );
+function buildWizardStartText(bankName: string, firstField: CredentialField | undefined): string {
+  return `🏦 ${bankName} — данные для входа\n\n${buildFieldPromptText(firstField)}`;
+}
+
+function buildConnectingText(bankName: string): string {
+  return `⏳ ${bankName} — подключаем...\n\nПервая синхронизация запущена. Статус появится здесь.`;
 }
 
 // ─── Callback entry points ────────────────────────────────────────────────────
@@ -632,6 +605,53 @@ function buildConnectionCompleteText(bankName: string): string {
  * Starts the setup wizard for the selected bank.
  */
 export async function handleBankSetupCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  bankKey: string,
+  chatId: number,
+): Promise<void> {
+  const plugin = BANK_REGISTRY[bankKey];
+  if (!plugin) {
+    await ctx.answerCallbackQuery({ text: 'Банк не найден' });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+
+  // Show info screen — the user clicks "🔓 Подключить" to actually start the wizard.
+  const infoText = buildWizardInfoText(plugin.name);
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '🔓 Подключить', callback_data: `bank_wizard_start:${bankKey}` },
+        { text: '← Назад', callback_data: 'bank_letter_nav' },
+      ],
+    ],
+  };
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: infoText,
+        reply_markup: keyboard,
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  await ctx.send(infoText, { reply_markup: keyboard });
+}
+
+/**
+ * Called when user clicks "🔓 Подключить" on the bank info screen.
+ * Creates the connection and starts credential entry.
+ */
+export async function handleBankWizardStartCallback(
   ctx: Ctx['CallbackQuery'],
   bot: BotInstance,
   bankKey: string,
@@ -674,21 +694,81 @@ export async function handleBankSetupCallback(
     status: 'setup',
   });
 
-  // Banks with no user-input fields: store defaults and activate immediately
+  const messageId = ctx.message?.id;
+  const threadId =
+    (ctx.update?.callback_query?.message as { message_thread_id?: number } | undefined)
+      ?.message_thread_id ?? null;
+
   if (plugin.fields.length === 0) {
+    // No credential fields — activate immediately and show connecting panel.
     if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
       database.bankCredentials.upsert(newConn.id, encryptData(JSON.stringify(plugin.defaults)));
     }
     database.bankConnections.update(newConn.id, { status: 'active' });
-    activateNewConnection(newConn.id);
-    await ctx.send(buildConnectionCompleteText(plugin.name));
+
+    let panelMsgId: number | null = null;
+    if (messageId) {
+      try {
+        await bot.api.editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          text: buildConnectingText(plugin.name),
+        });
+        panelMsgId = messageId;
+      } catch {
+        // fall through
+      }
+    }
+    if (panelMsgId === null) {
+      const sent = await bot.api.sendMessage({
+        chat_id: chatId,
+        text: buildConnectingText(plugin.name),
+        ...(threadId !== null ? { message_thread_id: threadId } : {}),
+      });
+      panelMsgId = sent.message_id;
+    }
+
+    database.bankConnections.update(newConn.id, {
+      panel_message_id: panelMsgId,
+      panel_message_thread_id: threadId,
+    });
+
+    activateNewConnection(newConn.id).catch((err) =>
+      logger.error({ err, connectionId: newConn.id }, 'Background activation failed'),
+    );
     return;
   }
 
+  // Has credential fields — edit info screen to show the first field prompt.
   const firstField = plugin.fields[0];
+  const firstFieldText = buildWizardStartText(plugin.name, firstField);
+
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: firstFieldText,
+        reply_markup: {
+          inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
+        },
+        link_preview_options: { is_disabled: true },
+      });
+      wizardPromptMessages.set(newConn.id, {
+        messageId,
+        sensitive: isPasswordField(firstField),
+        fieldPrompt: resolveFieldPrompt(firstField),
+      });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+
+  // Fallback: send new message
   const sent = await bot.api.sendMessage({
     chat_id: chatId,
-    text: buildWizardStartText(plugin.name, firstField),
+    text: firstFieldText,
     reply_markup: {
       inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
     },
@@ -948,8 +1028,21 @@ export async function handleBankReconnectCallback(
       database.bankCredentials.upsert(conn.id, encryptData(JSON.stringify(plugin.defaults)));
     }
     database.bankConnections.update(conn.id, { status: 'active' });
-    activateNewConnection(conn.id);
-    await ctx.send(buildConnectionCompleteText(plugin.name));
+
+    // Edit the existing panel to "connecting" state — sync-service will update it on completion.
+    if (conn.panel_message_id) {
+      await bot.api
+        .editMessageText({
+          chat_id: chatId,
+          message_id: conn.panel_message_id,
+          text: buildConnectingText(plugin.name),
+        })
+        .catch(() => {});
+    }
+
+    activateNewConnection(conn.id).catch((err) =>
+      logger.error({ err, connectionId: conn.id }, 'Background reconnect failed'),
+    );
     return;
   }
 
