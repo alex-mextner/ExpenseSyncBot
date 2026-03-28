@@ -341,6 +341,16 @@ async function showBankStatus(
   conn: BankConnection,
   group: Group,
 ): Promise<void> {
+  if (conn.panel_message_id) {
+    try {
+      await bot.api.deleteMessage({
+        chat_id: group.telegram_group_id,
+        message_id: conn.panel_message_id,
+      });
+    } catch {
+      // already gone
+    }
+  }
   const text = buildBankStatusText(conn);
   const sent = await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
