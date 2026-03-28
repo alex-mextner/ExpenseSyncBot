@@ -3,6 +3,7 @@ import type { CurrencyCode } from '../../config/constants';
 import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
+import type { MonthAbbr } from './month-abbr';
 import { getAuthenticatedClient } from './oauth';
 
 const logger = createLogger('sheets');
@@ -788,6 +789,316 @@ export async function hasBudgetSheet(
     logger.error({ err: err }, '[SHEETS] Failed to check Budget sheet');
     return false;
   }
+}
+
+// ── Monthly budget tab functions ────────────────────────────────────────────
+
+export interface BudgetRow {
+  category: string;
+  limit: number;
+  currency: CurrencyCode;
+}
+
+const MONTH_TAB_HEADERS = ['Category', 'Limit', 'Currency'];
+
+/**
+ * Check if a monthly budget tab (e.g. "Mar") exists in the spreadsheet
+ */
+export async function monthTabExists(
+  refreshToken: string,
+  spreadsheetId: string,
+  month: MonthAbbr,
+): Promise<boolean> {
+  try {
+    const auth = getAuthenticatedClient(refreshToken);
+    const sheets = google.sheets({ version: 'v4', auth });
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    return !!spreadsheet.data.sheets?.find((s) => s.properties?.title === month);
+  } catch (err) {
+    logger.error({ err }, `[SHEETS] monthTabExists failed for ${month}`);
+    return false;
+  }
+}
+
+/**
+ * Create an empty monthly budget tab with header row (Category | Limit | Currency)
+ */
+export async function createEmptyMonthTab(
+  refreshToken: string,
+  spreadsheetId: string,
+  month: MonthAbbr,
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const addResponse = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          addSheet: {
+            properties: {
+              title: month,
+              gridProperties: { frozenRowCount: 1 },
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  const sheetId = addResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateCells: {
+            rows: [
+              {
+                values: MONTH_TAB_HEADERS.map((header) => ({
+                  userEnteredValue: { stringValue: header },
+                  userEnteredFormat: {
+                    textFormat: { bold: true },
+                    backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                  },
+                })),
+              },
+            ],
+            fields: 'userEnteredValue,userEnteredFormat',
+            start: { sheetId: sheetId ?? 0, rowIndex: 0, columnIndex: 0 },
+          },
+        },
+        {
+          autoResizeDimensions: {
+            dimensions: {
+              sheetId: sheetId ?? 0,
+              dimension: 'COLUMNS',
+              startIndex: 0,
+              endIndex: 3,
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Created empty month tab: ${month}`);
+}
+
+/**
+ * Read all budget rows from a monthly tab
+ */
+export async function readMonthBudget(
+  refreshToken: string,
+  spreadsheetId: string,
+  month: MonthAbbr,
+): Promise<BudgetRow[]> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${month}!A2:C`,
+    });
+
+    const rows = response.data.values ?? [];
+    return rows
+      .filter((r) => r.length >= 2)
+      .map(([category, limitStr, currencyStr]) => ({
+        category: (category as string).trim(),
+        limit: parseFloat(limitStr as string),
+        currency: ((currencyStr as string | undefined)?.trim() || 'EUR') as CurrencyCode,
+      }))
+      .filter((r) => r.category && !Number.isNaN(r.limit));
+  } catch (err) {
+    logger.error({ err }, `[SHEETS] readMonthBudget failed for ${month}`);
+    return [];
+  }
+}
+
+/**
+ * Write or update a single budget row in a monthly tab (upsert by category)
+ */
+export async function writeMonthBudgetRow(
+  refreshToken: string,
+  spreadsheetId: string,
+  month: MonthAbbr,
+  row: BudgetRow,
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${month}!A2:C`,
+  });
+
+  const existingRows = response.data.values ?? [];
+  let targetRow = -1;
+  for (let i = 0; i < existingRows.length; i++) {
+    if (
+      (existingRows[i]?.[0] as string | undefined)?.toLowerCase() === row.category.toLowerCase()
+    ) {
+      targetRow = i + 2; // 1-indexed + header row
+      break;
+    }
+  }
+
+  const values = [[row.category, row.limit, row.currency]];
+
+  if (targetRow !== -1) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${month}!A${targetRow}:C${targetRow}`,
+      valueInputOption: 'RAW',
+      requestBody: { values },
+    });
+  } else {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${month}!A2:C`,
+      valueInputOption: 'RAW',
+      requestBody: { values },
+    });
+  }
+}
+
+/**
+ * Clone a monthly tab from one spreadsheet to another (cross-spreadsheet supported).
+ * Uses the Google Sheets copyTo API, then renames the resulting sheet.
+ */
+export async function cloneMonthTab(
+  refreshToken: string,
+  sourceSpreadsheetId: string,
+  sourceMonth: MonthAbbr,
+  targetSpreadsheetId: string,
+  targetMonth: MonthAbbr,
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  // Find source sheet ID
+  const sourceSpreadsheet = await sheets.spreadsheets.get({ spreadsheetId: sourceSpreadsheetId });
+  const sourceSheet = sourceSpreadsheet.data.sheets?.find(
+    (s) => s.properties?.title === sourceMonth,
+  );
+  const sourceSheetId = sourceSheet?.properties?.sheetId;
+  if (sourceSheetId === undefined || sourceSheetId === null) {
+    throw new Error(`Source tab "${sourceMonth}" not found in ${sourceSpreadsheetId}`);
+  }
+
+  // Copy sheet to target spreadsheet
+  const copyResponse = await sheets.spreadsheets.sheets.copyTo({
+    spreadsheetId: sourceSpreadsheetId,
+    sheetId: sourceSheetId,
+    requestBody: { destinationSpreadsheetId: targetSpreadsheetId },
+  });
+
+  const newSheetId = copyResponse.data.sheetId;
+  if (newSheetId === undefined || newSheetId === null) {
+    throw new Error('copyTo did not return a sheetId');
+  }
+
+  // Rename the copied sheet to targetMonth
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: targetSpreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateSheetProperties: {
+            properties: { sheetId: newSheetId, title: targetMonth },
+            fields: 'title',
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Cloned ${sourceMonth} → ${targetMonth}`);
+}
+
+// ── Raw expense row helpers (used by year-split migration) ──────────────────
+
+const EXPENSES_TAB = 'Expenses';
+
+/**
+ * Read all data rows from the Expenses tab as raw string arrays.
+ * Skips the header row. Uses UNFORMATTED_VALUE to capture calculated values, not formulas.
+ */
+export async function readExpenseRowsRaw(
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<string[][]> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2:Z`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  return (response.data.values ?? []).map((row) => row.map((cell) => String(cell ?? '')));
+}
+
+/**
+ * Append raw rows to the Expenses tab.
+ */
+export async function appendExpenseRowsRaw(
+  refreshToken: string,
+  spreadsheetId: string,
+  rows: string[][],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: rows },
+  });
+}
+
+/**
+ * Delete rows from the Expenses tab by their 1-based sheet row indices.
+ * Sorted and processed in reverse order to avoid index shifting.
+ * Uses the Expenses tab's sheetId (resolved from spreadsheet metadata).
+ */
+export async function deleteExpenseRowsByIndex(
+  refreshToken: string,
+  spreadsheetId: string,
+  rowIndices: number[],
+): Promise<void> {
+  if (rowIndices.length === 0) return;
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
+  const sheetId = expensesSheet?.properties?.sheetId;
+  if (sheetId === undefined) throw new Error(`"${EXPENSES_TAB}" tab not found in ${spreadsheetId}`);
+
+  // Process in reverse order to avoid row-index shifting
+  const sorted = [...rowIndices].sort((a, b) => b - a);
+
+  const requests = sorted.map((rowIdx) => ({
+    deleteDimension: {
+      range: {
+        sheetId,
+        dimension: 'ROWS' as const,
+        startIndex: rowIdx - 1, // 0-based
+        endIndex: rowIdx, // exclusive
+      },
+    },
+  }));
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
 }
 
 /**
