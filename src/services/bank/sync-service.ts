@@ -206,6 +206,16 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     });
     await prevMutex;
 
+    // Show connecting progress now that we have the mutex and are about to scrape.
+    if (conn.panel_message_id) {
+      await editMessageText(
+        env.BOT_TOKEN,
+        group.telegram_group_id,
+        conn.panel_message_id,
+        `🔄 ${escapeHtml(conn.display_name)} — подключаемся...`,
+      ).catch(() => {});
+    }
+
     let accounts: ZenAccount[] = [];
     let transactions: ZenTransaction[] = [];
 
@@ -237,6 +247,18 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
       releaseMutex(); // release before cancelling OTP so other syncs can queue up
       cancelOtpRequest(connectionId); // clean up if plugin exited without consuming the OTP
+    }
+
+    // Scrape done — re-read panel_message_id (OTP handler may have updated it) and show
+    // intermediate progress so the user sees we're still working.
+    const connAfterScrape = database.bankConnections.findById(connectionId);
+    if (connAfterScrape?.panel_message_id) {
+      await editMessageText(
+        env.BOT_TOKEN,
+        group.telegram_group_id,
+        connAfterScrape.panel_message_id,
+        `🔄 ${escapeHtml(conn.display_name)} — обрабатываем данные...`,
+      ).catch(() => {});
     }
 
     // Upsert accounts

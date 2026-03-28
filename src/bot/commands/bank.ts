@@ -109,7 +109,14 @@ async function startWizard(ctx: Ctx['Message'], bankKey: string, bot: BotInstanc
     chat_id: chatId,
     text: buildWizardInfoText(plugin.name),
     reply_markup: {
-      inline_keyboard: [[{ text: '🔓 Подключить', callback_data: `bank_wizard_start:${bankKey}` }]],
+      inline_keyboard: [
+        [
+          {
+            text: '🔓 Подключить',
+            callback_data: `bank_wizard_start:${bankKey}`,
+          },
+        ],
+      ],
     },
     link_preview_options: { is_disabled: true },
   });
@@ -465,7 +472,9 @@ export async function handleBankEditCallback(
   const pendingTxs = database.bankTransactions.findPendingByConnectionId(tx.connection_id);
   const otherEdit = pendingTxs.find((t) => t.id !== txId && t.edit_in_progress === 1);
   if (otherEdit) {
-    await ctx.answerCallbackQuery({ text: 'Сначала заверши текущее исправление' });
+    await ctx.answerCallbackQuery({
+      text: 'Сначала заверши текущее исправление',
+    });
     return;
   }
 
@@ -571,7 +580,7 @@ function isPasswordField(field: CredentialField | undefined): boolean {
 }
 
 const SECURITY_NOTE =
-  '\n\n🔒 Пароль шифруется алгоритмом AES-256-GCM и хранится только на сервере бота — никуда не передаётся. Транзакции получаем через открытую библиотеку ZenPlugins — можешь проверить исходник: github.com/zenmoney/ZenPlugins';
+  '\n\n🔒 Пароль шифруется алгоритмом AES-256-GCM и хранится только на сервере бота — никуда не передаётся. Транзакции получаем через открытую библиотеку ZenPlugins: github.com/zenmoney/ZenPlugins';
 
 function buildFieldPromptText(field: CredentialField | undefined): string {
   const prompt = resolveFieldPrompt(field);
@@ -623,7 +632,10 @@ export async function handleBankSetupCallback(
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '🔓 Подключить', callback_data: `bank_wizard_start:${bankKey}` },
+        {
+          text: '🔓 Подключить',
+          callback_data: `bank_wizard_start:${bankKey}`,
+        },
         { text: '← Назад', callback_data: 'bank_letter_nav' },
       ],
     ],
@@ -814,7 +826,12 @@ export async function handleBankSettingsCallback(
   const settingsText = `⚙️ ${conn.display_name}\n\n${lastSync}${errorLine}`;
   const settingsKeyboard = {
     inline_keyboard: [
-      [{ text: '🔄 Переподключить', callback_data: `bank_reconnect:${conn.id}` }],
+      [
+        {
+          text: '🔄 Переподключить',
+          callback_data: `bank_reconnect:${conn.id}`,
+        },
+      ],
       [{ text: '🔌 Отключить', callback_data: `bank_disconnect:${connId}` }],
       [{ text: '← Назад', callback_data: `bank_settings_back:${connId}` }],
     ],
@@ -894,8 +911,14 @@ export async function handleBankDisconnectCallback(
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '✅ Да, отключить', callback_data: `bank_disconnect_confirm:${connId}` },
-              { text: '❌ Отмена', callback_data: `bank_disconnect_cancel:${connId}` },
+              {
+                text: '✅ Да, отключить',
+                callback_data: `bank_disconnect_confirm:${connId}`,
+              },
+              {
+                text: '❌ Отмена',
+                callback_data: `bank_disconnect_cancel:${connId}`,
+              },
             ],
           ],
         },
@@ -906,8 +929,14 @@ export async function handleBankDisconnectCallback(
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '✅ Да, отключить', callback_data: `bank_disconnect_confirm:${connId}` },
-              { text: '❌ Отмена', callback_data: `bank_disconnect_cancel:${connId}` },
+              {
+                text: '✅ Да, отключить',
+                callback_data: `bank_disconnect_confirm:${connId}`,
+              },
+              {
+                text: '❌ Отмена',
+                callback_data: `bank_disconnect_cancel:${connId}`,
+              },
             ],
           ],
         },
@@ -1149,13 +1178,17 @@ export async function handleBankAddCallback(
   const messageId = ctx.message?.id;
   if (messageId) {
     try {
-      await ctx.editText('Выбери букву:', { reply_markup: { inline_keyboard: keyboard } });
+      await ctx.editText('Выбери букву:', {
+        reply_markup: { inline_keyboard: keyboard },
+      });
       return;
     } catch {
       // fall through
     }
   }
-  await ctx.send('Выбери букву:', { reply_markup: { inline_keyboard: keyboard } });
+  await ctx.send('Выбери букву:', {
+    reply_markup: { inline_keyboard: keyboard },
+  });
 }
 
 /** Shows banks whose display name starts with the given letter. */
@@ -1218,5 +1251,7 @@ export async function handleBankLetterNavCallback(
       // fall through
     }
   }
-  await ctx.send('Выбери букву:', { reply_markup: { inline_keyboard: keyboard } });
+  await ctx.send('Выбери букву:', {
+    reply_markup: { inline_keyboard: keyboard },
+  });
 }
