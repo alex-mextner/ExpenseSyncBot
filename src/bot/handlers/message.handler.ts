@@ -124,6 +124,13 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     return;
   }
 
+  // Bank OTP — must be checked before topic restriction: the user may reply from any topic
+  // (the OTP prompt could land in a different thread than active_topic_id).
+  if (text && !text.startsWith('/')) {
+    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
+    if (resolveOtpForGroup(telegramGroupId, text)) return;
+  }
+
   // Check topic restriction
   const messageThreadId = ctx.update?.message?.message_thread_id;
   if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
@@ -131,12 +138,6 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
     );
     return;
-  }
-
-  // Bank OTP — consume after topic check, before expense parsing
-  if (text && !text.startsWith('/')) {
-    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
-    if (resolveOtpForGroup(telegramGroupId, text)) return;
   }
 
   logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);

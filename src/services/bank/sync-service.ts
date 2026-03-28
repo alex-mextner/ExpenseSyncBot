@@ -121,13 +121,14 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     const readLineImpl = async (prompt: string): Promise<string> => {
       logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
 
+      // Prefer the bank panel thread; fall back to the group's active topic so the
+      // prompt is visible where the user actually reads messages.
+      const otpThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
       const promptMsg = await sendMessage(
         env.BOT_TOKEN,
         group.telegram_group_id,
         `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код в этот чат. У тебя 5 минут.`,
-        conn.panel_message_thread_id !== null
-          ? { message_thread_id: conn.panel_message_thread_id }
-          : undefined,
+        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
       );
 
       // Release the global shim mutex while waiting for user OTP input so other sync
@@ -319,6 +320,11 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       ).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
     }
   } catch (error) {
+    // OTP timeout is a user interaction event, not a bank-side failure — don't count it.
+    if (error instanceof Error && error.message.includes('истекло')) {
+      logger.info({ connectionId }, 'OTP not entered in time — sync paused until user retries');
+      return;
+    }
     await handleSyncError(connectionId, conn, error);
   } finally {
     syncingConnections.delete(connectionId);
