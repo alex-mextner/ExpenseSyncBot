@@ -3,16 +3,60 @@
  *
  * Prompts for credentials, runs the TBC-GE plugin via the ZenMoneyShim,
  * handles OTP via terminal readline, and prints accounts + transactions.
+ * All output is also written to /tmp/tbc-test-<timestamp>.log (full depth, no truncation).
  *
  * Usage: bun run scripts/test-tbc.ts
  */
 
+import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { inspect } from 'node:util';
 import { Database } from 'bun:sqlite';
 import { subDays } from 'date-fns';
-import { createZenMoneyShim } from '../src/services/bank/runtime';
 import { getOtpHint } from '../src/services/bank/otp-hints';
 import type { ScrapeResult } from '../src/services/bank/registry';
+import { createZenMoneyShim } from '../src/services/bank/runtime';
+
+// ─── Log file setup (full depth, no truncation) ───────────────────────────────
+
+const logFile = `/tmp/tbc-test-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+appendFileSync(logFile, `=== TBC-GE test log started at ${new Date().toISOString()} ===\n\n`);
+
+function toLogStr(...args: unknown[]): string {
+  return args
+    .map((a) =>
+      a === null || typeof a !== 'object' ? String(a) : inspect(a, { depth: 20, colors: false }),
+    )
+    .join(' ');
+}
+
+const origLog = console.log.bind(console);
+const origWarn = console.warn.bind(console);
+const origError = console.error.bind(console);
+
+console.log = (...args: unknown[]) => {
+  origLog(...args);
+  appendFileSync(logFile, toLogStr(...args) + '\n');
+};
+console.warn = (...args: unknown[]) => {
+  origWarn(...args);
+  appendFileSync(logFile, '[WARN] ' + toLogStr(...args) + '\n');
+};
+console.error = (...args: unknown[]) => {
+  origError(...args);
+  appendFileSync(logFile, '[ERROR] ' + toLogStr(...args) + '\n');
+};
+
+// ─── ZenPlugins globals (not in Bun) ─────────────────────────────────────────
+
+(globalThis as { assert?: unknown }).assert = function assert(
+  condition: unknown,
+  ...args: unknown[]
+): asserts condition {
+  if (!condition) {
+    throw new Error(`Assertion failed: ${args.map((a) => toLogStr(a)).join(' ')}`);
+  }
+};
 
 // ─── Interactive prompt helpers ───────────────────────────────────────────────
 
@@ -27,14 +71,10 @@ function ask(question: string, defaultValue?: string): Promise<string> {
   });
 }
 
-async function askPassword(question: string): Promise<string> {
-  // Bun/Node doesn't have built-in password masking; just use a plain prompt.
-  return ask(question);
-}
-
 // ─── Credential collection ────────────────────────────────────────────────────
 
-console.log('\n=== TBC-GE plugin interactive test ===\n');
+console.log('\n=== TBC-GE plugin interactive test ===');
+console.log(`Log file: ${logFile}\n`);
 
 const login = await ask('Login (username)', process.env['TBC_LOGIN']);
 if (!login) {
@@ -42,7 +82,7 @@ if (!login) {
   process.exit(1);
 }
 
-const password = await askPassword('Password');
+const password = await ask('Password');
 if (!password) {
   console.error('Password is required.');
   process.exit(1);
@@ -51,7 +91,6 @@ if (!password) {
 const preferences: Record<string, string> = {
   login,
   password,
-  // startDate is a date-type preference — auto-filled by registry, provide sensible default here
   startDate: new Date(subDays(new Date(), 30)).toISOString(),
 };
 
@@ -86,13 +125,7 @@ async function readLineImpl(prompt: string): Promise<string> {
 // ─── Build shim and register as global ZenMoney ───────────────────────────────
 
 const shim = createZenMoneyShim(CONNECTION_ID, db, preferences, readLineImpl);
-
-// Extend the shim with extra ZenMoney API surface that the TBC-GE plugin calls
-// but that createZenMoneyShim does not provide (these are harmless stubs).
-// All required ZenMoney API methods are provided by the shim directly.
-const zenMoneyGlobal = shim;
-
-(globalThis as { ZenMoney?: typeof zenMoneyGlobal }).ZenMoney = zenMoneyGlobal;
+(globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
 
 // ─── Load and run the plugin ───────────────────────────────────────────────────
 
@@ -128,8 +161,6 @@ try {
 }
 
 // Collect from both scrape() return value and shim addAccount/addTransaction calls.
-// The plugin returns ZenPlugins-internal types (with `instrument`, `movements`, etc.)
-// which are wider than our registry ZenAccount/ZenTransaction — use unknown[] for printing.
 const accounts: unknown[] = [
   ...((rawResult?.accounts as unknown[] | undefined) ?? []),
   ...shim._getCollectedAccounts(),
@@ -140,7 +171,9 @@ const transactions: unknown[] = [
   ...shim._getCollectedTransactions(),
 ];
 
-const setResultData = shim._getSetResult() as { accounts?: unknown[]; transactions?: unknown[] } | undefined;
+const setResultData = shim._getSetResult() as
+  | { accounts?: unknown[]; transactions?: unknown[] }
+  | undefined;
 if (setResultData) {
   accounts.push(...(setResultData.accounts ?? []));
   transactions.push(...(setResultData.transactions ?? []));
@@ -154,12 +187,13 @@ if (accounts.length === 0) {
 } else {
   for (const acc of accounts) {
     const accAny = acc as { [k: string]: unknown };
-    // ZenPlugins use `instrument` for currency and `syncID` for ID internally.
     const title = (accAny['title'] as string | undefined) ?? (accAny['id'] as string);
     const balance =
       typeof accAny['balance'] === 'number' ? (accAny['balance'] as number).toFixed(2) : '?';
     const currency =
-      (accAny['instrument'] as string | undefined) ?? (accAny['currency'] as string | undefined) ?? '?';
+      (accAny['instrument'] as string | undefined) ??
+      (accAny['currency'] as string | undefined) ??
+      '?';
     console.log(`  ${title}: ${balance} ${currency}`);
   }
 }
@@ -168,7 +202,6 @@ console.log(`\n=== TRANSACTIONS (${transactions.length} total) ===`);
 if (transactions.length === 0) {
   console.log('  (none)');
 } else {
-  // Print up to 20 most-recent transactions.
   const SAMPLE_SIZE = 20;
   const sample = transactions.slice(-SAMPLE_SIZE);
   for (const tx of sample) {
@@ -203,3 +236,4 @@ if (transactions.length === 0) {
 }
 
 console.log('\nDone.');
+console.log(`\nFull log: ${logFile}`);

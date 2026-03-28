@@ -251,6 +251,15 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       const shim = createZenMoneyShim(connectionId, database.db, preferences, readLineImpl);
       shimRef.current = shim;
       (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
+      // assert() is a ZenPlugins global not available in Bun — set before plugin runs.
+      (globalThis as { assert?: unknown }).assert = function assert(
+        condition: unknown,
+        ...args: unknown[]
+      ): asserts condition {
+        if (!condition) {
+          throw new Error(`Assertion failed: ${args.map(String).join(' ')}`);
+        }
+      };
 
       const { scrape } = await plugin.plugin();
       const rawResult = (await scrape({ preferences, fromDate, toDate })) as
