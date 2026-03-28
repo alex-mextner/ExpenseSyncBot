@@ -10,6 +10,7 @@ import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
+import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
 import { preFillTransaction } from './prefill';
@@ -103,6 +104,20 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       string
     >;
 
+    // Cron syncs must not start if no plugin state exists yet — it means the user hasn't
+    // completed the initial setup (login OTP + device trust). Starting would send unwanted SMS.
+    if (!allowOtp) {
+      const hasState = database.db
+        .query<{ cnt: number }, [number]>(
+          'SELECT COUNT(*) as cnt FROM bank_plugin_state WHERE connection_id = ?',
+        )
+        .get(connectionId);
+      if (!hasState || hasState.cnt === 0) {
+        logger.info({ connectionId }, 'Skipping cron sync — plugin not initialized yet');
+        return;
+      }
+    }
+
     const fromDate = conn.last_sync_at ? new Date(conn.last_sync_at) : subDays(new Date(), 30);
     const toDate = new Date();
 
@@ -129,7 +144,8 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       // Prefer the bank panel thread; fall back to the group's active topic so the
       // prompt is visible where the user actually reads messages.
       const otpThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
-      const otpText = `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код из SMS в этот чат (есть 5 минут).`;
+      const hint = getOtpHint(conn.bank_name, prompt);
+      const otpText = `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}${hint ? `\n\n💡 ${escapeHtml(hint)}` : ''}\n\nОтправь код сюда (есть 5 минут).`;
 
       // Edit the existing panel in-place to avoid creating a second dangling message.
       // Fall back to sendMessage if there is no panel yet.

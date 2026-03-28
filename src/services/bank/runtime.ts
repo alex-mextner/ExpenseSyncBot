@@ -7,7 +7,9 @@ const logger = createLogger('zen-runtime');
 
 export interface ZenMoneyShim {
   getData(key: string): unknown;
-  saveData(key: string, value: unknown): void;
+  /** Stage data to be persisted. In our shim, writes immediately (same as saveData). */
+  setData(key: string, value: unknown): void;
+  saveData(key?: string, value?: unknown): void;
   getPreferences(): Record<string, string>;
   addAccount(account: unknown): void;
   addTransaction(tx: unknown): void;
@@ -15,6 +17,15 @@ export interface ZenMoneyShim {
   setResult(data: unknown): void;
   trustCertificates(): void;
   clearData(): void;
+  isAccountSkipped(id: string): boolean;
+  /** Stub: cookie management used by legacy plugin flows. No-op in background sync. */
+  getCookies(): Promise<Array<{ name: string; value: string; domain: string }>>;
+  setCookie(domain: string, name: string, value: string): Promise<void>;
+  clearCookies(): Promise<void>;
+  saveCookies(): Promise<void>;
+  restoreCookies(): Promise<void>;
+  locale: string;
+  application: { platform: string; version: string };
   device: {
     manufacturer: string;
     model: string;
@@ -58,8 +69,15 @@ export function createZenMoneyShim(
       }
     },
 
-    saveData(key: string, value: unknown): void {
+    setData(key: string, value: unknown): void {
       upsertState.run(connectionId, key, JSON.stringify(value));
+    },
+
+    saveData(key?: string, value?: unknown): void {
+      if (key !== undefined) {
+        upsertState.run(connectionId, key, JSON.stringify(value));
+      }
+      // No-arg variant: all writes are synchronous, nothing to flush.
     },
 
     getPreferences(): Record<string, string> {
@@ -87,6 +105,26 @@ export function createZenMoneyShim(
     trustCertificates(): void {
       // no-op: Bun handles SSL natively
     },
+
+    isAccountSkipped(_id: string): boolean {
+      return false;
+    },
+
+    async getCookies() {
+      return [];
+    },
+
+    async setCookie(_domain: string, _name: string, _value: string) {},
+
+    async clearCookies() {},
+
+    async saveCookies() {},
+
+    async restoreCookies() {},
+
+    locale: 'en',
+
+    application: { platform: 'Android', version: '6.66.3' },
 
     device: {
       manufacturer: 'Samsung',

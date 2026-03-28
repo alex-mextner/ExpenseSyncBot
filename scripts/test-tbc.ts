@@ -10,8 +10,8 @@
 import { createInterface } from 'node:readline';
 import { Database } from 'bun:sqlite';
 import { subDays } from 'date-fns';
-import { runMigrations } from '../src/database/schema';
 import { createZenMoneyShim } from '../src/services/bank/runtime';
+import { getOtpHint } from '../src/services/bank/otp-hints';
 import type { ScrapeResult } from '../src/services/bank/registry';
 
 // ─── Interactive prompt helpers ───────────────────────────────────────────────
@@ -57,34 +57,27 @@ const preferences: Record<string, string> = {
 
 console.log(`\nUsing preferences: login=${login}, startDate=${preferences['startDate']}\n`);
 
-// ─── In-memory SQLite (for shim plugin state storage) ─────────────────────────
+// ─── In-memory SQLite (minimal schema for shim plugin state only) ─────────────
 
 const db = new Database(':memory:');
-db.exec('PRAGMA foreign_keys = ON;');
-runMigrations(db);
-
-// Create a fake group and bank connection so the DB schema constraints are met.
 db.exec(`
-  INSERT INTO groups (telegram_group_id, default_currency) VALUES (999999, 'GEL');
+  CREATE TABLE bank_plugin_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    UNIQUE(connection_id, key)
+  )
 `);
-const groupRow = db.query('SELECT id FROM groups WHERE telegram_group_id = 999999').get() as {
-  id: number;
-};
 
-db.exec(`
-  INSERT INTO bank_connections (group_id, bank_name, display_name, status)
-  VALUES (${groupRow.id}, 'tbc-ge', 'TBC GE test', 'active');
-`);
-const connRow = db
-  .query('SELECT id FROM bank_connections WHERE bank_name = ?')
-  .get('tbc-ge') as { id: number };
-
-const CONNECTION_ID = connRow.id;
+const CONNECTION_ID = 1;
 
 // ─── OTP readline handler ─────────────────────────────────────────────────────
 
 async function readLineImpl(prompt: string): Promise<string> {
   console.log(`\n[OTP requested] Plugin says: "${prompt}"`);
+  const hint = getOtpHint('tbc-ge', prompt);
+  if (hint) console.log(`💡 ${hint}`);
   const code = await ask('Enter OTP code');
   if (!code) throw new Error('OTP was not provided — aborting.');
   return code;
@@ -96,24 +89,8 @@ const shim = createZenMoneyShim(CONNECTION_ID, db, preferences, readLineImpl);
 
 // Extend the shim with extra ZenMoney API surface that the TBC-GE plugin calls
 // but that createZenMoneyShim does not provide (these are harmless stubs).
-const zenMoneyGlobal = Object.assign(shim, {
-  // Plugins call ZenMoney.isAccountSkipped(id) to check user exclusion lists.
-  // In a standalone test there are no excluded accounts.
-  isAccountSkipped: (_id: string) => false,
-
-  // Some plugins set ZenMoney.locale as a property.
-  locale: 'en',
-
-  // No-arg ZenMoney.saveData() — flushes all pending state.
-  // createZenMoneyShim implements saveData(key, value) but TBC also calls it with no args.
-  // Wrap to handle both signatures transparently.
-  saveData: (key?: string, value?: unknown) => {
-    if (key !== undefined) {
-      shim.saveData(key, value);
-    }
-    // No-arg variant: nothing to flush (shim writes synchronously already).
-  },
-});
+// All required ZenMoney API methods are provided by the shim directly.
+const zenMoneyGlobal = shim;
 
 (globalThis as { ZenMoney?: typeof zenMoneyGlobal }).ZenMoney = zenMoneyGlobal;
 
