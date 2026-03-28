@@ -12,6 +12,7 @@ import {
   handleBankDisconnectConfirmCallback,
   handleBankEditCallback,
   handleBankReconnectCallback,
+  handleBankSettingsBackCallback,
   handleBankSettingsCallback,
   handleBankSetupCallback,
   handleBankSyncCallback,
@@ -241,7 +242,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankSettingsCallback(ctx, connId, chatId);
+        await handleBankSettingsCallback(ctx, bot, connId, chatId);
         break;
       }
 
@@ -282,6 +283,16 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankDisconnectCancelCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_settings_back': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSettingsBackCallback(ctx, bot, connId, chatId);
         break;
       }
 

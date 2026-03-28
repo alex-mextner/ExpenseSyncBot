@@ -125,6 +125,7 @@ async function startWizard(
       reply_markup: {
         inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
       },
+      link_preview_options: { is_disabled: true },
     });
     wizardPromptMessages.set(newConn.id, {
       messageId: sent.message_id,
@@ -192,7 +193,8 @@ export async function handleWizardInput(
       await bot.api.editMessageText({
         chat_id: chatId,
         message_id: storedPrompt.messageId,
-        text: `🔒 ${storedPrompt.fieldPrompt}: ${'•'.repeat(text.length)}`,
+        text: `🔒 ${storedPrompt.fieldPrompt}: ${'•'.repeat(text.length)}${SECURITY_NOTE}`,
+        link_preview_options: { is_disabled: true },
       });
     } catch {
       // message may be too old or already edited
@@ -226,11 +228,23 @@ export async function handleWizardInput(
     return true;
   }
 
-  // Wizard complete — activate connection
+  // Wizard complete — activate connection.
+  // Wait up to 3 s for quick failures (auth errors surface within ~500 ms).
   wizardPromptMessages.delete(setupConn.id);
   database.bankConnections.update(setupConn.id, { status: 'active' });
-  activateNewConnection(setupConn.id);
-  await ctx.send(buildConnectionCompleteText(plugin.name));
+  await Promise.race([
+    activateNewConnection(setupConn.id),
+    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+  ]);
+  const freshConn = database.bankConnections.findById(setupConn.id);
+  if (freshConn && freshConn.consecutive_failures > 0 && freshConn.last_error) {
+    await ctx.send(
+      `❌ ${plugin.name} — ошибка при первой синхронизации:\n${freshConn.last_error}\n\n` +
+        `Проверь логин и пароль, затем нажми ⚙️ → 🔄 Переподключить`,
+    );
+  } else {
+    await ctx.send(buildConnectionCompleteText(plugin.name));
+  }
 
   logger.info({ connectionId: setupConn.id, bank: setupConn.bank_name }, 'Bank wizard completed');
   return true;
@@ -664,6 +678,7 @@ export async function handleBankSetupCallback(
 
 export async function handleBankSettingsCallback(
   ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
   connId: number,
   chatId: number,
 ): Promise<void> {
@@ -689,14 +704,30 @@ export async function handleBankSettingsCallback(
       ? `\n⚠️ Последняя ошибка: ${conn.last_error}`
       : '';
 
-  await ctx.send(`⚙️ ${conn.display_name}\n\n${lastSync}${errorLine}`, {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '🔄 Переподключить', callback_data: `bank_reconnect:${conn.id}` }],
-        [{ text: '🔌 Отключить', callback_data: `bank_disconnect:${connId}` }],
-      ],
-    },
-  });
+  const settingsText = `⚙️ ${conn.display_name}\n\n${lastSync}${errorLine}`;
+  const settingsKeyboard = {
+    inline_keyboard: [
+      [{ text: '🔄 Переподключить', callback_data: `bank_reconnect:${conn.id}` }],
+      [{ text: '🔌 Отключить', callback_data: `bank_disconnect:${connId}` }],
+      [{ text: '← Назад', callback_data: `bank_settings_back:${connId}` }],
+    ],
+  };
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: settingsText,
+        reply_markup: settingsKeyboard,
+      });
+      return;
+    } catch {
+      // message too old — fall through to send new
+    }
+  }
+  await ctx.send(settingsText, { reply_markup: settingsKeyboard });
 }
 
 export async function handleBankSyncCallback(
@@ -938,6 +969,42 @@ export async function handleBankWizardCancelCallback(
       await ctx.editText('Подключение банка отменено.');
     } catch {
       // message too old
+    }
+  }
+}
+
+/** Restore the status panel after navigating into settings. */
+export async function handleBankSettingsBackCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  connId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const conn = database.bankConnections.findById(connId);
+  if (!conn || conn.group_id !== group.id) {
+    await ctx.answerCallbackQuery({ text: 'Подключение не найдено' });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: buildBankStatusText(conn),
+        reply_markup: { inline_keyboard: buildBankManageKeyboard(conn) },
+      });
+    } catch {
+      // ignore
     }
   }
 }

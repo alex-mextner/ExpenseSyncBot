@@ -60,13 +60,13 @@ export function triggerManualSync(connectionId: number): Promise<void> {
  * Called after a new bank connection is activated during runtime.
  * Runs the initial sync immediately; subsequent syncs are handled by the cron job.
  */
-export function activateNewConnection(connectionId: number): void {
+export function activateNewConnection(connectionId: number): Promise<void> {
   const conn = database.bankConnections.findById(connectionId);
-  if (!conn || conn.status !== 'active') return;
+  if (!conn || conn.status !== 'active') return Promise.resolve();
 
   logger.info({ connectionId, bank: conn.bank_name }, 'New connection — running initial sync');
 
-  runSyncCycle(connectionId).catch((err) =>
+  return runSyncCycle(connectionId).catch((err) =>
     logger.error({ err, connectionId }, 'Initial sync failed'),
   );
 }
@@ -306,9 +306,22 @@ async function handleSyncError(
 
   logger.error({ err: error, connectionId, failures }, 'Sync cycle failed');
 
+  const group = database.groups.findById(conn.group_id);
+
+  // Always update the panel message to reflect the new error state
+  const freshConn = database.bankConnections.findById(connectionId);
+  if (freshConn?.panel_message_id && group) {
+    await editMessageText(
+      env.BOT_TOKEN,
+      group.telegram_group_id,
+      freshConn.panel_message_id,
+      buildBankStatusText(freshConn),
+      { reply_markup: { inline_keyboard: buildBankManageKeyboard(freshConn) } },
+    ).catch((err) => logger.warn({ err }, 'Failed to update panel message after error'));
+  }
+
   // Send alert only on the 3rd failure (not on every subsequent failure)
   if (failures === MAX_CONSECUTIVE_FAILURES) {
-    const group = database.groups.findById(conn.group_id);
     if (group) {
       await sendMessage(
         env.BOT_TOKEN,
