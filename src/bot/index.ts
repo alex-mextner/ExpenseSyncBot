@@ -22,7 +22,7 @@ import { handleStatsCommand } from './commands/stats';
 import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
-import { backfillSerialDates, registerMonthlyCron } from './cron';
+import { registerMonthlyCron } from './cron';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
@@ -201,11 +201,6 @@ export async function startBot(): Promise<Bot> {
   const devPipeline = initDevPipeline(bot);
   await devPipeline.resumeIncompleteTasksOnStartup();
   logger.info('✓ Dev pipeline started');
-
-  // Repair date cells written as serial numbers by year-split migration (2026-03-28)
-  logger.info('🗓 Backfilling serial date cells...');
-  await backfillSerialDates();
-  logger.info('✓ Serial date backfill complete');
 
   return bot;
 }
