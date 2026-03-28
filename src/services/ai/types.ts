@@ -32,4 +32,6 @@ export interface AgentContext {
   userFullName: string;
   customPrompt: string | null;
   telegramGroupId: number;
+  /** Send a PNG image buffer to the chat. Used by render_table tool. */
+  sendPhoto?: (imageBuffer: Buffer) => Promise<void>;
 }

@@ -10,6 +10,7 @@ import type { BankTransaction, BankTransactionFilters } from '../../database/typ
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
+import { parseMarkdownTable } from '../render/md-table-html.ts';
 import { renderTableToPng } from '../render/table-renderer.ts';
 import type { AgentContext, ToolResult } from './types';
 
@@ -773,9 +774,19 @@ function executeRenderTable(input: Record<string, unknown>, ctx: AgentContext): 
     return { success: false, error: 'title and markdown are required' };
   }
 
+  // Validate markdown table structure before firing off the render
+  const { headers } = parseMarkdownTable(markdown);
+  if (headers.length === 0) {
+    return {
+      success: false,
+      error:
+        'Invalid markdown table: could not parse headers. Expected format: "| Col1 | Col2 |\\n|---|---|\\n| v1 | v2 |"',
+    };
+  }
+
   const sendPhoto = ctx.sendPhoto;
 
-  renderTableToPng({ title, markdown, ...(caption !== undefined ? { caption } : {}) })
+  renderTableToPng({ title, markdown, caption })
     .then((buffer: Buffer) => sendPhoto(buffer))
     .catch((err: Error) => logger.error({ err }, 'render_table: failed to render or send'));
 

@@ -293,6 +293,32 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'render_table',
+    description: `Renders a Markdown table as a styled image and sends it to the chat.
+
+Use whenever presenting tabular data: comparisons, category breakdowns, budgets, schedules, or any multi-column lists.
+Call IN PARALLEL with writing the same data as plain text in your response — showing both is intentional.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Heading shown above the table.',
+        },
+        markdown: {
+          type: 'string',
+          description:
+            'Markdown table syntax. Example: "| Категория | Сумма |\\n|---|---|\\n| Еда | 5000 ₽ |"',
+        },
+        caption: {
+          type: 'string',
+          description: 'Optional note shown below the table.',
+        },
+      },
+      required: ['title', 'markdown'],
+    },
+  },
+  {
     name: 'find_missing_expenses',
     description:
       'Compare bank transactions vs recorded expenses. Returns unmatched bank debit transactions that may be missing from the expense log.',
@@ -329,4 +355,5 @@ export const TOOL_LABELS: Record<string, string> = {
   get_bank_transactions: 'Загружаю банковские транзакции',
   get_bank_balances: 'Проверяю балансы счетов',
   find_missing_expenses: 'Ищу пропущенные расходы',
+  render_table: 'Рендерю таблицу',
 };

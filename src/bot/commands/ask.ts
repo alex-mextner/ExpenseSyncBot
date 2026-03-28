@@ -117,6 +117,16 @@ async function handleAskWithAnthropic(
     userFullName,
     customPrompt: group.custom_prompt,
     telegramGroupId: group.telegram_group_id,
+    sendPhoto: async (imageBuffer) => {
+      // Runs outside topic middleware's AsyncLocalStorage scope — must pass message_thread_id explicitly.
+      const threadId = ctx.update?.message?.message_thread_id;
+      const file = new File([imageBuffer], 'table.png', { type: 'image/png' });
+      await bot.api.sendPhoto({
+        chat_id: chatId,
+        photo: file,
+        ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+      });
+    },
   };
 
   // Get recent chat history (last 10 messages / 5 pairs)
