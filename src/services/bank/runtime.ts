@@ -15,6 +15,11 @@ export interface ZenMoneyShim {
   setResult(data: unknown): void;
   trustCertificates(): void;
   clearData(): void;
+  device: {
+    manufacturer: string;
+    model: string;
+    os: { name: string; version: string };
+  };
   _getCollectedAccounts(): unknown[];
   _getCollectedTransactions(): unknown[];
   _getSetResult(): unknown;
@@ -79,6 +84,12 @@ export function createZenMoneyShim(
 
     trustCertificates(): void {
       // no-op: Bun handles SSL natively
+    },
+
+    device: {
+      manufacturer: 'Samsung',
+      model: 'SM-G991B',
+      os: { name: 'Android', version: '13' },
     },
 
     clearData(): void {
