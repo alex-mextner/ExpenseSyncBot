@@ -155,10 +155,10 @@ describe('buildBankManageKeyboard', () => {
     expect(allButtons.some((b) => b.callback_data.startsWith('bank_sync:'))).toBe(true);
   });
 
-  test('always includes disconnect button', () => {
+  test('does not include disconnect button in main panel (it lives in settings submenu)', () => {
     const rows = buildBankManageKeyboard(baseConn);
     const allButtons = rows.flat();
-    expect(allButtons.some((b) => b.callback_data.startsWith('bank_disconnect:'))).toBe(true);
+    expect(allButtons.some((b) => b.callback_data.startsWith('bank_disconnect:'))).toBe(false);
   });
 
   test('always includes settings button', () => {
