@@ -22,7 +22,9 @@
       "Bash(/Users/ultra/.bun/bin/bunx knip:*)",
       "Bash(./scripts/backup-db.sh 2>&1)",
       "Bash(bunx knip:*)",
-      "Bash(npm view:*)"
+      "Bash(npm view:*)",
+      "Bash(/Users/ultra/xp/ExpenseSyncBot/node_modules/.bin/biome lint:*)",
+      "Bash(node_modules/.bin/biome lint:fix src/services/bank/sync-service.ts)"
     ],
     "deny": [],
     "ask": []
