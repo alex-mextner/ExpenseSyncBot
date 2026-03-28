@@ -54,7 +54,7 @@ export function startSyncService(): void {
 }
 
 export function triggerManualSync(connectionId: number): Promise<void> {
-  return runSyncCycle(connectionId);
+  return runSyncCycle(connectionId, true);
 }
 
 /**
@@ -67,12 +67,12 @@ export function activateNewConnection(connectionId: number): Promise<void> {
 
   logger.info({ connectionId, bank: conn.bank_name }, 'New connection — running initial sync');
 
-  return runSyncCycle(connectionId).catch((err) =>
+  return runSyncCycle(connectionId, true).catch((err) =>
     logger.error({ err, connectionId }, 'Initial sync failed'),
   );
 }
 
-async function runSyncCycle(connectionId: number): Promise<void> {
+async function runSyncCycle(connectionId: number, allowOtp = false): Promise<void> {
   if (syncingConnections.has(connectionId)) {
     logger.info({ connectionId }, 'Sync already in progress — skipping');
     return;
@@ -121,13 +121,18 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     const readLineImpl = async (prompt: string): Promise<string> => {
       logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
 
+      if (!allowOtp) {
+        // Cron sync — don't interrupt user with automatic OTP requests.
+        throw new Error('OTP required — use manual sync button');
+      }
+
       // Prefer the bank panel thread; fall back to the group's active topic so the
       // prompt is visible where the user actually reads messages.
       const otpThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
       const promptMsg = await sendMessage(
         env.BOT_TOKEN,
         group.telegram_group_id,
-        `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код в этот чат. У тебя 5 минут.`,
+        `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код из SMS сюда.`,
         otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
       );
 
@@ -320,9 +325,39 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       ).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
     }
   } catch (error) {
-    // OTP timeout is a user interaction event, not a bank-side failure — don't count it.
+    // OTP events are not bank-side failures — don't count them against consecutive_failures.
     if (error instanceof Error && error.message.includes('истекло')) {
       logger.info({ connectionId }, 'OTP not entered in time — sync paused until user retries');
+      return;
+    }
+    if (error instanceof Error && error.message === 'OTP required — use manual sync button') {
+      logger.info({ connectionId }, 'OTP required for cron sync — notifying user to sync manually');
+      const notifyGroup = database.groups.findById(conn.group_id);
+      const freshConn = database.bankConnections.findById(connectionId);
+      if (freshConn && notifyGroup) {
+        const threadId = freshConn.panel_message_thread_id ?? notifyGroup.active_topic_id;
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: '🔄 Синхронизировать', callback_data: `bank_sync:${connectionId}` }],
+          ],
+        };
+        if (freshConn.panel_message_id) {
+          await editMessageText(
+            env.BOT_TOKEN,
+            notifyGroup.telegram_group_id,
+            freshConn.panel_message_id,
+            `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
+            { reply_markup: keyboard },
+          ).catch(() => {});
+        } else if (threadId !== null) {
+          await sendMessage(
+            env.BOT_TOKEN,
+            notifyGroup.telegram_group_id,
+            `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
+            { message_thread_id: threadId, reply_markup: keyboard },
+          ).catch(() => {});
+        }
+      }
       return;
     }
     await handleSyncError(connectionId, conn, error);
