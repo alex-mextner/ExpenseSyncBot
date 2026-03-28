@@ -126,6 +126,7 @@ describe('buildBankStatusText', () => {
         prefill_category: null,
         prefill_comment: null,
         edit_in_progress: 0,
+        awaiting_comment: 0,
         created_at: '',
       },
     ];

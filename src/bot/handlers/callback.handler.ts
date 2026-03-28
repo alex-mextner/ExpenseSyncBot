@@ -13,6 +13,7 @@ import {
   handleBankEditCallback,
   handleBankLetterCallback,
   handleBankLetterNavCallback,
+  handleBankNoCommentCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
   handleBankSettingsCallback,
@@ -152,6 +153,16 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankEditCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_nocomment': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankNoCommentCallback(ctx, bot, txId, chatId);
         break;
       }
 

@@ -923,6 +923,21 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Created bank_otp_requests table');
       },
     },
+    {
+      name: '031_add_awaiting_comment_to_bank_transactions',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions')
+          WHERE name = 'awaiting_comment'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(
+            `ALTER TABLE bank_transactions ADD COLUMN awaiting_comment INTEGER NOT NULL DEFAULT 0`,
+          );
+          logger.info('✓ Added awaiting_comment to bank_transactions');
+        }
+      },
+    },
   ];
 
   // Check and run migrations

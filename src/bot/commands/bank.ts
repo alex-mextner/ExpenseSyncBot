@@ -388,69 +388,46 @@ export async function handleBankConfirmCallback(
     return;
   }
 
-  // Atomically claim the transaction: check+update in one transaction to prevent duplicate expenses.
-  const confirmed = database.db.transaction(() => {
+  // Atomically claim the transaction for comment prompt — prevent double-claiming.
+  const claimed = database.db.transaction(() => {
     const freshTx = database.bankTransactions.findById(txId, group.id);
     if (!freshTx) return null;
     if (freshTx.status !== 'pending') return false;
-    database.bankTransactions.updateStatus(txId, group.id, 'confirmed');
+    if (freshTx.edit_in_progress === 1) return 'edit'; // someone's editing it
+    database.bankTransactions.setEditInProgress(txId, true);
+    database.bankTransactions.setAwaitingComment(txId, true);
     return freshTx;
   })();
 
-  if (confirmed === null) {
+  if (claimed === null) {
     await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });
     return;
   }
-  if (confirmed === false) {
+  if (claimed === false) {
     await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
     return;
   }
-
-  const tx = confirmed;
-
-  // Use AI pre-filled category/comment if available (persisted during sync)
-  const category = tx.prefill_category ?? tx.merchant_normalized ?? tx.merchant ?? 'прочее';
-  const comment = tx.prefill_comment ?? tx.merchant_normalized ?? tx.merchant ?? '';
-
-  const txCurrency = tx.currency as import('../../config/constants').CurrencyCode;
-  const expense = database.expenses.create({
-    group_id: group.id,
-    user_id: user.id,
-    date: tx.date,
-    category,
-    comment,
-    amount: tx.amount,
-    currency: txCurrency,
-    eur_amount: convertAnyToEUR(tx.amount, tx.currency),
-  });
-
-  database.bankTransactions.setMatchedExpense(txId, group.id, expense.id);
-
-  // Only create rule request if there's a meaningful merchant string to normalize
-  if (tx.merchant) {
-    database.merchantRules.insertRuleRequest({
-      merchant_raw: tx.merchant,
-      mcc: tx.mcc,
-      group_id: group.id,
-      user_category: category,
-      user_comment: comment,
-    });
+  if (claimed === 'edit') {
+    await ctx.answerCallbackQuery({ text: 'Сначала заверши текущее исправление' });
+    return;
   }
 
-  await ctx.answerCallbackQuery({ text: '✅ Расход записан' });
+  await ctx.answerCallbackQuery();
 
-  const messageId = ctx.message?.id;
-  const originalText = ctx.message?.text ?? '';
-  if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `${originalText}\n\n✅ Записано`,
-      });
-    } catch {
-      // message may be too old to edit
-    }
+  // Ask user to enter a comment or skip it
+  const replyToMsgId = claimed.telegram_message_id ?? undefined;
+  const promptMsg = await bot.api.sendMessage({
+    chat_id: chatId,
+    text: `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
+    ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
+    },
+  });
+
+  if (promptMsg?.message_id) {
+    // Store prompt message id so handleBankEditReply can match the reply
+    database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
   }
 }
 
@@ -527,46 +504,136 @@ export async function handleBankEditReply(
 
   if (!editTx) return false;
 
-  const parts = text.split('—').map((s) => s.trim());
-  const category = parts[0] ?? 'прочее';
-  const comment = parts[1] ?? editTx.merchant_normalized ?? editTx.merchant ?? '';
-
   const user = database.users.findByTelegramId(ctx.from.id);
   if (!user) {
     database.bankTransactions.setEditInProgress(editTx.id, false);
+    database.bankTransactions.setAwaitingComment(editTx.id, false);
     return false;
   }
 
-  const editCurrency = editTx.currency as import('../../config/constants').CurrencyCode;
+  let category: string;
+  let comment: string;
+
+  if (editTx.awaiting_comment === 1) {
+    // "Принять" flow: user types a comment; category comes from pre-fill
+    category = editTx.prefill_category ?? editTx.merchant_normalized ?? editTx.merchant ?? 'прочее';
+    comment = text.trim();
+  } else {
+    // "Исправить" flow: user types "категория — комментарий"
+    const parts = text.split('—').map((s) => s.trim());
+    category = parts[0] ?? 'прочее';
+    comment = parts[1] ?? editTx.merchant_normalized ?? editTx.merchant ?? '';
+  }
+
+  await saveConfirmedTransaction(editTx, group.id, user.id, category, comment);
+  database.bankTransactions.setEditInProgress(editTx.id, false);
+  database.bankTransactions.setAwaitingComment(editTx.id, false);
+
+  await ctx.send(
+    `✅ Расход записан: ${category}${comment ? ` — ${comment}` : ''} (${editTx.amount} ${editTx.currency})`,
+  );
+  return true;
+}
+
+/**
+ * Handles "Без комментария" button — confirms transaction with empty comment.
+ */
+export async function handleBankNoCommentCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  txId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  if (!ctx.from) {
+    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+    return;
+  }
+
+  const user = database.users.findByTelegramId(ctx.from.id);
+  if (!user) {
+    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
+    return;
+  }
+
+  const confirmed = database.db.transaction(() => {
+    const freshTx = database.bankTransactions.findById(txId, group.id);
+    if (!freshTx) return null;
+    if (freshTx.status !== 'pending') return false;
+    return freshTx;
+  })();
+
+  if (confirmed === null) {
+    await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });
+    return;
+  }
+  if (confirmed === false) {
+    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
+    return;
+  }
+
+  const tx = confirmed;
+  const category = tx.prefill_category ?? tx.merchant_normalized ?? tx.merchant ?? 'прочее';
+
+  saveConfirmedTransaction(tx, group.id, user.id, category, '');
+  database.bankTransactions.setEditInProgress(tx.id, false);
+  database.bankTransactions.setAwaitingComment(tx.id, false);
+
+  await ctx.answerCallbackQuery({ text: '✅ Расход записан' });
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: `✅ Записано: ${category} (${tx.amount} ${tx.currency})`,
+      });
+    } catch {
+      // message may be too old to edit
+    }
+  }
+}
+
+/**
+ * Confirm a bank transaction as an expense and create the corresponding merchant rule request.
+ */
+function saveConfirmedTransaction(
+  tx: import('../../database/types').BankTransaction,
+  groupId: number,
+  userId: number,
+  category: string,
+  comment: string,
+): void {
+  const txCurrency = tx.currency as import('../../config/constants').CurrencyCode;
   const expense = database.expenses.create({
-    group_id: group.id,
-    user_id: user.id,
-    date: editTx.date,
+    group_id: groupId,
+    user_id: userId,
+    date: tx.date,
     category,
     comment,
-    amount: editTx.amount,
-    currency: editCurrency,
-    eur_amount: convertAnyToEUR(editTx.amount, editTx.currency),
+    amount: tx.amount,
+    currency: txCurrency,
+    eur_amount: convertAnyToEUR(tx.amount, tx.currency),
   });
 
-  database.bankTransactions.updateStatus(editTx.id, group.id, 'confirmed');
-  database.bankTransactions.setMatchedExpense(editTx.id, group.id, expense.id);
-  database.bankTransactions.setEditInProgress(editTx.id, false);
+  database.bankTransactions.updateStatus(tx.id, groupId, 'confirmed');
+  database.bankTransactions.setMatchedExpense(tx.id, groupId, expense.id);
 
-  if (editTx.merchant) {
+  if (tx.merchant) {
     database.merchantRules.insertRuleRequest({
-      merchant_raw: editTx.merchant,
-      mcc: editTx.mcc,
-      group_id: group.id,
+      merchant_raw: tx.merchant,
+      mcc: tx.mcc,
+      group_id: groupId,
       user_category: category,
       user_comment: comment,
     });
   }
-
-  await ctx.send(
-    `✅ Расход записан: ${category} — ${comment} (${editTx.amount} ${editTx.currency})`,
-  );
-  return true;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

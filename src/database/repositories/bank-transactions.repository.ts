@@ -146,6 +146,14 @@ export class BankTransactionsRepository {
       .run(flag ? 1 : 0, id);
   }
 
+  setAwaitingComment(id: number, flag: boolean): void {
+    this.db
+      .query<void, [number, number]>(
+        'UPDATE bank_transactions SET awaiting_comment = ? WHERE id = ?',
+      )
+      .run(flag ? 1 : 0, id);
+  }
+
   setPrefill(id: number, category: string, comment: string): void {
     this.db
       .query<void, [string, string, number]>(
