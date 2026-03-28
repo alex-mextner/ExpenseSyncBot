@@ -1,5 +1,5 @@
 import Big from 'big.js';
-import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('converter');
@@ -52,10 +52,17 @@ const BANK_FALLBACK_RATES: Record<string, number> = {
 };
 
 /**
+ * Currencies to cache from the API. Starts with SUPPORTED_CURRENCIES.
+ * Grows lazily — when convertAnyToEUR encounters a new code it registers it here
+ * so the next scheduled fetch will include it.
+ */
+const knownCurrencies: Set<string> = new Set(SUPPORTED_CURRENCIES);
+
+/**
  * Cache for API exchange rates
  */
 let cachedRates: Record<CurrencyCode, number> | null = null;
-// All currencies from the API — used by convertAnyToEUR for bank transactions
+// Rates for knownCurrencies fetched from API — used by convertAnyToEUR
 let cachedAllRates: Record<string, number> | null = null;
 // String-precision rates derived from API response via Big.js division (used by convertCurrencyBig)
 let cachedRatesStr: Record<CurrencyCode, string> | null = null;
@@ -131,11 +138,12 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
       AED: toRateStr('AED'),
     };
 
-    // Store all currencies from the API for convertAnyToEUR
+    // Store rates for known currencies only — populated lazily as new currencies are encountered.
     const allRates: Record<string, number> = { EUR: 1.0 };
-    for (const [code, apiRate] of Object.entries(data.rates)) {
+    for (const currency of knownCurrencies) {
+      const apiRate = data.rates[currency];
       if (typeof apiRate === 'number' && apiRate > 0) {
-        allRates[code] = 1 / apiRate;
+        allRates[currency] = 1 / apiRate;
       }
     }
     cachedAllRates = allRates;
@@ -245,6 +253,8 @@ export function convertCurrency(
  */
 export function convertAnyToEUR(amount: number, currency: string): number {
   if (currency === 'EUR') return amount;
+  // Register so the next scheduled API fetch caches this currency's live rate.
+  knownCurrencies.add(currency);
   const rate =
     cachedAllRates?.[currency] ??
     cachedRates?.[currency as CurrencyCode] ??

@@ -577,6 +577,8 @@ When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
 4. On the server: `git submodule update --remote` fetches from the fork
 5. Open a PR to upstream — when merged, revert `.gitmodules` to the upstream URL
 
+**After every commit in the submodule**: push the branch to the fork immediately — `git -C src/services/bank/ZenPlugins push fork <branch>`. Don't leave local-only commits in submodules.
+
 ### ZenPlugins-Specific Conventions
 
 - **No trailing semicolons** (ASI style)
