@@ -8,7 +8,7 @@ import {
   timeSince,
 } from '../../services/bank/panel-builder';
 import type { CredentialField } from '../../services/bank/registry';
-import { BANK_REGISTRY, getBankList } from '../../services/bank/registry';
+import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
 import { convertToEUR } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
@@ -54,15 +54,18 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
     return;
   }
 
-  if (arg && BANK_REGISTRY[arg]) {
-    // Jump straight to setup wizard or show bank status
-    const existing = database.bankConnections.findByGroupAndBank(group.id, arg);
-    if (existing && existing.status !== 'setup') {
-      await showBankStatus(ctx, bot, existing, group);
-    } else {
-      await startWizard(ctx, group.id, arg, bot);
+  if (arg) {
+    const found = lookupBank(arg);
+    if (found) {
+      const [bankKey] = found;
+      const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
+      if (existing && existing.status !== 'setup') {
+        await showBankStatus(ctx, bot, existing, group);
+      } else {
+        await startWizard(ctx, group.id, bankKey, bot);
+      }
+      return;
     }
-    return;
   }
 
   const connections = database.bankConnections.findAllByGroupId(group.id);
@@ -174,8 +177,9 @@ export async function handleWizardInput(
 
   if (!setupConn) return false;
 
-  const plugin = BANK_REGISTRY[setupConn.bank_name];
-  if (!plugin) return false;
+  const bankFound = lookupBank(setupConn.bank_name);
+  if (!bankFound) return false;
+  const [, plugin] = bankFound;
 
   // Determine which credential field we're currently collecting
   const credentials = database.bankCredentials.findByConnectionId(setupConn.id);
@@ -921,11 +925,12 @@ export async function handleBankReconnectCallback(
     return;
   }
 
-  const plugin = BANK_REGISTRY[conn.bank_name];
-  if (!plugin) {
+  const reconnectFound = lookupBank(conn.bank_name);
+  if (!reconnectFound) {
     await ctx.answerCallbackQuery({ text: 'Банк не найден' });
     return;
   }
+  const [, plugin] = reconnectFound;
 
   await ctx.answerCallbackQuery();
 

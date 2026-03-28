@@ -203,3 +203,17 @@ export function getBankList(): { key: string; name: string }[] {
     .map(([key, plugin]) => ({ key, name: plugin.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Finds a bank plugin by exact key or by prefix match (e.g. 'tbc' → 'tbc-ge').
+ * Returns [resolvedKey, plugin] or null. Used for backward compatibility with DB
+ * rows that may store the old short bank_name before auto-discovery renamed keys.
+ */
+export function lookupBank(query: string): [string, BankPlugin] | null {
+  const exact = BANK_REGISTRY[query];
+  if (exact) return [query, exact];
+  const key = Object.keys(BANK_REGISTRY).find((k) => k.startsWith(`${query}-`));
+  const plugin = key ? BANK_REGISTRY[key] : undefined;
+  if (key && plugin) return [key, plugin];
+  return null;
+}

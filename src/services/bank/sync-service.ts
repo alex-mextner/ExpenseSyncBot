@@ -112,9 +112,74 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       return;
     }
 
+    // shimRef allows readLineImpl to reference the shim before it is created.
+    const shimRef: { current: ReturnType<typeof createZenMoneyShim> | null } = { current: null };
+
+    // releaseMutex declared here so readLineImpl closure can reassign it on re-acquire.
+    let releaseMutex: () => void = () => {};
+
+    const readLineImpl = async (prompt: string): Promise<string> => {
+      logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
+
+      const promptMsg = await sendMessage(
+        env.BOT_TOKEN,
+        group.telegram_group_id,
+        `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код в этот чат. У тебя 5 минут.`,
+        conn.panel_message_thread_id !== null
+          ? { message_thread_id: conn.panel_message_thread_id }
+          : undefined,
+      );
+
+      // Release the global shim mutex while waiting for user OTP input so other sync
+      // cycles are not blocked for the full 5-minute OTP wait window.
+      delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+      const releaseBeforeOtp = releaseMutex;
+      releaseMutex = () => {}; // guard against double-release from finally
+      releaseBeforeOtp();
+
+      let code: string;
+      try {
+        code = await registerOtpRequest(connectionId, group.telegram_group_id);
+      } catch (err) {
+        // OTP timed out — edit the prompt message to offer a retry button.
+        if (promptMsg?.message_id && err instanceof Error && err.message.includes('истекло')) {
+          await editMessageText(
+            env.BOT_TOKEN,
+            group.telegram_group_id,
+            promptMsg.message_id,
+            `⏰ Время ожидания кода истекло.\n\nНажми кнопку ниже чтобы синхронизировать снова.`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: '🔄 Синхронизировать снова',
+                      callback_data: `bank_sync:${connectionId}`,
+                    },
+                  ],
+                ],
+              },
+            },
+          ).catch(() => {});
+        }
+        throw err;
+      }
+
+      // Re-acquire the global shim mutex before the plugin resumes execution.
+      const prevForReacquire = shimMutex;
+      shimMutex = new Promise<void>((resolve) => {
+        releaseMutex = resolve;
+      });
+      await prevForReacquire;
+      if (shimRef.current) {
+        (globalThis as { ZenMoney?: unknown }).ZenMoney = shimRef.current;
+      }
+
+      return code;
+    };
+
     // Serialize plugin execution — globalThis.ZenMoney is shared and not concurrency-safe.
     const prevMutex = shimMutex;
-    let releaseMutex!: () => void;
     shimMutex = new Promise<void>((resolve) => {
       releaseMutex = resolve;
     });
@@ -124,20 +189,8 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     let transactions: ZenTransaction[] = [];
 
     try {
-      const readLineImpl = async (prompt: string): Promise<string> => {
-        logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
-        await sendMessage(
-          env.BOT_TOKEN,
-          group.telegram_group_id,
-          `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код в этот чат. У тебя 5 минут.`,
-          conn.panel_message_thread_id !== null
-            ? { message_thread_id: conn.panel_message_thread_id }
-            : undefined,
-        );
-        return registerOtpRequest(connectionId, group.telegram_group_id);
-      };
-
       const shim = createZenMoneyShim(connectionId, database.db, preferences, readLineImpl);
+      shimRef.current = shim;
       (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
 
       const { scrape } = await plugin.plugin();
