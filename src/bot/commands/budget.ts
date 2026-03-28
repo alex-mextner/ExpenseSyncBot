@@ -4,10 +4,13 @@ import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   createBudgetSheet,
   hasBudgetSheet,
+  monthTabExists,
   readBudgetData,
+  readMonthBudget,
   writeBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
@@ -41,16 +44,34 @@ export interface BudgetSyncResult {
  */
 export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult> {
   const group = database.groups.findById(groupId);
-  if (!group?.spreadsheet_id || !group?.google_refresh_token) {
+  if (!group?.google_refresh_token) {
     throw new Error('Group not configured for Google Sheets');
   }
 
-  const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-  if (!hasSheet) {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = format(now, 'yyyy-MM');
+  const currentMonthAbbr = monthAbbrFromDate(now);
+
+  const spreadsheetId = database.groupSpreadsheets.getByYear(groupId, currentYear);
+  if (!spreadsheetId) {
     return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
   }
 
-  const sheetBudgets = await readBudgetData(group.google_refresh_token, group.spreadsheet_id);
+  const tabExists = await monthTabExists(
+    group.google_refresh_token,
+    spreadsheetId,
+    currentMonthAbbr,
+  );
+  if (!tabExists) {
+    return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
+  }
+
+  const sheetBudgets = await readMonthBudget(
+    group.google_refresh_token,
+    spreadsheetId,
+    currentMonthAbbr,
+  );
 
   const result: BudgetSyncResult = {
     unchanged: 0,
@@ -60,50 +81,53 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
     createdCategories: [],
   };
 
-  // Build set of sheet budget keys
-  const sheetKeys = new Set<string>();
-  for (const b of sheetBudgets) {
-    sheetKeys.add(`${b.month}|${b.category}`);
-  }
+  const sheetCategories = new Set<string>(sheetBudgets.map((b) => b.category));
 
-  // Process sheet budgets
   for (const b of sheetBudgets) {
     if (!database.categories.exists(groupId, b.category)) {
       database.categories.create({ group_id: groupId, name: b.category });
       result.createdCategories.push(b.category);
     }
 
-    const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, b.month);
+    const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
 
     if (!existing) {
       database.budgets.setBudget({
         group_id: groupId,
         category: b.category,
-        month: b.month,
+        month: currentMonth,
         limit_amount: b.limit,
         currency: b.currency,
       });
-      result.added.push(b);
+      result.added.push({
+        month: currentMonth,
+        category: b.category,
+        limit: b.limit,
+        currency: b.currency,
+      });
     } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
       database.budgets.setBudget({
         group_id: groupId,
         category: b.category,
-        month: b.month,
+        month: currentMonth,
         limit_amount: b.limit,
         currency: b.currency,
       });
-      result.updated.push({ ...b, oldLimit: existing.limit_amount });
+      result.updated.push({
+        month: currentMonth,
+        category: b.category,
+        limit: b.limit,
+        currency: b.currency,
+        oldLimit: existing.limit_amount,
+      });
     } else {
       result.unchanged++;
     }
   }
 
-  // Find deleted (in DB but not in sheet) — only for current month
-  const currentMonth = format(new Date(), 'yyyy-MM');
   const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
   for (const db of dbBudgets) {
-    const key = `${db.month}|${db.category}`;
-    if (!sheetKeys.has(key)) {
+    if (!sheetCategories.has(db.category)) {
       database.budgets.delete(db.id);
       result.deleted.push({
         month: db.month,
@@ -575,49 +599,37 @@ export async function silentSyncBudgets(
   groupId: number,
 ): Promise<number> {
   try {
-    // Check if Budget sheet exists
-    const hasSheet = await hasBudgetSheet(googleRefreshToken, spreadsheetId);
-    if (!hasSheet) {
-      return 0;
-    }
+    const now = new Date();
+    const currentMonth = format(now, 'yyyy-MM');
+    const currentMonthAbbr = monthAbbrFromDate(now);
 
-    // Read budgets from Google Sheets
-    const budgetsFromSheet = await readBudgetData(googleRefreshToken, spreadsheetId);
-    if (budgetsFromSheet.length === 0) {
-      return 0;
-    }
+    const tabExists = await monthTabExists(googleRefreshToken, spreadsheetId, currentMonthAbbr);
+    if (!tabExists) return 0;
+
+    const budgetsFromSheet = await readMonthBudget(
+      googleRefreshToken,
+      spreadsheetId,
+      currentMonthAbbr,
+    );
+    if (budgetsFromSheet.length === 0) return 0;
 
     let syncedCount = 0;
-
-    for (const budgetData of budgetsFromSheet) {
-      // Check if category exists, if not - create it
-      const categoryExists = database.categories.exists(groupId, budgetData.category);
-      if (!categoryExists) {
-        database.categories.create({
-          group_id: groupId,
-          name: budgetData.category,
-        });
+    for (const b of budgetsFromSheet) {
+      if (!database.categories.exists(groupId, b.category)) {
+        database.categories.create({ group_id: groupId, name: b.category });
       }
 
-      // Get existing budget to check if it changed
-      const existing = database.budgets.findByGroupCategoryMonth(
-        groupId,
-        budgetData.category,
-        budgetData.month,
-      );
-
+      const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
       const hasChanged =
-        !existing ||
-        existing.limit_amount !== budgetData.limit ||
-        existing.currency !== budgetData.currency;
+        !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
 
       if (hasChanged) {
         database.budgets.setBudget({
           group_id: groupId,
-          category: budgetData.category,
-          month: budgetData.month,
-          limit_amount: budgetData.limit,
-          currency: budgetData.currency,
+          category: b.category,
+          month: currentMonth,
+          limit_amount: b.limit,
+          currency: b.currency,
         });
         syncedCount++;
       }
@@ -625,7 +637,7 @@ export async function silentSyncBudgets(
 
     return syncedCount;
   } catch (err) {
-    logger.error({ err: err }, '[BUDGET] Silent sync failed');
+    logger.error({ err }, '[BUDGET] Silent sync failed');
     return 0;
   }
 }
