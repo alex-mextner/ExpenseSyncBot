@@ -145,6 +145,9 @@ async function handleAskWithAnthropic(
 
     const finalResponse = await agent.run(`${userName}: ${question}`, historyMessages, bot);
 
+    // Empty response means the agent chose to stay silent ([SKIP] signal)
+    if (!finalResponse) return;
+
     // Save only the final text response to chat history (not tool_use rounds)
     database.chatMessages.create({
       group_id: group.id,

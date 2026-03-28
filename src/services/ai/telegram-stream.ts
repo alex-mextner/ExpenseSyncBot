@@ -57,6 +57,15 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
   }
 }
 
+/**
+ * Returns true if the AI response is a skip signal — bot chose to stay silent.
+ * Recognized signals: [SKIP], ..., or empty string.
+ */
+export function isSkipSignal(text: string): boolean {
+  const t = text.trim();
+  return t === '[SKIP]' || t === '...' || t === '';
+}
+
 const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
 const ERROR_COOLDOWN_MS = 10000;
 const MAX_MESSAGE_LENGTH = 4000;
@@ -447,6 +456,19 @@ export class TelegramStreamWriter {
     }
 
     return truncated;
+  }
+
+  /**
+   * Delete the sent message from Telegram (used when bot decides to stay silent).
+   * Also stops typing indicator and cleans up placeholder.
+   */
+  async deleteSentMessage(): Promise<void> {
+    this.stopTyping();
+    if (this.sentMessageId) {
+      const id = this.sentMessageId;
+      this.sentMessageId = null;
+      this.bot.api.deleteMessage({ chat_id: this.chatId, message_id: id }).catch(() => {});
+    }
   }
 
   private splitIntoChunks(text: string, maxLength: number): string[] {

@@ -14,7 +14,7 @@ import { AnthropicError, NetworkError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
-import { TelegramStreamWriter } from './telegram-stream';
+import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { TOOL_DEFINITIONS } from './tools';
 import type { AgentContext, ToolCallResult } from './types';
@@ -90,6 +90,13 @@ export class ExpenseBotAgent {
       );
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
+
+      // Skip signal — bot chose to stay silent, delete the placeholder message
+      if (isSkipSignal(finalText)) {
+        logger.info('[AGENT] Skip signal — staying silent');
+        await writer.deleteSentMessage();
+        return '';
+      }
 
       // --- Validation pass (only when no tools were called) ---
       if (toolCallNames.length === 0) {
@@ -401,6 +408,13 @@ NEVER mention, suggest, or describe features that are NOT listed above. If a use
 
 ## AVAILABLE COMMANDS
 ${formatCommandsForPrompt()}
+
+## WHEN TO STAY SILENT
+If the message is clearly a side conversation between two people (one person replying to another, not addressing you) — respond with exactly [SKIP] and nothing else.
+Examples of when to respond [SKIP]:
+- "ok, got it" / "thanks!" / "see you later" — casual chat not involving you
+- Person A replies to person B about something unrelated to finances
+Do NOT [SKIP] if: the message is directed at you, asks about finances/expenses/budgets, or you're unsure. When in doubt — respond.
 
 Respond in Russian if the user writes in Russian, otherwise in English.`;
 
