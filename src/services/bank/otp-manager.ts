@@ -6,7 +6,9 @@ import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('otp-manager');
 
-const OTP_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+// 60 seconds — OTP codes expire fast, and the global shim mutex is held while waiting.
+// Keeping this short limits the stall window for other sync cycles.
+const OTP_TIMEOUT_MS = 60 * 1000;
 
 type PendingOtp = {
   connectionId: number;
@@ -26,7 +28,7 @@ export function registerOtpRequest(connectionId: number, telegramGroupId: number
   return new Promise<string>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       pending.delete(connectionId);
-      reject(new Error('Время ожидания кода истекло (5 мин)'));
+      reject(new Error('Время ожидания кода истекло (1 мин)'));
     }, OTP_TIMEOUT_MS);
 
     pending.set(connectionId, { connectionId, telegramGroupId, resolve, reject, timeoutId });
@@ -47,14 +49,6 @@ export function resolveOtpForGroup(telegramGroupId: number, code: string): boole
       req.resolve(code);
       return true;
     }
-  }
-  return false;
-}
-
-/** Returns true if any connection in this group is waiting for an OTP. */
-export function hasPendingOtp(telegramGroupId: number): boolean {
-  for (const req of pending.values()) {
-    if (req.telegramGroupId === telegramGroupId) return true;
   }
   return false;
 }

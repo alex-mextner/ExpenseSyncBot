@@ -161,8 +161,8 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       }
     } finally {
       delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+      releaseMutex(); // release before cancelling OTP so other syncs can queue up
       cancelOtpRequest(connectionId); // clean up if plugin exited without consuming the OTP
-      releaseMutex();
     }
 
     // Upsert accounts

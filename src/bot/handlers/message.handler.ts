@@ -110,12 +110,6 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     return;
   }
 
-  // Bank OTP — consume before wizard or expense parsing
-  if (text && !text.startsWith('/')) {
-    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
-    if (resolveOtpForGroup(telegramGroupId, text)) return;
-  }
-
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
@@ -137,6 +131,12 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
     );
     return;
+  }
+
+  // Bank OTP — consume after topic check, before expense parsing
+  if (text && !text.startsWith('/')) {
+    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
+    if (resolveOtpForGroup(telegramGroupId, text)) return;
   }
 
   logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
