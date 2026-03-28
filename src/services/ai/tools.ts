@@ -293,6 +293,21 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'send_feedback',
+    description:
+      'Send a feedback message or bug report to the bot admin. Use when a user explicitly asks to report a problem, send feedback, or contact support.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        message: {
+          type: 'string',
+          description: 'Feedback or bug report text to send to the admin.',
+        },
+      },
+      required: ['message'],
+    },
+  },
+  {
     name: 'render_table',
     description: `Renders a Markdown table as a styled image and sends it to the chat.
 
@@ -356,4 +371,5 @@ export const TOOL_LABELS: Record<string, string> = {
   get_bank_balances: 'Проверяю балансы счетов',
   find_missing_expenses: 'Ищу пропущенные расходы',
   render_table: 'Рендерю таблицу',
+  send_feedback: 'Отправляю фидбек',
 };

@@ -5,9 +5,11 @@
 import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankTransaction, BankTransactionFilters } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
+import { sendMessage } from '../bank/telegram-sender';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { parseMarkdownTable } from '../render/md-table-html.ts';
@@ -75,6 +77,8 @@ export async function executeTool(
         return await executeFindMissingExpenses(input, ctx);
       case 'render_table':
         return executeRenderTable(input, ctx);
+      case 'send_feedback':
+        return await executeSendFeedback(input, ctx);
       default:
         return { success: false, error: `Unknown tool: ${name}` };
     }
@@ -791,4 +795,21 @@ function executeRenderTable(input: Record<string, unknown>, ctx: AgentContext): 
     .catch((err: Error) => logger.error({ err }, 'render_table: failed to render or send'));
 
   return { success: true, output: 'Таблица отрисовывается и будет отправлена в чат.' };
+}
+
+// === Feedback tool ===
+
+async function executeSendFeedback(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  const message = input['message'] as string;
+  if (!message) return { success: false, error: 'message is required' };
+  if (!env.BOT_ADMIN_CHAT_ID) return { success: false, error: 'Admin feedback not configured' };
+
+  const group = database.groups.findById(ctx.groupId);
+  const groupLabel = group ? `<b>${group.telegram_group_id}</b>` : String(ctx.chatId);
+  const text = `💬 Фидбек из группы ${groupLabel}:\n\n${message}`;
+  await sendMessage(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text);
+  return { success: true, output: 'Фидбек отправлен администратору.' };
 }
