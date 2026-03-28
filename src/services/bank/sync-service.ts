@@ -279,6 +279,7 @@ async function handleSyncError(
         env.BOT_TOKEN,
         group.telegram_group_id,
         `⚠️ ${escapeHtml(conn.display_name)} — ошибка синхронизации\n\nНе удаётся подключиться 3 раза подряд.\nПоследняя ошибка: ${escapeHtml(message)}\n\nВозможно, изменился пароль или истекла сессия.\n/bank ${escapeHtml(conn.bank_name)} — переподключить`,
+        group.active_topic_id !== null ? { message_thread_id: group.active_topic_id } : undefined,
       ).catch((e) => logger.error({ err: e }, 'Failed to send escalation alert'));
     }
   }
