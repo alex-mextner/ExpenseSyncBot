@@ -35,7 +35,10 @@ export function resetSheetWriteFailures(groupId: number): void {
 /**
  * Handle expense message
  */
-export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance): Promise<void> {
+export async function handleExpenseMessage(
+  ctx: Ctx['Message'],
+  bot: BotInstance,
+): Promise<boolean> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
@@ -45,7 +48,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
 
   if (!telegramId || !messageId || !text) {
     logger.info(`[MSG] Ignoring: missing telegramId, messageId or text`);
-    return;
+    return true;
   }
 
   // Check if message is from group/supergroup
@@ -92,7 +95,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       );
     }
 
-    return;
+    return true;
   }
 
   const telegramGroupId = ctx.chat.id;
@@ -107,28 +110,28 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     // Group not set up yet
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} not found in database`);
     await ctx.send(`Группа не настроена. Для настройки используй команду /connect`);
-    return;
+    return true;
   }
 
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
     const handled = await handleWizardInput(ctx, group.id, text, bot);
-    if (handled) return;
+    if (handled) return true;
   }
 
   // Check if group has completed setup
   if (!database.groups.hasCompletedSetup(telegramGroupId)) {
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
     await ctx.send('Завершите настройку группы: /connect');
-    return;
+    return true;
   }
 
   // Bank OTP — must be checked before topic restriction: the user may reply from any topic
   // (the OTP prompt could land in a different thread than active_topic_id).
   if (text && !text.startsWith('/')) {
     const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
-    if (resolveOtpForGroup(telegramGroupId, text)) return;
+    if (resolveOtpForGroup(telegramGroupId, text)) return true;
   }
 
   // Check topic restriction
@@ -137,7 +140,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     logger.info(
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
     );
-    return;
+    return true;
   }
 
   logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
@@ -156,7 +159,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     logger.info(`[MSG] Updating user ${telegramId} group_id: ${user.group_id} → ${group.id}`);
     database.users.update(telegramId, { group_id: group.id });
     user = database.users.findByTelegramId(telegramId);
-    if (!user) return;
+    if (!user) return true;
   }
 
   // Check if we're waiting for design edit or code edit input
@@ -179,21 +182,21 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
         await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    return;
+    return true;
   }
 
   // Check if we're waiting for bulk correction text input
   const waitingBulkCorrection = database.photoQueue.findWaitingForBulkCorrection(group.id);
   if (waitingBulkCorrection) {
     await handleBulkCorrectionInput(ctx, bot, text, waitingBulkCorrection, group);
-    return;
+    return true;
   }
 
   // Check if we're waiting for category text input from user
   const waitingItem = database.receiptItems.findWaitingForCategoryInput(group.id);
   if (waitingItem) {
     await handleCategoryTextInput(ctx, bot, text, waitingItem, group.id);
-    return;
+    return true;
   }
 
   // Bank transaction edit flow — route replies to pending edit transactions
@@ -201,7 +204,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   if (replyToMessageId && text) {
     const { handleBankEditReply } = await import('../commands/bank');
     const handled = await handleBankEditReply(ctx, telegramGroupId, text, replyToMessageId);
-    if (handled) return;
+    if (handled) return true;
   }
 
   // Check for URLs in message
@@ -215,7 +218,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       group,
       user,
     );
-    if (hasPayment) return;
+    if (hasPayment) return true;
   }
 
   // Split message by lines and process each line
@@ -326,7 +329,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
         reply_markup: keyboard,
       });
     }
-    return;
+    return true;
   }
 
   // Success - no need to send message, reaction is enough
@@ -337,6 +340,8 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   if (hasProcessedExpenses) {
     await maybeSmartAdvice(ctx, group.id);
   }
+
+  return hasProcessedExpenses;
 }
 
 /**

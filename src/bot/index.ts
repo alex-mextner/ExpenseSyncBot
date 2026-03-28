@@ -134,20 +134,37 @@ export function createBot(): Bot {
 
     const text = ctx.text;
 
-    // Check for @botname mention
+    // @mention is always the trigger for AI — works regardless of topics config
     if (botUsername) {
       const mentionPattern = new RegExp(`@${botUsername}\\s+(.+)`, 'i');
       const match = text.match(mentionPattern);
 
       if (match?.[1]) {
-        // Handle as question
         await handleAskQuestion(ctx, match[1].trim(), bot);
         return;
       }
     }
 
-    // Handle as expense message
-    await handleExpenseMessage(ctx, bot);
+    // Determine if AI can be triggered without @mention:
+    //   - Regular group / non-forum supergroup: always allowed
+    //   - Forum supergroup: allowed only when a topic is locked via /topic
+    const isGroupChat = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+    let allowDirectAI = false;
+    if (isGroupChat) {
+      const isForum = ctx.chat.isForum === true;
+      if (!isForum) {
+        allowDirectAI = true;
+      } else {
+        const grp = database.groups.findByTelegramGroupId(ctx.chat.id);
+        allowDirectAI = grp?.active_topic_id != null;
+      }
+    }
+
+    // Try to handle as expense; if nothing was parsed and direct AI is allowed, answer as question
+    const expenseHandled = await handleExpenseMessage(ctx, bot);
+    if (!expenseHandled && allowDirectAI) {
+      await handleAskQuestion(ctx, text, bot);
+    }
   });
 
   // Register monthly budget tab cron
