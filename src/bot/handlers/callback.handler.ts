@@ -11,6 +11,8 @@ import {
   handleBankDisconnectCancelCallback,
   handleBankDisconnectConfirmCallback,
   handleBankEditCallback,
+  handleBankLetterCallback,
+  handleBankLetterNavCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
   handleBankSettingsCallback,
@@ -302,6 +304,25 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankAddCallback(ctx, chatId);
+        break;
+      }
+
+      case 'bank_letter': {
+        const letter = params[0]?.toUpperCase();
+        if (!chatId || !letter) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankLetterCallback(ctx, bot, letter, chatId);
+        break;
+      }
+
+      case 'bank_letter_nav': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankLetterNavCallback(ctx, bot, chatId);
         break;
       }
 

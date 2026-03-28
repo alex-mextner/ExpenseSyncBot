@@ -77,11 +77,21 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
 
 // ─── Wizard ──────────────────────────────────────────────────────────────────
 
+function buildLetterNavKeyboard(
+  banks: { key: string; name: string }[],
+): { text: string; callback_data: string }[][] {
+  const letters = [...new Set(banks.map((b) => b.name.charAt(0).toUpperCase()))].sort();
+  const rows: { text: string; callback_data: string }[][] = [];
+  for (let i = 0; i < letters.length; i += 5) {
+    rows.push(letters.slice(i, i + 5).map((l) => ({ text: l, callback_data: `bank_letter:${l}` })));
+  }
+  return rows;
+}
+
 async function showNoBanksPanel(ctx: Ctx['Message']): Promise<void> {
   const banks = getBankList();
-  const buttons = banks.map((b) => [{ text: b.name, callback_data: `bank_setup:${b.key}` }]);
-  await ctx.send('Ни одного банка не подключено.\n\nВыбери банк:', {
-    reply_markup: { inline_keyboard: buttons },
+  await ctx.send('Ни одного банка не подключено.\n\nВыбери букву:', {
+    reply_markup: { inline_keyboard: buildLetterNavKeyboard(banks) },
   });
 }
 
@@ -108,8 +118,11 @@ async function startWizard(
     status: 'setup',
   });
 
-  // Banks with no credential fields activate immediately
+  // Banks with no user-input fields: store defaults and activate immediately
   if (plugin.fields.length === 0) {
+    if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
+      database.bankCredentials.upsert(newConn.id, encryptData(JSON.stringify(plugin.defaults)));
+    }
     database.bankConnections.update(newConn.id, { status: 'active' });
     activateNewConnection(newConn.id);
     await ctx.send(buildConnectionCompleteText(plugin.name));
@@ -218,6 +231,7 @@ export async function handleWizardInput(
         reply_markup: {
           inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
         },
+        link_preview_options: { is_disabled: true },
       });
       wizardPromptMessages.set(setupConn.id, {
         messageId: sent.message_id,
@@ -228,7 +242,12 @@ export async function handleWizardInput(
     return true;
   }
 
-  // Wizard complete — activate connection.
+  // Wizard complete — merge auto-fill defaults, then activate connection.
+  if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
+    const merged = { ...plugin.defaults, ...collectedFields };
+    database.bankCredentials.upsert(setupConn.id, encryptData(JSON.stringify(merged)));
+  }
+
   // Wait up to 3 s for quick failures (auth errors surface within ~500 ms).
   wizardPromptMessages.delete(setupConn.id);
   database.bankConnections.update(setupConn.id, { status: 'active' });
@@ -651,8 +670,11 @@ export async function handleBankSetupCallback(
     status: 'setup',
   });
 
-  // Banks with no credential fields (e.g., PDF upload) activate immediately
+  // Banks with no user-input fields: store defaults and activate immediately
   if (plugin.fields.length === 0) {
+    if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
+      database.bankCredentials.upsert(newConn.id, encryptData(JSON.stringify(plugin.defaults)));
+    }
     database.bankConnections.update(newConn.id, { status: 'active' });
     activateNewConnection(newConn.id);
     await ctx.send(buildConnectionCompleteText(plugin.name));
@@ -666,6 +688,7 @@ export async function handleBankSetupCallback(
     reply_markup: {
       inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
     },
+    link_preview_options: { is_disabled: true },
   });
   wizardPromptMessages.set(newConn.id, {
     messageId: sent.message_id,
@@ -916,6 +939,9 @@ export async function handleBankReconnectCallback(
   });
 
   if (plugin.fields.length === 0) {
+    if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
+      database.bankCredentials.upsert(conn.id, encryptData(JSON.stringify(plugin.defaults)));
+    }
     database.bankConnections.update(conn.id, { status: 'active' });
     activateNewConnection(conn.id);
     await ctx.send(buildConnectionCompleteText(plugin.name));
@@ -929,6 +955,7 @@ export async function handleBankReconnectCallback(
     reply_markup: {
       inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
     },
+    link_preview_options: { is_disabled: true },
   });
   wizardPromptMessages.set(conn.id, {
     messageId: sent.message_id,
@@ -1019,10 +1046,79 @@ export async function handleBankAddCallback(
     return;
   }
 
-  const banks = getBankList();
-  const buttons = banks.map((b) => [{ text: b.name, callback_data: `bank_setup:${b.key}` }]);
   await ctx.answerCallbackQuery();
-  await ctx.send('Выбери банк для подключения:', {
-    reply_markup: { inline_keyboard: buttons },
+  const keyboard = buildLetterNavKeyboard(getBankList());
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await ctx.editText('Выбери букву:', { reply_markup: { inline_keyboard: keyboard } });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  await ctx.send('Выбери букву:', { reply_markup: { inline_keyboard: keyboard } });
+}
+
+/** Shows banks whose display name starts with the given letter. */
+export async function handleBankLetterCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  letter: string,
+  chatId: number,
+): Promise<void> {
+  const banks = getBankList().filter((b) => b.name.charAt(0).toUpperCase() === letter);
+
+  if (banks.length === 0) {
+    await ctx.answerCallbackQuery({ text: 'Нет банков на эту букву' });
+    return;
+  }
+
+  const bankButtons = banks.map((b) => [{ text: b.name, callback_data: `bank_setup:${b.key}` }]);
+  bankButtons.push([{ text: '← Назад', callback_data: 'bank_letter_nav' }]);
+
+  await ctx.answerCallbackQuery();
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: `Банки на букву ${letter}:`,
+        reply_markup: { inline_keyboard: bankButtons },
+      });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  await ctx.send(`Банки на букву ${letter}:`, {
+    reply_markup: { inline_keyboard: bankButtons },
   });
+}
+
+/** Restores the letter navigator (used by the ← Назад button in bank letter view). */
+export async function handleBankLetterNavCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  chatId: number,
+): Promise<void> {
+  await ctx.answerCallbackQuery();
+  const keyboard = buildLetterNavKeyboard(getBankList());
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: 'Выбери букву:',
+        reply_markup: { inline_keyboard: keyboard },
+      });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  await ctx.send('Выбери букву:', { reply_markup: { inline_keyboard: keyboard } });
 }
