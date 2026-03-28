@@ -74,12 +74,30 @@ export function applyInheritance(
   return result;
 }
 
-/** Parse year from a date cell in DD.MM.YYYY format. Returns null if unparseable. */
-function yearFromDateCell(cell: string): number | null {
-  const match = cell.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-  if (!match) return null;
-  const year = parseInt(match[3] ?? '', 10);
-  return Number.isNaN(year) ? null : year;
+/** Parse year from a date cell. Handles ISO yyyy-MM-dd, European DD.MM.YYYY, and numeric serials. */
+export function yearFromDateCell(cell: string): number | null {
+  // ISO yyyy-MM-dd — what the bot writes via appendExpenseRow with USER_ENTERED
+  const iso = cell.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const year = parseInt(iso[1] ?? '', 10);
+    return Number.isNaN(year) ? null : year;
+  }
+
+  // European DD.MM.YYYY — legacy / display format
+  const dmy = cell.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dmy) {
+    const year = parseInt(dmy[3] ?? '', 10);
+    return Number.isNaN(year) ? null : year;
+  }
+
+  // Numeric date serial (UNFORMATTED_VALUE when Sheets stored the cell as a date type)
+  // 25569 = days between 1899-12-30 (Sheets epoch) and 1970-01-01 (Unix epoch)
+  const serial = Number(cell);
+  if (!Number.isNaN(serial) && serial > 25569) {
+    return new Date((serial - 25569) * 86400 * 1000).getUTCFullYear();
+  }
+
+  return null;
 }
 
 function normalizeMonth(month: string): string {

@@ -2,7 +2,34 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { FlatBudgetRow } from './budget-migration';
-import { applyInheritance } from './budget-migration';
+import { applyInheritance, yearFromDateCell } from './budget-migration';
+
+describe('yearFromDateCell', () => {
+  test('parses ISO yyyy-MM-dd (what the bot writes)', () => {
+    expect(yearFromDateCell('2026-03-28')).toBe(2026);
+    expect(yearFromDateCell('2025-01-01')).toBe(2025);
+  });
+
+  test('parses European DD.MM.YYYY', () => {
+    expect(yearFromDateCell('28.03.2026')).toBe(2026);
+    expect(yearFromDateCell('01.01.2025')).toBe(2025);
+  });
+
+  test('parses numeric date serial (UNFORMATTED_VALUE from Sheets)', () => {
+    // 46109 = 2026-03-28 in Sheets serial (days since 1899-12-30)
+    expect(yearFromDateCell('46109')).toBe(2026); // 2026-03-28
+  });
+
+  test('returns null for empty string', () => {
+    expect(yearFromDateCell('')).toBeNull();
+  });
+
+  test('returns null for unrecognized formats', () => {
+    expect(yearFromDateCell('March 28, 2026')).toBeNull();
+    expect(yearFromDateCell('28/03/2026')).toBeNull();
+    expect(yearFromDateCell('invalid')).toBeNull();
+  });
+});
 
 describe('applyInheritance', () => {
   test('returns empty map for empty input', () => {
