@@ -2,7 +2,7 @@
 
 import cron from 'node-cron';
 import { database } from '../database';
-import { monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
+import { MONTH_ABBREVS, monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
 import {
   cloneMonthTab,
   createEmptyMonthTab,
@@ -105,4 +105,76 @@ export function registerMonthlyCron(bot: BotInstance): void {
   });
 
   logger.info('[CRON] Monthly tab cron registered (00:00 on 1st of each month)');
+}
+
+/**
+ * Backfill any month tabs missing between January and the current month (inclusive)
+ * for every active group. Runs silently at startup — no chat notifications.
+ * Each missing tab is cloned from the nearest prior existing tab, or created empty.
+ */
+export async function backfillMissingMonthTabs(): Promise<void> {
+  const now = new Date();
+  const year = now.getFullYear();
+  const currentMonthIdx = now.getMonth(); // 0 = Jan, 11 = Dec
+
+  const groups = database.groups.findAll();
+
+  for (const group of groups) {
+    if (!group.google_refresh_token) continue;
+
+    const spreadsheetId = database.groupSpreadsheets.getByYear(group.id, year);
+    if (!spreadsheetId) continue;
+
+    try {
+      for (let mi = 0; mi <= currentMonthIdx; mi++) {
+        const month = MONTH_ABBREVS[mi];
+        if (!month) continue;
+
+        if (await monthTabExists(group.google_refresh_token, spreadsheetId, month)) continue;
+
+        // Find nearest prior tab to clone from, searching backwards
+        let cloned = false;
+        for (let pi = mi - 1; pi >= -11; pi--) {
+          let srcSpreadsheetId: string | null;
+          let srcMonth: (typeof MONTH_ABBREVS)[number];
+
+          if (pi >= 0) {
+            srcSpreadsheetId = spreadsheetId;
+            srcMonth = MONTH_ABBREVS[pi] as (typeof MONTH_ABBREVS)[number];
+          } else {
+            // Look into the previous year's spreadsheet
+            const prevYear = year - 1;
+            srcSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, prevYear);
+            srcMonth = MONTH_ABBREVS[12 + pi] as (typeof MONTH_ABBREVS)[number];
+          }
+
+          if (
+            srcSpreadsheetId &&
+            srcMonth &&
+            (await monthTabExists(group.google_refresh_token, srcSpreadsheetId, srcMonth))
+          ) {
+            await cloneMonthTab(
+              group.google_refresh_token,
+              srcSpreadsheetId,
+              srcMonth,
+              spreadsheetId,
+              month,
+            );
+            logger.info(`[BACKFILL] Cloned ${srcMonth} → ${month} for group ${group.id}`);
+            cloned = true;
+            break;
+          }
+        }
+
+        if (!cloned) {
+          await createEmptyMonthTab(group.google_refresh_token, spreadsheetId, month);
+          logger.info(`[BACKFILL] Created empty tab ${month} for group ${group.id}`);
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, `[BACKFILL] Failed for group ${group.id}`);
+    }
+  }
+
+  logger.info('[BACKFILL] Missing month tabs backfill complete');
 }

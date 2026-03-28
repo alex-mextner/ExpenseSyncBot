@@ -22,7 +22,7 @@ import { handleStatsCommand } from './commands/stats';
 import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
-import { registerMonthlyCron } from './cron';
+import { backfillMissingMonthTabs, registerMonthlyCron } from './cron';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
@@ -201,6 +201,11 @@ export async function startBot(): Promise<Bot> {
   const devPipeline = initDevPipeline(bot);
   await devPipeline.resumeIncompleteTasksOnStartup();
   logger.info('✓ Dev pipeline started');
+
+  // Backfill any month tabs missing between Jan and current month
+  logger.info('📅 Backfilling missing month tabs...');
+  await backfillMissingMonthTabs();
+  logger.info('✓ Month tabs backfill complete');
 
   return bot;
 }
