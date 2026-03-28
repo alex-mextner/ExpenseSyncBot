@@ -23,6 +23,98 @@ const logger = createLogger('budget');
 const lastBudgetSyncByGroup = new Map<number, number>();
 const BUDGET_SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
+// ── Notify cache for pagination buttons ──
+
+const BUDGET_NOTIFY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const budgetNotifyCache = new Map<string, { result: BudgetSyncResult; expires: number }>();
+const BUDGET_PAGE_SIZE = 10;
+
+function cleanBudgetCache(): void {
+  const now = Date.now();
+  for (const [k, v] of budgetNotifyCache) {
+    if (v.expires < now) budgetNotifyCache.delete(k);
+  }
+}
+
+export function getBudgetSyncCachedResult(key: string): BudgetSyncResult | null {
+  const entry = budgetNotifyCache.get(key);
+  if (!entry || entry.expires < Date.now()) return null;
+  return entry.result;
+}
+
+function fmtBudgetItem(e: {
+  category: string;
+  limit: number;
+  currency: CurrencyCode;
+  oldLimit?: number;
+}): string {
+  const change = e.oldLimit !== undefined ? ` (было ${e.oldLimit})` : '';
+  return `${e.category}: ${e.limit} ${e.currency}${change}`;
+}
+
+type BudgetNotifyMessage = {
+  text: string;
+  reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+};
+
+function buildAutoSyncBudgetsMessage(
+  result: BudgetSyncResult,
+  cacheKey: string,
+): BudgetNotifyMessage {
+  const counts: string[] = [];
+  if (result.added.length > 0) counts.push(`+${result.added.length}`);
+  if (result.deleted.length > 0) counts.push(`-${result.deleted.length}`);
+  if (result.updated.length > 0) counts.push(`~${result.updated.length}`);
+
+  const lines: string[] = [`🔄 Авто-синк бюджетов: ${counts.join(', ')}`];
+  const buttons: Array<{ text: string; callback_data: string }> = [];
+
+  if (result.added.length > 0) {
+    lines.push(`\n➕ Добавлено: ${result.added.length}`);
+    for (const e of result.added.slice(0, BUDGET_PAGE_SIZE)) {
+      lines.push(`  ${fmtBudgetItem(e)}`);
+    }
+    if (result.added.length > BUDGET_PAGE_SIZE) {
+      buttons.push({
+        text: `➕ ещё ${result.added.length - BUDGET_PAGE_SIZE} добавлено`,
+        callback_data: `bsync_more:${cacheKey}:a`,
+      });
+    }
+  }
+
+  if (result.deleted.length > 0) {
+    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
+    for (const e of result.deleted.slice(0, BUDGET_PAGE_SIZE)) {
+      lines.push(`  ${fmtBudgetItem(e)}`);
+    }
+    if (result.deleted.length > BUDGET_PAGE_SIZE) {
+      buttons.push({
+        text: `🗑 ещё ${result.deleted.length - BUDGET_PAGE_SIZE} удалено`,
+        callback_data: `bsync_more:${cacheKey}:d`,
+      });
+    }
+  }
+
+  if (result.updated.length > 0) {
+    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
+    for (const e of result.updated.slice(0, BUDGET_PAGE_SIZE)) {
+      lines.push(`  ${fmtBudgetItem(e)}`);
+    }
+    if (result.updated.length > BUDGET_PAGE_SIZE) {
+      buttons.push({
+        text: `✏️ ещё ${result.updated.length - BUDGET_PAGE_SIZE} обновлено`,
+        callback_data: `bsync_more:${cacheKey}:u`,
+      });
+    }
+  }
+
+  const text = lines.join('\n');
+  if (buttons.length > 0) {
+    return { text, reply_markup: { inline_keyboard: buttons.map((b) => [b]) } };
+  }
+  return { text };
+}
+
 export interface BudgetSyncResult {
   unchanged: number;
   added: Array<{ month: string; category: string; limit: number; currency: CurrencyCode }>;
@@ -161,13 +253,13 @@ export async function ensureFreshBudgets(
       result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0;
 
     if (hasChanges && telegramGroupId && bot) {
-      const parts: string[] = [];
-      if (result.added.length > 0) parts.push(`+${result.added.length}`);
-      if (result.deleted.length > 0) parts.push(`-${result.deleted.length}`);
-      if (result.updated.length > 0) parts.push(`~${result.updated.length}`);
+      cleanBudgetCache();
+      const cacheKey = Math.random().toString(36).slice(2, 10);
+      budgetNotifyCache.set(cacheKey, { result, expires: Date.now() + BUDGET_NOTIFY_CACHE_TTL_MS });
+      const msgData = buildAutoSyncBudgetsMessage(result, cacheKey);
       await bot.api.sendMessage({
         chat_id: telegramGroupId,
-        text: `🔄 Авто-синк бюджетов: ${parts.join(', ')}`,
+        ...msgData,
       });
     }
   } catch (err) {

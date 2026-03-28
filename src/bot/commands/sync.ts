@@ -338,6 +338,95 @@ function formatSyncResult(result: SyncResult): string {
 const lastExpenseSyncByGroup = new Map<number, number>();
 const SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
+// ── Notify cache for pagination buttons ──
+
+const NOTIFY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const syncNotifyCache = new Map<string, { result: SyncResult; expires: number }>();
+const SYNC_PAGE_SIZE = 10;
+
+function cleanSyncCache(): void {
+  const now = Date.now();
+  for (const [k, v] of syncNotifyCache) {
+    if (v.expires < now) syncNotifyCache.delete(k);
+  }
+}
+
+export function getSyncCachedResult(key: string): SyncResult | null {
+  const entry = syncNotifyCache.get(key);
+  if (!entry || entry.expires < Date.now()) return null;
+  return entry.result;
+}
+
+function fmtSyncItem(e: {
+  date: string;
+  amount: number;
+  currency: string;
+  category: string;
+  comment: string;
+}): string {
+  return `${e.date} ${e.amount} ${e.currency} ${e.category}${e.comment ? ` ${e.comment}` : ''}`;
+}
+
+type SyncNotifyMessage = {
+  text: string;
+  reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+};
+
+function buildAutoSyncExpensesMessage(result: SyncResult, cacheKey: string): SyncNotifyMessage {
+  const counts: string[] = [];
+  if (result.added.length > 0) counts.push(`+${result.added.length}`);
+  if (result.deleted.length > 0) counts.push(`-${result.deleted.length}`);
+  if (result.updated.length > 0) counts.push(`~${result.updated.length}`);
+
+  const lines: string[] = [`🔄 Авто-синк расходов: ${counts.join(', ')}`];
+  const buttons: Array<{ text: string; callback_data: string }> = [];
+
+  if (result.added.length > 0) {
+    lines.push(`\n➕ Добавлено: ${result.added.length}`);
+    for (const e of result.added.slice(0, SYNC_PAGE_SIZE)) {
+      lines.push(`  ${fmtSyncItem(e)}`);
+    }
+    if (result.added.length > SYNC_PAGE_SIZE) {
+      buttons.push({
+        text: `➕ ещё ${result.added.length - SYNC_PAGE_SIZE} добавлено`,
+        callback_data: `sync_more:${cacheKey}:a`,
+      });
+    }
+  }
+
+  if (result.deleted.length > 0) {
+    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
+    for (const e of result.deleted.slice(0, SYNC_PAGE_SIZE)) {
+      lines.push(`  ${fmtSyncItem(e)}`);
+    }
+    if (result.deleted.length > SYNC_PAGE_SIZE) {
+      buttons.push({
+        text: `🗑 ещё ${result.deleted.length - SYNC_PAGE_SIZE} удалено`,
+        callback_data: `sync_more:${cacheKey}:d`,
+      });
+    }
+  }
+
+  if (result.updated.length > 0) {
+    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
+    for (const e of result.updated.slice(0, SYNC_PAGE_SIZE)) {
+      lines.push(`  ${fmtSyncItem(e)}${e.field ? ` (${e.field})` : ''}`);
+    }
+    if (result.updated.length > SYNC_PAGE_SIZE) {
+      buttons.push({
+        text: `✏️ ещё ${result.updated.length - SYNC_PAGE_SIZE} обновлено`,
+        callback_data: `sync_more:${cacheKey}:u`,
+      });
+    }
+  }
+
+  const text = lines.join('\n');
+  if (buttons.length > 0) {
+    return { text, reply_markup: { inline_keyboard: buttons.map((b) => [b]) } };
+  }
+  return { text };
+}
+
 /**
  * Sync expenses if stale. Blocking — caller awaits fresh data.
  * Sends notification to chat only if there were changes.
@@ -357,13 +446,13 @@ export async function ensureFreshExpenses(
       result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0;
 
     if (hasChanges && telegramGroupId && bot) {
-      const parts: string[] = [];
-      if (result.added.length > 0) parts.push(`+${result.added.length}`);
-      if (result.deleted.length > 0) parts.push(`-${result.deleted.length}`);
-      if (result.updated.length > 0) parts.push(`~${result.updated.length}`);
+      cleanSyncCache();
+      const cacheKey = Math.random().toString(36).slice(2, 10);
+      syncNotifyCache.set(cacheKey, { result, expires: Date.now() + NOTIFY_CACHE_TTL_MS });
+      const msgData = buildAutoSyncExpensesMessage(result, cacheKey);
       await bot.api.sendMessage({
         chat_id: telegramGroupId,
-        text: `🔄 Авто-синк расходов: ${parts.join(', ')}`,
+        ...msgData,
       });
     }
   } catch (err) {

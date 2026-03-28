@@ -337,6 +337,16 @@ export async function handleCallbackQuery(
         break;
       }
 
+      case 'sync_more': {
+        await handleSyncMoreCallback(ctx, params, bot);
+        break;
+      }
+
+      case 'bsync_more': {
+        await handleBudgetSyncMoreCallback(ctx, params, bot);
+        break;
+      }
+
       default:
         await ctx.answerCallbackQuery({ text: 'Unknown action' });
     }
@@ -1428,4 +1438,109 @@ async function handleReceiptCancel(
     text: '❌ Обработка чека отменена',
     parse_mode: 'HTML',
   });
+}
+
+async function handleSyncMoreCallback(
+  ctx: Ctx['CallbackQuery'],
+  params: string[],
+  bot: BotInstance,
+): Promise<void> {
+  const [cacheKey, section] = params;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!cacheKey || !section || !chatId) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели' });
+    return;
+  }
+
+  const { getSyncCachedResult } = await import('../commands/sync');
+  const result = getSyncCachedResult(cacheKey);
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели. Выполни /sync заново.' });
+    return;
+  }
+
+  let items: Array<{
+    date: string;
+    amount: number;
+    currency: string;
+    category: string;
+    comment: string;
+    field?: string;
+  }>;
+  let label: string;
+  if (section === 'a') {
+    items = result.added.slice(10);
+    label = 'Добавлено';
+  } else if (section === 'd') {
+    items = result.deleted.slice(10);
+    label = 'Удалено';
+  } else {
+    items = result.updated.slice(10);
+    label = 'Обновлено';
+  }
+
+  const lines = [`📋 ${label} (ещё ${items.length}):`];
+  for (const e of items) {
+    const field = e.field ? ` (${e.field})` : '';
+    lines.push(
+      `  ${e.date} ${e.amount} ${e.currency} ${e.category}${e.comment ? ` ${e.comment}` : ''}${field}`,
+    );
+  }
+
+  let text = lines.join('\n');
+  if (text.length > 4096) text = `${text.slice(0, 4090)}\n...`;
+
+  await ctx.answerCallbackQuery();
+  await bot.api
+    .sendMessage({ chat_id: chatId, text })
+    .catch((err: unknown) => logger.error({ err }, '[CALLBACK] sync_more send failed'));
+}
+
+async function handleBudgetSyncMoreCallback(
+  ctx: Ctx['CallbackQuery'],
+  params: string[],
+  bot: BotInstance,
+): Promise<void> {
+  const [cacheKey, section] = params;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!cacheKey || !section || !chatId) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели' });
+    return;
+  }
+
+  const { getBudgetSyncCachedResult } = await import('../commands/budget');
+  const result = getBudgetSyncCachedResult(cacheKey);
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели. Перезапусти бота.' });
+    return;
+  }
+
+  let items: Array<{ category: string; limit: number; currency: string; oldLimit?: number }>;
+  let label: string;
+  if (section === 'a') {
+    items = result.added.slice(10);
+    label = 'Добавлено';
+  } else if (section === 'd') {
+    items = result.deleted.slice(10);
+    label = 'Удалено';
+  } else {
+    items = result.updated.slice(10);
+    label = 'Обновлено';
+  }
+
+  const lines = [`📋 Бюджеты — ${label} (ещё ${items.length}):`];
+  for (const e of items) {
+    const change = e.oldLimit !== undefined ? ` (было ${e.oldLimit})` : '';
+    lines.push(`  ${e.category}: ${e.limit} ${e.currency}${change}`);
+  }
+
+  let text = lines.join('\n');
+  if (text.length > 4096) text = `${text.slice(0, 4090)}\n...`;
+
+  await ctx.answerCallbackQuery();
+  await bot.api
+    .sendMessage({ chat_id: chatId, text })
+    .catch((err: unknown) => logger.error({ err }, '[CALLBACK] bsync_more send failed'));
 }

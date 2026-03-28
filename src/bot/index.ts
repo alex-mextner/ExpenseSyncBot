@@ -22,7 +22,7 @@ import { handleStatsCommand } from './commands/stats';
 import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
-import { backfillSortExpensesTabs, recoverPriorYearExpenses, registerMonthlyCron } from './cron';
+import { registerMonthlyCron } from './cron';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
@@ -201,16 +201,6 @@ export async function startBot(): Promise<Bot> {
   const devPipeline = initDevPipeline(bot);
   await devPipeline.resumeIncompleteTasksOnStartup();
   logger.info('✓ Dev pipeline started');
-
-  // Restore prior-year expenses deleted by cross-year sync bug (2026-03-28)
-  logger.info('🔁 Recovering prior-year expenses...');
-  await recoverPriorYearExpenses();
-  logger.info('✓ Prior-year recovery complete');
-
-  // Sort Expenses tab by date in all spreadsheets (2026-03-28)
-  logger.info('📋 Sorting Expenses tabs...');
-  await backfillSortExpensesTabs();
-  logger.info('✓ Expenses tabs sorted');
 
   return bot;
 }
