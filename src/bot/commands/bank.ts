@@ -122,6 +122,9 @@ async function startWizard(
     const sent = await bot.api.sendMessage({
       chat_id: chatId,
       text: buildWizardStartText(plugin.name, firstField),
+      reply_markup: {
+        inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
+      },
     });
     wizardPromptMessages.set(newConn.id, {
       messageId: sent.message_id,
@@ -210,6 +213,9 @@ export async function handleWizardInput(
       const sent = await bot.api.sendMessage({
         chat_id: chatId,
         text: buildFieldPromptText(nextField),
+        reply_markup: {
+          inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
+        },
       });
       wizardPromptMessages.set(setupConn.id, {
         messageId: sent.message_id,
@@ -566,8 +572,7 @@ function buildWizardStartText(bankName: string, firstField: CredentialField | un
     `@${env.BOT_USERNAME} покажи баланс карты — узнать баланс через ИИ\n` +
     `/bank — управление подключёнными банками\n\n` +
     `Вводи данные для входа в интернет-банк:\n\n` +
-    `${buildFieldPromptText(firstField)}\n\n` +
-    `(Для отмены: /bank отмена)`
+    `${buildFieldPromptText(firstField)}`
   );
 }
 
@@ -644,6 +649,9 @@ export async function handleBankSetupCallback(
   const sent = await bot.api.sendMessage({
     chat_id: chatId,
     text: buildWizardStartText(plugin.name, firstField),
+    reply_markup: {
+      inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
+    },
   });
   wizardPromptMessages.set(newConn.id, {
     messageId: sent.message_id,
@@ -684,7 +692,7 @@ export async function handleBankSettingsCallback(
   await ctx.send(`⚙️ ${conn.display_name}\n\n${lastSync}${errorLine}`, {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '🔄 Переподключить', callback_data: `bank_setup:${conn.bank_name}` }],
+        [{ text: '🔄 Переподключить', callback_data: `bank_reconnect:${conn.id}` }],
         [{ text: '🔌 Отключить', callback_data: `bank_disconnect:${connId}` }],
       ],
     },
@@ -833,6 +841,96 @@ export async function handleBankDisconnectCancelCallback(
       });
     } catch {
       // ignore
+    }
+  }
+}
+
+/**
+ * Reconnect an existing active bank connection — resets credentials and restarts the wizard.
+ * Unlike bank_setup, this always replaces the connection even if it's active.
+ */
+export async function handleBankReconnectCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  connId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const conn = database.bankConnections.findById(connId);
+  if (!conn || conn.group_id !== group.id) {
+    await ctx.answerCallbackQuery({ text: 'Подключение не найдено' });
+    return;
+  }
+
+  const plugin = BANK_REGISTRY[conn.bank_name];
+  if (!plugin) {
+    await ctx.answerCallbackQuery({ text: 'Банк не найден' });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+
+  // Reset the connection: wipe credentials, set status back to setup
+  wizardPromptMessages.delete(conn.id);
+  database.bankCredentials.deleteByConnectionId(conn.id);
+  database.bankConnections.update(conn.id, {
+    status: 'setup',
+    consecutive_failures: 0,
+    last_error: null,
+  });
+
+  if (plugin.fields.length === 0) {
+    database.bankConnections.update(conn.id, { status: 'active' });
+    activateNewConnection(conn.id);
+    await ctx.send(buildConnectionCompleteText(plugin.name));
+    return;
+  }
+
+  const firstField = plugin.fields[0];
+  const sent = await bot.api.sendMessage({
+    chat_id: chatId,
+    text: buildWizardStartText(plugin.name, firstField),
+    reply_markup: {
+      inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
+    },
+  });
+  wizardPromptMessages.set(conn.id, {
+    messageId: sent.message_id,
+    sensitive: isPasswordField(firstField),
+    fieldPrompt: resolveFieldPrompt(firstField),
+  });
+}
+
+/** Cancel the active wizard for this group. */
+export async function handleBankWizardCancelCallback(
+  ctx: Ctx['CallbackQuery'],
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const setupConn = database.bankConnections.findSetupByGroupId(group.id);
+  if (setupConn) {
+    wizardPromptMessages.delete(setupConn.id);
+    database.bankConnections.deleteById(setupConn.id);
+  }
+
+  await ctx.answerCallbackQuery({ text: 'Отменено' });
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await ctx.editText('Подключение банка отменено.');
+    } catch {
+      // message too old
     }
   }
 }

@@ -48,16 +48,9 @@ export function buildBankManageKeyboard(conn: BankConnection): PanelButton[][] {
     [{ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` }],
   ];
 
-  if (conn.consecutive_failures > 0) {
-    rows.push([{ text: '🔄 Переподключить', callback_data: `bank_setup:${conn.bank_name}` }]);
-    rows.push([{ text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` }]);
-  } else if (conn.last_sync_at) {
-    rows.push([
-      { text: '🔄 Синхронизировать', callback_data: `bank_sync:${conn.id}` },
-      { text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` },
-    ]);
-  } else {
-    rows.push([{ text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` }]);
+  // Show sync button only when the connection is healthy and has synced at least once
+  if (conn.last_sync_at && conn.consecutive_failures === 0) {
+    rows.push([{ text: '🔄 Синхронизировать', callback_data: `bank_sync:${conn.id}` }]);
   }
 
   return rows;

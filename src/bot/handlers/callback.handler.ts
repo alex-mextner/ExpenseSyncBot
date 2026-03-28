@@ -11,9 +11,11 @@ import {
   handleBankDisconnectCancelCallback,
   handleBankDisconnectConfirmCallback,
   handleBankEditCallback,
+  handleBankReconnectCallback,
   handleBankSettingsCallback,
   handleBankSetupCallback,
   handleBankSyncCallback,
+  handleBankWizardCancelCallback,
 } from '../commands/bank';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
@@ -211,6 +213,25 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankSetupCallback(ctx, bot, bankKey, chatId);
+        break;
+      }
+
+      case 'bank_reconnect': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankReconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_wizard_cancel': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankWizardCancelCallback(ctx, chatId);
         break;
       }
 
