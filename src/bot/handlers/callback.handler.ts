@@ -2,7 +2,7 @@ import { format } from 'date-fns';
 import { MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
-import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
+
 import { createLogger } from '../../utils/logger.ts';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
@@ -351,33 +351,6 @@ async function handleBudgetAction(
         currency,
       });
 
-      // Ensure Budget sheet exists and write to Google Sheets
-      if (group.google_refresh_token && group.spreadsheet_id) {
-        try {
-          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-
-          if (!hasSheet) {
-            const categories = database.categories.getCategoryNames(group.id);
-            await createBudgetSheet(
-              group.google_refresh_token,
-              group.spreadsheet_id,
-              categories,
-              100,
-              currency,
-            );
-          }
-
-          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-            month: currentMonth,
-            category: category ?? '',
-            limit: amount,
-            currency: currency,
-          });
-        } catch (err) {
-          logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
-        }
-      }
-
       const currencySymbol = getCurrencySymbol(currency);
       await ctx.answerCallbackQuery({
         text: `✅ Бюджет установлен: ${currencySymbol}${amount}`,
@@ -419,33 +392,6 @@ async function handleBudgetAction(
         limit_amount: amount,
         currency: currency,
       });
-
-      // Ensure Budget sheet exists and write to Google Sheets
-      if (group.google_refresh_token && group.spreadsheet_id) {
-        try {
-          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-
-          if (!hasSheet) {
-            const categories = database.categories.getCategoryNames(group.id);
-            await createBudgetSheet(
-              group.google_refresh_token,
-              group.spreadsheet_id,
-              categories,
-              100,
-              currency,
-            );
-          }
-
-          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-            month: currentMonth,
-            category: category ?? '',
-            limit: amount,
-            currency,
-          });
-        } catch (err) {
-          logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
-        }
-      }
 
       const currencySymbol = getCurrencySymbol(currency);
 
