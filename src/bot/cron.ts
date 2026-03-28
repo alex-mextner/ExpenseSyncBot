@@ -10,6 +10,7 @@ import {
   monthTabExists,
 } from '../services/google/sheets';
 import { createLogger } from '../utils/logger.ts';
+import { importExpensesFromSheet } from './commands/sync';
 import type { BotInstance } from './types';
 
 const logger = createLogger('cron');
@@ -105,4 +106,41 @@ export function registerMonthlyCron(bot: BotInstance): void {
   });
 
   logger.info('[CRON] Monthly tab cron registered (00:00 on 1st of each month)');
+}
+
+/**
+ * One-time startup recovery: re-import expenses from prior-year spreadsheets
+ * into the DB. Only inserts rows that are missing — never deletes, never duplicates.
+ * Needed after a sync bug deleted prior-year expenses from the DB (2026-03-28).
+ */
+export async function recoverPriorYearExpenses(): Promise<void> {
+  const currentYear = new Date().getFullYear();
+  const groups = database.groups.findAll();
+
+  for (const group of groups) {
+    if (!group.google_refresh_token) continue;
+
+    const priorSheets = database.groupSpreadsheets
+      .listAll(group.id)
+      .filter((s) => s.year < currentYear);
+
+    for (const { year, spreadsheetId } of priorSheets) {
+      try {
+        const inserted = await importExpensesFromSheet(
+          group.id,
+          group.google_refresh_token,
+          spreadsheetId,
+        );
+        if (inserted > 0) {
+          logger.info(
+            `[RECOVER] Restored ${inserted} expense(s) for group ${group.id}, year ${year}`,
+          );
+        } else {
+          logger.info(`[RECOVER] group ${group.id}, year ${year}: nothing missing`);
+        }
+      } catch (err) {
+        logger.error({ err }, `[RECOVER] Failed for group ${group.id}, year ${year}`);
+      }
+    }
+  }
 }

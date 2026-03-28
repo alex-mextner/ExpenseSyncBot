@@ -92,7 +92,18 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
 
   logger.info(`[SYNC] Sheet: ${sheetExpenses.length} expenses, ${errors.length} errors`);
 
-  const dbExpenses = database.expenses.findByGroupId(groupId, 100000);
+  // Determine the year this spreadsheet covers so we only compare DB expenses
+  // from that year. Without this, syncing a 2026-only sheet would delete all
+  // prior-year DB expenses that don't appear in it.
+  const spreadsheetYear =
+    database.groupSpreadsheets
+      .listAll(groupId)
+      .find((s) => s.spreadsheetId === group.spreadsheet_id)?.year ?? null;
+
+  const allDbExpenses = database.expenses.findByGroupId(groupId, 100000);
+  const dbExpenses = spreadsheetYear
+    ? allDbExpenses.filter((e) => e.date.startsWith(`${spreadsheetYear}-`))
+    : allDbExpenses;
   const users = database.users.findByGroupId ? database.users.findByGroupId(groupId) : [];
   const defaultUserId = users[0]?.id ?? 1;
 
@@ -241,6 +252,47 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
 }
 
 /** Format sync result as Telegram message */
+/**
+ * One-directional import: read expenses from an arbitrary spreadsheet and add any
+ * that are missing from the DB. Never deletes. Returns the number of inserted rows.
+ * Safe to call repeatedly — deduplicates by date|category|amount|currency key.
+ */
+export async function importExpensesFromSheet(
+  groupId: number,
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<number> {
+  const { expenses: sheetExpenses } = await readExpensesFromSheet(refreshToken, spreadsheetId);
+  if (sheetExpenses.length === 0) return 0;
+
+  const dbExpenses = database.expenses.findByGroupId(groupId, 100000);
+  const existingKeys = new Set(dbExpenses.map((e) => dbExpenseToKey(e)));
+
+  const users = database.users.findByGroupId ? database.users.findByGroupId(groupId) : [];
+  const defaultUserId = users[0]?.id ?? 1;
+
+  let inserted = 0;
+  for (const row of sheetExpenses) {
+    const parsed = sheetRowToKey(row);
+    if (!parsed) continue;
+    if (existingKeys.has(parsed.key)) continue;
+
+    database.expenses.create({
+      group_id: groupId,
+      user_id: defaultUserId,
+      date: row.date,
+      category: row.category,
+      comment: row.comment,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      eur_amount: row.eurAmount,
+    });
+    existingKeys.add(parsed.key); // guard against within-loop duplicates
+    inserted++;
+  }
+  return inserted;
+}
+
 function formatSyncResult(result: SyncResult): string {
   const lines: string[] = ['✅ Синхронизация завершена!\n'];
 
