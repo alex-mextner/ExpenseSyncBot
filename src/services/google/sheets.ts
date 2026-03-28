@@ -55,7 +55,7 @@ export async function createExpenseSpreadsheet(
   const response = await sheets.spreadsheets.create({
     requestBody: {
       properties: {
-        title: `Expenses Tracker - ${new Date().toLocaleDateString()}`,
+        title: `Expenses Tracker ${new Date().getFullYear()}`,
       },
       sheets: [
         {
@@ -706,7 +706,189 @@ export async function readExpenseRowsRaw(
     range: `${EXPENSES_TAB}!A2:Z`,
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
-  return (response.data.values ?? []).map((row) => row.map((cell) => String(cell ?? '')));
+  return (response.data.values ?? []).map((row) =>
+    row.map((cell, colIdx) => {
+      const str = String(cell ?? '');
+      // Column 0 is always the date. Sheets stores date cells as serial numbers
+      // (days since Dec 30, 1899) when read with UNFORMATTED_VALUE.
+      // Convert back to ISO yyyy-MM-dd so the migration roundtrip preserves date format.
+      if (colIdx === 0) {
+        const serial = Number(str);
+        // 25569 = days between Sheets epoch (Dec 30, 1899) and Unix epoch (Jan 1, 1970)
+        if (!Number.isNaN(serial) && serial > 25569 && serial < 99999) {
+          const date = new Date((serial - 25569) * 86400 * 1000);
+          const y = date.getUTCFullYear();
+          const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+          const d = String(date.getUTCDate()).padStart(2, '0');
+          return `${y}-${mo}-${d}`;
+        }
+      }
+      return str;
+    }),
+  );
+}
+
+/** Rename a spreadsheet's title. */
+export async function renameSpreadsheet(
+  refreshToken: string,
+  spreadsheetId: string,
+  title: string,
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateSpreadsheetProperties: {
+            properties: { title },
+            fields: 'title',
+          },
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Scan the Expenses tab for date cells stored as serial numbers (migration artifact)
+ * and rewrite them as ISO yyyy-MM-dd strings. Returns the number of cells fixed.
+ */
+export async function repairDateSerials(
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<number> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2:A`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+
+  const rows = response.data.values ?? [];
+  const updates: { row: number; isoDate: string }[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const cell = String(rows[i]?.[0] ?? '');
+    const serial = Number(cell);
+    if (!Number.isNaN(serial) && serial > 25569 && serial < 99999) {
+      const date = new Date((serial - 25569) * 86400 * 1000);
+      const y = date.getUTCFullYear();
+      const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      updates.push({ row: i + 2, isoDate: `${y}-${mo}-${d}` }); // +2: 1-based row + skip header
+    }
+  }
+
+  if (updates.length === 0) return 0;
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: updates.map(({ row, isoDate }) => ({
+        range: `${EXPENSES_TAB}!A${row}`,
+        values: [[isoDate]],
+      })),
+    },
+  });
+
+  return updates.length;
+}
+
+/**
+ * Scan the Expenses tab for EUR (calc) cells that are static numbers (migration artifact)
+ * and rewrite them as =AMOUNT*RATE formulas. Skips EUR-denominated rows and rows without a rate.
+ * Returns the number of cells fixed.
+ */
+export async function repairEurFormulas(
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<number> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const headerResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!1:1`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const headers = (headerResponse.data.values?.[0] ?? []) as string[];
+
+  const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  if (eurColIdx === -1 || rateColIdx === -1) return 0;
+
+  // Non-EUR currency columns
+  const currencyCols: { idx: number }[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    const match = headers[i]?.match(/^([A-Z]{3})\s*\(/);
+    if (match?.[1] && match[1] !== 'EUR') {
+      currencyCols.push({ idx: i });
+    }
+  }
+  if (currencyCols.length === 0) return 0;
+
+  const lastCol = colLetter(headers.length - 1);
+  // FORMULA render option: formulas come back as "=C5*G5", static values as the number
+  const dataResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2:${lastCol}`,
+    valueRenderOption: 'FORMULA',
+  });
+  const rows = dataResponse.data.values ?? [];
+
+  const updates: { row: number; formula: string }[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] as (string | number | null | undefined)[];
+    if (!row || row.length === 0) continue;
+
+    const eurVal = row[eurColIdx];
+    // Already a formula — nothing to do
+    if (typeof eurVal === 'string' && eurVal.startsWith('=')) continue;
+    // Empty EUR cell — skip
+    if (eurVal === '' || eurVal === undefined || eurVal === null) continue;
+
+    // Find the non-EUR currency column with a positive amount
+    let amountColIdx = -1;
+    for (const { idx } of currencyCols) {
+      const val = row[idx];
+      if (val !== '' && val !== undefined && val !== null && Number(val) > 0) {
+        amountColIdx = idx;
+        break;
+      }
+    }
+    if (amountColIdx === -1) continue;
+
+    // Rate column must have a value
+    const rateVal = row[rateColIdx];
+    if (rateVal === '' || rateVal === undefined || rateVal === null) continue;
+
+    const sheetRow = i + 2; // 1-based row + skip header
+    updates.push({
+      row: sheetRow,
+      formula: `=${colLetter(amountColIdx)}${sheetRow}*${colLetter(rateColIdx)}${sheetRow}`,
+    });
+  }
+
+  if (updates.length === 0) return 0;
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: updates.map(({ row, formula }) => ({
+        range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
+        values: [[formula]],
+      })),
+    },
+  });
+
+  return updates.length;
 }
 
 /**

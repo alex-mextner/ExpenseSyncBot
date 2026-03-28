@@ -13,6 +13,7 @@ import {
   deleteExpenseRowsByIndex,
   monthTabExists,
   readExpenseRowsRaw,
+  repairEurFormulas,
   writeMonthBudgetRow,
 } from './sheets';
 
@@ -164,6 +165,11 @@ export async function runYearSplitMigration(
       splitYearRows.map(({ row }) => row),
     );
     logger.info(`[MIGRATION] Copied ${splitYearRows.length} expense rows to new spreadsheet`);
+
+    const fixedFormulas = await repairEurFormulas(refreshToken, newSpreadsheetId);
+    if (fixedFormulas > 0) {
+      logger.info(`[MIGRATION] Restored ${fixedFormulas} EUR formula(s) in new spreadsheet`);
+    }
 
     // 3. Delete those rows from the old spreadsheet
     await deleteExpenseRowsByIndex(

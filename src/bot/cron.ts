@@ -8,6 +8,9 @@ import {
   createEmptyMonthTab,
   createExpenseSpreadsheet,
   monthTabExists,
+  renameSpreadsheet,
+  repairDateSerials,
+  repairEurFormulas,
 } from '../services/google/sheets';
 import { createLogger } from '../utils/logger.ts';
 import type { BotInstance } from './types';
@@ -105,4 +108,45 @@ export function registerMonthlyCron(bot: BotInstance): void {
   });
 
   logger.info('[CRON] Monthly tab cron registered (00:00 on 1st of each month)');
+}
+
+/**
+ * One-time startup backfill: fix date cells written as serial numbers by the year-split migration.
+ * Runs silently — no chat notifications.
+ */
+export async function backfillSerialDates(): Promise<void> {
+  const groups = database.groups.findAll();
+
+  for (const group of groups) {
+    if (!group.google_refresh_token) continue;
+
+    const allSpreadsheets = database.groupSpreadsheets.listAll(group.id);
+
+    for (const { year, spreadsheetId } of allSpreadsheets) {
+      try {
+        await renameSpreadsheet(
+          group.google_refresh_token,
+          spreadsheetId,
+          `Expenses Tracker ${year}`,
+        );
+        logger.info(`[BACKFILL] Renamed spreadsheet for group ${group.id}, year ${year}`);
+
+        const fixedDates = await repairDateSerials(group.google_refresh_token, spreadsheetId);
+        if (fixedDates > 0) {
+          logger.info(
+            `[BACKFILL] Fixed ${fixedDates} serial date(s) in group ${group.id}, year ${year}`,
+          );
+        }
+
+        const fixedFormulas = await repairEurFormulas(group.google_refresh_token, spreadsheetId);
+        if (fixedFormulas > 0) {
+          logger.info(
+            `[BACKFILL] Restored ${fixedFormulas} EUR formula(s) in group ${group.id}, year ${year}`,
+          );
+        }
+      } catch (err) {
+        logger.error({ err }, `[BACKFILL] Failed for group ${group.id}, year ${year}`);
+      }
+    }
+  }
 }
