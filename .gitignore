@@ -34,7 +34,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 # Database
-data/
+data/*
+!data/.gitkeep
 *.db
 *.db-shm
 *.db-wal
