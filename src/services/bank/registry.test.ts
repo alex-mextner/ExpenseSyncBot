@@ -24,24 +24,25 @@ describe('BANK_REGISTRY auto-discovery', () => {
 
   test('tbc-ge has login/password fields', () => {
     const tbc = BANK_REGISTRY['tbc-ge'];
-    expect(tbc).toBeDefined();
-    const names = tbc!.fields.map((f) => f.name);
+    if (!tbc) throw new Error('tbc-ge not in registry');
+    const names = tbc.fields.map((f) => f.name);
     expect(names).toContain('login');
     expect(names).toContain('password');
-    expect(tbc!.fields.find((f) => f.name === 'password')?.type).toBe('password');
+    expect(tbc.fields.find((f) => f.name === 'password')?.type).toBe('password');
   });
 
   test('tbc-ge startDate is stored as default, not a wizard field', () => {
     const tbc = BANK_REGISTRY['tbc-ge'];
-    expect(tbc!.defaults?.['startDate']).toBeDefined();
-    expect(tbc!.fields.map((f) => f.name)).not.toContain('startDate');
+    if (!tbc) throw new Error('tbc-ge not in registry');
+    expect(tbc.defaults?.['startDate']).toBeDefined();
+    expect(tbc.fields.map((f) => f.name)).not.toContain('startDate');
   });
 
   test('kaspi has no wizard fields (date-only plugin)', () => {
     const kaspi = BANK_REGISTRY['kaspi'];
-    expect(kaspi).toBeDefined();
-    expect(kaspi!.fields).toHaveLength(0);
-    expect(kaspi!.defaults?.['startDate']).toBeDefined();
+    if (!kaspi) throw new Error('kaspi not in registry');
+    expect(kaspi.fields).toHaveLength(0);
+    expect(kaspi.defaults?.['startDate']).toBeDefined();
   });
 
   test('each bank entry has name, plugin function, and fields array', () => {
