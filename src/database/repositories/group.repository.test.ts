@@ -220,6 +220,44 @@ describe('GroupRepository', () => {
     });
   });
 
+  describe('spreadsheet_id via group_spreadsheets JOIN', () => {
+    test('new group has null spreadsheet_id (no group_spreadsheets entry)', () => {
+      const group = repo.create({ telegram_group_id: 800 });
+      expect(group.spreadsheet_id).toBeNull();
+    });
+
+    test('findById returns spreadsheet_id from group_spreadsheets for current year', () => {
+      const group = repo.create({ telegram_group_id: 801 });
+      const year = new Date().getFullYear();
+      db.exec(
+        `INSERT INTO group_spreadsheets (group_id, year, spreadsheet_id) VALUES (${group.id}, ${year}, 'test-sheet-id')`,
+      );
+      const found = repo.findById(group.id);
+      expect(found?.spreadsheet_id).toBe('test-sheet-id');
+    });
+
+    test('findById returns null spreadsheet_id when entry is for different year', () => {
+      const group = repo.create({ telegram_group_id: 802 });
+      db.exec(
+        `INSERT INTO group_spreadsheets (group_id, year, spreadsheet_id) VALUES (${group.id}, 2020, 'old-sheet')`,
+      );
+      const found = repo.findById(group.id);
+      expect(found?.spreadsheet_id).toBeNull();
+    });
+
+    test('update with spreadsheet_id writes to group_spreadsheets', () => {
+      const group = repo.create({ telegram_group_id: 803 });
+      repo.update(803, { spreadsheet_id: 'new-sheet' });
+      const year = new Date().getFullYear();
+      const row = db
+        .query<{ spreadsheet_id: string }, [number, number]>(
+          'SELECT spreadsheet_id FROM group_spreadsheets WHERE group_id = ? AND year = ?',
+        )
+        .get(group.id, year);
+      expect(row?.spreadsheet_id).toBe('new-sheet');
+    });
+  });
+
   describe('hasCompletedSetup', () => {
     test('returns false for new group without oauth', () => {
       repo.create({ telegram_group_id: 700 });
