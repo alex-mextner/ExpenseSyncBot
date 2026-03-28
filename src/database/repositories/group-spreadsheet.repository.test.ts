@@ -3,8 +3,8 @@
 import type { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
-import { GroupSpreadsheetRepository } from './group-spreadsheet.repository';
 import { GroupRepository } from './group.repository';
+import { GroupSpreadsheetRepository } from './group-spreadsheet.repository';
 
 let db: Database;
 let repo: GroupSpreadsheetRepository;
