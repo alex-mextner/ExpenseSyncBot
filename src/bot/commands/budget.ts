@@ -6,12 +6,10 @@ import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
-  createBudgetSheet,
-  hasBudgetSheet,
+  createEmptyMonthTab,
   monthTabExists,
-  readBudgetData,
   readMonthBudget,
-  writeBudgetRow,
+  writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
@@ -382,64 +380,34 @@ export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
  * Show budget progress for current month
  */
 async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<void> {
-  if (!group.google_refresh_token || !group.spreadsheet_id) {
-    await ctx.send('⚠️ Сначала подключи Google Sheets с помощью /connect');
-    return;
-  }
-
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
 
-  // Ensure Budget sheet exists
-  const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-  if (!hasSheet) {
-    const categories = database.categories.getCategoryNames(group.id);
-    if (categories.length > 0) {
-      try {
-        await createBudgetSheet(
-          group.google_refresh_token,
-          group.spreadsheet_id,
-          categories,
-          100,
-          group.default_currency,
-        );
-        await ctx.send('✅ Вкладка Budget создана в таблице!');
-      } catch (err) {
-        logger.error({ err: err }, '[BUDGET] Failed to create Budget sheet');
-        await ctx.send('⚠️ Не удалось создать вкладку Budget. Проверь доступ к таблице.');
-      }
-    }
-  }
-
-  // Get current month expenses
   const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
   const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
   const expenses = database.expenses.findByDateRange(group.id, currentMonthStart, currentMonthEnd);
 
-  // Calculate spending by category
   const categorySpending: Record<string, number> = {};
   for (const expense of expenses) {
     categorySpending[expense.category] =
       (categorySpending[expense.category] || 0) + expense.eur_amount;
   }
 
-  // Get budgets for current month
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
   if (budgets.length === 0) {
     await ctx.send(
-      `📊 Бюджет на ${currentMonthName}\n\n` +
-        `⚠️ Бюджеты не установлены.\n\n` +
+      `Бюджет на ${currentMonthName}\n\n` +
+        `Бюджеты не установлены.\n\n` +
         `Используй:\n` +
         `• /budget set <Категория> <Сумма>\n` +
-        `• /budget sync - синхронизировать с Google Sheets`,
+        `• /budget sync — синхронизировать с Google Sheets`,
     );
     await maybeSmartAdvice(ctx, group.id);
     return;
   }
 
-  // Group budgets by currency and calculate totals
   const budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }> =
     {} as Record<CurrencyCode, { totalBudget: number; totalSpent: number }>;
 
@@ -450,28 +418,23 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
     }
     const spentEur = categorySpending[budget.category] || 0;
     const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
-
     budgetsByCurrency[currency].totalBudget += budget.limit_amount;
     budgetsByCurrency[currency].totalSpent += spentInCurrency;
   }
 
-  // Build message
-  let message = `📊 Бюджет на ${currentMonthName}\n\n`;
+  let message = `Бюджет на ${currentMonthName}\n\n`;
 
-  // Display totals for each currency
   for (const [currency, { totalBudget, totalSpent }] of Object.entries(budgetsByCurrency)) {
     const percentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
-    message += `💰 Всего (${currency}): ${formatAmount(totalSpent, currency as CurrencyCode)} / ${formatAmount(totalBudget, currency as CurrencyCode)} (${percentage}%)\n`;
+    message += `Всего (${currency}): ${formatAmount(totalSpent, currency as CurrencyCode)} / ${formatAmount(totalBudget, currency as CurrencyCode)} (${percentage}%)\n`;
   }
   message += '\n';
 
-  // Sort budgets by percentage descending (exceeded first)
   const budgetProgress = budgets.map((budget) => {
     const spentEur = categorySpending[budget.category] || 0;
     const spent = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
     const percentage =
       budget.limit_amount > 0 ? Math.round((spent / budget.limit_amount) * 100) : 0;
-
     return {
       budget,
       spent,
@@ -483,17 +446,13 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
 
   budgetProgress.sort((a, b) => b.percentage - a.percentage);
 
-  // Display each category
   for (const { budget, spent, percentage, is_exceeded, is_warning } of budgetProgress) {
     const emoji = getCategoryEmoji(budget.category);
-    const status = is_exceeded ? '🔴' : is_warning ? '⚠️' : '';
-
+    const status = is_exceeded ? '(!)' : is_warning ? '(~)' : '';
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  await ctx.send(message);
-
-  // Maybe send daily advice (20% probability)
+  await ctx.send(message.trim());
   await maybeSmartAdvice(ctx, group.id);
 }
 
@@ -509,22 +468,20 @@ async function setBudget(
 ): Promise<void> {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
+  const currentMonthAbbr = monthAbbrFromDate(now);
 
-  // Normalize category name (capitalize first letter)
   const normalizedCategory =
     categoryName.charAt(0).toUpperCase() + categoryName.slice(1).toLowerCase();
 
-  // Check if category exists
   const categoryExists = database.categories.exists(group.id, normalizedCategory);
 
   if (!categoryExists) {
     const existingCategories = database.categories.getCategoryNames(group.id);
     const keyboard = createAddCategoryWithBudgetKeyboard(normalizedCategory, amount, currency);
-
     const currencySymbol = getCurrencySymbol(currency);
 
     await ctx.send(
-      `⚠️ Категория "${normalizedCategory}" не существует.\n\n` +
+      `Категория "${normalizedCategory}" не существует.\n\n` +
         `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом ${currencySymbol}${amount}?\n\n` +
         `Или выбери из существующих:\n${existingCategories.join(', ')}`,
       { reply_markup: keyboard.build() },
@@ -532,60 +489,51 @@ async function setBudget(
     return;
   }
 
-  // Save to database
   database.budgets.setBudget({
     group_id: group.id,
     category: normalizedCategory,
     month: currentMonth,
     limit_amount: amount,
-    currency: currency,
+    currency,
   });
 
   if (!group.google_refresh_token || !group.spreadsheet_id) {
     const emoji = getCategoryEmoji(normalizedCategory);
     await ctx.send(
-      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
-        '⚠️ Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
+      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
+        'Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
     );
     return;
   }
 
-  // Ensure Budget sheet exists
-  const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-
-  if (!hasSheet) {
-    const categories = database.categories.getCategoryNames(group.id);
-    await createBudgetSheet(
+  try {
+    const tabExists = await monthTabExists(
       group.google_refresh_token,
       group.spreadsheet_id,
-      categories,
-      100,
-      currency,
+      currentMonthAbbr,
     );
-  }
+    if (!tabExists) {
+      await createEmptyMonthTab(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr);
+    }
 
-  // Write to Google Sheets
-  try {
-    await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-      month: currentMonth,
+    await writeMonthBudgetRow(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr, {
       category: normalizedCategory,
       limit: amount,
-      currency: currency,
+      currency,
     });
 
     const emoji = getCategoryEmoji(normalizedCategory);
     await ctx.send(
-      `✅ Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
+      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
     );
   } catch (err) {
-    logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
+    logger.error({ err }, '[BUDGET] Failed to write to Google Sheets');
     await ctx.send(
-      `⚠️ Бюджет сохранен в базу данных, но не удалось записать в Google Sheets.\n` +
+      `Бюджет сохранен в базу данных, но не удалось записать в Google Sheets.\n` +
         `Проверь доступ к таблице или используй /budget sync позже.`,
     );
   }
 
-  // Maybe send daily advice (20% probability)
   await maybeSmartAdvice(ctx, group.id);
 }
 
@@ -643,92 +591,71 @@ export async function silentSyncBudgets(
 }
 
 /**
- * Sync budgets from Google Sheets to database
+ * Sync budgets from Google Sheets monthly tab to database
  */
 async function syncBudgets(ctx: Ctx['Command'], group: Group): Promise<void> {
   if (!group.google_refresh_token || !group.spreadsheet_id) {
-    await ctx.send('⚠️ Сначала подключи Google Sheets с помощью /connect');
+    await ctx.send('Сначала подключи Google Sheets с помощью /connect');
     return;
   }
 
   try {
-    // Check if Budget sheet exists
-    const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
+    const now = new Date();
+    const currentMonthAbbr = monthAbbrFromDate(now);
+    const currentMonth = format(now, 'yyyy-MM');
 
-    if (!hasSheet) {
-      // Try to create Budget sheet
-      const categories = database.categories.getCategoryNames(group.id);
-      if (categories.length > 0) {
-        try {
-          await createBudgetSheet(
-            group.google_refresh_token,
-            group.spreadsheet_id,
-            categories,
-            100,
-            group.default_currency,
-          );
-          await ctx.send(
-            '✅ Вкладка Budget создана в таблице!\n\n' +
-              'Теперь можешь установить бюджеты через:\n' +
-              '/budget set <Категория> <Сумма>',
-          );
-        } catch (err) {
-          logger.error({ err: err }, '[BUDGET] Failed to create Budget sheet');
-          await ctx.send('⚠️ Не удалось создать вкладку Budget. Проверь доступ к таблице.');
-        }
-      } else {
-        await ctx.send(
-          `⚠️ Вкладка Budget не найдена в таблице.\n\n` +
-            `Сначала добавь хотя бы один расход, чтобы создать категории.`,
-        );
-      }
+    const tabExists = await monthTabExists(
+      group.google_refresh_token,
+      group.spreadsheet_id,
+      currentMonthAbbr,
+    );
+
+    if (!tabExists) {
+      await createEmptyMonthTab(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr);
+      await ctx.send(
+        `Вкладка ${currentMonthAbbr} создана в таблице.\n\n` +
+          `Добавь бюджеты через:\n/budget set <Категория> <Сумма>`,
+      );
       return;
     }
 
-    // Read budgets from Google Sheets
-    const budgetsFromSheet = await readBudgetData(group.google_refresh_token, group.spreadsheet_id);
+    const budgetsFromSheet = await readMonthBudget(
+      group.google_refresh_token,
+      group.spreadsheet_id,
+      currentMonthAbbr,
+    );
 
     if (budgetsFromSheet.length === 0) {
-      await ctx.send('⚠️ В Google Sheets нет бюджетов для синхронизации.');
+      await ctx.send(`В вкладке ${currentMonthAbbr} нет бюджетов для синхронизации.`);
       return;
     }
 
-    // Save each budget to database
     let syncedCount = 0;
     let createdCategoriesCount = 0;
 
-    for (const budgetData of budgetsFromSheet) {
-      // Check if category exists, if not - create it
-      const categoryExists = database.categories.exists(group.id, budgetData.category);
-      if (!categoryExists) {
-        database.categories.create({
-          group_id: group.id,
-          name: budgetData.category,
-        });
+    for (const b of budgetsFromSheet) {
+      if (!database.categories.exists(group.id, b.category)) {
+        database.categories.create({ group_id: group.id, name: b.category });
         createdCategoriesCount++;
-        logger.info(`[BUDGET] Created category: ${budgetData.category}`);
       }
-
       database.budgets.setBudget({
         group_id: group.id,
-        category: budgetData.category,
-        month: budgetData.month,
-        limit_amount: budgetData.limit,
-        currency: budgetData.currency,
+        category: b.category,
+        month: currentMonth,
+        limit_amount: b.limit,
+        currency: b.currency,
       });
       syncedCount++;
     }
 
-    let message = `✅ Синхронизировано записей бюджета: ${syncedCount}`;
+    let message = `Синхронизировано записей бюджета: ${syncedCount}`;
     if (createdCategoriesCount > 0) {
-      message += `\n✨ Создано новых категорий: ${createdCategoriesCount}`;
+      message += `\nСоздано новых категорий: ${createdCategoriesCount}`;
     }
     await ctx.send(message);
-
-    // Maybe send daily advice (20% probability)
     await maybeSmartAdvice(ctx, group.id);
   } catch (err) {
-    logger.error({ err: err }, '[BUDGET] Failed to sync budgets');
-    await ctx.send('❌ Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');
+    logger.error({ err }, '[BUDGET] Failed to sync budgets');
+    await ctx.send('Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');
   }
 }
