@@ -28,9 +28,35 @@ const FALLBACK_RATES: Record<CurrencyCode, number> = Object.fromEntries(
 ) as Record<CurrencyCode, number>;
 
 /**
+ * Fallback rates for currencies used by bank plugins but not in SUPPORTED_CURRENCIES.
+ * These are approximate values for when the API is unavailable.
+ */
+const BANK_FALLBACK_RATES: Record<string, number> = {
+  GEL: 1 / 2.94, // Georgian Lari (~2.94 GEL = 1 EUR)
+  KZT: 1 / 514, // Kazakh Tenge
+  AMD: 1 / 408, // Armenian Dram
+  UAH: 1 / 44, // Ukrainian Hryvnia
+  UZS: 1 / 13500, // Uzbek Som
+  AZN: 1 / 1.84, // Azerbaijani Manat
+  TRY: 1 / 35, // Turkish Lira
+  ILS: 1 / 3.96, // Israeli Shekel
+  PLN: 1 / 4.28, // Polish Zloty
+  CZK: 1 / 25.2, // Czech Koruna
+  HUF: 1 / 400, // Hungarian Forint
+  RON: 1 / 4.97, // Romanian Leu
+  BGN: 1 / 1.96, // Bulgarian Lev
+  HRK: 1 / 7.53, // Croatian Kuna
+  MKD: 1 / 61.5, // Macedonian Denar
+  BAM: 1 / 1.96, // Bosnian Mark
+  RSD: 1 / 117, // Serbian Dinar (duplicate of SUPPORTED, kept for lookup convenience)
+};
+
+/**
  * Cache for API exchange rates
  */
 let cachedRates: Record<CurrencyCode, number> | null = null;
+// All currencies from the API — used by convertAnyToEUR for bank transactions
+let cachedAllRates: Record<string, number> | null = null;
 // String-precision rates derived from API response via Big.js division (used by convertCurrencyBig)
 let cachedRatesStr: Record<CurrencyCode, string> | null = null;
 let cacheTimestamp: number = 0;
@@ -105,6 +131,15 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
       AED: toRateStr('AED'),
     };
 
+    // Store all currencies from the API for convertAnyToEUR
+    const allRates: Record<string, number> = { EUR: 1.0 };
+    for (const [code, apiRate] of Object.entries(data.rates)) {
+      if (typeof apiRate === 'number' && apiRate > 0) {
+        allRates[code] = 1 / apiRate;
+      }
+    }
+    cachedAllRates = allRates;
+
     logger.info('[CURRENCY] ✅ Successfully fetched exchange rates from API');
     logger.info('[CURRENCY] Exchange rates (to EUR):');
     logger.info(`  /1 USD = €${(1 / rates.USD).toFixed(4)}`);
@@ -147,9 +182,9 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
     return apiRates;
   }
 
-  // API failed — reset string cache so convertCurrencyBig also falls back to FALLBACK_RATES_STR,
-  // keeping the two caches in sync (both null → both use hardcoded fallbacks)
+  // API failed — reset caches so all callers fall back to hardcoded rates
   cachedRatesStr = null;
+  cachedAllRates = null;
 
   // Fallback to hardcoded rates
   logger.info('[CURRENCY] Using fallback exchange rates');
@@ -200,6 +235,26 @@ export function convertCurrency(
   // from -> EUR -> to
   const eurAmount = amount * fromRate;
   return Math.round((eurAmount / toRate) * 100) / 100;
+}
+
+/**
+ * Convert amount to EUR for any ISO 4217 currency code, including those outside SUPPORTED_CURRENCIES.
+ * Uses live API rates (all currencies), then SUPPORTED_CURRENCIES fallback, then BANK_FALLBACK_RATES.
+ * If the currency is completely unknown, logs a warning and returns the amount unchanged.
+ * Intended for bank transaction processing where the currency comes from the bank plugin.
+ */
+export function convertAnyToEUR(amount: number, currency: string): number {
+  if (currency === 'EUR') return amount;
+  const rate =
+    cachedAllRates?.[currency] ??
+    cachedRates?.[currency as CurrencyCode] ??
+    FALLBACK_RATES[currency as CurrencyCode] ??
+    BANK_FALLBACK_RATES[currency];
+  if (rate === undefined) {
+    logger.warn({ currency }, 'convertAnyToEUR: no rate found, treating as EUR');
+    return Math.round(amount * 100) / 100;
+  }
+  return Math.round(amount * rate * 100) / 100;
 }
 
 /**
