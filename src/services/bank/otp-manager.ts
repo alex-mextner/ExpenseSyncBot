@@ -1,38 +1,80 @@
 // Manages pending OTP/readLine requests from ZenPlugins during sync.
 // When a plugin calls ZenMoney.readLine(), execution pauses here until
 // the user sends the code in the Telegram chat.
+// State is stored in SQLite so bank-sync and expensesyncbot (separate processes) share it.
 
+import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('otp-manager');
 
 // 5 minutes — enough time for the user to receive and enter an OTP code.
-// The global shim mutex is released during this wait (see sync-service.ts readLineImpl).
 const OTP_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_INTERVAL_MS = 200;
 
-type PendingOtp = {
-  connectionId: number;
-  telegramGroupId: number;
-  resolve: (code: string) => void;
-  reject: (err: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
+type OtpRow = {
+  id: number;
+  connection_id: number;
+  group_telegram_id: number;
+  code: string | null;
+  status: string;
 };
-
-const pending = new Map<number, PendingOtp>();
 
 /** Register a pending OTP request. Returns a Promise that resolves when the user sends a code. */
 export function registerOtpRequest(connectionId: number, telegramGroupId: number): Promise<string> {
-  // Cancel any stale request for this connection first
-  cancelOtpRequest(connectionId);
+  // Remove any stale request for this connection first
+  database.db.query('DELETE FROM bank_otp_requests WHERE connection_id = ?').run(connectionId);
+
+  const expiresAt = new Date(Date.now() + OTP_TIMEOUT_MS).toISOString();
+  database.db
+    .query(
+      "INSERT INTO bank_otp_requests (connection_id, group_telegram_id, status, expires_at) VALUES (?, ?, 'pending', ?)",
+    )
+    .run(connectionId, telegramGroupId, expiresAt);
+
+  logger.info({ connectionId, telegramGroupId }, 'OTP request registered');
 
   return new Promise<string>((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      pending.delete(connectionId);
-      reject(new Error('Время ожидания кода истекло (5 мин)'));
-    }, OTP_TIMEOUT_MS);
+    const deadline = Date.now() + OTP_TIMEOUT_MS;
 
-    pending.set(connectionId, { connectionId, telegramGroupId, resolve, reject, timeoutId });
-    logger.info({ connectionId, telegramGroupId }, 'OTP request registered');
+    const pollId = setInterval(() => {
+      const row = database.db
+        .query<OtpRow, [number]>('SELECT * FROM bank_otp_requests WHERE connection_id = ? LIMIT 1')
+        .get(connectionId);
+
+      if (!row) {
+        clearInterval(pollId);
+        reject(new Error('OTP запрос отменён'));
+        return;
+      }
+
+      if (row.status === 'resolved' && row.code) {
+        clearInterval(pollId);
+        database.db
+          .query('DELETE FROM bank_otp_requests WHERE connection_id = ?')
+          .run(connectionId);
+        logger.info({ connectionId }, 'OTP resolved');
+        resolve(row.code);
+        return;
+      }
+
+      if (row.status === 'cancelled') {
+        clearInterval(pollId);
+        database.db
+          .query('DELETE FROM bank_otp_requests WHERE connection_id = ?')
+          .run(connectionId);
+        reject(new Error('OTP запрос отменён'));
+        return;
+      }
+
+      if (Date.now() >= deadline) {
+        clearInterval(pollId);
+        database.db
+          .query('DELETE FROM bank_otp_requests WHERE connection_id = ?')
+          .run(connectionId);
+        reject(new Error('Время ожидания кода истекло (5 мин)'));
+      }
+    }, POLL_INTERVAL_MS);
   });
 }
 
@@ -41,25 +83,34 @@ export function registerOtpRequest(connectionId: number, telegramGroupId: number
  * Returns true if the message was consumed as an OTP code.
  */
 export function resolveOtpForGroup(telegramGroupId: number, code: string): boolean {
-  for (const [connectionId, req] of pending) {
-    if (req.telegramGroupId === telegramGroupId) {
-      clearTimeout(req.timeoutId);
-      pending.delete(connectionId);
-      logger.info({ connectionId, code: code.replace(/./g, '*') }, 'OTP resolved');
-      req.resolve(code);
-      return true;
-    }
-  }
-  return false;
+  const row = database.db
+    .query<OtpRow, [number]>(
+      "SELECT * FROM bank_otp_requests WHERE group_telegram_id = ? AND status = 'pending' AND expires_at > datetime('now') LIMIT 1",
+    )
+    .get(telegramGroupId);
+
+  if (!row) return false;
+
+  database.db
+    .query("UPDATE bank_otp_requests SET code = ?, status = 'resolved' WHERE connection_id = ?")
+    .run(code, row.connection_id);
+
+  logger.info({ connectionId: row.connection_id, code: code.replace(/./g, '*') }, 'OTP resolved');
+  return true;
 }
 
 /** Cancel the pending OTP request for a connection (on sync error/cleanup). */
 export function cancelOtpRequest(connectionId: number): void {
-  const req = pending.get(connectionId);
-  if (req) {
-    clearTimeout(req.timeoutId);
-    pending.delete(connectionId);
-    req.reject(new Error('OTP запрос отменён'));
+  const row = database.db
+    .query<OtpRow, [number]>(
+      "SELECT * FROM bank_otp_requests WHERE connection_id = ? AND status = 'pending' LIMIT 1",
+    )
+    .get(connectionId);
+
+  if (row) {
+    database.db
+      .query("UPDATE bank_otp_requests SET status = 'cancelled' WHERE connection_id = ?")
+      .run(connectionId);
     logger.info({ connectionId }, 'OTP request cancelled');
   }
 }

@@ -906,6 +906,23 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Created group_spreadsheets table, migrated existing spreadsheet_ids');
       },
     },
+    {
+      name: '030_create_bank_otp_requests',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS bank_otp_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id INTEGER NOT NULL UNIQUE,
+            group_telegram_id INTEGER NOT NULL,
+            code TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT NOT NULL
+          );
+        `);
+        logger.info('✓ Created bank_otp_requests table');
+      },
+    },
   ];
 
   // Check and run migrations

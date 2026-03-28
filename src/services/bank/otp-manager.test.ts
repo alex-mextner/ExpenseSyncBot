@@ -1,13 +1,29 @@
 // Tests for OTP manager — pending request lifecycle.
+// Uses an in-memory SQLite so bank-sync and bot processes can be tested in isolation.
 
-import { afterEach, describe, expect, test } from 'bun:test';
-import { cancelOtpRequest, registerOtpRequest, resolveOtpForGroup } from './otp-manager';
+import { Database } from 'bun:sqlite';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
+
+const testDb = new Database(':memory:');
+testDb.exec(`
+  CREATE TABLE IF NOT EXISTS bank_otp_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id INTEGER NOT NULL UNIQUE,
+    group_telegram_id INTEGER NOT NULL,
+    code TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    expires_at TEXT NOT NULL
+  )
+`);
+
+// Must mock before importing otp-manager (dynamic import below ensures order)
+mock.module('../../database', () => ({ database: { db: testDb } }));
+
+const { cancelOtpRequest, registerOtpRequest, resolveOtpForGroup } = await import('./otp-manager');
 
 afterEach(() => {
-  // Clean up any leftover pending requests between tests
-  cancelOtpRequest(1);
-  cancelOtpRequest(2);
-  cancelOtpRequest(999);
+  testDb.exec('DELETE FROM bank_otp_requests');
 });
 
 describe('registerOtpRequest / resolveOtpForGroup', () => {

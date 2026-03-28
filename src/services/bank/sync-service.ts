@@ -129,12 +129,24 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       // Prefer the bank panel thread; fall back to the group's active topic so the
       // prompt is visible where the user actually reads messages.
       const otpThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
-      const promptMsg = await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код из SMS в этот чат (есть 5 минут).`,
-        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
-      );
+      const otpText = `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код из SMS в этот чат (есть 5 минут).`;
+
+      // Edit the existing panel in-place to avoid creating a second dangling message.
+      // Fall back to sendMessage if there is no panel yet.
+      let promptMsgId: number | null = conn.panel_message_id ?? null;
+      if (promptMsgId) {
+        await editMessageText(env.BOT_TOKEN, group.telegram_group_id, promptMsgId, otpText).catch(
+          () => {},
+        );
+      } else {
+        const sent = await sendMessage(
+          env.BOT_TOKEN,
+          group.telegram_group_id,
+          otpText,
+          otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
+        );
+        promptMsgId = sent?.message_id ?? null;
+      }
 
       // Release the global shim mutex while waiting for user OTP input so other sync
       // cycles are not blocked for the full 5-minute OTP wait window.
@@ -148,11 +160,11 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
         code = await registerOtpRequest(connectionId, group.telegram_group_id);
       } catch (err) {
         // OTP timed out — edit the prompt message to offer a retry button.
-        if (promptMsg?.message_id && err instanceof Error && err.message.includes('истекло')) {
+        if (promptMsgId && err instanceof Error && err.message.includes('истекло')) {
           await editMessageText(
             env.BOT_TOKEN,
             group.telegram_group_id,
-            promptMsg.message_id,
+            promptMsgId,
             `⏰ Время ожидания кода истекло.\n\nНажми кнопку ниже чтобы синхронизировать снова.`,
             {
               reply_markup: {
@@ -173,15 +185,15 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
       // Edit the OTP prompt to "accepted" and register it as the panel message so
       // sync-service will update it to the real status when the sync completes.
-      if (promptMsg?.message_id) {
+      if (promptMsgId) {
         await editMessageText(
           env.BOT_TOKEN,
           group.telegram_group_id,
-          promptMsg.message_id,
-          '🔄 Принято, синхронизируем...',
+          promptMsgId,
+          '⌛ Принято, синхронизируем...',
         ).catch(() => {});
         database.bankConnections.update(connectionId, {
-          panel_message_id: promptMsg.message_id,
+          panel_message_id: promptMsgId,
           panel_message_thread_id: otpThreadId,
         });
       }
@@ -212,7 +224,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
         env.BOT_TOKEN,
         group.telegram_group_id,
         conn.panel_message_id,
-        `🔄 ${escapeHtml(conn.display_name)} — подключаемся...`,
+        `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`,
       ).catch(() => {});
     }
 
@@ -253,11 +265,13 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     // intermediate progress so the user sees we're still working.
     const connAfterScrape = database.bankConnections.findById(connectionId);
     if (connAfterScrape?.panel_message_id) {
+      const txCount = transactions.length;
+      const txInfo = txCount > 0 ? `\n\nПолучено транзакций: ${txCount}` : '';
       await editMessageText(
         env.BOT_TOKEN,
         group.telegram_group_id,
         connAfterScrape.panel_message_id,
-        `🔄 ${escapeHtml(conn.display_name)} — обрабатываем данные...`,
+        `⌛ ${escapeHtml(conn.display_name)} — Обрабатываем данные...${txInfo}`,
       ).catch(() => {});
     }
 

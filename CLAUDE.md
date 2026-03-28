@@ -296,6 +296,8 @@ await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text,
 
 Never send to the main chat (no thread) when the group has an `active_topic_id` — the user won't see messages from a topic-based group in the General channel.
 
+**Never send to personal (private) chats from background workers.** All messages from sync, cron, OTP prompts, and background jobs MUST go to `group.telegram_group_id` (always a group chat ID, never a user ID). If a message ends up in someone's personal chat, it means the wrong chat ID was used — check the DB.
+
 ### Testing
 
 Currently minimal tests. Test file example: [src/services/currency/parser.test.ts](src/services/currency/parser.test.ts)
