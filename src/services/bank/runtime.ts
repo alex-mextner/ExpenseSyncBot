@@ -19,16 +19,32 @@ export interface ZenMoneyShim {
   clearData(): void;
   isAccountSkipped(id: string): boolean;
   /** Stub: cookie management used by legacy plugin flows. No-op in background sync. */
-  getCookies(): Promise<Array<{ name: string; value: string; domain: string }>>;
-  setCookie(domain: string, name: string, value: string): Promise<void>;
+  getCookies(): Promise<
+    Array<{
+      name: string;
+      value: string;
+      domain: string;
+      path: string;
+      persistent: boolean;
+      secure: string | null;
+      expires: string | null;
+    }>
+  >;
+  setCookie(domain: string, name: string, value: string | null): Promise<void>;
   clearCookies(): Promise<void>;
   saveCookies(): Promise<void>;
   restoreCookies(): Promise<void>;
+  /** Stub: mTLS — no-op in background sync. */
+  setClientPfx(pfx: Uint8Array | null, domain: string): void;
+  /** Stub: analytics event — no-op. */
+  logEvent(type: string, data?: Record<string, unknown>): void;
   locale: string;
-  application: { platform: string; version: string };
+  application: { platform: string; version: string; build: string };
   device: {
+    id: string;
     manufacturer: string;
     model: string;
+    brand: string;
     os: { name: string; version: string };
   };
   _getCollectedAccounts(): unknown[];
@@ -114,7 +130,7 @@ export function createZenMoneyShim(
       return [];
     },
 
-    async setCookie(_domain: string, _name: string, _value: string) {},
+    async setCookie(_domain: string, _name: string, _value: string | null) {},
 
     async clearCookies() {},
 
@@ -122,13 +138,19 @@ export function createZenMoneyShim(
 
     async restoreCookies() {},
 
+    setClientPfx(_pfx: Uint8Array | null, _domain: string) {},
+
+    logEvent(_type: string, _data?: Record<string, unknown>) {},
+
     locale: 'en',
 
-    application: { platform: 'Android', version: '6.66.3' },
+    application: { platform: 'Android', version: '6.66.3', build: '6663' },
 
     device: {
+      id: 'expensesyncbot_device',
       manufacturer: 'Samsung',
       model: 'SM-G991B',
+      brand: 'Samsung',
       os: { name: 'Android', version: '13' },
     },
 
