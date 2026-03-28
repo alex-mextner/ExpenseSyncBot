@@ -9,7 +9,7 @@ import {
 import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
-import { convertToEUR } from '../../services/currency/converter';
+import { convertAnyToEUR } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
@@ -62,7 +62,7 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
     const [bankKey] = found;
     const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
     if (existing && existing.status !== 'setup') {
-      await showBankStatus(ctx, bot, existing, group);
+      await showBankStatus(ctx, bot, existing, group, true);
     } else {
       await startWizard(ctx, bankKey, bot);
     }
@@ -317,11 +317,7 @@ async function showBanksPanel(
 
   // Summary message
   const accounts = database.bankAccounts.findByGroupId(group.id);
-  const totalEur = accounts.reduce(
-    (sum, a) =>
-      sum + convertToEUR(a.balance, a.currency as import('../../config/constants').CurrencyCode),
-    0,
-  );
+  const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
 
   const summary = `Итого: ~${totalEur.toFixed(0)} EUR`;
   const summarySent = await bot.api.sendMessage({
@@ -342,6 +338,7 @@ async function showBankStatus(
   bot: BotInstance,
   conn: BankConnection,
   group: Group,
+  explicit = false,
 ): Promise<void> {
   if (conn.panel_message_id) {
     try {
@@ -358,7 +355,7 @@ async function showBankStatus(
     chat_id: group.telegram_group_id,
     text,
     reply_markup: {
-      inline_keyboard: buildBankManageKeyboard(conn),
+      inline_keyboard: buildBankManageKeyboard(conn, explicit),
     },
   });
   database.bankConnections.update(conn.id, {
@@ -424,7 +421,7 @@ export async function handleBankConfirmCallback(
     comment,
     amount: tx.amount,
     currency: txCurrency,
-    eur_amount: convertToEUR(tx.amount, txCurrency),
+    eur_amount: convertAnyToEUR(tx.amount, tx.currency),
   });
 
   database.bankTransactions.setMatchedExpense(txId, group.id, expense.id);
@@ -549,7 +546,7 @@ export async function handleBankEditReply(
     comment,
     amount: editTx.amount,
     currency: editCurrency,
-    eur_amount: convertToEUR(editTx.amount, editCurrency),
+    eur_amount: convertAnyToEUR(editTx.amount, editTx.currency),
   });
 
   database.bankTransactions.updateStatus(editTx.id, group.id, 'confirmed');

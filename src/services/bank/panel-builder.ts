@@ -43,16 +43,28 @@ export function buildBankStatusText(conn: BankConnection): string {
   return `🏦 ${conn.display_name} · ${syncLine} · ${statusEmoji}\nБаланс: ${balanceLine}${txLines}${errorLine}`;
 }
 
-export function buildBankManageKeyboard(conn: BankConnection): PanelButton[][] {
-  const rows: PanelButton[][] = [
-    [{ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` }],
-  ];
+/**
+ * @param expanded - when true (e.g. /bank tbc explicit call), show management buttons directly
+ *   instead of the collapsed ⚙️ navigation button used in the summary panel.
+ */
+export function buildBankManageKeyboard(conn: BankConnection, expanded = false): PanelButton[][] {
+  if (!expanded) {
+    const rows: PanelButton[][] = [
+      [{ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` }],
+    ];
+    if (conn.last_sync_at && conn.consecutive_failures === 0) {
+      rows.push([{ text: '🔄 Синхронизировать', callback_data: `bank_sync:${conn.id}` }]);
+    }
+    return rows;
+  }
 
-  // Show sync button only when the connection is healthy and has synced at least once
+  // Expanded: management buttons shown directly, no ⚙️ wrapper
+  const rows: PanelButton[][] = [];
   if (conn.last_sync_at && conn.consecutive_failures === 0) {
     rows.push([{ text: '🔄 Синхронизировать', callback_data: `bank_sync:${conn.id}` }]);
   }
-
+  rows.push([{ text: '🔄 Переподключить', callback_data: `bank_reconnect:${conn.id}` }]);
+  rows.push([{ text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` }]);
   return rows;
 }
 
