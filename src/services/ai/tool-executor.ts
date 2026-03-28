@@ -515,18 +515,27 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
 
 function executeSetCustomPrompt(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const prompt = input['prompt'] as string;
+  const mode = (input['mode'] as string) ?? 'set';
 
   if (prompt === undefined) {
     return { success: false, error: 'prompt is required' };
   }
 
-  database.groups.update(ctx.telegramGroupId, {
-    custom_prompt: prompt || null,
-  });
+  let newPrompt: string | null;
+  if (mode === 'append') {
+    const existing = ctx.customPrompt ?? '';
+    newPrompt = existing ? `${existing}\n\n${prompt}` : prompt || null;
+  } else {
+    newPrompt = prompt || null;
+  }
+
+  database.groups.update(ctx.telegramGroupId, { custom_prompt: newPrompt });
 
   return {
     success: true,
-    output: prompt ? `Custom prompt set (${prompt.length} chars)` : 'Custom prompt cleared',
+    output: newPrompt
+      ? `Custom prompt updated (${newPrompt.length} chars total)`
+      : 'Custom prompt cleared',
   };
 }
 

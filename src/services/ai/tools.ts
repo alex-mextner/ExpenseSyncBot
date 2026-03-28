@@ -224,13 +224,19 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'set_custom_prompt',
     description:
-      'Set or clear the custom AI system prompt for the group. This prompt is appended to the default system prompt.',
+      'Set, append to, or clear the custom AI system prompt for the group. This prompt is appended to the default system prompt.',
     input_schema: {
       type: 'object' as const,
       properties: {
         prompt: {
           type: 'string',
           description: 'Custom prompt text. Set to empty string to clear.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['set', 'append'],
+          description:
+            '"set" (default) — replaces the current prompt. "append" — adds the text after the existing prompt.',
         },
       },
       required: ['prompt'],
