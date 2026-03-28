@@ -99,9 +99,6 @@ export class BankConnectionsRepository {
     this.db.query<void, [number]>('DELETE FROM bank_connections WHERE id = ?').run(id);
   }
 
-  /**
-   * Delete setup-status rows older than 10 minutes for a group (stale wizard sessions).
-   */
   findSetupByGroupId(groupId: number): BankConnection | null {
     return (
       this.db
@@ -112,23 +109,26 @@ export class BankConnectionsRepository {
     );
   }
 
+  /** Delete setup-status rows older than 10 minutes for a group (stale wizard sessions). */
   deleteStaleSetup(groupId: number): number[] {
-    const stale = this.db
-      .query<{ id: number }, [number]>(`
-      SELECT id FROM bank_connections
-      WHERE group_id = ? AND status = 'setup'
-        AND created_at < datetime('now', '-10 minutes')
-    `)
-      .all(groupId);
-    if (stale.length > 0) {
-      this.db
-        .query<void, [number]>(`
-        DELETE FROM bank_connections
-        WHERE group_id = ? AND status = 'setup'
-          AND created_at < datetime('now', '-10 minutes')
-      `)
-        .run(groupId);
-    }
-    return stale.map((r) => r.id);
+    return this.db.transaction(() => {
+      const stale = this.db
+        .query<{ id: number }, [number]>(`
+          SELECT id FROM bank_connections
+          WHERE group_id = ? AND status = 'setup'
+            AND created_at < datetime('now', '-10 minutes')
+        `)
+        .all(groupId);
+      if (stale.length > 0) {
+        this.db
+          .query<void, [number]>(`
+            DELETE FROM bank_connections
+            WHERE group_id = ? AND status = 'setup'
+              AND created_at < datetime('now', '-10 minutes')
+          `)
+          .run(groupId);
+      }
+      return stale.map((r) => r.id);
+    })();
   }
 }

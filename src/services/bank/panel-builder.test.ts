@@ -161,6 +161,17 @@ describe('buildBankManageKeyboard', () => {
     expect(allButtons.some((b) => b.callback_data.startsWith('bank_disconnect:'))).toBe(false);
   });
 
+  test('hides sync button when consecutive_failures > 0 even after first sync', () => {
+    const conn = {
+      ...baseConn,
+      last_sync_at: new Date().toISOString(),
+      consecutive_failures: 2,
+    };
+    const rows = buildBankManageKeyboard(conn);
+    const allButtons = rows.flat();
+    expect(allButtons.some((b) => b.callback_data.startsWith('bank_sync:'))).toBe(false);
+  });
+
   test('always includes settings button', () => {
     const rows = buildBankManageKeyboard(baseConn);
     const allButtons = rows.flat();

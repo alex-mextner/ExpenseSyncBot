@@ -920,7 +920,14 @@ export async function handleBankWizardCancelCallback(
   const setupConn = database.bankConnections.findSetupByGroupId(group.id);
   if (setupConn) {
     wizardPromptMessages.delete(setupConn.id);
-    database.bankConnections.deleteById(setupConn.id);
+    if (setupConn.last_sync_at !== null) {
+      // Was an active connection being reconnected — preserve the row and linked data,
+      // just mark it disconnected (credentials already wiped by handleBankReconnectCallback).
+      database.bankConnections.update(setupConn.id, { status: 'disconnected' });
+    } else {
+      // Fresh new connection being set up — nothing to preserve, delete entirely.
+      database.bankConnections.deleteById(setupConn.id);
+    }
   }
 
   await ctx.answerCallbackQuery({ text: 'Отменено' });

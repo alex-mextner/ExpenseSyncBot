@@ -80,14 +80,19 @@ describe('BankConnectionsRepository', () => {
     expect(repo.findById(conn.id)).toBeNull();
   });
 
-  test('deleteStaleSetup removes setup rows older than 10 min', () => {
+  test('deleteStaleSetup removes setup rows older than 10 min and returns their IDs', () => {
     // Insert a stale setup row by manipulating created_at
-    db.exec(`
-      INSERT INTO bank_connections (group_id, bank_name, display_name, status, created_at)
-      VALUES (${groupId}, 'stale', 'Stale Bank', 'setup', datetime('now', '-11 minutes'))
-    `);
-    repo.deleteStaleSetup(groupId);
+    const result = db
+      .query<{ id: number }, []>(`
+        INSERT INTO bank_connections (group_id, bank_name, display_name, status, created_at)
+        VALUES (${groupId}, 'stale', 'Stale Bank', 'setup', datetime('now', '-11 minutes'))
+        RETURNING id
+      `)
+      .get();
+    const deletedIds = repo.deleteStaleSetup(groupId);
     expect(repo.findByGroupAndBank(groupId, 'stale')).toBeNull();
+    expect(deletedIds).toHaveLength(1);
+    expect(deletedIds[0]).toBe(result?.id);
   });
 
   test('deleteStaleSetup does not remove active connections', () => {
