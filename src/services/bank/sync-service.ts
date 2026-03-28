@@ -304,7 +304,6 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     for (const rawTx of transactions) {
       const normalized = normalizePluginsTransaction(rawTx, accountCurrencyMap);
       if (normalized !== null) normalizedTransactions.push(normalized);
-      else logger.warn({ txId: 'unknown' }, 'Could not normalize transaction — skipping');
     }
     transactions = normalizedTransactions;
 
@@ -534,16 +533,22 @@ async function handleSyncError(
 
 /** Converts ZenPlugins movements-based Transaction to our flat ZenTransaction.
  *  Passes through objects that are already in ZenTransaction format. */
-function normalizePluginsTransaction(
+export function normalizePluginsTransaction(
   raw: ZenTransaction | ZenPluginsTransaction,
   accountCurrencyMap: Map<string, string>,
 ): ZenTransaction | null {
   if (!('movements' in raw)) return raw;
 
   const movement = raw.movements[0];
+  if (!movement) {
+    logger.warn('normalizePluginsTransaction: transaction has empty movements array — skipping');
+    return null;
+  }
 
   // movement.id can be null for some transaction types (e.g. unresolved holds).
   // Generate a deterministic synthetic ID so they are not silently dropped.
+  // Known collision risk: two different holds for identical sum+timestamp+account
+  // on the same ms — second one is silently deduped by insertIgnore. Accepted.
   const acc = movement.account;
   const accId = 'id' in acc ? acc.id : '';
   const id =

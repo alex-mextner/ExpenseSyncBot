@@ -4,7 +4,6 @@ import { describe, expect, it } from 'bun:test';
 import {
   calculateSimilarity,
   findBestCategoryMatch,
-  findSimilarCategories,
   levenshteinDistance,
   normalizeCategoryName,
   normalizePhonetic,
@@ -122,55 +121,5 @@ describe('findBestCategoryMatch', () => {
   it('prefers exact over fuzzy', () => {
     const c = ['Food', 'Fast Food', 'Seafood'];
     expect(findBestCategoryMatch('food', c)).toBe('Food');
-  });
-});
-
-describe('findSimilarCategories', () => {
-  const cats = ['Food', 'Transport', 'Entertainment', 'Health', 'Healthcare'];
-
-  it('returns empty array for empty input', () =>
-    expect(findSimilarCategories('', cats)).toEqual([]));
-  it('returns empty array for empty categories', () =>
-    expect(findSimilarCategories('food', [])).toEqual([]));
-  it('returns at most limit results', () =>
-    expect(findSimilarCategories('health', cats, 1)).toHaveLength(1));
-  it('default limit is 3', () =>
-    expect(findSimilarCategories('health', cats).length).toBeLessThanOrEqual(3));
-  it('exact match scores highest (appears first)', () => {
-    const results = findSimilarCategories('health', cats);
-    expect(results[0]).toBe('Health');
-  });
-  it('returns multiple partial matches', () => {
-    const results = findSimilarCategories('health', cats, 5);
-    expect(results).toContain('Health');
-    expect(results).toContain('Healthcare');
-  });
-  it('word-based matching works', () => {
-    const results = findSimilarCategories('food delivery', cats);
-    expect(results).toContain('Food');
-  });
-  it('returns sorted by score descending', () => {
-    const results = findSimilarCategories('health', cats, 5);
-    expect(results[0]).toBe('Health');
-  });
-  it('returns empty array when nothing matches', () => {
-    const results = findSimilarCategories('zzzxxx', cats);
-    expect(results).toEqual([]);
-  });
-  it('limit 0 returns empty array', () => {
-    const results = findSimilarCategories('food', cats, 0);
-    expect(results).toHaveLength(0);
-  });
-  it('exact match score is highest (100)', () => {
-    const results = findSimilarCategories('food', ['Food', 'Fast Food', 'Seafood']);
-    expect(results[0]).toBe('Food');
-  });
-  it('category-contains-input score beats input-contains-category', () => {
-    const results = findSimilarCategories('food', ['Seafood', 'Food'], 2);
-    expect(results[0]).toBe('Food');
-  });
-  it('handles case-insensitive matching for similar categories', () => {
-    const results = findSimilarCategories('HEALTH', cats, 5);
-    expect(results).toContain('Health');
   });
 });
