@@ -10,6 +10,7 @@ import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
+import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
 import { preFillTransaction } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
@@ -105,6 +106,12 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     const fromDate = conn.last_sync_at ? new Date(conn.last_sync_at) : subDays(new Date(), 30);
     const toDate = new Date();
 
+    const group = database.groups.findById(conn.group_id);
+    if (!group) {
+      logger.warn({ groupId: conn.group_id }, 'Group not found for connection');
+      return;
+    }
+
     // Serialize plugin execution — globalThis.ZenMoney is shared and not concurrency-safe.
     const prevMutex = shimMutex;
     let releaseMutex!: () => void;
@@ -117,7 +124,20 @@ async function runSyncCycle(connectionId: number): Promise<void> {
     let transactions: ZenTransaction[] = [];
 
     try {
-      const shim = createZenMoneyShim(connectionId, database.db, preferences);
+      const readLineImpl = async (prompt: string): Promise<string> => {
+        logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
+        await sendMessage(
+          env.BOT_TOKEN,
+          group.telegram_group_id,
+          `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}\n\nОтправь код в этот чат. У тебя 5 минут.`,
+          conn.panel_message_thread_id !== null
+            ? { message_thread_id: conn.panel_message_thread_id }
+            : undefined,
+        );
+        return registerOtpRequest(connectionId, group.telegram_group_id);
+      };
+
+      const shim = createZenMoneyShim(connectionId, database.db, preferences, readLineImpl);
       (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
 
       const { scrape } = await plugin.plugin();
@@ -141,6 +161,7 @@ async function runSyncCycle(connectionId: number): Promise<void> {
       }
     } finally {
       delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+      cancelOtpRequest(connectionId); // clean up if plugin exited without consuming the OTP
       releaseMutex();
     }
 
@@ -158,11 +179,6 @@ async function runSyncCycle(connectionId: number): Promise<void> {
 
     // Load approved merchant rules once for this cycle
     const approvedRules = database.merchantRules.findApproved();
-    const group = database.groups.findById(conn.group_id);
-    if (!group) {
-      logger.warn({ groupId: conn.group_id }, 'Group not found for connection');
-      return;
-    }
 
     // Process transactions
     for (const tx of transactions) {

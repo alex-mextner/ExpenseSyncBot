@@ -29,6 +29,7 @@ export function createZenMoneyShim(
   connectionId: number,
   db: Database,
   preferences: Record<string, string>,
+  readLineImpl?: (prompt: string) => Promise<string>,
 ): ZenMoneyShim {
   const collectedAccounts: unknown[] = [];
   const collectedTransactions: unknown[] = [];
@@ -74,7 +75,8 @@ export function createZenMoneyShim(
     },
 
     readLine(prompt: string): Promise<string> {
-      logger.warn({ prompt }, 'ZenMoney.readLine called — interactive plugins not supported');
+      if (readLineImpl) return readLineImpl(prompt);
+      logger.warn({ prompt }, 'ZenMoney.readLine called but no readLine handler registered');
       return Promise.resolve('');
     },
 

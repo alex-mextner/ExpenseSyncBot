@@ -110,6 +110,12 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     return;
   }
 
+  // Bank OTP — consume before wizard or expense parsing
+  if (text && !text.startsWith('/')) {
+    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
+    if (resolveOtpForGroup(telegramGroupId, text)) return;
+  }
+
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
