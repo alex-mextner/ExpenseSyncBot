@@ -1,4 +1,5 @@
 // /bank command — setup wizard, status panel, and confirmation flow handlers.
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankConnection, Group } from '../../database/types';
 import {
@@ -562,7 +563,7 @@ function buildWizardStartText(bankName: string, firstField: CredentialField | un
     `• Предлагать категорию через ИИ\n` +
     `• Ждать твоего подтверждения перед записью\n` +
     `• Синхронизировать с Google Sheets\n\n` +
-    `@бот покажи баланс карты — узнать баланс через ИИ\n` +
+    `@${env.BOT_USERNAME} покажи баланс карты — узнать баланс через ИИ\n` +
     `/bank — управление подключёнными банками\n\n` +
     `Вводи данные для входа в интернет-банк:\n\n` +
     `${buildFieldPromptText(firstField)}\n\n` +
@@ -578,7 +579,7 @@ function buildConnectionCompleteText(bankName: string): string {
     `[✅ Принять] [✏️ Исправить]\n\n` +
     `Первая синхронизация запущена прямо сейчас.\n\n` +
     `/bank — статус и управление\n` +
-    `@бот покажи баланс карты — спросить ИИ`
+    `@${env.BOT_USERNAME} покажи баланс карты — спросить ИИ`
   );
 }
 
