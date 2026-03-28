@@ -140,7 +140,7 @@ export function createBot(): Bot {
       const match = text.match(mentionPattern);
 
       if (match?.[1]) {
-        await handleAskQuestion(ctx, match[1].trim(), bot);
+        await handleAskQuestion(ctx, match[1].trim(), bot, true);
         return;
       }
     }

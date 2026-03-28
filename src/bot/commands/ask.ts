@@ -30,6 +30,7 @@ export async function handleAskQuestion(
   ctx: Ctx['Message'],
   question: string,
   bot: Bot,
+  isMention = false,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
@@ -92,7 +93,7 @@ export async function handleAskQuestion(
     return;
   }
 
-  await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName);
+  await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName, isMention);
 }
 
 /**
@@ -106,6 +107,7 @@ async function handleAskWithAnthropic(
   user: User,
   userName: string,
   userFullName: string,
+  isMention = false,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
 
@@ -127,6 +129,7 @@ async function handleAskWithAnthropic(
         ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
       });
     },
+    isMention,
   };
 
   // Get recent chat history (last 10 messages / 5 pairs)

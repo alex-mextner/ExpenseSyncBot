@@ -34,4 +34,6 @@ export interface AgentContext {
   telegramGroupId: number;
   /** Send a PNG image buffer to the chat. Used by render_table tool. */
   sendPhoto?: (imageBuffer: Buffer) => Promise<void>;
+  /** True when the message was sent via explicit @mention — never skip in this case. */
+  isMention?: boolean;
 }

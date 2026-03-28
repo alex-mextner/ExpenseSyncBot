@@ -91,8 +91,9 @@ export class ExpenseBotAgent {
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
 
-      // Skip signal — bot chose to stay silent, delete the placeholder message
-      if (isSkipSignal(finalText)) {
+      // Skip signal — bot chose to stay silent, delete the placeholder message.
+      // Never skip on explicit @mention — user intentionally addressed the bot.
+      if (isSkipSignal(finalText) && !this.ctx.isMention) {
         logger.info('[AGENT] Skip signal — staying silent');
         await writer.deleteSentMessage();
         return '';
@@ -380,6 +381,7 @@ Use ONLY these HTML tags (no Markdown, no ** or *):
 Escape < > & as &lt; &gt; &amp;
 Do NOT use <blockquote>, <u>, or any other tags — they are reserved for system UI.
 Do NOT invent links.
+NEVER use Markdown tables (|---|---| syntax) in chat messages — Telegram does not render them. Use the render_table tool instead, which produces a proper image.
 When displaying large amounts (≥ 1 million): prefer the suffix form — "1.5 млн RSD" over "1500000.00 RSD". Tool results include both forms (e.g. "1500000.00 (1.5 млн) RSD") — use the suffix form in your reply.
 
 ## BOT CAPABILITIES — STRICTLY ONLY THESE
