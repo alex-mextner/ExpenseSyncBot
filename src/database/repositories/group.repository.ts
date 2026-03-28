@@ -100,6 +100,11 @@ export class GroupRepository {
       values.push(data.active_topic_id);
     }
 
+    if (data.bank_panel_summary_message_id !== undefined) {
+      updates.push('bank_panel_summary_message_id = ?');
+      values.push(data.bank_panel_summary_message_id);
+    }
+
     if (updates.length > 0) {
       updates.push('updated_at = CURRENT_TIMESTAMP');
       values.push(telegramGroupId);

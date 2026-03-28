@@ -305,7 +305,9 @@ export class ExpenseBotAgent {
             type: 'tool_result' as const,
             tool_use_id: tr.id,
             content: tr.result.success
-              ? tr.result.output || 'Success'
+              ? tr.result.data !== undefined
+                ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
+                : tr.result.output || 'Success'
               : `Error: ${tr.result.error}`,
           })),
         });
@@ -359,6 +361,9 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 6. If you need totals by category → use summary_only: true in get_expenses.
 7. ANY arithmetic whatsoever → ALWAYS call calculate. This includes non-financial math (counting, areas, ratios, etc.). NEVER do math in your head. The tool uses live exchange rates for currency conversion.
 8. After calling set_budget or delete_budget → ALWAYS call get_budgets immediately to get fresh data before writing the response. Never use values from a previous get_budgets call after modifying budgets.
+9. Bank balance questions → call get_bank_balances. If result data is empty, check the note field and relay it to the user exactly — do NOT say the bank is not connected if the note says otherwise. NEVER suggest /connect for bank issues — /connect is for Google Sheets only. For bank issues use /bank.
+10. Bank transaction history → call get_bank_transactions.
+11. Missing/unmatched bank expenses → call find_missing_expenses.
 
 ## FORMATTING
 Use ONLY these HTML tags (no Markdown, no ** or *):
@@ -378,6 +383,11 @@ This bot tracks expenses and budgets. It can:
 - Scan receipt photos (QR and OCR)
 - Give financial advice and analytics
 - Calculate with currency conversion (calculator tool)
+- Connect bank accounts (/bank) to auto-import transactions with AI categorization
+- View real-time bank account balances (get_bank_balances tool)
+- Find bank transactions not yet recorded as expenses (find_missing_expenses tool)
+
+IMPORTANT: /connect is for Google Sheets integration only. /bank is for bank account integration (TBC, Kaspi, etc.).
 
 The bot CANNOT:
 - Create events, reminders, or calendar entries

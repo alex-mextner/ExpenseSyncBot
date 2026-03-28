@@ -255,6 +255,57 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       required: ['action', 'name'],
     },
   },
+
+  // === Bank tools ===
+  {
+    name: 'get_bank_transactions',
+    description:
+      'Get bank transactions for a period. All results are scoped to this group only. Use to answer questions about bank spending or reconciliation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        period: {
+          type: 'string',
+          description: '"current_month" | "last_month" | "YYYY-MM"',
+        },
+        bank_name: {
+          type: 'string',
+          description: 'Filter by bank registry key (e.g. "tbc"). Omit for all banks.',
+        },
+        status: {
+          type: 'string',
+          description: '"pending" | "confirmed" | "skipped" — omit for all statuses.',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_bank_balances',
+    description: 'Get current account balances from all connected banks for this group.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        bank_name: {
+          type: 'string',
+          description: 'Optional: filter to specific bank registry key.',
+        },
+      },
+    },
+  },
+  {
+    name: 'find_missing_expenses',
+    description:
+      'Compare bank transactions vs recorded expenses. Returns unmatched bank debit transactions that may be missing from the expense log.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        period: {
+          type: 'string',
+          description: '"current_month" | "last_month" | "YYYY-MM"',
+        },
+      },
+    },
+  },
 ];
 
 /**
@@ -275,4 +326,7 @@ export const TOOL_LABELS: Record<string, string> = {
   calculate: 'Считаю',
   set_custom_prompt: 'Обновляю промпт',
   manage_category: 'Управляю категориями',
+  get_bank_transactions: 'Загружаю банковские транзакции',
+  get_bank_balances: 'Проверяю балансы счетов',
+  find_missing_expenses: 'Ищу пропущенные расходы',
 };

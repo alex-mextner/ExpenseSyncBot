@@ -113,7 +113,7 @@ The bot parses expense messages in multiple formats (see README.md for examples)
 
 #### 4. AI Integration (Hugging Face)
 
-Bot can answer questions about expenses when mentioned in groups: `@botname question`
+Bot can answer questions about expenses when mentioned in groups: `@ExpenseSyncBot question`
 
 **Implementation:** [src/bot/commands/ask.ts](src/bot/commands/ask.ts)
 
@@ -508,6 +508,11 @@ When renaming variables, constants, config keys, or any other interface:
 - **Default recommendation**: full migration — no aliases, no legacy shims. Aliases are technical debt.
 - **Exceptions** worth keeping old names: public API with external consumers, stable library interface, or explicit user decision.
 - If migration is feasible (internal code, DB rows can be updated, tests can be rewritten), propose full migration as the primary option. Final call is the programmer's.
+
+## Bot Identity
+
+- **Bot username:** `@ExpenseSyncBot` (set via `BOT_USERNAME` env var, default `'ExpenseSyncBot'`)
+- All user-facing messages that mention the bot must use `@${env.BOT_USERNAME}` — never hardcode `@бот` or any placeholder.
 
 ## Tone of Voice (bot messages)
 

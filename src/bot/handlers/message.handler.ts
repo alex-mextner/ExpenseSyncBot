@@ -110,6 +110,13 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     return;
   }
 
+  // Bank setup wizard — consume credential input before other checks
+  if (text && !text.startsWith('/')) {
+    const { handleWizardInput } = await import('../commands/bank');
+    const handled = await handleWizardInput(ctx, group.id, text, bot);
+    if (handled) return;
+  }
+
   // Check if group has completed setup
   if (!database.groups.hasCompletedSetup(telegramGroupId)) {
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
@@ -124,6 +131,12 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
     );
     return;
+  }
+
+  // Bank OTP — consume after topic check, before expense parsing
+  if (text && !text.startsWith('/')) {
+    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
+    if (resolveOtpForGroup(telegramGroupId, text)) return;
   }
 
   logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
@@ -180,6 +193,14 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   if (waitingItem) {
     await handleCategoryTextInput(ctx, bot, text, waitingItem, group.id);
     return;
+  }
+
+  // Bank transaction edit flow — route replies to pending edit transactions
+  const replyToMessageId = ctx.update?.message?.reply_to_message?.message_id;
+  if (replyToMessageId && text) {
+    const { handleBankEditReply } = await import('../commands/bank');
+    const handled = await handleBankEditReply(ctx, telegramGroupId, text, replyToMessageId);
+    if (handled) return;
   }
 
   // Check for URLs in message

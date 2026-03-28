@@ -28,6 +28,9 @@ jobs:
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
 
+            echo "📦 Installing ZenPlugins dependencies..."
+            /var/www/.bun/bin/bun install --cwd src/services/bank/ZenPlugins
+
             echo "🔧 Making start script executable..."
             chmod +x start.sh
 

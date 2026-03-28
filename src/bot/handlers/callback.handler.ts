@@ -4,6 +4,22 @@ import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
 
 import { createLogger } from '../../utils/logger.ts';
+import {
+  handleBankAddCallback,
+  handleBankConfirmCallback,
+  handleBankDisconnectCallback,
+  handleBankDisconnectCancelCallback,
+  handleBankDisconnectConfirmCallback,
+  handleBankEditCallback,
+  handleBankLetterCallback,
+  handleBankLetterNavCallback,
+  handleBankReconnectCallback,
+  handleBankSettingsBackCallback,
+  handleBankSettingsCallback,
+  handleBankSetupCallback,
+  handleBankSyncCallback,
+  handleBankWizardCancelCallback,
+} from '../commands/bank';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
@@ -117,6 +133,198 @@ export async function handleCallbackQuery(
       case 'dev':
         await handleDevCallback(ctx, params, telegramId, bot);
         break;
+
+      case 'bank_confirm': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankConfirmCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_edit': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankEditCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'merchant_approve': {
+        const ruleId = Number(params[0]);
+        if (!ruleId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        database.merchantRules.updateStatus(ruleId, 'approved');
+        await ctx.answerCallbackQuery({ text: '✅ Правило принято' });
+        if (chatId && ctx.message?.id) {
+          try {
+            await bot.api.editMessageReplyMarkup({
+              chat_id: chatId,
+              message_id: ctx.message.id,
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // message may be too old to edit
+          }
+        }
+        break;
+      }
+
+      case 'merchant_reject': {
+        const ruleId = Number(params[0]);
+        if (!ruleId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        database.merchantRules.updateStatus(ruleId, 'rejected');
+        await ctx.answerCallbackQuery({ text: '❌ Правило отклонено' });
+        if (chatId && ctx.message?.id) {
+          try {
+            await bot.api.editMessageReplyMarkup({
+              chat_id: chatId,
+              message_id: ctx.message.id,
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // message may be too old to edit
+          }
+        }
+        break;
+      }
+
+      case 'merchant_edit': {
+        const ruleId = Number(params[0]);
+        if (!ruleId || !chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await ctx.answerCallbackQuery();
+        // TODO: implement reply-based edit for merchant rules (out of scope for this task)
+        break;
+      }
+
+      case 'bank_setup': {
+        const bankKey = params[0];
+        if (!chatId || !bankKey) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSetupCallback(ctx, bot, bankKey, chatId);
+        break;
+      }
+
+      case 'bank_reconnect': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankReconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_wizard_cancel': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankWizardCancelCallback(ctx, chatId);
+        break;
+      }
+
+      case 'bank_settings': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSettingsCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_sync': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSyncCallback(ctx, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect_confirm': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectConfirmCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect_cancel': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectCancelCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_settings_back': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSettingsBackCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_add': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAddCallback(ctx, chatId);
+        break;
+      }
+
+      case 'bank_letter': {
+        const letter = params[0]?.toUpperCase();
+        if (!chatId || !letter) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankLetterCallback(ctx, bot, letter, chatId);
+        break;
+      }
+
+      case 'bank_letter_nav': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankLetterNavCallback(ctx, bot, chatId);
+        break;
+      }
 
       default:
         await ctx.answerCallbackQuery({ text: 'Unknown action' });
