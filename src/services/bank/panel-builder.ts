@@ -44,17 +44,21 @@ export function buildBankStatusText(conn: BankConnection): string {
 }
 
 export function buildBankManageKeyboard(conn: BankConnection): PanelButton[][] {
-  const rows: PanelButton[][] = [
-    [{ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` }],
-  ];
+  const rows: PanelButton[][] = [];
 
-  if (conn.last_sync_at) {
+  if (conn.consecutive_failures > 0) {
+    // Error state: show reconnect prominently
+    rows.push([{ text: '🔄 Переподключить', callback_data: `bank_setup:${conn.bank_name}` }]);
+    rows.push([{ text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` }]);
+  } else if (conn.last_sync_at) {
+    rows.push([{ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` }]);
     rows.push([
       { text: '🔄 Синхронизировать', callback_data: `bank_sync:${conn.id}` },
       { text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` },
     ]);
   } else {
-    // First sync pending — no manual sync button yet
+    // First sync pending
+    rows.push([{ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` }]);
     rows.push([{ text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` }]);
   }
 

@@ -256,12 +256,47 @@ async function runSyncCycle(connectionId: number): Promise<void> {
   }
 }
 
+/**
+ * Maps ZenPlugin error types to human-readable messages.
+ * ZPAPIError does not extend Error, so instanceof Error won't work.
+ */
+function zenErrorMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') return String(error);
+
+  const name = (error as { constructor?: { name?: string } }).constructor?.name ?? '';
+  const msg = (error as { message?: string }).message;
+  const bankMsg = (error as { bankMessage?: string }).bankMessage;
+
+  const knownErrors: Record<string, string> = {
+    InvalidLoginOrPasswordError: 'Неверный логин или пароль',
+    PinCodeInsteadOfPasswordError: 'Введён PIN вместо пароля',
+    PasswordExpiredError: 'Пароль истёк — смени в интернет-банке',
+    InvalidOtpCodeError: 'Неверный код подтверждения',
+    TemporaryUnavailableError: 'Банк временно недоступен',
+    IncompatibleVersionError: 'Несовместимая версия плагина',
+    PreviousSessionNotClosedError: 'Предыдущая сессия не закрыта — попробуем позже',
+    UserInteractionError: 'Требуется действие в приложении банка',
+    SubscriptionRequiredError: 'Требуется подписка в приложении банка',
+  };
+
+  if (name in knownErrors) return knownErrors[name] ?? String(error);
+  if (name === 'BankMessageError' && bankMsg) return `Сообщение от банка: ${bankMsg}`;
+  if (name === 'InvalidPreferencesError' || name === 'TemporaryError') {
+    return msg || 'Ошибка авторизации';
+  }
+
+  // Fallback: use message if non-empty, otherwise constructor name or raw string
+  if (msg) return msg;
+  if (name && name !== 'Object') return name;
+  return String(error);
+}
+
 async function handleSyncError(
   connectionId: number,
   conn: BankConnection,
   error: unknown,
 ): Promise<void> {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = zenErrorMessage(error);
   const failures = conn.consecutive_failures + 1;
 
   database.bankConnections.update(connectionId, {
