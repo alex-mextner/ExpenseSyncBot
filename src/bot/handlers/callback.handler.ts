@@ -210,7 +210,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankSetupCallback(ctx, bankKey, chatId);
+        await handleBankSetupCallback(ctx, bot, bankKey, chatId);
         break;
       }
 

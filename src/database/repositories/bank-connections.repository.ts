@@ -112,13 +112,23 @@ export class BankConnectionsRepository {
     );
   }
 
-  deleteStaleSetup(groupId: number): void {
-    this.db
-      .query<void, [number]>(`
-      DELETE FROM bank_connections
+  deleteStaleSetup(groupId: number): number[] {
+    const stale = this.db
+      .query<{ id: number }, [number]>(`
+      SELECT id FROM bank_connections
       WHERE group_id = ? AND status = 'setup'
         AND created_at < datetime('now', '-10 minutes')
     `)
-      .run(groupId);
+      .all(groupId);
+    if (stale.length > 0) {
+      this.db
+        .query<void, [number]>(`
+        DELETE FROM bank_connections
+        WHERE group_id = ? AND status = 'setup'
+          AND created_at < datetime('now', '-10 minutes')
+      `)
+        .run(groupId);
+    }
+    return stale.map((r) => r.id);
   }
 }

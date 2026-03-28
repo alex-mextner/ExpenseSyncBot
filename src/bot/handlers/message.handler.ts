@@ -113,7 +113,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
-    const handled = await handleWizardInput(ctx, group.id, text);
+    const handled = await handleWizardInput(ctx, group.id, text, bot);
     if (handled) return;
   }
 

@@ -16,6 +16,16 @@ import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('bank-command');
 
+// ─── Wizard prompt tracking ───────────────────────────────────────────────────
+// Maps connectionId → last sent prompt info so we can mask sensitive inputs.
+
+type WizardPromptEntry = {
+  messageId: number;
+  sensitive: boolean; // whether this prompt was for a sensitive field
+  fieldPrompt: string; // prompt label, e.g. "Пароль TBC"
+};
+const wizardPromptMessages = new Map<number, WizardPromptEntry>();
+
 // ─── /bank command entry point ───────────────────────────────────────────────
 
 export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): Promise<void> {
@@ -31,7 +41,9 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
   if (!group) return;
 
   // Clean up stale setup sessions
-  database.bankConnections.deleteStaleSetup(group.id);
+  for (const id of database.bankConnections.deleteStaleSetup(group.id)) {
+    wizardPromptMessages.delete(id);
+  }
 
   // Parse argument, e.g. /bank tbc
   const arg = ctx.text?.split(' ')[1]?.toLowerCase();
@@ -47,7 +59,7 @@ export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): 
     if (existing && existing.status !== 'setup') {
       await showBankStatus(ctx, bot, existing, group);
     } else {
-      await startWizard(ctx, group.id, arg);
+      await startWizard(ctx, group.id, arg, bot);
     }
     return;
   }
@@ -72,13 +84,19 @@ async function showNoBanksPanel(ctx: Ctx['Message']): Promise<void> {
   });
 }
 
-async function startWizard(ctx: Ctx['Message'], groupId: number, bankKey: string): Promise<void> {
+async function startWizard(
+  ctx: Ctx['Message'],
+  groupId: number,
+  bankKey: string,
+  bot: BotInstance,
+): Promise<void> {
   const plugin = BANK_REGISTRY[bankKey];
   if (!plugin) return;
 
   // Check if there's already an active/disconnected connection for this bank
   const existing = database.bankConnections.findByGroupAndBank(groupId, bankKey);
   if (existing) {
+    wizardPromptMessages.delete(existing.id);
     database.bankConnections.deleteById(existing.id);
   }
 
@@ -98,13 +116,25 @@ async function startWizard(ctx: Ctx['Message'], groupId: number, bankKey: string
   }
 
   const firstField = plugin.fields[0];
-  await ctx.send(buildWizardStartText(plugin.name, firstField));
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    const sent = await bot.api.sendMessage({
+      chat_id: chatId,
+      text: buildWizardStartText(plugin.name, firstField),
+    });
+    wizardPromptMessages.set(newConn.id, {
+      messageId: sent.message_id,
+      sensitive: isPasswordField(firstField),
+      fieldPrompt: resolveFieldPrompt(firstField),
+    });
+  }
 }
 
 async function handleWizardCancel(ctx: Ctx['Message'], groupId: number): Promise<void> {
   const setupConn = database.bankConnections.findSetupByGroupId(groupId);
 
   if (setupConn) {
+    wizardPromptMessages.delete(setupConn.id);
     database.bankConnections.deleteById(setupConn.id);
     await ctx.send('Подключение банка отменено.');
   } else {
@@ -120,6 +150,7 @@ export async function handleWizardInput(
   ctx: Ctx['Message'],
   groupId: number,
   text: string,
+  bot: BotInstance,
 ): Promise<boolean> {
   const setupConn = database.bankConnections.findSetupByGroupId(groupId);
 
@@ -143,6 +174,26 @@ export async function handleWizardInput(
 
   const currentField = remainingFields[0];
   const fieldName = resolveFieldName(currentField);
+  const chatId = ctx.chat?.id;
+
+  // If this was a sensitive field, delete the user's message and mask the prompt
+  const storedPrompt = wizardPromptMessages.get(setupConn.id);
+  if (storedPrompt?.sensitive && chatId) {
+    try {
+      await bot.api.deleteMessage({ chat_id: chatId, message_id: ctx.id });
+    } catch {
+      // bot may lack delete permission or message already gone
+    }
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: storedPrompt.messageId,
+        text: `🔒 ${storedPrompt.fieldPrompt}: ${'•'.repeat(text.length)}`,
+      });
+    } catch {
+      // message may be too old or already edited
+    }
+  }
 
   collectedFields[fieldName] = text;
 
@@ -154,11 +205,22 @@ export async function handleWizardInput(
 
   if (nextFields.length > 0) {
     const nextField = nextFields[0];
-    await ctx.send(buildFieldPromptText(nextField));
+    if (chatId) {
+      const sent = await bot.api.sendMessage({
+        chat_id: chatId,
+        text: buildFieldPromptText(nextField),
+      });
+      wizardPromptMessages.set(setupConn.id, {
+        messageId: sent.message_id,
+        sensitive: isPasswordField(nextField),
+        fieldPrompt: resolveFieldPrompt(nextField),
+      });
+    }
     return true;
   }
 
   // Wizard complete — activate connection
+  wizardPromptMessages.delete(setupConn.id);
   database.bankConnections.update(setupConn.id, { status: 'active' });
   activateNewConnection(setupConn.id);
   await ctx.send(buildConnectionCompleteText(plugin.name));
@@ -478,13 +540,18 @@ function resolveFieldPrompt(field: CredentialField | undefined): string {
   return field.prompt ?? field.name;
 }
 
+function isPasswordField(field: CredentialField | undefined): boolean {
+  return (
+    typeof field !== 'string' && !!field && (field.type === 'password' || field.type === 'otp')
+  );
+}
+
 const SECURITY_NOTE =
   '\n\n🔒 Пароль шифруется алгоритмом AES-256-GCM и хранится только на сервере бота — никуда не передаётся. Транзакции получаем через открытую библиотеку ZenPlugins — можешь проверить исходник: github.com/zenmoney/ZenPlugins';
 
 function buildFieldPromptText(field: CredentialField | undefined): string {
   const prompt = resolveFieldPrompt(field);
-  const isPassword = typeof field !== 'string' && !!field && field.type === 'password';
-  return `${prompt}:${isPassword ? SECURITY_NOTE : ''}`;
+  return `${prompt}:${isPasswordField(field) ? SECURITY_NOTE : ''}`;
 }
 
 function buildWizardStartText(bankName: string, firstField: CredentialField | undefined): string {
@@ -523,6 +590,7 @@ function buildConnectionCompleteText(bankName: string): string {
  */
 export async function handleBankSetupCallback(
   ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
   bankKey: string,
   chatId: number,
 ): Promise<void> {
@@ -539,7 +607,9 @@ export async function handleBankSetupCallback(
   }
 
   // Clean up stale setup sessions before starting a new one
-  database.bankConnections.deleteStaleSetup(group.id);
+  for (const id of database.bankConnections.deleteStaleSetup(group.id)) {
+    wizardPromptMessages.delete(id);
+  }
 
   // Only replace setup connections — active/disconnected connections require explicit disconnect
   const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
@@ -548,6 +618,7 @@ export async function handleBankSetupCallback(
       await ctx.answerCallbackQuery({ text: `${plugin.name} уже подключён` });
       return;
     }
+    wizardPromptMessages.delete(existing.id);
     database.bankConnections.deleteById(existing.id);
   }
 
@@ -569,7 +640,15 @@ export async function handleBankSetupCallback(
   }
 
   const firstField = plugin.fields[0];
-  await ctx.send(buildWizardStartText(plugin.name, firstField));
+  const sent = await bot.api.sendMessage({
+    chat_id: chatId,
+    text: buildWizardStartText(plugin.name, firstField),
+  });
+  wizardPromptMessages.set(newConn.id, {
+    messageId: sent.message_id,
+    sensitive: isPasswordField(firstField),
+    fieldPrompt: resolveFieldPrompt(firstField),
+  });
 }
 
 // ─── New action handlers ──────────────────────────────────────────────────────
