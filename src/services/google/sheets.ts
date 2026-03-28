@@ -728,6 +728,37 @@ export async function readExpenseRowsRaw(
   );
 }
 
+/**
+ * Sort the Expenses tab by column A (date) ascending, preserving the header row.
+ */
+export async function sortExpensesTab(refreshToken: string, spreadsheetId: string): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
+  const sheetId = expensesSheet?.properties?.sheetId;
+  if (sheetId === undefined) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          sortRange: {
+            range: {
+              sheetId,
+              startRowIndex: 1, // skip header
+              startColumnIndex: 0,
+            },
+            sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }],
+          },
+        },
+      ],
+    },
+  });
+}
+
 /** Rename a spreadsheet's title. */
 export async function renameSpreadsheet(
   refreshToken: string,

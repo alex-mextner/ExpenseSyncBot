@@ -14,6 +14,7 @@ import {
   monthTabExists,
   readExpenseRowsRaw,
   repairEurFormulas,
+  sortExpensesTab,
   writeMonthBudgetRow,
 } from './sheets';
 
@@ -170,6 +171,9 @@ export async function runYearSplitMigration(
     if (fixedFormulas > 0) {
       logger.info(`[MIGRATION] Restored ${fixedFormulas} EUR formula(s) in new spreadsheet`);
     }
+
+    await sortExpensesTab(refreshToken, newSpreadsheetId);
+    logger.info('[MIGRATION] Sorted Expenses tab by date');
 
     // 3. Delete those rows from the old spreadsheet
     await deleteExpenseRowsByIndex(

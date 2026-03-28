@@ -8,6 +8,7 @@ import {
   createEmptyMonthTab,
   createExpenseSpreadsheet,
   monthTabExists,
+  sortExpensesTab,
 } from '../services/google/sheets';
 import { createLogger } from '../utils/logger.ts';
 import { importExpensesFromSheet } from './commands/sync';
@@ -106,6 +107,26 @@ export function registerMonthlyCron(bot: BotInstance): void {
   });
 
   logger.info('[CRON] Monthly tab cron registered (00:00 on 1st of each month)');
+}
+
+/**
+ * One-time startup backfill: sort Expenses tab by date in all groups' spreadsheets.
+ */
+export async function backfillSortExpensesTabs(): Promise<void> {
+  const groups = database.groups.findAll();
+
+  for (const group of groups) {
+    if (!group.google_refresh_token) continue;
+
+    for (const { year, spreadsheetId } of database.groupSpreadsheets.listAll(group.id)) {
+      try {
+        await sortExpensesTab(group.google_refresh_token, spreadsheetId);
+        logger.info(`[BACKFILL] Sorted Expenses tab for group ${group.id}, year ${year}`);
+      } catch (err) {
+        logger.error({ err }, `[BACKFILL] Sort failed for group ${group.id}, year ${year}`);
+      }
+    }
+  }
 }
 
 /**
