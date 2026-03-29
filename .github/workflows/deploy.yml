@@ -49,8 +49,7 @@ jobs:
 
             echo "🔄 Reloading Caddy (if Caddyfile changed)..."
             if ! diff -q Caddyfile /etc/caddy/Caddyfile >/dev/null 2>&1; then
-              sudo cp Caddyfile /etc/caddy/Caddyfile
-              sudo systemctl reload caddy
+              caddy reload --config Caddyfile
               echo "✅ Caddy reloaded"
             else
               echo "⏭️ Caddyfile unchanged, skipping"
