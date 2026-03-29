@@ -43,6 +43,10 @@ export function startOAuthServer(): void {
     async fetch(req) {
       const url = new URL(req.url);
 
+      if (url.pathname === '/') {
+        return serveStaticPage('index.html');
+      }
+
       if (url.pathname === '/callback') {
         return handleOAuthCallback(url);
       }

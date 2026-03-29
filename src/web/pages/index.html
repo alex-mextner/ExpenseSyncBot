@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ExpenseSyncBot — Telegram Expense Tracker</title>
+  <style>
+    :root { --accent: #2563eb; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+    .container { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem; }
+    h1 { font-size: 2rem; margin-bottom: .5rem; }
+    .tagline { color: var(--muted); margin-bottom: 2rem; font-size: 1.05rem; }
+    h2 { font-size: 1.15rem; margin-top: 1.5rem; margin-bottom: .5rem; color: var(--accent); }
+    p, li { font-size: .95rem; margin-bottom: .5rem; }
+    ul { padding-left: 1.5rem; margin-bottom: 1rem; }
+    a { color: var(--accent); }
+    .card { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .cta { display: inline-block; margin-top: 1.5rem; padding: .75rem 1.5rem; background: var(--accent); color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }
+    .cta:hover { opacity: .9; }
+    .links { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; font-size: .9rem; }
+    .links a { margin-right: 1.5rem; }
+    footer { text-align: center; margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>ExpenseSyncBot</h1>
+      <p class="tagline">A Telegram bot for tracking expenses and syncing them to Google Sheets.</p>
+
+      <h2>What It Does</h2>
+      <p>ExpenseSyncBot lets you record expenses directly in a Telegram group chat. It automatically syncs every expense to a Google Sheets spreadsheet, giving you a real-time financial overview.</p>
+
+      <h2>Features</h2>
+      <ul>
+        <li>Multi-currency expense tracking with automatic conversion</li>
+        <li>Automatic sync to Google Sheets</li>
+        <li>Smart category detection</li>
+        <li>Budget management and alerts</li>
+        <li>AI-powered expense analysis and advice</li>
+        <li>Receipt photo scanning (OCR)</li>
+      </ul>
+
+      <h2>How It Uses Google APIs</h2>
+      <p>When you connect your Google account, the Bot creates a dedicated Google Sheets spreadsheet and writes your expenses into it. It uses two Google API scopes:</p>
+      <ul>
+        <li><strong>Google Sheets API</strong> — to read and write expense data in the spreadsheet</li>
+        <li><strong>Google Drive API (drive.file)</strong> — to create new spreadsheet files. This is limited to files the Bot creates and does not access any other files on your Drive.</li>
+      </ul>
+      <p>You can revoke access at any time through your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</p>
+
+      <a class="cta" href="https://t.me/ExpenseSyncBot" target="_blank" rel="noopener">Open in Telegram</a>
+
+      <div class="links">
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/terms">Terms of Service</a>
+      </div>
+    </div>
+    <footer>&copy; 2026 ExpenseSyncBot</footer>
+  </div>
+</body>
+</html>

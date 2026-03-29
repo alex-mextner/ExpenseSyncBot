@@ -50,32 +50,43 @@
         <li><code>https://www.googleapis.com/auth/drive.file</code> — to create new spreadsheet files. This scope is limited to files created by the Bot and does not grant access to any other files on your Drive.</li>
       </ul>
 
-      <h2>4. Data Storage and Security</h2>
+      <h2>4. Data Sharing</h2>
+      <p>We do not sell, rent, or share your personal data or Google user data with any third parties. We do not use your data for advertising, retargeting, or interest-based advertising. We do not use your data to determine credit-worthiness or for lending purposes.</p>
+
+      <h2>5. Data Storage and Security</h2>
       <ul>
-        <li>All data is stored in a SQLite database on a private server.</li>
+        <li>All data is stored in a SQLite database on a private server with restricted access.</li>
         <li>Google refresh tokens are encrypted using AES-256-GCM before storage. Plaintext tokens are never logged or stored.</li>
-        <li>The server is accessible only via HTTPS (TLS) for OAuth callbacks.</li>
-        <li>We do not sell, share, or transfer your data to any third parties.</li>
+        <li>All communication with Google APIs and the OAuth callback endpoint is encrypted via HTTPS (TLS).</li>
+        <li>Server access is restricted to authorized administrators only.</li>
       </ul>
 
-      <h2>5. Data Retention</h2>
-      <p>We retain your data for as long as you use the Bot. Expense records are kept to provide statistics and analytics. You can request deletion at any time (see below).</p>
+      <h2>6. Data Retention and Deletion</h2>
+      <p>We retain your data for as long as you actively use the Bot. Expense records are kept to provide statistics and analytics.</p>
+      <ul>
+        <li>When you revoke Google access (via <code>/reconnect</code> or <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>), we delete your stored Google refresh token.</li>
+        <li>You can request complete deletion of all your data — including expenses, tokens, and conversation history — at any time by contacting us (see below).</li>
+        <li>If you stop using the Bot and do not interact with it for an extended period, your data remains stored unless you explicitly request deletion.</li>
+      </ul>
 
-      <h2>6. Your Rights</h2>
+      <h2>7. Your Rights</h2>
       <p>You can exercise the following rights at any time:</p>
       <ul>
-        <li><strong>Disconnect Google account</strong> — use the <code>/reconnect</code> command to revoke access. You can also revoke access directly in your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</li>
-        <li><strong>Request data deletion</strong> — contact us (see below) to request complete deletion of all your data, including expenses, tokens, and conversation history.</li>
-        <li><strong>Access your data</strong> — all your expense data is available in the Google Sheets spreadsheet created by the Bot and via the <code>/stats</code> command.</li>
+        <li><strong>Disconnect Google account</strong> — use the <code>/reconnect</code> command in Telegram or revoke access directly in your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</li>
+        <li><strong>Request data deletion</strong> — contact us to request complete deletion of all your data.</li>
+        <li><strong>Access your data</strong> — all your expense data is available in the Google Sheets spreadsheet created by the Bot and via the <code>/stats</code> command in Telegram.</li>
       </ul>
 
-      <h2>7. Children's Privacy</h2>
+      <h2>8. Google API Services User Data Policy</h2>
+      <p>ExpenseSyncBot's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+      <h2>9. Children's Privacy</h2>
       <p>The Bot is not intended for use by anyone under the age of 13. We do not knowingly collect data from children.</p>
 
-      <h2>8. Changes to This Policy</h2>
-      <p>We may update this policy from time to time. Significant changes will be announced in the Bot. The "Last updated" date at the top indicates the most recent revision.</p>
+      <h2>10. Changes to This Policy</h2>
+      <p>We may update this policy from time to time. If we make material changes to how we use Google user data, we will notify users and obtain fresh consent before using data in the new way. The "Last updated" date at the top indicates the most recent revision.</p>
 
-      <h2>9. Contact</h2>
+      <h2>11. Contact</h2>
       <p>For questions about this privacy policy or to request data deletion, contact us via Telegram: <a href="https://t.me/ExpenseSyncBot" target="_blank" rel="noopener">@ExpenseSyncBot</a>.</p>
     </div>
     <footer>&copy; 2026 ExpenseSyncBot</footer>
