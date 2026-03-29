@@ -39,7 +39,7 @@ jobs:
             echo "📜 Rotating logs before restart..."
             STAMP=$(date +%Y-%m-%d_%H-%M-%S)
             cd logs
-            for f in error.log out.log; do
+            for f in error.log out.log healthcheck.log; do
               if [ -s "$f" ]; then
                 mv "$f" "${f%.log}_${STAMP}.log"
                 gzip "${f%.log}_${STAMP}.log"
