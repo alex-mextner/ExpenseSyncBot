@@ -72,7 +72,7 @@ const MAX_MESSAGE_LENGTH = 4000;
 
 export class TelegramStreamWriter {
   private sentMessageId: number | null = null;
-  private placeholderMessageId: number | null = null;
+  private placeholderIdPromise: Promise<number | null>;
   private fullText = ''; // current round's accumulated text
   private historyText = ''; // clean final AI text for chat history
   private lastFlushTime = Date.now();
@@ -90,16 +90,15 @@ export class TelegramStreamWriter {
     private bot: Bot,
     private chatId: number,
   ) {
-    // Send placeholder and keep "typing" status alive
-    this.bot.api
+    // Send placeholder; sendOrEdit will edit it in-place instead of creating a new message,
+    // which prevents double-message race when the API call resolves after streaming begins.
+    this.placeholderIdPromise = this.bot.api
       .sendMessage({
         chat_id: this.chatId,
         text: '⏳ Минутку...',
       })
-      .then((msg) => {
-        this.placeholderMessageId = msg.message_id;
-      })
-      .catch(() => {});
+      .then((msg) => msg.message_id)
+      .catch(() => null);
 
     this.typingInterval = setInterval(() => {
       if (!this.sentMessageId) {
@@ -119,20 +118,6 @@ export class TelegramStreamWriter {
     if (this.typingInterval) {
       clearInterval(this.typingInterval);
       this.typingInterval = null;
-    }
-    this.deletePlaceholder();
-  }
-
-  private deletePlaceholder(): void {
-    if (this.placeholderMessageId) {
-      const id = this.placeholderMessageId;
-      this.placeholderMessageId = null;
-      this.bot.api
-        .deleteMessage({
-          chat_id: this.chatId,
-          message_id: id,
-        })
-        .catch(() => {});
     }
   }
 
@@ -311,6 +296,13 @@ export class TelegramStreamWriter {
     if (text === this.lastSentText) return;
 
     try {
+      if (!this.sentMessageId) {
+        // Reuse the placeholder — avoids creating a second message if the API call
+        // resolves after streaming has already begun (double-message race condition).
+        const placeholderId = await this.placeholderIdPromise;
+        this.sentMessageId = placeholderId;
+      }
+
       if (this.sentMessageId) {
         await this.bot.api.editMessageText({
           chat_id: this.chatId,
@@ -319,6 +311,7 @@ export class TelegramStreamWriter {
           parse_mode: 'HTML',
         });
       } else {
+        // Placeholder creation failed — fall back to a new message
         const sent = await this.bot.api.sendMessage({
           chat_id: this.chatId,
           text,
@@ -460,14 +453,14 @@ export class TelegramStreamWriter {
 
   /**
    * Delete the sent message from Telegram (used when bot decides to stay silent).
-   * Also stops typing indicator and cleans up placeholder.
+   * Falls back to the placeholder if sentMessageId wasn't set yet.
    */
   async deleteSentMessage(): Promise<void> {
     this.stopTyping();
-    if (this.sentMessageId) {
-      const id = this.sentMessageId;
+    const messageId = this.sentMessageId ?? (await this.placeholderIdPromise);
+    if (messageId) {
       this.sentMessageId = null;
-      this.bot.api.deleteMessage({ chat_id: this.chatId, message_id: id }).catch(() => {});
+      this.bot.api.deleteMessage({ chat_id: this.chatId, message_id: messageId }).catch(() => {});
     }
   }
 

@@ -34,7 +34,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         summary_only: {
           type: 'boolean',
           description:
-            'If true, return only aggregated totals by category instead of individual expenses',
+            'If true, return pre-calculated totals by category (count, total in display currency, breakdown by original currency). Use for any aggregation question — totals for a period, category breakdown, "what did X spend", "how much in total". Always prefer this over fetching individual records when you need a summary.',
         },
       },
     },

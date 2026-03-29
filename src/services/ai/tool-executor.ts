@@ -197,9 +197,13 @@ async function executeGetExpenses(
   // Return individual expenses (paginated)
   const offset = (page - 1) * pageSize;
   const pageItems = expenses.slice(offset, offset + pageSize);
+  const group = database.groups.findById(ctx.groupId);
+  const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
+  const totalEur = expenses.reduce((s, e) => s + e.eur_amount, 0);
+  const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
   const lines = [
     `Period: ${startDate} to ${endDate}`,
-    `Total: ${expenses.length} expenses | Page ${page}/${totalPages}`,
+    `Total: ${expenses.length} expenses | Grand total: ${formatAmount(totalDisplay, displayCurrency, true)} | Page ${page}/${totalPages}`,
     '',
   ];
   for (const e of pageItems) {
