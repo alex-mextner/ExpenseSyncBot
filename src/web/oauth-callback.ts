@@ -6,6 +6,15 @@ import { createLogger } from '../utils/logger.ts';
 
 const logger = createLogger('oauth-callback');
 
+/** Escape HTML special characters to prevent XSS */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /**
  * Pending OAuth states (groupId -> resolve/reject functions)
  */
@@ -128,7 +137,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         <body>
           <div class="container">
             <h1 class="error">❌ Authorization Failed</h1>
-            <p>${errorDescription}</p>
+            <p>${escapeHtml(errorDescription)}</p>
             <p>Please return to Telegram and try again.</p>
           </div>
         </body>
@@ -255,7 +264,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         <body>
           <div class="container">
             <h1 class="error">❌ Error</h1>
-            <p>${err instanceof Error ? err.message : 'Unknown error occurred'}</p>
+            <p>${escapeHtml(err instanceof Error ? err.message : 'Unknown error occurred')}</p>
             <p>Please return to Telegram and try again.</p>
           </div>
         </body>

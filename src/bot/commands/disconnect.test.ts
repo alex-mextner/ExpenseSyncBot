@@ -24,8 +24,11 @@ beforeEach(() => {
   clearTestDb(db);
 });
 
+const ALLOWED_TABLES = ['expenses', 'budgets', 'chat_messages', 'categories'] as const;
+
 /** Helper: count rows in a table filtered by group_id */
-function countByGroup(table: string, groupId: number): number {
+function countByGroup(table: (typeof ALLOWED_TABLES)[number], groupId: number): number {
+  if (!ALLOWED_TABLES.includes(table)) throw new Error(`Table ${table} not in whitelist`);
   const result = db
     .query<{ count: number }, [number]>(`SELECT COUNT(*) as count FROM ${table} WHERE group_id = ?`)
     .get(groupId);
