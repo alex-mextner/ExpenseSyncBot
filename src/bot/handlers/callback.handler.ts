@@ -27,6 +27,7 @@ import {
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
 import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
+import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
 import { getSheetWriteErrorMessage, saveExpenseToSheet } from './message.handler';
@@ -549,7 +550,17 @@ async function handleConfirmAction(
   params: string[],
   bot: BotInstance,
 ): Promise<void> {
+  const action = params[0] ?? '';
   const answer = params[1] ?? '';
+
+  if (action === 'disconnect') {
+    if (answer === 'yes') {
+      await handleDisconnectConfirm(ctx, bot);
+    } else {
+      await handleDisconnectCancel(ctx, bot);
+    }
+    return;
+  }
 
   if (answer === 'yes') {
     await ctx.answerCallbackQuery({ text: '✅ Подтверждено' });

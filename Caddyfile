@@ -1,7 +1,26 @@
 expense-sync-bot.invntrm.ru {
 	# Automatic HTTPS with Let's Encrypt
 
-	# OAuth callback endpoint (proxied to local server)
+	# Static pages: homepage, privacy policy, terms of service
+	handle / {
+		root * /var/www/ExpenseSyncBot/public
+		rewrite * /index.html
+		file_server
+	}
+
+	handle /privacy {
+		root * /var/www/ExpenseSyncBot/public
+		rewrite * /privacy-policy.html
+		file_server
+	}
+
+	handle /terms {
+		root * /var/www/ExpenseSyncBot/public
+		rewrite * /terms-of-service.html
+		file_server
+	}
+
+	# OAuth callback endpoint (proxied to Bun server)
 	handle /callback* {
 		reverse_proxy localhost:3311
 	}
@@ -17,9 +36,9 @@ expense-sync-bot.invntrm.ru {
 		reverse_proxy localhost:3311
 	}
 
-	# All other requests return 404 (bot doesn't serve web pages)
+	# Everything else
 	handle {
-		respond "ExpenseSyncBot is running" 200
+		respond "Not Found" 404
 	}
 
 	# Logging

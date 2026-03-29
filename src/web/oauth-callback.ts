@@ -5,6 +5,15 @@ import { createLogger } from '../utils/logger.ts';
 
 const logger = createLogger('oauth-callback');
 
+/** Escape HTML special characters to prevent XSS */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /**
  * Pending OAuth states (groupId -> resolve/reject functions)
  */
@@ -49,11 +58,6 @@ export function startOAuthServer(): void {
 
       if (url.pathname === '/health') {
         return new Response('OK', { status: 200 });
-      }
-
-      // Serve temporary images for OCR processing
-      if (url.pathname.startsWith('/temp-images/')) {
-        return handleTempImage(url);
       }
 
       return new Response('Not Found', { status: 404 });
@@ -115,7 +119,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         <body>
           <div class="container">
             <h1 class="error">❌ Authorization Failed</h1>
-            <p>${errorDescription}</p>
+            <p>${escapeHtml(errorDescription)}</p>
             <p>Please return to Telegram and try again.</p>
           </div>
         </body>
@@ -242,7 +246,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         <body>
           <div class="container">
             <h1 class="error">❌ Error</h1>
-            <p>${err instanceof Error ? err.message : 'Unknown error occurred'}</p>
+            <p>${escapeHtml(err instanceof Error ? err.message : 'Unknown error occurred')}</p>
             <p>Please return to Telegram and try again.</p>
           </div>
         </body>
@@ -253,38 +257,5 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       },
     );
-  }
-}
-
-/**
- * Handle temporary image serving for OCR
- */
-async function handleTempImage(url: URL): Promise<Response> {
-  const filename = url.pathname.split('/temp-images/')[1];
-
-  if (!filename) {
-    return new Response('Not Found', { status: 404 });
-  }
-
-  const path = await import('node:path');
-
-  const filepath = path.join(process.cwd(), 'temp-images', filename);
-
-  try {
-    const file = Bun.file(filepath);
-
-    if (!(await file.exists())) {
-      return new Response('Not Found', { status: 404 });
-    }
-
-    return new Response(file, {
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-      },
-    });
-  } catch (error) {
-    logger.error({ err: error }, '[TEMP_IMAGE] Error serving image');
-    return new Response('Internal Server Error', { status: 500 });
   }
 }
