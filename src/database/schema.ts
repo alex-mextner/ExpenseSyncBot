@@ -977,6 +977,21 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '035_backfill_account_id_in_bank_transactions',
+      up: () => {
+        // Populate account_id from raw_data JSON for existing transactions.
+        // raw_data stores the ZenTransaction object; the 'account' field (if present)
+        // is the ZenPlugins account id that maps to bank_accounts.account_id.
+        const result = db.exec(`
+          UPDATE bank_transactions
+          SET account_id = json_extract(raw_data, '$.account')
+          WHERE account_id IS NULL
+            AND json_extract(raw_data, '$.account') IS NOT NULL
+        `);
+        logger.info({ changes: result }, '✓ Backfilled account_id from raw_data');
+      },
+    },
   ];
 
   // Check and run migrations
