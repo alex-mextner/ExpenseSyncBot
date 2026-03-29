@@ -2,12 +2,22 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 
-// Mock database so tests don't depend on the real singleton or test execution order.
+type FindByGroupIdFn = (groupId: number, includeExcluded?: boolean) => unknown[];
+
+const mockFindByGroupId: { impl: FindByGroupIdFn } = { impl: () => [] };
+const mockFindById: { impl: (id: number) => unknown } = { impl: () => null };
+
 mock.module('../../database', () => ({
   database: {
-    bankAccounts: { findByGroupId: () => [] },
+    bankAccounts: {
+      findByGroupId: (groupId: number, includeExcluded?: boolean) =>
+        mockFindByGroupId.impl(groupId, includeExcluded),
+    },
     bankTransactions: { findByGroupId: () => [], findUnmatched: () => [] },
-    bankConnections: { findById: () => null, findActiveByGroupId: () => [] },
+    bankConnections: {
+      findById: (id: number) => mockFindById.impl(id),
+      findActiveByGroupId: () => [],
+    },
     expenses: { findByDateRange: () => [] },
   },
 }));
@@ -29,10 +39,101 @@ const ctx: AgentContext = {
 
 describe('bank AI tools', () => {
   test('get_bank_balances returns empty list when no connections', async () => {
+    mockFindByGroupId.impl = () => [];
     const result = await executeTool('get_bank_balances', {}, ctx);
     expect(result.success).toBe(true);
     expect(Array.isArray(result.data)).toBe(true);
     expect(result.data).toEqual([]);
+  });
+
+  test('get_bank_balances filters excluded accounts by default', async () => {
+    const activeAccount = {
+      id: 1,
+      connection_id: 1,
+      title: 'Card USD',
+      balance: 100,
+      currency: 'USD',
+      type: null,
+      is_excluded: 0,
+    };
+    mockFindByGroupId.impl = (_groupId, includeExcluded) =>
+      includeExcluded
+        ? [activeAccount, { ...activeAccount, id: 2, is_excluded: 1, title: 'Lena' }]
+        : [activeAccount];
+    mockFindById.impl = () => ({ bank_name: 'tbc-ge', display_name: 'TBC Georgia' });
+
+    const result = await executeTool('get_bank_balances', {}, ctx);
+    expect(result.success).toBe(true);
+    expect(Array.isArray(result.data)).toBe(true);
+    expect((result.data as unknown[]).length).toBe(1);
+  });
+
+  test('get_bank_balances with include_excluded: true returns all accounts', async () => {
+    const accounts = [
+      {
+        id: 1,
+        connection_id: 1,
+        title: 'Card USD',
+        balance: 100,
+        currency: 'USD',
+        type: null,
+        is_excluded: 0,
+      },
+      {
+        id: 2,
+        connection_id: 1,
+        title: 'Lena',
+        balance: 1639,
+        currency: 'USD',
+        type: null,
+        is_excluded: 1,
+      },
+    ];
+    mockFindByGroupId.impl = (_groupId, includeExcluded) =>
+      includeExcluded ? accounts : [accounts[0]];
+    mockFindById.impl = () => ({ bank_name: 'tbc-ge', display_name: 'TBC Georgia' });
+
+    const result = await executeTool('get_bank_balances', { include_excluded: true }, ctx);
+    expect(result.success).toBe(true);
+    expect((result.data as unknown[]).length).toBe(2);
+  });
+
+  test('get_bank_balances with bank_name filter does case-insensitive substring match', async () => {
+    const account = {
+      id: 1,
+      connection_id: 1,
+      title: 'Card USD',
+      balance: 100,
+      currency: 'USD',
+      type: null,
+      is_excluded: 0,
+    };
+    mockFindByGroupId.impl = () => [account];
+    mockFindById.impl = () => ({ bank_name: 'tbc-ge', display_name: 'TBC Georgia' });
+
+    const result = await executeTool('get_bank_balances', { bank_name: 'TBC' }, ctx);
+    expect(result.success).toBe(true);
+    expect((result.data as unknown[]).length).toBe(1);
+  });
+
+  test('get_bank_balances with non-matching bank_name returns helpful error with available banks', async () => {
+    const account = {
+      id: 1,
+      connection_id: 1,
+      title: 'Card USD',
+      balance: 100,
+      currency: 'USD',
+      type: null,
+      is_excluded: 0,
+    };
+    mockFindByGroupId.impl = () => [account];
+    mockFindById.impl = () => ({ bank_name: 'tbc-ge', display_name: 'TBC Georgia' });
+
+    const result = await executeTool('get_bank_balances', { bank_name: 'kaspi' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual([]);
+    expect(result.summary).toContain('tbc-ge');
+    expect(result.summary).toContain('kaspi');
   });
 
   test('get_bank_transactions returns empty list when no transactions', async () => {

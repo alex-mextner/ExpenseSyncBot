@@ -201,14 +201,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'calculate',
     description:
-      'Evaluate ANY math expression — financial or not. Currency amounts are optional and auto-converted. Use for ALL arithmetic the user asks for: splitting bills, counting people, areas, ratios, percentages — anything. NEVER calculate manually. Examples: "100 * 3", "1000000 / 6", "100$ - 70EUR" in USD, "1500 RSD + 50 EUR" in EUR, "500€ - 10%", "300$ / 3".',
+      'Evaluate ANY math expression — financial or not. Currency amounts are optional and auto-converted. Use for ALL arithmetic: splitting bills, counting people, areas, ratios, percentages, currency conversion — anything. NEVER calculate manually.\n\nExamples:\n- {"expression": "100 * 3"}\n- {"expression": "100$ - 70 EUR", "target_currency": "USD"}\n- {"expression": "1500 RSD + 50 EUR", "target_currency": "EUR"}\n- {"expression": "500€ - 10%"}\n- {"expression": "1000000 / 6"}\n\nFor currency conversion (e.g. "what is 1 USD in RUB"): {"expression": "1 USD", "target_currency": "RUB"}. NEVER use "in" as an operator — it is not supported. Do NOT call get_exchange_rates first — this tool already uses live rates.',
     input_schema: {
       type: 'object' as const,
       properties: {
         expression: {
           type: 'string',
           description:
-            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /. Supports percentage: "EXPR - N%" or "EXPR + N%".',
+            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /. Supports percentage: "EXPR - N%" or "EXPR + N%". For plain conversion: "1 USD" with target_currency set.',
         },
         target_currency: {
           type: 'string',
@@ -287,13 +287,20 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: 'get_bank_balances',
-    description: 'Get current account balances from all connected banks for this group.',
+    description:
+      'Get current account balances from all connected banks for this group. By default returns only active (non-excluded) accounts.',
     input_schema: {
       type: 'object' as const,
       properties: {
         bank_name: {
           type: 'string',
-          description: 'Optional: filter to specific bank registry key.',
+          description:
+            'Optional: filter by bank registry key (case-insensitive substring match). The key comes from previous results — e.g. "tbc-ge", not "tbc". Omit to see all banks.',
+        },
+        include_excluded: {
+          type: 'boolean',
+          description:
+            'If true, include accounts that have been manually excluded/disabled (is_excluded=true). Default: false.',
         },
       },
     },

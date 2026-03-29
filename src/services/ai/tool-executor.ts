@@ -659,17 +659,38 @@ function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentCo
 }
 
 function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const bankName = typeof input['bank_name'] === 'string' ? input['bank_name'] : undefined;
+  const bankNameFilter =
+    typeof input['bank_name'] === 'string' ? input['bank_name'].toLowerCase() : undefined;
+  const includeExcluded = input['include_excluded'] === true;
 
-  const accounts = database.bankAccounts.findByGroupId(ctx.groupId);
-  const filtered = bankName
+  const accounts = database.bankAccounts.findByGroupId(ctx.groupId, includeExcluded);
+  const filtered = bankNameFilter
     ? accounts.filter((a) => {
         const conn = database.bankConnections.findById(a.connection_id);
-        return conn?.bank_name === bankName;
+        return conn?.bank_name.toLowerCase().includes(bankNameFilter);
       })
     : accounts;
 
   if (filtered.length === 0) {
+    // Check if there are accounts at all (ignoring the bank_name filter)
+    if (bankNameFilter) {
+      const allAccounts = database.bankAccounts.findByGroupId(ctx.groupId, true);
+      if (allAccounts.length > 0) {
+        const availableBanks = [
+          ...new Set(
+            allAccounts
+              .map((a) => database.bankConnections.findById(a.connection_id)?.bank_name)
+              .filter((n): n is string => Boolean(n)),
+          ),
+        ].join(', ');
+        return {
+          success: true,
+          data: [],
+          summary: `No accounts found matching bank_name filter "${bankNameFilter}". Available bank keys: ${availableBanks}. Retry without bank_name to see all accounts.`,
+        };
+      }
+    }
+
     const connections = database.bankConnections.findActiveByGroupId(ctx.groupId);
     if (connections.length === 0) {
       return {
@@ -694,6 +715,7 @@ function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContex
       balance: a.balance,
       currency: a.currency,
       type: a.type,
+      is_excluded: a.is_excluded === 1,
     })),
   };
 }

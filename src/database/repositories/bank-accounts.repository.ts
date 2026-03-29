@@ -51,12 +51,13 @@ export class BankAccountsRepository {
       .run(excluded ? 1 : 0, id);
   }
 
-  findByGroupId(groupId: number): BankAccount[] {
+  findByGroupId(groupId: number, includeExcluded = false): BankAccount[] {
+    const excludeClause = includeExcluded ? '' : 'AND ba.is_excluded = 0';
     return this.db
       .query<BankAccount, [number]>(`
       SELECT ba.* FROM bank_accounts ba
       JOIN bank_connections bc ON ba.connection_id = bc.id
-      WHERE bc.group_id = ? AND bc.status = 'active'
+      WHERE bc.group_id = ? AND bc.status = 'active' ${excludeClause}
       ORDER BY bc.bank_name, ba.title
     `)
       .all(groupId);

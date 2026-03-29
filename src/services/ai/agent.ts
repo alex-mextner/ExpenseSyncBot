@@ -287,6 +287,8 @@ export class ExpenseBotAgent {
               result.success,
               result.output,
               result.error,
+              result.data,
+              result.summary,
             );
             totalToolCalls++;
             toolCallNames.push(currentToolUse.name);
@@ -369,7 +371,7 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 6. For ANY aggregation question (total for a period, breakdown by category, "what did X spend", "how much in total", "по итогам") → ALWAYS use summary_only: true in get_expenses. The tool returns pre-calculated totals per category. NEVER manually sum individual expense amounts — that's what the tool is for.
 7. ANY arithmetic whatsoever → ALWAYS call calculate. This includes non-financial math (counting, areas, ratios, etc.). NEVER do math in your head. The tool uses live exchange rates for currency conversion.
 8. After calling set_budget or delete_budget → ALWAYS call get_budgets immediately to get fresh data before writing the response. Never use values from a previous get_budgets call after modifying budgets.
-9. Bank balance questions → call get_bank_balances. If result data is empty, check the note field and relay it to the user exactly — do NOT say the bank is not connected if the note says otherwise. NEVER suggest /connect for bank issues — /connect is for Google Sheets only. For bank issues use /bank.
+9. Bank balance questions → call get_bank_balances WITHOUT bank_name filter (omit it). If result data is empty, check the summary field and relay it to the user exactly — do NOT say the bank is not connected if the summary says otherwise. NEVER suggest /connect for bank issues — /connect is for Google Sheets only. For bank issues use /bank. If the user asks about disabled/excluded accounts → add include_excluded: true.
 10. Bank transaction history → call get_bank_transactions.
 11. Missing/unmatched bank expenses → call find_missing_expenses.
 12. User asks you to remember, save, or update any group instruction, topic, context, or preference → call set_custom_prompt. NEVER say "got it", "noted", or "remembered" without calling the tool first.
