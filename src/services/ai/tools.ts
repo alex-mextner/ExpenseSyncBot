@@ -317,8 +317,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: 'render_table',
     description: `Renders a Markdown table as a styled image and sends it to the chat.
 
-Use whenever presenting tabular data: comparisons, category breakdowns, budgets, schedules, or any multi-column lists.
-Call IN PARALLEL with writing the same data as plain text in your response — showing both is intentional.`,
+ALWAYS call this tool when you have tabular data (comparisons, category breakdowns, budgets, schedules, multi-column lists) — never skip it.
+Call IN PARALLEL with your text response. In the text, present the same data as a bullet list — never write raw Markdown table syntax there.`,
     input_schema: {
       type: 'object' as const,
       properties: {
