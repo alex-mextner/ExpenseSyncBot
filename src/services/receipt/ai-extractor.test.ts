@@ -105,7 +105,7 @@ describe('extractExpensesFromReceipt', () => {
     it('returns items array from valid JSON response', async () => {
       mockFetchWithContent(VALID_ITEMS_JSON);
 
-      const result = await extractExpensesFromReceipt('Receipt text', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt text', [], undefined, 1);
       expect(Array.isArray(result.items)).toBe(true);
       expect(result.items.length).toBe(1);
     });
@@ -113,7 +113,7 @@ describe('extractExpensesFromReceipt', () => {
     it('returns correct item fields', async () => {
       mockFetchWithContent(VALID_ITEMS_JSON);
 
-      const result = await extractExpensesFromReceipt('Receipt text', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt text', [], undefined, 1);
       const item = result.items[0];
       expect(item?.name_ru).toBe('Молоко');
       expect(item?.quantity).toBe(1);
@@ -125,14 +125,19 @@ describe('extractExpensesFromReceipt', () => {
     it('returns currency from response', async () => {
       mockFetchWithContent(VALID_ITEMS_JSON);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.currency).toBe('RSD');
     });
 
     it('accepts plain text receipt data', async () => {
       mockFetchWithContent(VALID_ITEMS_JSON);
 
-      const result = await extractExpensesFromReceipt('Store: Mega Mart\nMilk 1L - 100 RSD', [], 1);
+      const result = await extractExpensesFromReceipt(
+        'Store: Mega Mart\nMilk 1L - 100 RSD',
+        [],
+        undefined,
+        1,
+      );
       expect(result.items.length).toBeGreaterThan(0);
     });
 
@@ -140,7 +145,7 @@ describe('extractExpensesFromReceipt', () => {
       mockFetchWithContent(VALID_ITEMS_JSON);
 
       const html = '<!DOCTYPE html><html><body><p>Milk 100 RSD</p></body></html>';
-      const result = await extractExpensesFromReceipt(html, [], 1);
+      const result = await extractExpensesFromReceipt(html, [], undefined, 1);
       expect(result.items.length).toBeGreaterThan(0);
     });
   });
@@ -150,7 +155,7 @@ describe('extractExpensesFromReceipt', () => {
       const withThink = `<think>Let me analyze this receipt carefully...</think>\n${VALID_ITEMS_JSON}`;
       mockFetchWithContent(withThink);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items.length).toBe(1);
       expect(result.items[0]?.name_ru).toBe('Молоко');
     });
@@ -159,7 +164,7 @@ describe('extractExpensesFromReceipt', () => {
       const withMultipleThink = `<think>First thought</think><think>Second thought</think>${VALID_ITEMS_JSON}`;
       mockFetchWithContent(withMultipleThink);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items.length).toBe(1);
     });
 
@@ -167,7 +172,7 @@ describe('extractExpensesFromReceipt', () => {
       const withCodeBlock = `\`\`\`json\n${VALID_ITEMS_JSON}\n\`\`\``;
       mockFetchWithContent(withCodeBlock);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items.length).toBe(1);
     });
 
@@ -175,7 +180,7 @@ describe('extractExpensesFromReceipt', () => {
       const withCodeBlock = `\`\`\`\n${VALID_ITEMS_JSON}\n\`\`\``;
       mockFetchWithContent(withCodeBlock);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items.length).toBe(1);
     });
 
@@ -185,7 +190,7 @@ describe('extractExpensesFromReceipt', () => {
         '{"items":[{"name_ru":"Хлеб","quantity":1,"price":399,99,"total":399,99,"category":"Еда","possible_categories":[]}],"currency":"RSD"}';
       mockFetchWithContent(rawJson);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items[0]?.price).toBe(399.99);
     });
 
@@ -193,7 +198,7 @@ describe('extractExpensesFromReceipt', () => {
       const withPrefix = `Here is the parsed receipt:\n\n${VALID_ITEMS_JSON}`;
       mockFetchWithContent(withPrefix);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items.length).toBe(1);
     });
   });
@@ -215,7 +220,7 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(json);
 
-      const result = await extractExpensesFromReceipt('Receipt', ['Еда', 'Разное'], 1);
+      const result = await extractExpensesFromReceipt('Receipt', ['Еда', 'Разное'], undefined, 1);
       expect(result.items[0]?.category).toBe('Еда');
     });
 
@@ -235,7 +240,7 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(json);
 
-      const result = await extractExpensesFromReceipt('Receipt', ['Еда', 'Разное'], 1);
+      const result = await extractExpensesFromReceipt('Receipt', ['Еда', 'Разное'], undefined, 1);
       expect(result.items[0]?.category).toBe('Еда');
     });
 
@@ -255,7 +260,12 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(json);
 
-      const result = await extractExpensesFromReceipt('Receipt', ['Продукты', 'Хозтовары'], 1);
+      const result = await extractExpensesFromReceipt(
+        'Receipt',
+        ['Продукты', 'Хозтовары'],
+        undefined,
+        1,
+      );
       const validFallbacks = ['Продукты', 'Хозтовары', 'Разное'];
       const firstCategory = result.items[0]?.category;
       expect(typeof firstCategory === 'string' && validFallbacks.includes(firstCategory)).toBe(
@@ -279,7 +289,12 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(json);
 
-      const result = await extractExpensesFromReceipt('Receipt', ['Продукты', 'Разное'], 1);
+      const result = await extractExpensesFromReceipt(
+        'Receipt',
+        ['Продукты', 'Разное'],
+        undefined,
+        1,
+      );
       expect(result.items[0]?.category).toBe('Разное');
     });
 
@@ -299,7 +314,7 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(json);
 
-      const result = await extractExpensesFromReceipt('Receipt', ['Еда', 'Разное'], 1);
+      const result = await extractExpensesFromReceipt('Receipt', ['Еда', 'Разное'], undefined, 1);
       const possibleCats = result.items[0]?.possible_categories ?? [];
       for (const cat of possibleCats) {
         expect(['Еда', 'Разное']).toContain(cat);
@@ -322,7 +337,7 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(json);
 
-      const result = await extractExpensesFromReceipt('Receipt', [], 1);
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(Array.isArray(result.items[0]?.possible_categories)).toBe(true);
     });
   });
@@ -331,19 +346,19 @@ describe('extractExpensesFromReceipt', () => {
     it('throws when AI returns null content', async () => {
       mockFetchWithContent(null);
 
-      await expect(extractExpensesFromReceipt('Receipt', [], 1)).rejects.toThrow();
+      await expect(extractExpensesFromReceipt('Receipt', [], undefined, 1)).rejects.toThrow();
     });
 
     it('throws when AI returns invalid JSON', async () => {
       mockFetchWithContent('this is not json at all');
 
-      await expect(extractExpensesFromReceipt('Receipt', [], 1)).rejects.toThrow();
+      await expect(extractExpensesFromReceipt('Receipt', [], undefined, 1)).rejects.toThrow();
     });
 
     it('throws when items array is empty', async () => {
       mockFetchWithContent(JSON.stringify({ items: [], currency: 'EUR' }));
 
-      await expect(extractExpensesFromReceipt('Receipt', [], 1)).rejects.toThrow();
+      await expect(extractExpensesFromReceipt('Receipt', [], undefined, 1)).rejects.toThrow();
     });
 
     it('throws when item is missing required fields', async () => {
@@ -353,20 +368,20 @@ describe('extractExpensesFromReceipt', () => {
       });
       mockFetchWithContent(badItem);
 
-      await expect(extractExpensesFromReceipt('Receipt', [], 1)).rejects.toThrow();
+      await expect(extractExpensesFromReceipt('Receipt', [], undefined, 1)).rejects.toThrow();
     });
 
     it('throws when network request fails', async () => {
       mockFetchWithError(new Error('network failure'));
 
-      await expect(extractExpensesFromReceipt('Receipt', [], 1)).rejects.toThrow();
+      await expect(extractExpensesFromReceipt('Receipt', [], undefined, 1)).rejects.toThrow();
     });
 
     it('throws after all retries and models exhausted', async () => {
       mockFetchWithError(new Error('persistent failure'));
 
       try {
-        await extractExpensesFromReceipt('Receipt', [], 1);
+        await extractExpensesFromReceipt('Receipt', [], undefined, 1);
         throw new Error('should have thrown');
       } catch (err) {
         expect(err instanceof Error).toBe(true);
@@ -389,7 +404,7 @@ describe('extractExpensesFromReceipt', () => {
         throw new Error('always fails');
       }) as unknown as typeof globalThis.fetch;
 
-      await expect(extractExpensesFromReceipt('Receipt', [], 1)).rejects.toThrow();
+      await expect(extractExpensesFromReceipt('Receipt', [], undefined, 1)).rejects.toThrow();
       // 2 models × 1 retry each = 2 API calls
       expect(apiCallCount).toBe(2);
     });

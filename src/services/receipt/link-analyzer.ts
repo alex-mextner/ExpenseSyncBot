@@ -96,9 +96,11 @@ async function analyzeLink(
     if (content.length < 50) return null;
 
     const categories = database.categories.findByGroupId(groupId);
+    const categoryExamples = database.expenses.getRecentExamplesByCategory(groupId);
     const result = await extractExpensesFromReceipt(
       content,
       categories.map((c) => c.name),
+      categoryExamples,
     );
 
     if (!result.items?.length) return null;
