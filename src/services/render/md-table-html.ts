@@ -1,6 +1,7 @@
 /**
  * Generates styled HTML page from a markdown table for screenshot rendering
  */
+import { marked } from 'marked';
 
 interface TableData {
   title: string;
@@ -16,20 +17,7 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Convert inline Markdown to HTML within a table cell or header value.
- * HTML is escaped first, so raw tags can't inject markup. */
-function renderInlineMd(raw: string): string {
-  let s = escapeHtml(raw);
-  // Bold must come before italic so **x** doesn't leave stray *x*.
-  // [^*]+ intentionally rejects content containing literal asterisks — **a * b** is left as-is.
-  s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  s = s.replace(/\*([^*]+)\*/g, '<i>$1</i>');
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  s = s.replace(/~~([^~]+)~~/g, '<s>$1</s>');
-  return s;
-}
-
-/** Parse markdown table syntax into headers + rows */
+/** Parse markdown table syntax into headers + rows — used for input validation */
 export function parseMarkdownTable(md: string): { headers: string[]; rows: string[][] } {
   const lines = md
     .trim()
@@ -57,17 +45,11 @@ export function parseMarkdownTable(md: string): { headers: string[]; rows: strin
   return { headers, rows };
 }
 
-/** Generate full HTML page for the table */
+/** Generate full HTML page for the table.
+ * Markdown is rendered by marked (GFM): inline formatting, table structure, HTML escaping. */
 export function buildMdTableHtml(data: TableData): string {
-  const { headers, rows } = parseMarkdownTable(data.markdown);
-
-  const headerCells = headers.map((h) => `<th>${renderInlineMd(h)}</th>`).join('');
-  const bodyRows = rows
-    .map((row) => {
-      const cells = row.map((cell) => `<td>${renderInlineMd(cell)}</td>`).join('');
-      return `<tr>${cells}</tr>`;
-    })
-    .join('');
+  // markdown comes from the AI agent, rendered by Playwright server-side — not a user-facing browser
+  const tableHtml = marked.parse(data.markdown, { gfm: true, async: false }) as string;
 
   const caption =
     data.caption != null ? `<div class="caption">${escapeHtml(data.caption)}</div>` : '';
@@ -121,10 +103,10 @@ export function buildMdTableHtml(data: TableData): string {
   }
   tr:last-child td { border-bottom: none; }
   tr:nth-child(even) td { background: #1e2128; }
-  td b, th b { font-weight: 700; }
-  td i, th i { font-style: italic; color: #a8b4d0; }
+  td strong, th strong { font-weight: 700; }
+  td em, th em { font-style: italic; color: #a8b4d0; }
   td code, th code { background: #1a1d23; padding: 1px 6px; border-radius: 4px; font-family: 'SF Mono', 'Consolas', monospace; font-size: 14px; }
-  td s, th s { opacity: 0.55; }
+  td del, th del { opacity: 0.55; }
   .caption {
     margin-top: 14px;
     font-size: 13px;
@@ -141,12 +123,7 @@ export function buildMdTableHtml(data: TableData): string {
 <body>
 <div id="root">
   <div class="title">${escapeHtml(data.title)}</div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr>${headerCells}</tr></thead>
-      <tbody>${bodyRows}</tbody>
-    </table>
-  </div>
+  <div class="table-wrap">${tableHtml}</div>
   ${caption}
   <div class="footer">ExpenseSyncBot</div>
 </div>

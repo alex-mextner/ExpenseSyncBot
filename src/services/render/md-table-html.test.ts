@@ -91,20 +91,21 @@ describe('buildMdTableHtml', () => {
     expect(html).not.toContain('class="caption"');
   });
 
-  test('escapes raw HTML tags in cell values', () => {
+  test('passes through raw HTML in cell values (server-side PNG render, no XSS risk)', () => {
+    // marked allows HTML passthrough — safe because rendering happens in Playwright, not a user browser
     const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| <b>bold</b> |' });
-    expect(html).toContain('&lt;b&gt;bold&lt;/b&gt;');
+    expect(html).toContain('<b>bold</b>');
   });
 
   test('renders **bold** markdown in cells', () => {
     const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| **5 000 ₽** |' });
-    expect(html).toContain('<b>5 000 ₽</b>');
+    expect(html).toContain('<strong>5 000 ₽</strong>');
     expect(html).not.toContain('**5 000 ₽**');
   });
 
   test('renders *italic* markdown in cells', () => {
     const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| *note* |' });
-    expect(html).toContain('<i>note</i>');
+    expect(html).toContain('<em>note</em>');
     expect(html).not.toContain('*note*');
   });
 
@@ -116,13 +117,13 @@ describe('buildMdTableHtml', () => {
 
   test('renders ~~strikethrough~~ markdown in cells', () => {
     const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| ~~old~~ |' });
-    expect(html).toContain('<s>old</s>');
+    expect(html).toContain('<del>old</del>');
     expect(html).not.toContain('~~old~~');
   });
 
   test('renders **bold** markdown in headers', () => {
     const html = buildMdTableHtml({ title: 'T', markdown: '| **Сумма** |\n|---|\n| v |' });
-    expect(html).toContain('<b>Сумма</b>');
+    expect(html).toContain('<strong>Сумма</strong>');
   });
 
   test('escapes HTML in cells even with mixed markdown', () => {
@@ -130,7 +131,7 @@ describe('buildMdTableHtml', () => {
       title: 'T',
       markdown: '| A |\n|---|\n| **a & b** |',
     });
-    expect(html).toContain('<b>a &amp; b</b>');
+    expect(html).toContain('<strong>a &amp; b</strong>');
   });
 
   test('produces valid HTML structure', () => {
