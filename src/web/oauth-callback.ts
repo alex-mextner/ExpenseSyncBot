@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode } from '../services/google/oauth';
@@ -278,8 +279,6 @@ async function handleTempImage(url: URL): Promise<Response> {
     return new Response('Not Found', { status: 404 });
   }
 
-  const path = await import('node:path');
-
   const filepath = path.join(process.cwd(), 'temp-images', filename);
 
   try {
@@ -305,7 +304,6 @@ async function handleTempImage(url: URL): Promise<Response> {
  * Serve a static HTML page from the pages directory
  */
 async function serveStaticPage(filename: string): Promise<Response> {
-  const path = await import('node:path');
   const filepath = path.join(import.meta.dirname, 'pages', filename);
 
   try {
