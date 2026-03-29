@@ -341,10 +341,15 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       // Apply merchant normalization
       const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
 
+      const txDate = tx.date.includes('T') ? (tx.date.split('T')[0] ?? tx.date) : tx.date;
+      const txTime = extractTime(tx.date);
+
       const inserted = database.bankTransactions.insertIgnore({
         connection_id: connectionId,
         external_id: tx.id,
-        date: tx.date.includes('T') ? (tx.date.split('T')[0] ?? tx.date) : tx.date,
+        account_id: tx.account ?? null,
+        date: txDate,
+        time: txTime,
         amount,
         sign_type: signType,
         currency: tx.currency,
@@ -378,6 +383,13 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
       // Skip cards for old transactions — stored in DB but no card sent
       if (inserted.date !== today) continue;
+
+      // Skip cards for transactions from excluded accounts
+      if (inserted.account_id) {
+        const accounts = database.bankAccounts.findByConnectionId(connectionId);
+        const account = accounts.find((a) => a.account_id === inserted.account_id);
+        if (account?.is_excluded === 1) continue;
+      }
 
       // Large transaction: compare EUR equivalent to threshold
       const amountInEur = convertAnyToEUR(inserted.amount, inserted.currency);
@@ -598,6 +610,8 @@ export function normalizePluginsTransaction(
 
   const result: ZenTransaction = { id, sum, currency, date };
 
+  if (accId) result.account = accId;
+
   if (raw.merchant !== null && raw.merchant !== undefined) {
     const title =
       'title' in raw.merchant ? (raw.merchant as Merchant).title : raw.merchant.fullTitle;
@@ -637,6 +651,16 @@ function applyMerchantRules(
   return null;
 }
 
+/** Extracts HH:MM from an ISO datetime string. Returns null if no time component. */
+function extractTime(dateStr: string): string | null {
+  if (!dateStr.includes('T')) return null;
+  const timePart = dateStr.split('T')[1];
+  if (!timePart) return null;
+  // Strip timezone offset and seconds — keep HH:MM
+  const hhmm = timePart.slice(0, 5);
+  return /^\d{2}:\d{2}$/.test(hhmm) ? hhmm : null;
+}
+
 function formatConfirmationCard(
   tx: BankTransaction,
   category: string,
@@ -646,9 +670,10 @@ function formatConfirmationCard(
   const prefix = isLarge ? '⚠️ Крупная транзакция' : '💳';
   const merchant = escapeHtml(tx.merchant_normalized ?? tx.merchant ?? 'Неизвестно');
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
+  const dateTime = tx.time ? `${tx.date} ${tx.time}` : tx.date;
 
   return `${prefix} ${escapeHtml(bankName)} — ${tx.amount.toFixed(2)} ${escapeHtml(tx.currency)}
-📅 ${tx.date}
+📅 ${dateTime}
 📍 ${merchant}
 🗂 Категория: ${escapeHtml(category)}${mccLine}`;
 }

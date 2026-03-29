@@ -91,9 +91,46 @@ describe('buildMdTableHtml', () => {
     expect(html).not.toContain('class="caption"');
   });
 
-  test('escapes special chars in cell values', () => {
+  test('escapes raw HTML tags in cell values', () => {
     const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| <b>bold</b> |' });
     expect(html).toContain('&lt;b&gt;bold&lt;/b&gt;');
+  });
+
+  test('renders **bold** markdown in cells', () => {
+    const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| **5 000 ₽** |' });
+    expect(html).toContain('<b>5 000 ₽</b>');
+    expect(html).not.toContain('**5 000 ₽**');
+  });
+
+  test('renders *italic* markdown in cells', () => {
+    const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| *note* |' });
+    expect(html).toContain('<i>note</i>');
+    expect(html).not.toContain('*note*');
+  });
+
+  test('renders `code` markdown in cells', () => {
+    const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| `123` |' });
+    expect(html).toContain('<code>123</code>');
+    expect(html).not.toContain('`123`');
+  });
+
+  test('renders ~~strikethrough~~ markdown in cells', () => {
+    const html = buildMdTableHtml({ title: 'T', markdown: '| A |\n|---|\n| ~~old~~ |' });
+    expect(html).toContain('<s>old</s>');
+    expect(html).not.toContain('~~old~~');
+  });
+
+  test('renders **bold** markdown in headers', () => {
+    const html = buildMdTableHtml({ title: 'T', markdown: '| **Сумма** |\n|---|\n| v |' });
+    expect(html).toContain('<b>Сумма</b>');
+  });
+
+  test('escapes HTML in cells even with mixed markdown', () => {
+    const html = buildMdTableHtml({
+      title: 'T',
+      markdown: '| A |\n|---|\n| **a & b** |',
+    });
+    expect(html).toContain('<b>a &amp; b</b>');
   });
 
   test('produces valid HTML structure', () => {

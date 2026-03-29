@@ -16,7 +16,9 @@ export class BankTransactionsRepository {
         [
           number,
           string,
+          string | null,
           string,
+          string | null,
           number,
           string,
           string,
@@ -28,16 +30,18 @@ export class BankTransactionsRepository {
         ]
       >(`
         INSERT INTO bank_transactions
-          (connection_id, external_id, date, amount, sign_type, currency,
+          (connection_id, external_id, account_id, date, time, amount, sign_type, currency,
            merchant, merchant_normalized, mcc, raw_data, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(connection_id, external_id) DO NOTHING
         RETURNING id
       `)
       .get(
         data.connection_id,
         data.external_id,
+        data.account_id ?? null,
         data.date,
+        data.time ?? null,
         data.amount,
         data.sign_type,
         data.currency,

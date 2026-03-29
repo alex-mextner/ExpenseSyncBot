@@ -938,6 +938,45 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '032_add_time_to_bank_transactions',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions')
+          WHERE name = 'time'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(`ALTER TABLE bank_transactions ADD COLUMN time TEXT`);
+          logger.info('✓ Added time to bank_transactions');
+        }
+      },
+    },
+    {
+      name: '033_add_is_excluded_to_bank_accounts',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('bank_accounts')
+          WHERE name = 'is_excluded'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(`ALTER TABLE bank_accounts ADD COLUMN is_excluded INTEGER NOT NULL DEFAULT 0`);
+          logger.info('✓ Added is_excluded to bank_accounts');
+        }
+      },
+    },
+    {
+      name: '034_add_account_id_to_bank_transactions',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions')
+          WHERE name = 'account_id'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(`ALTER TABLE bank_transactions ADD COLUMN account_id TEXT`);
+          logger.info('✓ Added account_id to bank_transactions');
+        }
+      },
+    },
   ];
 
   // Check and run migrations

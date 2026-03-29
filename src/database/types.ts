@@ -341,6 +341,7 @@ export interface BankAccount {
   balance: number;
   currency: string;
   type: string | null;
+  is_excluded: number;
   updated_at: string;
 }
 
@@ -357,7 +358,9 @@ export interface BankTransaction {
   id: number;
   connection_id: number;
   external_id: string;
+  account_id: string | null;
   date: string;
+  time: string | null;
   amount: number;
   sign_type: 'debit' | 'credit' | 'reversal';
   currency: string;
@@ -378,7 +381,9 @@ export interface BankTransaction {
 export interface CreateBankTransactionData {
   connection_id: number;
   external_id: string;
+  account_id?: string | null;
   date: string;
+  time?: string | null;
   amount: number;
   sign_type: BankTransaction['sign_type'];
   currency: string;

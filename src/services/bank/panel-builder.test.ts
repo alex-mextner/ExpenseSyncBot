@@ -93,6 +93,7 @@ describe('buildBankStatusText', () => {
         balance: 1234.56,
         currency: 'GEL',
         type: null,
+        is_excluded: 0,
         updated_at: '',
       },
     ];
@@ -112,7 +113,9 @@ describe('buildBankStatusText', () => {
         id: 1,
         connection_id: 1,
         external_id: 'e1',
+        account_id: null,
         date: '2026-03-27',
+        time: null,
         amount: 50,
         sign_type: 'debit',
         currency: 'GEL',

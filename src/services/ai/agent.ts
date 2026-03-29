@@ -26,8 +26,8 @@ export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
-export const AI_MODEL = process.env['AI_MODEL'] || 'glm-5';
-export const AI_BASE_URL = process.env['AI_BASE_URL'] || 'https://api.z.ai/api/anthropic';
+export const AI_MODEL = env.AI_MODEL;
+export const AI_BASE_URL = env.AI_BASE_URL;
 
 export class ExpenseBotAgent {
   private anthropic: Anthropic;
@@ -372,6 +372,7 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 9. Bank balance questions → call get_bank_balances. If result data is empty, check the note field and relay it to the user exactly — do NOT say the bank is not connected if the note says otherwise. NEVER suggest /connect for bank issues — /connect is for Google Sheets only. For bank issues use /bank.
 10. Bank transaction history → call get_bank_transactions.
 11. Missing/unmatched bank expenses → call find_missing_expenses.
+12. User asks you to remember, save, or update any group instruction, topic, context, or preference → call set_custom_prompt. NEVER say "got it", "noted", or "remembered" without calling the tool first.
 
 ## FORMATTING
 Use ONLY these HTML tags (no Markdown, no ** or *):

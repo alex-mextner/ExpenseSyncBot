@@ -5,6 +5,8 @@ import type { Group, PhotoQueueItem, User } from '../../database/types';
 
 import { createLogger } from '../../utils/logger.ts';
 import {
+  handleBankAccountsCallback,
+  handleBankAccountToggleCallback,
   handleBankAddCallback,
   handleBankConfirmCallback,
   handleBankDisconnectCallback,
@@ -345,6 +347,27 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankLetterNavCallback(ctx, bot, chatId);
+        break;
+      }
+
+      case 'bank_accounts': {
+        const connectionId = Number(params[0]);
+        if (!chatId || !connectionId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAccountsCallback(ctx, bot, connectionId, chatId);
+        break;
+      }
+
+      case 'bank_account_toggle': {
+        const accountId = Number(params[0]);
+        const connectionId = Number(params[1]);
+        if (!chatId || !accountId || !connectionId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAccountToggleCallback(ctx, bot, accountId, connectionId, chatId);
         break;
       }
 

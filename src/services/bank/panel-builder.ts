@@ -63,6 +63,10 @@ export function buildBankManageKeyboard(conn: BankConnection, expanded = false):
   if (conn.last_sync_at && conn.consecutive_failures === 0) {
     rows.push([{ text: '🔄 Синхронизировать', callback_data: `bank_sync:${conn.id}` }]);
   }
+  const accounts = database.bankAccounts.findByConnectionId(conn.id);
+  if (accounts.length > 0) {
+    rows.push([{ text: '📋 Счета', callback_data: `bank_accounts:${conn.id}` }]);
+  }
   rows.push([{ text: '🔄 Переподключить', callback_data: `bank_reconnect:${conn.id}` }]);
   rows.push([{ text: '🔌 Отключить', callback_data: `bank_disconnect:${conn.id}` }]);
   return rows;

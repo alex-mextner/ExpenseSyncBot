@@ -601,6 +601,86 @@ export async function handleBankNoCommentCallback(
 }
 
 /**
+ * Shows the list of accounts for a connection with exclude/include toggles.
+ */
+export async function handleBankAccountsCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  connectionId: number,
+  chatId: number,
+): Promise<void> {
+  const conn = database.bankConnections.findById(connectionId);
+  if (!conn) {
+    await ctx.answerCallbackQuery({ text: 'Подключение не найдено' });
+    return;
+  }
+
+  const accounts = database.bankAccounts.findByConnectionId(connectionId);
+  if (accounts.length === 0) {
+    await ctx.answerCallbackQuery({ text: 'Счета не найдены' });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+
+  const text = `📋 <b>${conn.display_name} — счета</b>\n\nВыбери счета для получения уведомлений. Отключённые счета не будут присылать транзакции.`;
+  const keyboard = {
+    inline_keyboard: [
+      ...accounts.map((acc) => [
+        {
+          text: `${acc.is_excluded ? '🔕' : '🔔'} ${acc.title} (${acc.balance.toFixed(0)} ${acc.currency})`,
+          callback_data: `bank_account_toggle:${acc.id}:${connectionId}`,
+        },
+      ]),
+      [{ text: '← Назад', callback_data: `bank_settings:${connectionId}` }],
+    ],
+  };
+
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+      return;
+    } catch {
+      // message too old — fall through to send new
+    }
+  }
+  await ctx.send(text, { parse_mode: 'HTML', reply_markup: keyboard });
+}
+
+/**
+ * Toggles the is_excluded flag on a bank account.
+ */
+export async function handleBankAccountToggleCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  accountId: number,
+  connectionId: number,
+  chatId: number,
+): Promise<void> {
+  const account = database.bankAccounts.findById(accountId);
+  if (!account) {
+    await ctx.answerCallbackQuery({ text: 'Счёт не найден' });
+    return;
+  }
+
+  const newExcluded = account.is_excluded !== 1;
+  database.bankAccounts.setExcluded(accountId, newExcluded);
+  await ctx.answerCallbackQuery({
+    text: newExcluded ? '🔕 Уведомления отключены' : '🔔 Уведомления включены',
+  });
+
+  // Refresh the accounts list
+  await handleBankAccountsCallback(ctx, bot, connectionId, chatId);
+}
+
+/**
  * Confirm a bank transaction as an expense and create the corresponding merchant rule request.
  */
 function saveConfirmedTransaction(

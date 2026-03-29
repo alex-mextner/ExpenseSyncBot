@@ -45,6 +45,12 @@ export class BankAccountsRepository {
       .all(connectionId);
   }
 
+  setExcluded(id: number, excluded: boolean): void {
+    this.db
+      .query<void, [number, number]>('UPDATE bank_accounts SET is_excluded = ? WHERE id = ?')
+      .run(excluded ? 1 : 0, id);
+  }
+
   findByGroupId(groupId: number): BankAccount[] {
     return this.db
       .query<BankAccount, [number]>(`

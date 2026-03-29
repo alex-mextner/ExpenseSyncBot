@@ -16,7 +16,7 @@ function getClient(): Anthropic {
   if (!client) {
     client = new Anthropic({
       apiKey: env.ANTHROPIC_API_KEY,
-      ...(env.AI_BASE_URL ? { baseURL: env.AI_BASE_URL } : {}),
+      baseURL: env.AI_BASE_URL,
     });
   }
   return client;
@@ -132,7 +132,7 @@ ${existingList || '(пусто)'}
 
   try {
     const response = await getClient().messages.create({
-      model: env.AI_MODEL || 'claude-haiku-4-5-20251001',
+      model: env.AI_MODEL,
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     });
