@@ -2,13 +2,15 @@
  * Tests for the response validation pass
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import type Anthropic from '@anthropic-ai/sdk';
 import { validateResponse } from './response-validator';
 
 // Mock Anthropic SDK
-const mockCreate = mock((_args: Record<string, unknown>, _opts?: Record<string, unknown>) =>
-  Promise.resolve({
-    content: [{ type: 'text' as const, text: 'APPROVE' }],
-  }),
+const mockCreate = mock(
+  (_args: Anthropic.Messages.MessageCreateParamsNonStreaming, _opts?: Anthropic.RequestOptions) =>
+    Promise.resolve({
+      content: [{ type: 'text' as const, text: 'APPROVE' }],
+    }),
 );
 
 mock.module('@anthropic-ai/sdk', () => ({
@@ -80,8 +82,8 @@ describe('validateResponse', () => {
     const call = mockCreate.mock.calls[0];
     expect(call).toBeDefined();
     const args = call?.[0];
-    expect(args?.['max_tokens']).toBe(256);
-    const messages = args?.['messages'] as Array<{ content: string }>;
+    expect(args?.max_tokens).toBe(256);
+    const messages = args?.messages as Array<{ content: string }>;
     expect(messages[0]?.content).toContain('get_expenses, get_budgets');
     expect(messages[0]?.content).toContain('покажи расходы');
   });
@@ -100,7 +102,56 @@ describe('validateResponse', () => {
     const call = mockCreate.mock.calls[0];
     expect(call).toBeDefined();
     const args = call?.[0];
-    const messages = args?.['messages'] as Array<{ content: string }>;
+    const messages = args?.messages as Array<{ content: string }>;
     expect(messages[0]?.content).toContain('(none — no tools were called)');
+  });
+
+  test('validation prompt contains mutation rule', async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text' as const, text: 'APPROVE' }],
+    });
+
+    await validateResponse('test-key', {
+      userMessage: 'запомни что мы используем RSD',
+      toolCalls: [],
+      response: 'Запомнил!',
+    });
+
+    const call = mockCreate.mock.calls[0];
+    const args = call?.[0];
+    const system = args?.system as string;
+    expect(system).toContain('mutation requests');
+    expect(system).toContain('set_custom_prompt');
+  });
+
+  test('rejects mutation without tool call', async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text' as const, text: 'REJECT: Ответ без вызова set_custom_prompt' }],
+    });
+
+    const result = await validateResponse('test-key', {
+      userMessage: 'запомни что наш сайт про женскую одежду',
+      toolCalls: [],
+      response: 'Запомнил! Тема — женский сайт 👗',
+    });
+
+    expect(result.approved).toBe(false);
+    if (!result.approved) {
+      expect(result.reason).toContain('set_custom_prompt');
+    }
+  });
+
+  test('approves valid mutation with tool call', async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text' as const, text: 'APPROVE' }],
+    });
+
+    const result = await validateResponse('test-key', {
+      userMessage: 'запомни что наш сайт про женскую одежду',
+      toolCalls: ['set_custom_prompt'],
+      response: 'Готово, сохранил.',
+    });
+
+    expect(result.approved).toBe(true);
   });
 });

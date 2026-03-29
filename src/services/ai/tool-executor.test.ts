@@ -75,6 +75,12 @@ mock.module('../expense-recorder', () => ({
   getExpenseRecorder: () => ({ record: mockRecord }),
 }));
 
+// Mock budget commands — prevents dynamic import from pulling in the full
+// bot/commands/budget module (which imports writeMonthBudgetRow from sheets)
+mock.module('../../bot/commands/budget', () => ({
+  ensureFreshBudgets: mock(() => Promise.resolve()),
+}));
+
 // Import after mocks are set up
 import { executeTool } from './tool-executor';
 

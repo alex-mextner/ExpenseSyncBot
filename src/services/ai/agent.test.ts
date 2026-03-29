@@ -410,6 +410,20 @@ describe('ExpenseBotAgent', () => {
       expect(systemBlocks.at(0)?.text).not.toContain('CUSTOM GROUP INSTRUCTIONS');
     });
 
+    it('system prompt includes set_custom_prompt mutation rule', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
+        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
+      );
+
+      await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
+
+      const callArgs = getCallArgs(streamSpy);
+      const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
+      expect(systemBlocks.at(0)?.text).toContain('set_custom_prompt');
+      expect(systemBlocks.at(0)?.text).toContain('NEVER say "got it"');
+    });
+
     it('system block has cache_control ephemeral', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
