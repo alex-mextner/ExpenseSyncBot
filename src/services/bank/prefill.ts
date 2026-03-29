@@ -5,6 +5,7 @@ import { env } from '../../config/env.ts';
 import { database } from '../../database';
 import type { BankTransaction } from '../../database/types.ts';
 import { createLogger } from '../../utils/logger.ts';
+import { AI_BASE_URL, AI_MODEL } from '../ai/agent.ts';
 import { getMccLabel } from './mcc-labels.ts';
 
 const logger = createLogger('bank-prefill');
@@ -21,7 +22,7 @@ function getClient(): Anthropic {
   if (!client) {
     client = new Anthropic({
       apiKey: env.ANTHROPIC_API_KEY,
-      ...(env.AI_BASE_URL ? { baseURL: env.AI_BASE_URL } : {}),
+      baseURL: AI_BASE_URL || undefined,
     });
   }
   return client;
@@ -94,7 +95,7 @@ ${txLines}
 
   try {
     const response = await getClient().messages.create({
-      model: env.AI_MODEL || 'claude-haiku-4-5-20251001',
+      model: AI_MODEL,
       max_tokens: 200,
       messages: [{ role: 'user', content: prompt }],
     });
