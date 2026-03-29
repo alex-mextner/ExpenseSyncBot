@@ -365,6 +365,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 8. **AI context size** - limit expense history to recent (e.g., 100000 items) to avoid token limits
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
+11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
 
 ## When Modifying Code
 
