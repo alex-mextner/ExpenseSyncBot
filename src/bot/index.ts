@@ -11,6 +11,7 @@ import { handleBudgetCommand } from './commands/budget';
 import { handleCategoriesCommand } from './commands/categories';
 import { handleConnectCommand } from './commands/connect';
 import { handleDevCommand, initDevPipeline } from './commands/dev';
+import { handleDisconnectCommand } from './commands/disconnect';
 import { handleHelpCommand } from './commands/help';
 import { handlePingCommand } from './commands/ping';
 import { handlePromptCommand } from './commands/prompt';
@@ -87,6 +88,7 @@ export function createBot(): Bot {
   bot.command('spreadsheet', handleSpreadsheetCommand);
   bot.command('settings', handleSettingsCommand);
   bot.command('reconnect', handleReconnectCommand);
+  bot.command('disconnect', handleDisconnectCommand);
   bot.command('prompt', handlePromptCommand);
   bot.command('topic', handleTopicCommand);
   bot.command('dev', handleDevCommand);

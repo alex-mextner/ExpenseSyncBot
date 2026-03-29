@@ -26,6 +26,10 @@ export class GroupSpreadsheetRepository {
     return this.getByYear(groupId, new Date().getFullYear());
   }
 
+  deleteByGroupId(groupId: number): void {
+    this.db.query<void, [number]>('DELETE FROM group_spreadsheets WHERE group_id = ?').run(groupId);
+  }
+
   listAll(groupId: number): { year: number; spreadsheetId: string }[] {
     return this.db
       .query<{ year: number; spreadsheet_id: string }, [number]>(

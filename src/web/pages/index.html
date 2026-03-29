@@ -5,58 +5,113 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ExpenseSyncBot — Telegram Expense Tracker</title>
   <style>
-    :root { --accent: #2563eb; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; }
+    :root { --accent: #2563eb; --accent-light: #dbeafe; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; --border: #e2e8f0; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
-    .container { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem; }
-    h1 { font-size: 2rem; margin-bottom: .5rem; }
-    .tagline { color: var(--muted); margin-bottom: 2rem; font-size: 1.05rem; }
-    h2 { font-size: 1.15rem; margin-top: 1.5rem; margin-bottom: .5rem; color: var(--accent); }
-    p, li { font-size: .95rem; margin-bottom: .5rem; }
-    ul { padding-left: 1.5rem; margin-bottom: 1rem; }
-    a { color: var(--accent); }
-    .card { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-    .cta { display: inline-block; margin-top: 1.5rem; padding: .75rem 1.5rem; background: var(--accent); color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }
-    .cta:hover { opacity: .9; }
-    .links { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; font-size: .9rem; }
-    .links a { margin-right: 1.5rem; }
-    footer { text-align: center; margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+    .container { max-width: 800px; margin: 0 auto; padding: 3rem 1.5rem; }
+
+    /* Hero */
+    .hero { text-align: center; padding: 3rem 2rem; background: linear-gradient(135deg, var(--accent), #7c3aed); border-radius: 16px; color: #fff; margin-bottom: 1.5rem; }
+    .hero h1 { font-size: 2.5rem; margin-bottom: .25rem; letter-spacing: -.02em; }
+    .hero .tagline { font-size: 1.15rem; opacity: .9; margin-bottom: 2rem; }
+    .hero .cta { display: inline-block; padding: .85rem 2rem; background: #fff; color: var(--accent); text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 1rem; transition: transform .15s; }
+    .hero .cta:hover { transform: translateY(-2px); }
+
+    /* Cards grid */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: var(--card); border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .card h3 { font-size: 1rem; margin-bottom: .5rem; display: flex; align-items: center; gap: .5rem; }
+    .card p { font-size: .9rem; color: var(--muted); margin: 0; }
+    .icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+    .icon-blue { background: var(--accent-light); }
+    .icon-green { background: #dcfce7; }
+    .icon-purple { background: #f3e8ff; }
+    .icon-amber { background: #fef3c7; }
+    .icon-rose { background: #ffe4e6; }
+    .icon-cyan { background: #cffafe; }
+
+    /* How it works */
+    .section { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); margin-bottom: 1.5rem; }
+    .section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: .95rem; }
+    .steps li::before { counter-increment: step; content: counter(step); width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+    .steps li:last-child { margin-bottom: 0; }
+
+    /* Google API */
+    .scope-list { list-style: none; padding: 0; }
+    .scope-list li { background: var(--bg); padding: .75rem 1rem; border-radius: 8px; margin-bottom: .5rem; font-size: .9rem; }
+    .scope-list li strong { color: var(--accent); }
+
+    /* Footer */
+    .links { text-align: center; padding: 1rem; font-size: .9rem; }
+    .links a { color: var(--accent); margin: 0 1rem; text-decoration: none; }
+    .links a:hover { text-decoration: underline; }
+    footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 1rem 0; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="card">
+
+    <div class="hero">
       <h1>ExpenseSyncBot</h1>
-      <p class="tagline">A Telegram bot for tracking expenses and syncing them to Google Sheets.</p>
-
-      <h2>What It Does</h2>
-      <p>ExpenseSyncBot lets you record expenses directly in a Telegram group chat. It automatically syncs every expense to a Google Sheets spreadsheet, giving you a real-time financial overview.</p>
-
-      <h2>Features</h2>
-      <ul>
-        <li>Multi-currency expense tracking with automatic conversion</li>
-        <li>Automatic sync to Google Sheets</li>
-        <li>Smart category detection</li>
-        <li>Budget management and alerts</li>
-        <li>AI-powered expense analysis and advice</li>
-        <li>Receipt photo scanning (OCR)</li>
-      </ul>
-
-      <h2>How It Uses Google APIs</h2>
-      <p>When you connect your Google account, the Bot creates a dedicated Google Sheets spreadsheet and writes your expenses into it. It uses two Google API scopes:</p>
-      <ul>
-        <li><strong>Google Sheets API</strong> — to read and write expense data in the spreadsheet</li>
-        <li><strong>Google Drive API (drive.file)</strong> — to create new spreadsheet files. This is limited to files the Bot creates and does not access any other files on your Drive.</li>
-      </ul>
-      <p>You can revoke access at any time through your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</p>
-
+      <p class="tagline">Track expenses in Telegram. Sync to Google Sheets. Automatically.</p>
       <a class="cta" href="https://t.me/ExpenseSyncBot" target="_blank" rel="noopener">Open in Telegram</a>
+    </div>
 
-      <div class="links">
-        <a href="/privacy">Privacy Policy</a>
-        <a href="/terms">Terms of Service</a>
+    <div class="grid">
+      <div class="card">
+        <h3><span class="icon icon-blue">$</span> Multi-Currency</h3>
+        <p>Track expenses in any currency — EUR, USD, RSD, RUB and more. Automatic conversion and per-currency breakdowns.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-green">&#9783;</span> Google Sheets Sync</h3>
+        <p>Every expense is synced to a personal Google Sheets spreadsheet in real time. Your data, your spreadsheet.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-purple">&#9733;</span> Smart Categories</h3>
+        <p>Automatic category detection and custom categories. The bot learns your spending habits over time.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-amber">&#9878;</span> Budget Tracking</h3>
+        <p>Set monthly budgets by category. Get alerts when you're approaching the limit.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-rose">&#10064;</span> Receipt Scanning</h3>
+        <p>Send a photo of a receipt — the bot reads it, extracts items, and logs each expense automatically.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-cyan">&#9881;</span> AI Analysis</h3>
+        <p>Ask the bot anything about your spending. Get personalized insights, trends, and daily financial advice.</p>
       </div>
     </div>
+
+    <div class="section">
+      <h2>How It Works</h2>
+      <ol class="steps">
+        <li>Add <strong>@ExpenseSyncBot</strong> to a Telegram group chat</li>
+        <li>Run <strong>/connect</strong> and authorize your Google account</li>
+        <li>Send expenses as simple messages: <code>50 lunch</code>, <code>1200 RSD taxi</code>, <code>$30 groceries</code></li>
+        <li>The bot logs everything locally and syncs it to your Google Sheet</li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>How It Uses Google APIs</h2>
+      <p style="font-size: .95rem; margin-bottom: 1rem;">When you connect your Google account, the bot creates a dedicated spreadsheet and writes your expenses into it. It requests only two scopes:</p>
+      <ul class="scope-list">
+        <li><strong>Google Sheets API</strong> — to read and write expense data in the spreadsheet the bot creates for you.</li>
+        <li><strong>Google Drive API (drive.file)</strong> — to create new spreadsheet files. This scope is limited to files created by the bot — it does not access any other files on your Drive.</li>
+      </ul>
+      <p style="font-size: .9rem; color: var(--muted); margin-top: .75rem;">You can revoke access at any time through your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a> or by using the <code>/disconnect</code> command in Telegram.</p>
+    </div>
+
+    <div class="links">
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/terms">Terms of Service</a>
+    </div>
+
     <footer>&copy; 2026 ExpenseSyncBot</footer>
   </div>
 </body>

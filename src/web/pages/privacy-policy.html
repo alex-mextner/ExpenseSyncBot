@@ -62,23 +62,25 @@
       </ul>
 
       <h2>6. Data Retention and Deletion</h2>
-      <p>We retain your data for as long as you actively use the Bot. Expense records are kept to provide statistics and analytics.</p>
+      <p>We retain your data for as long as you actively use the Bot:</p>
       <ul>
-        <li>When you revoke Google access (via <code>/reconnect</code> or <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>), we delete your stored Google refresh token.</li>
-        <li>You can request complete deletion of all your data — including expenses, tokens, and conversation history — at any time by contacting us (see below).</li>
-        <li>If you stop using the Bot and do not interact with it for an extended period, your data remains stored unless you explicitly request deletion.</li>
+        <li><strong>Google OAuth refresh token</strong> — stored encrypted until you disconnect or revoke access. Deleted immediately upon disconnection.</li>
+        <li><strong>Expense records, categories, and budgets</strong> — stored indefinitely to provide statistics and analytics, until you delete them.</li>
+        <li><strong>AI conversation history</strong> — stored to maintain context in group conversations, deleted on disconnect.</li>
+        <li><strong>Bank connection credentials</strong> — stored encrypted for as long as the bank connection is active, deleted when you disconnect the bank or the bot.</li>
       </ul>
+      <p>You can delete <b>all</b> stored data at once by using the <code>/disconnect</code> command in Telegram. This permanently removes all expenses, tokens, budgets, categories, AI history, and bank connections for the group. The Google Sheets spreadsheet itself is not deleted — it remains in your Google Drive.</p>
 
       <h2>7. Your Rights</h2>
       <p>You can exercise the following rights at any time:</p>
       <ul>
-        <li><strong>Disconnect Google account</strong> — use the <code>/reconnect</code> command in Telegram or revoke access directly in your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</li>
-        <li><strong>Request data deletion</strong> — contact us to request complete deletion of all your data.</li>
-        <li><strong>Access your data</strong> — all your expense data is available in the Google Sheets spreadsheet created by the Bot and via the <code>/stats</code> command in Telegram.</li>
+        <li><strong>Delete all data</strong> — use the <code>/disconnect</code> command in Telegram to permanently delete all group data from our servers.</li>
+        <li><strong>Revoke Google access</strong> — use <code>/reconnect</code> to re-authorize, or revoke access directly in your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</li>
+        <li><strong>Access your data</strong> — all your expense data is available in the Google Sheets spreadsheet and via the <code>/stats</code> command in Telegram.</li>
       </ul>
 
       <h2>8. Google API Services User Data Policy</h2>
-      <p>ExpenseSyncBot's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+      <p>ExpenseSyncBot does not transfer information received from Google APIs to any other application or third party. ExpenseSyncBot's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
 
       <h2>9. Children's Privacy</h2>
       <p>The Bot is not intended for use by anyone under the age of 13. We do not knowingly collect data from children.</p>
