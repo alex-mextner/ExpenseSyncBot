@@ -54,3 +54,40 @@ jobs:
 
             echo "📊 PM2 status:"
             /var/www/.bun/bin/pm2 list
+
+      - name: Notify deploy success
+        if: success()
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+          TEXT=$(printf '✅ <b>Deployed</b> <code>%s</code>\n%s' "${COMMIT_SHA:0:7}" "$FIRST_LINE")
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat_id, text: $text, parse_mode: "HTML"}')"
+
+  notify-failure:
+    name: Notify on failure
+    needs: [deploy]
+    if: always() && needs.deploy.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure notification
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+          TEXT=$(printf '❌ <b>Deploy failed</b> <code>%s</code>\n%s\n\n<a href="%s">View run</a>' "${COMMIT_SHA:0:7}" "$FIRST_LINE" "$RUN_URL")
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat_id, text: $text, parse_mode: "HTML", disable_web_page_preview: true}')"
