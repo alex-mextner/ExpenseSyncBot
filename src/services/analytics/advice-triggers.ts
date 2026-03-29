@@ -166,7 +166,30 @@ export function checkSmartTriggers(
     }
   }
 
-  // === Trigger 6: Pending bank transactions need review ===
+  // === Trigger 6: Recurring expense missed ===
+  const overduePatterns = database.recurringPatterns.findOverdue(groupId, today);
+  const firstOverdue = overduePatterns[0];
+  if (firstOverdue) {
+    const topic = `recurring_missed:${firstOverdue.category}:${firstOverdue.next_expected_date}`;
+    if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+      if (canSendAdvice(groupId, 'quick')) {
+        return {
+          type: 'recurring_missed',
+          tier: 'quick',
+          topic,
+          data: {
+            category: firstOverdue.category,
+            expected_amount: firstOverdue.expected_amount,
+            currency: firstOverdue.currency,
+            next_expected_date: firstOverdue.next_expected_date,
+            overdue_count: overduePatterns.length,
+          },
+        };
+      }
+    }
+  }
+
+  // === Trigger 7: Pending bank transactions need review ===
   const pendingConnections = database.bankConnections.findActiveByGroupId(groupId);
   let totalPending = 0;
   for (const conn of pendingConnections) {

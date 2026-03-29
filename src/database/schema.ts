@@ -992,6 +992,33 @@ export function runMigrations(db: Database): void {
         logger.info({ changes: result }, '✓ Backfilled account_id from raw_data');
       },
     },
+    {
+      name: '036_create_recurring_patterns',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS recurring_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            category TEXT NOT NULL,
+            expected_amount REAL NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'EUR',
+            interval_days INTEGER NOT NULL DEFAULT 30,
+            expected_day INTEGER,
+            tolerance_days INTEGER NOT NULL DEFAULT 5,
+            last_seen_date TEXT,
+            next_expected_date TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'dismissed')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_recurring_patterns_group
+          ON recurring_patterns(group_id, status);
+        `);
+        logger.info('✓ Created recurring_patterns table');
+      },
+    },
   ];
 
   // Check and run migrations
