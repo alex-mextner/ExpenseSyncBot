@@ -224,19 +224,19 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'set_custom_prompt',
     description:
-      'Set, append to, or clear the custom AI system prompt for the group. This prompt is appended to the default system prompt.',
+      'Set, append to, or clear the custom AI system prompt for the group. This is the ONLY persistent memory available — use it whenever the user says "remember", "note", "save", or asks to keep any fact, rule, or preference for future conversations. Prefer mode="append" to avoid overwriting existing notes. Examples: user says "remember that Lena has a hidden account" → append "Note: Lena has a hidden account."; user says "always reply in English" → append the rule. Act immediately without asking for confirmation.',
     input_schema: {
       type: 'object' as const,
       properties: {
         prompt: {
           type: 'string',
-          description: 'Custom prompt text. Set to empty string to clear.',
+          description: 'Text to save. For facts/notes use plain declarative sentences.',
         },
         mode: {
           type: 'string',
           enum: ['set', 'append'],
           description:
-            '"set" (default) — replaces the current prompt. "append" — adds the text after the existing prompt.',
+            '"set" — replaces the entire prompt (use to rewrite rules from scratch). "append" (preferred) — adds text after the existing prompt, preserving previous notes.',
         },
       },
       required: ['prompt'],
