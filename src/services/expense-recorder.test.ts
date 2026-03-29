@@ -4,7 +4,6 @@ import type { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { CurrencyCode } from '../config/constants';
 import { ExpenseRepository } from '../database/repositories/expense.repository';
-// CategoryRepository not needed — recorder doesn't manage categories
 import { ExpenseItemsRepository } from '../database/repositories/expense-items.repository';
 import { GroupRepository } from '../database/repositories/group.repository';
 import { UserRepository } from '../database/repositories/user.repository';
@@ -99,6 +98,7 @@ describe('ExpenseRecorder', () => {
     db.close();
   });
 
+  /** Create a group with Google Sheets connected */
   function seedGroup(overrides?: Partial<{ enabled_currencies: CurrencyCode[] }>): {
     groupId: number;
     userId: number;
@@ -113,8 +113,16 @@ describe('ExpenseRecorder', () => {
     return { groupId: group.id, userId: user.id };
   }
 
+  /** Create a group without Google Sheets (no refresh token / spreadsheet) */
+  function seedGroupWithoutGoogle(): { groupId: number; userId: number } {
+    const group = groups.create({ telegram_group_id: -100456 });
+    // No google_refresh_token or spreadsheet_id set — they default to null
+    const user = users.create({ telegram_id: 222, group_id: group.id });
+    return { groupId: group.id, userId: user.id };
+  }
+
   describe('record()', () => {
-    it('writes expense to sheet and DB, returns expense with eurAmount', async () => {
+    it('writes expense to sheet and DB when Google is connected', async () => {
       const { groupId, userId } = seedGroup();
 
       const result = await recorder.record(groupId, userId, {
@@ -174,19 +182,51 @@ describe('ExpenseRecorder', () => {
       expect(result.expense.eur_amount).toBe(700);
     });
 
-    it('throws if group has no spreadsheet', async () => {
-      const group = groups.create({ telegram_group_id: -100999 });
-      const user = users.create({ telegram_id: 222, group_id: group.id });
+    it('records expense to DB only when no Google connection (refreshToken null)', async () => {
+      const { groupId, userId } = seedGroupWithoutGoogle();
 
-      await expect(
-        recorder.record(group.id, user.id, {
-          date: '2026-03-24',
-          category: 'Test',
-          comment: '',
-          amount: 100,
-          currency: 'EUR',
-        }),
-      ).rejects.toThrow('not configured');
+      const result = await recorder.record(groupId, userId, {
+        date: '2026-03-24',
+        category: 'Еда',
+        comment: 'Пицца',
+        amount: 4500,
+        currency: 'RSD',
+      });
+
+      // Sheet was NOT called
+      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(0);
+
+      // DB expense still created
+      expect(result.expense.group_id).toBe(groupId);
+      expect(result.expense.user_id).toBe(userId);
+      expect(result.expense.amount).toBe(4500);
+      expect(result.expense.currency).toBe('RSD');
+      expect(result.eurAmount).toBe(38.25);
+
+      // Verify in DB
+      const dbExpense = expenses.findById(result.expense.id);
+      expect(dbExpense).toBeTruthy();
+    });
+
+    it('records expense to DB only when spreadsheetId is null', async () => {
+      // Create group with token but no spreadsheet
+      const group = groups.create({ telegram_group_id: -100789 });
+      groups.update(-100789, { google_refresh_token: 'token-only' });
+      const user = users.create({ telegram_id: 333, group_id: group.id });
+
+      const result = await recorder.record(group.id, user.id, {
+        date: '2026-03-24',
+        category: 'Test',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+      });
+
+      // Sheet was NOT called (spreadsheetId is null)
+      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(0);
+
+      // DB expense still created
+      expect(result.expense.amount).toBe(100);
     });
 
     it('throws if group not found', async () => {
@@ -224,7 +264,7 @@ describe('ExpenseRecorder', () => {
   });
 
   describe('recordBatch()', () => {
-    it('groups items by category and creates one expense per category', async () => {
+    it('groups items by category and creates one expense per category with sheet writes', async () => {
       const { groupId, userId } = seedGroup();
 
       const results = await recorder.recordBatch(groupId, userId, [
@@ -247,12 +287,62 @@ describe('ExpenseRecorder', () => {
       if (!home) throw new Error('Expected Дом result');
       expect(home.expense.amount).toBe(150);
 
-      // Sheet writes: 2 calls
+      // Sheet writes: 2 calls (one per category)
       expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(2);
 
       // DB: 2 expenses
       const all = expenses.findByGroupId(groupId);
       expect(all).toHaveLength(2);
+    });
+
+    it('records batch to DB only without Google connection', async () => {
+      const { groupId, userId } = seedGroupWithoutGoogle();
+
+      const results = await recorder.recordBatch(groupId, userId, [
+        { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
+        { name: 'Молоко', quantity: 2, price: 100, total: 200, currency: 'RSD', category: 'Еда' },
+        { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
+      ]);
+
+      expect(results).toHaveLength(2);
+
+      // Sheet was NOT called
+      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(0);
+
+      // DB: 2 expenses still created
+      const all = expenses.findByGroupId(groupId);
+      expect(all).toHaveLength(2);
+
+      // Еда: 80 + 200 = 280 RSD
+      const food = results.find((r) => r.expense.category === 'Еда');
+      if (!food) throw new Error('Expected Еда result');
+      expect(food.expense.amount).toBe(280);
+    });
+
+    it('groups items by category correctly', async () => {
+      const { groupId, userId } = seedGroup();
+
+      const results = await recorder.recordBatch(groupId, userId, [
+        { name: 'A', quantity: 1, price: 10, total: 10, currency: 'RSD', category: 'Cat1' },
+        { name: 'B', quantity: 1, price: 20, total: 20, currency: 'RSD', category: 'Cat2' },
+        { name: 'C', quantity: 1, price: 30, total: 30, currency: 'RSD', category: 'Cat1' },
+        { name: 'D', quantity: 1, price: 40, total: 40, currency: 'RSD', category: 'Cat3' },
+        { name: 'E', quantity: 1, price: 50, total: 50, currency: 'RSD', category: 'Cat2' },
+      ]);
+
+      expect(results).toHaveLength(3); // 3 distinct categories
+
+      const cat1 = results.find((r) => r.expense.category === 'Cat1');
+      if (!cat1) throw new Error('Expected Cat1');
+      expect(cat1.expense.amount).toBe(40); // 10 + 30
+
+      const cat2 = results.find((r) => r.expense.category === 'Cat2');
+      if (!cat2) throw new Error('Expected Cat2');
+      expect(cat2.expense.amount).toBe(70); // 20 + 50
+
+      const cat3 = results.find((r) => r.expense.category === 'Cat3');
+      if (!cat3) throw new Error('Expected Cat3');
+      expect(cat3.expense.amount).toBe(40);
     });
 
     it('creates expense items linked to expenses', async () => {
@@ -276,6 +366,14 @@ describe('ExpenseRecorder', () => {
       const results = await recorder.recordBatch(groupId, userId, []);
       expect(results).toHaveLength(0);
       expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
+    });
+
+    it('throws if group not found', async () => {
+      await expect(
+        recorder.recordBatch(999, 1, [
+          { name: 'X', quantity: 1, price: 10, total: 10, currency: 'RSD', category: 'Test' },
+        ]),
+      ).rejects.toThrow('not found');
     });
   });
 
@@ -320,10 +418,25 @@ describe('ExpenseRecorder', () => {
       expect(all).toHaveLength(2);
     });
 
-    it('throws if group not configured', async () => {
-      const group = groups.create({ telegram_group_id: -100777 });
+    it('throws when no Google connection (refreshToken null)', async () => {
+      const { groupId } = seedGroupWithoutGoogle();
 
-      await expect(recorder.pushToSheet(group.id, [])).rejects.toThrow('not configured');
+      await expect(recorder.pushToSheet(groupId, [])).rejects.toThrow(
+        'not connected to Google Sheets',
+      );
+    });
+
+    it('throws when spreadsheetId is null', async () => {
+      const group = groups.create({ telegram_group_id: -100777 });
+      groups.update(-100777, { google_refresh_token: 'token-only' });
+
+      await expect(recorder.pushToSheet(group.id, [])).rejects.toThrow(
+        'not connected to Google Sheets',
+      );
+    });
+
+    it('throws if group not found', async () => {
+      await expect(recorder.pushToSheet(999, [])).rejects.toThrow('not found');
     });
   });
 });
