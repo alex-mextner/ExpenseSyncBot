@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — ExpenseSyncBot</title>
+  <style>
+    :root { --accent: #2563eb; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+    .container { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem; }
+    h1 { font-size: 1.75rem; margin-bottom: .25rem; }
+    .subtitle { color: var(--muted); margin-bottom: 2rem; font-size: .95rem; }
+    h2 { font-size: 1.15rem; margin-top: 2rem; margin-bottom: .5rem; color: var(--accent); }
+    p, li { font-size: .95rem; margin-bottom: .5rem; }
+    ul { padding-left: 1.5rem; margin-bottom: 1rem; }
+    a { color: var(--accent); }
+    .card { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    footer { text-align: center; margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Privacy Policy</h1>
+      <p class="subtitle">Last updated: March 29, 2026</p>
+
+      <p>ExpenseSyncBot ("the Bot", "we", "us") is a Telegram bot that helps users track expenses and sync them to Google Sheets. This policy describes what data we collect, how we use it, and how you can control it.</p>
+
+      <h2>1. Data We Collect</h2>
+      <p>We collect and store the following data when you use the Bot:</p>
+      <ul>
+        <li><strong>Telegram identifiers</strong> — your Telegram user ID, first name, and the group chat ID where the Bot is used. We do not collect your phone number or Telegram username.</li>
+        <li><strong>Expense data</strong> — amounts, currencies, categories, and comments you send to the Bot.</li>
+        <li><strong>Google OAuth refresh token</strong> — when you connect a Google account, we store an encrypted refresh token to maintain access to Google Sheets on your behalf.</li>
+        <li><strong>AI conversation history</strong> — messages sent to the Bot's AI assistant within group chats, used to provide contextual responses.</li>
+      </ul>
+
+      <h2>2. How We Use Your Data</h2>
+      <ul>
+        <li><strong>Creating and updating Google Sheets</strong> — we use Google Sheets API (<code>spreadsheets</code> scope) to create a spreadsheet and write your expenses into it.</li>
+        <li><strong>Creating spreadsheet files</strong> — we use Google Drive API (<code>drive.file</code> scope) solely to create new spreadsheet files. We do not access any other files on your Google Drive.</li>
+        <li><strong>Expense tracking</strong> — we store expenses locally to provide statistics, budgets, and AI-powered analysis.</li>
+      </ul>
+
+      <h2>3. Google API Scopes</h2>
+      <p>The Bot requests the following Google API scopes:</p>
+      <ul>
+        <li><code>https://www.googleapis.com/auth/spreadsheets</code> — to read and write expense data in your Google Sheets spreadsheet.</li>
+        <li><code>https://www.googleapis.com/auth/drive.file</code> — to create new spreadsheet files. This scope is limited to files created by the Bot and does not grant access to any other files on your Drive.</li>
+      </ul>
+
+      <h2>4. Data Storage and Security</h2>
+      <ul>
+        <li>All data is stored in a SQLite database on a private server.</li>
+        <li>Google refresh tokens are encrypted using AES-256-GCM before storage. Plaintext tokens are never logged or stored.</li>
+        <li>The server is accessible only via HTTPS (TLS) for OAuth callbacks.</li>
+        <li>We do not sell, share, or transfer your data to any third parties.</li>
+      </ul>
+
+      <h2>5. Data Retention</h2>
+      <p>We retain your data for as long as you use the Bot. Expense records are kept to provide statistics and analytics. You can request deletion at any time (see below).</p>
+
+      <h2>6. Your Rights</h2>
+      <p>You can exercise the following rights at any time:</p>
+      <ul>
+        <li><strong>Disconnect Google account</strong> — use the <code>/reconnect</code> command to revoke access. You can also revoke access directly in your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a>.</li>
+        <li><strong>Request data deletion</strong> — contact us (see below) to request complete deletion of all your data, including expenses, tokens, and conversation history.</li>
+        <li><strong>Access your data</strong> — all your expense data is available in the Google Sheets spreadsheet created by the Bot and via the <code>/stats</code> command.</li>
+      </ul>
+
+      <h2>7. Children's Privacy</h2>
+      <p>The Bot is not intended for use by anyone under the age of 13. We do not knowingly collect data from children.</p>
+
+      <h2>8. Changes to This Policy</h2>
+      <p>We may update this policy from time to time. Significant changes will be announced in the Bot. The "Last updated" date at the top indicates the most recent revision.</p>
+
+      <h2>9. Contact</h2>
+      <p>For questions about this privacy policy or to request data deletion, contact us via Telegram: <a href="https://t.me/ExpenseSyncBot" target="_blank" rel="noopener">@ExpenseSyncBot</a>.</p>
+    </div>
+    <footer>&copy; 2026 ExpenseSyncBot</footer>
+  </div>
+</body>
+</html>

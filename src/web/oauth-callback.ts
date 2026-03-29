@@ -51,6 +51,14 @@ export function startOAuthServer(): void {
         return new Response('OK', { status: 200 });
       }
 
+      if (url.pathname === '/privacy') {
+        return serveStaticPage('privacy-policy.html');
+      }
+
+      if (url.pathname === '/terms') {
+        return serveStaticPage('terms-of-service.html');
+      }
+
       // Serve temporary images for OCR processing
       if (url.pathname.startsWith('/temp-images/')) {
         return handleTempImage(url);
@@ -285,6 +293,32 @@ async function handleTempImage(url: URL): Promise<Response> {
     });
   } catch (error) {
     logger.error({ err: error }, '[TEMP_IMAGE] Error serving image');
+    return new Response('Internal Server Error', { status: 500 });
+  }
+}
+
+/**
+ * Serve a static HTML page from the pages directory
+ */
+async function serveStaticPage(filename: string): Promise<Response> {
+  const path = await import('node:path');
+  const filepath = path.join(import.meta.dirname, 'pages', filename);
+
+  try {
+    const file = Bun.file(filepath);
+
+    if (!(await file.exists())) {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    return new Response(file, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  } catch (error) {
+    logger.error({ err: error }, `Error serving static page: ${filename}`);
     return new Response('Internal Server Error', { status: 500 });
   }
 }
