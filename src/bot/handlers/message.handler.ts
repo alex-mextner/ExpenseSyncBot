@@ -397,6 +397,20 @@ export async function saveExpenseToSheet(
     `[SAVE] ✅ Recorded ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
   );
 
+  // Check recurring pattern match (fire-and-forget)
+  try {
+    const { checkRecurringMatch } = await import('../../services/analytics/recurring-matcher');
+    checkRecurringMatch(
+      groupId,
+      category,
+      pendingExpense.parsed_amount,
+      pendingExpense.parsed_currency,
+      currentDate,
+    );
+  } catch (err) {
+    logger.error({ err }, '[SAVE] Recurring pattern check failed');
+  }
+
   // Delete pending expense
   database.pendingExpenses.delete(pendingExpenseId);
   logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);

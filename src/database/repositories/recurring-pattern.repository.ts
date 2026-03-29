@@ -23,6 +23,19 @@ export class RecurringPatternRepository {
   }
 
   /**
+   * Find all recurring patterns for a group (including paused and dismissed)
+   */
+  findAllByGroupId(groupId: number): RecurringPattern[] {
+    return this.db
+      .query<RecurringPattern, [number]>(
+        `SELECT * FROM recurring_patterns
+         WHERE group_id = ?
+         ORDER BY status ASC, category ASC`,
+      )
+      .all(groupId);
+  }
+
+  /**
    * Find a recurring pattern by ID
    */
   findById(id: number): RecurringPattern | null {

@@ -73,6 +73,10 @@ export async function executeTool(
         return executeGetBankTransactions(input, ctx);
       case 'get_bank_balances':
         return executeGetBankBalances(input, ctx);
+      case 'get_recurring_patterns':
+        return executeGetRecurringPatterns(ctx);
+      case 'manage_recurring_pattern':
+        return executeManageRecurringPattern(input, ctx);
       case 'find_missing_expenses':
         return await executeFindMissingExpenses(input, ctx);
       case 'render_table':
@@ -769,6 +773,67 @@ async function executeFindMissingExpenses(
     data: missing,
     summary: `${missing.length} транзакций без записи в расходах за период ${startDate}–${endDate}`,
   };
+}
+
+// === Recurring pattern tools ===
+
+function executeGetRecurringPatterns(ctx: AgentContext): ToolResult {
+  const patterns = database.recurringPatterns.findAllByGroupId(ctx.groupId);
+
+  if (patterns.length === 0) {
+    return { success: true, output: 'No recurring patterns detected yet.' };
+  }
+
+  const lines = [`Recurring patterns (${patterns.length} total):`, ''];
+  for (const p of patterns) {
+    const statusLabel = p.status === 'active' ? '✅' : p.status === 'paused' ? '⏸️' : '❌';
+    lines.push(
+      `[id:${p.id}] ${statusLabel} ${p.category} | ${formatAmount(p.expected_amount, p.currency as CurrencyCode)} | day ~${p.expected_day ?? '?'} | next: ${p.next_expected_date ?? 'unknown'} | last: ${p.last_seen_date ?? 'never'} | status: ${p.status}`,
+    );
+  }
+
+  return { success: true, output: lines.join('\n') };
+}
+
+function executeManageRecurringPattern(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): ToolResult {
+  const patternId = input['pattern_id'] as number;
+  const action = input['action'] as string;
+
+  if (!patternId || !action) {
+    return { success: false, error: 'pattern_id and action are required' };
+  }
+
+  const pattern = database.recurringPatterns.findById(patternId);
+  if (!pattern) {
+    return { success: false, error: `Pattern with ID ${patternId} not found` };
+  }
+
+  if (pattern.group_id !== ctx.groupId) {
+    return { success: false, error: 'Access denied: pattern belongs to a different group' };
+  }
+
+  switch (action) {
+    case 'pause':
+      database.recurringPatterns.updateStatus(patternId, 'paused');
+      return { success: true, output: `Pattern "${pattern.category}" paused.` };
+    case 'resume':
+      database.recurringPatterns.updateStatus(patternId, 'active');
+      return { success: true, output: `Pattern "${pattern.category}" resumed.` };
+    case 'dismiss':
+      database.recurringPatterns.updateStatus(patternId, 'dismissed');
+      return { success: true, output: `Pattern "${pattern.category}" dismissed.` };
+    case 'delete':
+      database.recurringPatterns.delete(patternId);
+      return { success: true, output: `Pattern "${pattern.category}" deleted.` };
+    default:
+      return {
+        success: false,
+        error: `Unknown action: ${action}. Use "pause", "resume", "dismiss", or "delete".`,
+      };
+  }
 }
 
 function resolvePeriodDates(period: string): { startDate: string; endDate: string } {
