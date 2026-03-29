@@ -1,3 +1,4 @@
+/** /connect command handler — group setup with optional Google Sheets */
 import { InlineKeyboard } from 'gramio';
 import { type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
@@ -49,7 +50,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
   } else {
     logger.info(`[CMD] Group ${group.id} found`);
 
-    // If group is already fully configured, don't re-run OAuth
+    // If group is already fully configured with Google, don't re-run OAuth
     if (group.google_refresh_token && group.spreadsheet_id) {
       logger.info(`[CMD] Group ${group.id} already configured, skipping`);
       const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${group.spreadsheet_id}`;
@@ -61,11 +62,75 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
       );
       return;
     }
+
+    // If group has completed setup without Google, offer to connect Google
+    if (database.groups.hasCompletedSetup(chatId) && !group.google_refresh_token) {
+      await startGoogleOAuth(ctx, group.id, chatId);
+      return;
+    }
   }
 
-  // Generate OAuth URL - use group ID as state
-  logger.info(`[CMD] Generating OAuth URL for group ${group.id}`);
-  const authUrl = generateAuthUrl(group.id);
+  // Show Google connection choice
+  const keyboard = new InlineKeyboard()
+    .text('🔐 Подключить Google Sheets', `setup:google:${group.id}`)
+    .row()
+    .text('⏩ Пропустить (подключить позже)', `setup:skip_google:${group.id}`);
+
+  await ctx.send(
+    `👋 Настройка бота для группы\n\n` +
+      `<b>Google Sheets</b> позволяет:\n` +
+      `• Все расходы — в твоей таблице, ты владелец\n` +
+      `• Редактировать руками — бот подхватит изменения\n` +
+      `• Добавлять формулы, графики, сводные таблицы\n` +
+      `• Делиться с семьёй или бухгалтером\n` +
+      `• Скачать как CSV/Excel\n\n` +
+      `Можно подключить сейчас или позже через /connect.`,
+    { parse_mode: 'HTML', reply_markup: keyboard },
+  );
+}
+
+/**
+ * Handle setup choice callback (Google or Skip)
+ */
+export async function handleSetupChoiceCallback(
+  ctx: Ctx['CallbackQuery'],
+  action: string,
+): Promise<void> {
+  const parts = action.split(':');
+  const choice = parts[0]; // 'google' or 'skip_google'
+  const groupId = Number.parseInt(parts[1] || '', 10);
+
+  if (!groupId) {
+    await ctx.answerCallbackQuery({ text: 'Ошибка: группа не найдена' });
+    return;
+  }
+
+  const group = database.groups.findById(groupId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Ошибка: группа не найдена' });
+    return;
+  }
+
+  if (choice === 'google') {
+    await ctx.answerCallbackQuery({ text: 'Подключаем Google...' });
+    await startGoogleOAuth(ctx, groupId, group.telegram_group_id);
+  } else if (choice === 'skip_google') {
+    await ctx.answerCallbackQuery({ text: 'Google пропущен' });
+    await ctx.editText('⏩ Google Sheets пропущен. Можно подключить позже через /connect.');
+    await startCurrencySelection(ctx, group.telegram_group_id);
+  }
+}
+
+/**
+ * Start Google OAuth flow
+ */
+async function startGoogleOAuth(
+  ctx: Ctx['Command'] | Ctx['CallbackQuery'],
+  groupId: number,
+  chatId: number,
+): Promise<void> {
+  logger.info(`[CMD] Generating OAuth URL for group ${groupId}`);
+  const authUrl = generateAuthUrl(groupId);
 
   const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
 
@@ -79,8 +144,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
   );
 
   // Wait for OAuth callback
-  logger.info(`[CMD] Waiting for OAuth callback for group ${group.id}...`);
-  const groupId = group.id;
+  logger.info(`[CMD] Waiting for OAuth callback for group ${groupId}...`);
   const refreshToken = await new Promise<string>((resolve, reject) => {
     registerOAuthState(groupId, resolve, reject);
 
@@ -118,12 +182,28 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     await ctx.send(MESSAGES.authSuccess);
   }
 
-  // Show currency set selection keyboard (Step 1)
-  const keyboard = createCurrencyKeyboard();
+  // If group already has currencies (reconnecting Google), go straight to spreadsheet creation
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (group && group.enabled_currencies.length > 0 && group.default_currency) {
+    await createSpreadsheetForGroup(ctx, chatId);
+    return;
+  }
+
+  await startCurrencySelection(ctx, chatId);
+}
+
+/**
+ * Start currency selection flow (Step 1/2)
+ */
+async function startCurrencySelection(
+  ctx: Ctx['Command'] | Ctx['CallbackQuery'],
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  const keyboard = createCurrencyKeyboard(group?.enabled_currencies);
   await ctx.send(
     '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
       '• Можно выбрать несколько\n' +
-      '• Эти валюты будут столбцами в таблице\n' +
       '• Нажми ✅ Далее когда закончишь',
     { reply_markup: keyboard },
   );
@@ -190,7 +270,6 @@ export async function handleCurrencyCallback(
   const statusText =
     '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
     '• Можно выбрать несколько\n' +
-    '• Эти валюты будут столбцами в таблице\n' +
     '• Нажми ✅ Далее когда закончишь\n\n' +
     `📊 Выбрано: ${updatedGroup.enabled_currencies.join(', ') || 'нет'}`;
 
@@ -228,19 +307,42 @@ export async function handleDefaultCurrencyCallback(
   // Set as default currency
   database.groups.update(chatId, { default_currency: currency });
 
-  // Verify refresh token exists
-  if (!group.google_refresh_token) {
-    await ctx.answerCallbackQuery({ text: 'Ошибка: Google не подключен' });
+  // If Google is connected, create spreadsheet
+  if (group.google_refresh_token) {
+    await createSpreadsheetForGroup(ctx, chatId);
+  } else {
+    // No Google — setup complete without spreadsheet
+    await ctx.editText(
+      `✅ Настройка завершена!\n\n` +
+        `Валюта по умолчанию: <b>${currency}</b>\n` +
+        `Набор валют: ${group.enabled_currencies.join(', ')}\n\n` +
+        `Пиши расходы в чат: <code>100 еда обед</code>\n` +
+        `Подключить Google Sheets можно позже: /connect`,
+      { parse_mode: 'HTML' },
+    );
+    await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
+  }
+}
+
+/**
+ * Create spreadsheet for a group that has Google tokens and currencies configured
+ */
+async function createSpreadsheetForGroup(
+  ctx: Ctx['CallbackQuery'] | Ctx['Command'],
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group || !group.google_refresh_token || !group.default_currency) {
     await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
     return;
   }
 
-  // Create spreadsheet
   logger.info(`[CMD] Creating spreadsheet for group ${chatId}...`);
   try {
     const { spreadsheetId, spreadsheetUrl } = await createExpenseSpreadsheet(
       group.google_refresh_token,
-      currency,
+      group.default_currency as CurrencyCode,
       group.enabled_currencies,
     );
 
@@ -248,13 +350,11 @@ export async function handleDefaultCurrencyCallback(
 
     database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
-    await ctx.editText(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
+    await ctx.send(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
 
-    await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
     logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
-    await ctx.answerCallbackQuery({ text: '❌ Ошибка при создании таблицы' });
-    await ctx.send('Произошла ошибка. Попробуй еще раз: /connect');
+    await ctx.send('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
 }

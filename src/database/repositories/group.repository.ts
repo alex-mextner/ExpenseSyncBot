@@ -131,10 +131,12 @@ export class GroupRepository {
   hasCompletedSetup(telegramGroupId: number): boolean {
     const group = this.findByTelegramGroupId(telegramGroupId);
     if (!group) return false;
-    return !!(
-      group.google_refresh_token &&
-      group.spreadsheet_id &&
-      group.enabled_currencies.length > 0
-    );
+    return !!(group.default_currency && group.enabled_currencies.length > 0);
+  }
+
+  hasGoogleConnection(telegramGroupId: number): boolean {
+    const group = this.findByTelegramGroupId(telegramGroupId);
+    if (!group) return false;
+    return !!(group.google_refresh_token && group.spreadsheet_id);
   }
 }
