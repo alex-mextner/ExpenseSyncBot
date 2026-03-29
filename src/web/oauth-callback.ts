@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode } from '../services/google/oauth';
@@ -53,29 +52,12 @@ export function startOAuthServer(): void {
     async fetch(req) {
       const url = new URL(req.url);
 
-      if (url.pathname === '/') {
-        return serveStaticPage('index.html');
-      }
-
       if (url.pathname === '/callback') {
         return handleOAuthCallback(url);
       }
 
       if (url.pathname === '/health') {
         return new Response('OK', { status: 200 });
-      }
-
-      if (url.pathname === '/privacy') {
-        return serveStaticPage('privacy-policy.html');
-      }
-
-      if (url.pathname === '/terms') {
-        return serveStaticPage('terms-of-service.html');
-      }
-
-      // Serve temporary images for OCR processing
-      if (url.pathname.startsWith('/temp-images/')) {
-        return handleTempImage(url);
       }
 
       return new Response('Not Found', { status: 404 });
@@ -275,61 +257,5 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       },
     );
-  }
-}
-
-/**
- * Handle temporary image serving for OCR
- */
-async function handleTempImage(url: URL): Promise<Response> {
-  const filename = url.pathname.split('/temp-images/')[1];
-
-  if (!filename) {
-    return new Response('Not Found', { status: 404 });
-  }
-
-  const filepath = path.join(process.cwd(), 'temp-images', filename);
-
-  try {
-    const file = Bun.file(filepath);
-
-    if (!(await file.exists())) {
-      return new Response('Not Found', { status: 404 });
-    }
-
-    return new Response(file, {
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-      },
-    });
-  } catch (error) {
-    logger.error({ err: error }, '[TEMP_IMAGE] Error serving image');
-    return new Response('Internal Server Error', { status: 500 });
-  }
-}
-
-/**
- * Serve a static HTML page from the pages directory
- */
-async function serveStaticPage(filename: string): Promise<Response> {
-  const filepath = path.join(import.meta.dirname, 'pages', filename);
-
-  try {
-    const file = Bun.file(filepath);
-
-    if (!(await file.exists())) {
-      return new Response('Not Found', { status: 404 });
-    }
-
-    return new Response(file, {
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600',
-      },
-    });
-  } catch (error) {
-    logger.error({ err: error }, `Error serving static page: ${filename}`);
-    return new Response('Internal Server Error', { status: 500 });
   }
 }
