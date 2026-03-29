@@ -4,6 +4,7 @@
  */
 import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
+import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
@@ -12,7 +13,6 @@ import { createLogger } from '../../utils/logger.ts';
 import { sendMessage } from '../bank/telegram-sender';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
-import { parseMarkdownTable } from '../render/md-table-html.ts';
 import { renderTableToPng } from '../render/table-renderer.ts';
 import type { AgentContext, ToolResult } from './types';
 
@@ -788,8 +788,8 @@ function executeRenderTable(input: Record<string, unknown>, ctx: AgentContext): 
   }
 
   // Validate markdown table structure before firing off the render
-  const { headers } = parseMarkdownTable(markdown);
-  if (headers.length === 0) {
+  const hasTable = marked.lexer(markdown).some((t) => t.type === 'table');
+  if (!hasTable) {
     return {
       success: false,
       error:

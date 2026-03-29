@@ -17,34 +17,6 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Parse markdown table syntax into headers + rows — used for input validation */
-export function parseMarkdownTable(md: string): { headers: string[]; rows: string[][] } {
-  const lines = md
-    .trim()
-    .split('\n')
-    .filter((l) => l.trim());
-
-  if (lines.length < 2) {
-    return { headers: [], rows: [] };
-  }
-
-  const parseRow = (line: string): string[] =>
-    line
-      .split('|')
-      .slice(1, -1)
-      .map((s) => s.trim());
-
-  const firstLine = lines[0] ?? '';
-  const headers = parseRow(firstLine);
-  if (headers.length === 0) {
-    return { headers: [], rows: [] };
-  }
-  // lines[1] is the separator row (---|---), skip it
-  const rows = lines.slice(2).map(parseRow);
-
-  return { headers, rows };
-}
-
 /** Generate full HTML page for the table.
  * Markdown is rendered by marked (GFM): inline formatting, table structure, HTML escaping. */
 export function buildMdTableHtml(data: TableData): string {

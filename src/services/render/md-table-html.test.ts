@@ -1,56 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildMdTableHtml, parseMarkdownTable } from './md-table-html';
-
-describe('parseMarkdownTable', () => {
-  test('parses standard 2-column table', () => {
-    const md = '| Category | Amount |\n|---|---|\n| Food | 500 |';
-    const { headers, rows } = parseMarkdownTable(md);
-    expect(headers).toEqual(['Category', 'Amount']);
-    expect(rows).toEqual([['Food', '500']]);
-  });
-
-  test('parses multi-row table', () => {
-    const md = '| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |';
-    const { headers, rows } = parseMarkdownTable(md);
-    expect(headers).toEqual(['A', 'B']);
-    expect(rows).toEqual([
-      ['1', '2'],
-      ['3', '4'],
-    ]);
-  });
-
-  test('trims whitespace in cells', () => {
-    const md = '|  Col 1  |  Col 2  |\n|---|---|\n|  val  |  123  |';
-    const { headers, rows } = parseMarkdownTable(md);
-    expect(headers).toEqual(['Col 1', 'Col 2']);
-    expect(rows[0]).toEqual(['val', '123']);
-  });
-
-  test('returns empty on empty string', () => {
-    const { headers, rows } = parseMarkdownTable('');
-    expect(headers).toEqual([]);
-    expect(rows).toEqual([]);
-  });
-
-  test('returns empty when no pipes in first line', () => {
-    const { headers, rows } = parseMarkdownTable('no pipes here\n|---|---|\n| a | b |');
-    expect(headers).toEqual([]);
-    expect(rows).toEqual([]);
-  });
-
-  test('returns empty when only one line', () => {
-    const { headers, rows } = parseMarkdownTable('| Col |');
-    expect(headers).toEqual([]);
-    expect(rows).toEqual([]);
-  });
-
-  test('handles Windows line endings (CRLF)', () => {
-    const md = '| A | B |\r\n|---|---|\r\n| 1 | 2 |';
-    const { headers, rows } = parseMarkdownTable(md);
-    expect(headers).toEqual(['A', 'B']);
-    expect(rows).toEqual([['1', '2']]);
-  });
-});
+import { buildMdTableHtml } from './md-table-html';
 
 describe('buildMdTableHtml', () => {
   test('contains escaped title', () => {
