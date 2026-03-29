@@ -35,8 +35,9 @@
     .section { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); margin-bottom: 1.5rem; }
     .section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
     .steps { counter-reset: step; list-style: none; padding: 0; }
-    .steps li { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: .95rem; }
-    .steps li::before { counter-increment: step; content: counter(step); width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+    .steps li { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: .95rem; align-items: baseline; }
+    .steps li::before { counter-increment: step; content: counter(step); width: 28px; min-width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; position: relative; top: .15em; }
+    .steps code { word-break: break-all; }
     .steps li:last-child { margin-bottom: 0; }
 
     /* Google API */
@@ -90,7 +91,7 @@
     <div class="section">
       <h2>How It Works</h2>
       <ol class="steps">
-        <li>Add <strong>@ExpenseSyncBot</strong> to a Telegram group chat</li>
+        <li>Add <strong>@ExpenseSyncBot</strong> to a family Telegram group (into a topic) or create a dedicated group for expenses</li>
         <li>Run <strong>/connect</strong> and authorize your Google account</li>
         <li>Send expenses as simple messages: <code>50 lunch</code>, <code>1200 RSD taxi</code>, <code>$30 groceries</code></li>
         <li>The bot logs everything locally and syncs it to your Google Sheet</li>
