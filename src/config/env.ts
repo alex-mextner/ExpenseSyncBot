@@ -54,7 +54,7 @@ function validateEnv(): EnvConfig {
     LARGE_TX_THRESHOLD_EUR: parseInt(process.env['LARGE_TX_THRESHOLD_EUR'] || '100', 10),
     AI_DEBUG_LOGS: process.env['AI_DEBUG_LOGS'] === 'true',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
-    MINIAPP_URL: getEnvVariable('MINIAPP_URL', false) || undefined,
+    MINIAPP_URL: process.env['MINIAPP_URL'] || undefined,
   };
 }
 
