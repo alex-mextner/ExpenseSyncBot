@@ -1,23 +1,28 @@
 // /reconnect command — re-authorize Google account, ensure spreadsheets exist, full bidirectional sync
 
+import { copyFile } from 'node:fs/promises';
+import { format } from 'date-fns';
+import { google } from 'googleapis';
 import { InlineKeyboard } from 'gramio';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
 import { getExpenseRecorder } from '../../services/expense-recorder';
-import { type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
-import { generateAuthUrl } from '../../services/google/oauth';
+import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
+import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
 import {
   createEmptyMonthTab,
   createExpenseSpreadsheet,
   monthTabExists,
   readExpensesFromSheet,
+  readMonthBudget,
   type SheetRow,
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { registerOAuthState, unregisterOAuthState } from '../../web/oauth-callback';
 import type { Ctx } from '../types';
-import { syncExpenses } from './sync';
+import { importExpensesFromSheet } from './sync';
 
 const logger = createLogger('reconnect');
 
@@ -95,9 +100,12 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
 // ── Full bidirectional sync ──
 
 interface FullSyncReport {
+  dbBackupPath: string | null;
+  sheetBackupUrl: string | null;
   yearCreated: number | null;
-  sheetToDb: { added: number; deleted: number; updated: number; unchanged: number };
-  dbToSheet: number;
+  sheetToDbExpenses: number;
+  dbToSheetExpenses: number;
+  sheetToDbBudgets: number;
   budgetTabsCreated: string[];
   budgetRowsWritten: number;
 }
@@ -105,15 +113,19 @@ interface FullSyncReport {
 /**
  * Full bidirectional sync after reconnect:
  * 1. Ensure current-year spreadsheet exists
- * 2. Sheet → DB (syncExpenses)
- * 3. DB → Sheet (push missing expenses)
- * 4. Ensure budget month tabs and push DB budgets to sheet
+ * 2. Sheet → DB expenses (import only, never deletes)
+ * 3. DB → Sheet expenses (push missing)
+ * 4. Sheet → DB budgets (import from all month tabs)
+ * 5. DB → Sheet budgets (ensure tabs + write rows)
  */
 async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Promise<void> {
   const report: FullSyncReport = {
+    dbBackupPath: null,
+    sheetBackupUrl: null,
     yearCreated: null,
-    sheetToDb: { added: 0, deleted: 0, updated: 0, unchanged: 0 },
-    dbToSheet: 0,
+    sheetToDbExpenses: 0,
+    dbToSheetExpenses: 0,
+    sheetToDbBudgets: 0,
     budgetTabsCreated: [],
     budgetRowsWritten: 0,
   };
@@ -122,27 +134,35 @@ async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Pro
     await ctx.send('🔄 Полная синхронизация...');
 
     const freshGroup = database.groups.findById(groupId);
-    if (!freshGroup?.google_refresh_token) {
-      await ctx.send('❌ Токен не найден. Попробуй /reconnect ещё раз.');
+    if (!freshGroup?.google_refresh_token || !freshGroup.spreadsheet_id) {
+      await ctx.send('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
       return;
     }
+
+    // Step 0: Create backups before any modifications
+    report.dbBackupPath = await backupDatabase();
+    report.sheetBackupUrl = await backupSpreadsheet(
+      freshGroup.google_refresh_token,
+      freshGroup.spreadsheet_id,
+    );
 
     // Step 1: Ensure current-year spreadsheet exists
     report.yearCreated = await ensureCurrentYearSpreadsheet(freshGroup);
 
-    // Step 2: Sheet → DB
-    const syncResult = await syncExpenses(groupId);
-    report.sheetToDb = {
-      added: syncResult.added.length,
-      deleted: syncResult.deleted.length,
-      updated: syncResult.updated.length,
-      unchanged: syncResult.unchanged,
-    };
+    // Step 2: Sheet → DB expenses (add-only, never deletes)
+    report.sheetToDbExpenses = await importExpensesFromSheet(
+      freshGroup.id,
+      freshGroup.google_refresh_token,
+      freshGroup.spreadsheet_id,
+    );
 
-    // Step 3: DB → Sheet (push missing expenses)
-    report.dbToSheet = await pushMissingExpensesToSheet(freshGroup);
+    // Step 3: DB → Sheet expenses (push missing)
+    report.dbToSheetExpenses = await pushMissingExpensesToSheet(freshGroup);
 
-    // Step 4: Budget tabs + rows
+    // Step 4: Sheet → DB budgets (import from all month tabs)
+    report.sheetToDbBudgets = await importBudgetsFromSheet(freshGroup);
+
+    // Step 5: DB → Sheet budgets (ensure tabs + write rows)
     const budgetResult = await syncBudgetsToSheet(freshGroup);
     report.budgetTabsCreated = budgetResult.tabsCreated;
     report.budgetRowsWritten = budgetResult.rowsWritten;
@@ -153,6 +173,49 @@ async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Pro
     await ctx.send(
       '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' + 'Попробуй /sync вручную позже.',
     );
+  }
+}
+
+// ── Backups ──
+
+/** Copy the SQLite database file before sync. Returns backup file path or null on failure. */
+async function backupDatabase(): Promise<string | null> {
+  try {
+    const timestamp = format(new Date(), 'yyyy-MM-dd_HH-mm-ss');
+    const backupPath = `${env.DATABASE_PATH}.bak-${timestamp}`;
+    await copyFile(env.DATABASE_PATH, backupPath);
+    logger.info(`[RECONNECT] DB backup created: ${backupPath}`);
+    return backupPath;
+  } catch (err) {
+    logger.error({ err }, '[RECONNECT] DB backup failed');
+    return null;
+  }
+}
+
+/** Copy the Google spreadsheet via Drive API. Returns backup spreadsheet URL or null on failure. */
+async function backupSpreadsheet(
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<string | null> {
+  try {
+    const auth = getAuthenticatedClient(refreshToken);
+    const drive = google.drive({ version: 'v3', auth });
+    const timestamp = format(new Date(), 'yyyy-MM-dd HH:mm');
+    const copy = await drive.files.copy({
+      fileId: spreadsheetId,
+      requestBody: { name: `Expenses Tracker — backup ${timestamp}` },
+    });
+    const backupId = copy.data.id;
+    if (!backupId) {
+      logger.error('[RECONNECT] Drive backup returned no file ID');
+      return null;
+    }
+    const url = `https://docs.google.com/spreadsheets/d/${backupId}`;
+    logger.info(`[RECONNECT] Sheet backup created: ${url}`);
+    return url;
+  } catch (err) {
+    logger.error({ err }, '[RECONNECT] Sheet backup failed');
+    return null;
   }
 }
 
@@ -236,6 +299,59 @@ function sheetRowKey(row: SheetRow): string | null {
 }
 
 /**
+ * Import budgets from all month tabs in the current-year spreadsheet into DB.
+ * Only adds/updates, never deletes. Returns count of imported/updated budgets.
+ */
+async function importBudgetsFromSheet(group: Group): Promise<number> {
+  if (!group.google_refresh_token || !group.spreadsheet_id) return 0;
+
+  const currentYear = new Date().getFullYear();
+  const spreadsheetId =
+    database.groupSpreadsheets.getByYear(group.id, currentYear) ?? group.spreadsheet_id;
+
+  let imported = 0;
+
+  for (const monthAbbr of MONTH_ABBREVS) {
+    const exists = await monthTabExists(group.google_refresh_token, spreadsheetId, monthAbbr);
+    if (!exists) continue;
+
+    const budgetsFromSheet = await readMonthBudget(
+      group.google_refresh_token,
+      spreadsheetId,
+      monthAbbr,
+    );
+    if (budgetsFromSheet.length === 0) continue;
+
+    const monthIndex = MONTH_ABBREVS.indexOf(monthAbbr) + 1;
+    const monthStr = `${currentYear}-${String(monthIndex).padStart(2, '0')}`;
+
+    for (const b of budgetsFromSheet) {
+      if (!database.categories.exists(group.id, b.category)) {
+        database.categories.create({ group_id: group.id, name: b.category });
+      }
+
+      const existing = database.budgets.findByGroupCategoryMonth(group.id, b.category, monthStr);
+      const hasChanged =
+        !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
+
+      if (hasChanged) {
+        database.budgets.setBudget({
+          group_id: group.id,
+          category: b.category,
+          month: monthStr,
+          limit_amount: b.limit,
+          currency: b.currency,
+        });
+        imported++;
+      }
+    }
+  }
+
+  logger.info(`[RECONNECT] Imported ${imported} budgets from sheet for group ${group.id}`);
+  return imported;
+}
+
+/**
  * Ensure budget month tabs exist in the current-year spreadsheet and push DB budgets.
  */
 async function syncBudgetsToSheet(
@@ -301,28 +417,40 @@ async function syncBudgetsToSheet(
 function formatFullSyncReport(report: FullSyncReport): string {
   const lines: string[] = ['✅ Синхронизация завершена!\n'];
 
+  // Backup info
+  if (report.dbBackupPath || report.sheetBackupUrl) {
+    lines.push('💾 Бекапы:');
+    if (report.dbBackupPath) lines.push(`  БД: ${report.dbBackupPath}`);
+    if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
+    lines.push('');
+  }
+
   if (report.yearCreated) {
     lines.push(`📅 Создана таблица за ${report.yearCreated}`);
   }
 
-  // Sheet → DB
-  const s = report.sheetToDb;
-  const total = s.unchanged + s.added + s.updated;
-  lines.push(`\n📥 Таблица → БД: ${total} расходов`);
-  if (s.added > 0) lines.push(`  +${s.added} добавлено`);
-  if (s.deleted > 0) lines.push(`  -${s.deleted} удалено`);
-  if (s.updated > 0) lines.push(`  ~${s.updated} обновлено`);
-
-  // DB → Sheet
-  if (report.dbToSheet > 0) {
-    lines.push(`\n📤 БД → Таблица: +${report.dbToSheet} расходов добавлено`);
+  // Sheet → DB expenses
+  if (report.sheetToDbExpenses > 0) {
+    lines.push(`\n📥 Таблица → БД: +${report.sheetToDbExpenses} расходов добавлено`);
   } else {
-    lines.push('\n📤 БД → Таблица: всё синхронизировано');
+    lines.push('\n📥 Таблица → БД: расходы синхронизированы');
   }
 
-  // Budgets
+  // DB → Sheet expenses
+  if (report.dbToSheetExpenses > 0) {
+    lines.push(`📤 БД → Таблица: +${report.dbToSheetExpenses} расходов добавлено`);
+  } else {
+    lines.push('📤 БД → Таблица: всё синхронизировано');
+  }
+
+  // Budgets Sheet → DB
+  if (report.sheetToDbBudgets > 0) {
+    lines.push(`\n📥 Бюджеты из таблицы: +${report.sheetToDbBudgets} импортировано`);
+  }
+
+  // Budgets DB → Sheet
   if (report.budgetTabsCreated.length > 0 || report.budgetRowsWritten > 0) {
-    lines.push('\n💰 Бюджеты:');
+    lines.push('📤 Бюджеты в таблицу:');
     if (report.budgetTabsCreated.length > 0) {
       lines.push(`  Созданы вкладки: ${report.budgetTabsCreated.join(', ')}`);
     }

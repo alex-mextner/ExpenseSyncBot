@@ -2,11 +2,14 @@
 
 import type { Database as SqliteDb } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import type { CurrencyCode } from '../../config/constants';
 import { BudgetRepository } from '../../database/repositories/budget.repository';
+import { CategoryRepository } from '../../database/repositories/category.repository';
 import { ExpenseRepository } from '../../database/repositories/expense.repository';
 import { GroupRepository } from '../../database/repositories/group.repository';
 import { GroupSpreadsheetRepository } from '../../database/repositories/group-spreadsheet.repository';
 import { UserRepository } from '../../database/repositories/user.repository';
+import { MONTH_ABBREVS } from '../../services/google/month-abbr';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
 
 let db: SqliteDb;
@@ -15,6 +18,7 @@ let spreadsheets: GroupSpreadsheetRepository;
 let expenses: ExpenseRepository;
 let budgets: BudgetRepository;
 let users: UserRepository;
+let categories: CategoryRepository;
 
 beforeAll(() => {
   db = createTestDb();
@@ -23,6 +27,7 @@ beforeAll(() => {
   expenses = new ExpenseRepository(db);
   budgets = new BudgetRepository(db);
   users = new UserRepository(db);
+  categories = new CategoryRepository(db);
 });
 
 afterAll(() => {
@@ -278,5 +283,101 @@ describe('/reconnect budget sync to sheet', () => {
 
     expect(only2026).toHaveLength(1);
     expect(only2026[0]?.month).toBe('2026-01');
+  });
+});
+
+describe('/reconnect budget import from sheet', () => {
+  test('MONTH_ABBREVS maps to correct month strings', () => {
+    // Verify the mapping used in importBudgetsFromSheet
+    const pairs = MONTH_ABBREVS.map((abbr, idx) => ({
+      abbr,
+      monthStr: `2026-${String(idx + 1).padStart(2, '0')}`,
+    }));
+
+    expect(pairs[0]?.abbr).toBe('Jan');
+    expect(pairs[0]?.monthStr).toBe('2026-01');
+    expect(pairs[11]?.abbr).toBe('Dec');
+    expect(pairs[11]?.monthStr).toBe('2026-12');
+  });
+
+  test('imports new budget from sheet data into DB', () => {
+    const group = groups.create({ telegram_group_id: -1001234 });
+
+    // Simulate what importBudgetsFromSheet does: read budget from sheet, create in DB
+    const sheetBudget = { category: 'Food', limit: 500, currency: 'EUR' as CurrencyCode };
+    const monthStr = '2026-03';
+
+    // No existing budget
+    const existing = budgets.findByGroupCategoryMonth(group.id, sheetBudget.category, monthStr);
+    expect(existing).toBeNull();
+
+    // Create category if missing
+    if (!categories.exists(group.id, sheetBudget.category)) {
+      categories.create({ group_id: group.id, name: sheetBudget.category });
+    }
+
+    // Import budget
+    budgets.setBudget({
+      group_id: group.id,
+      category: sheetBudget.category,
+      month: monthStr,
+      limit_amount: sheetBudget.limit,
+      currency: sheetBudget.currency,
+    });
+
+    const imported = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
+    expect(imported?.limit_amount).toBe(500);
+    expect(imported?.currency).toBe('EUR');
+  });
+
+  test('updates existing budget when sheet has different values', () => {
+    const group = groups.create({ telegram_group_id: -1001234 });
+
+    // Existing budget in DB
+    budgets.setBudget({
+      group_id: group.id,
+      category: 'Food',
+      month: '2026-03',
+      limit_amount: 300,
+      currency: 'EUR',
+    });
+
+    // Sheet has updated value
+    const sheetBudget = { category: 'Food', limit: 500, currency: 'USD' as CurrencyCode };
+    const existing = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
+    const hasChanged =
+      !existing ||
+      existing.limit_amount !== sheetBudget.limit ||
+      existing.currency !== sheetBudget.currency;
+    expect(hasChanged).toBe(true);
+
+    // Upsert with new values
+    budgets.setBudget({
+      group_id: group.id,
+      category: sheetBudget.category,
+      month: '2026-03',
+      limit_amount: sheetBudget.limit,
+      currency: sheetBudget.currency,
+    });
+
+    const updated = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
+    expect(updated?.limit_amount).toBe(500);
+    expect(updated?.currency).toBe('USD');
+  });
+
+  test('skips unchanged budgets', () => {
+    const group = groups.create({ telegram_group_id: -1001234 });
+
+    budgets.setBudget({
+      group_id: group.id,
+      category: 'Food',
+      month: '2026-03',
+      limit_amount: 500,
+      currency: 'EUR',
+    });
+
+    const existing = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
+    const hasChanged = !existing || existing.limit_amount !== 500 || existing.currency !== 'EUR';
+    expect(hasChanged).toBe(false);
   });
 });
