@@ -10,4 +10,4 @@ pre-commit:
 pre-push:
   commands:
     tests:
-      run: bun test src/bot src/config src/database src/errors src/services/ai src/services/analytics src/services/bank/*.test.ts src/services/broadcast.test.ts src/services/currency src/services/dev-pipeline src/services/expense-recorder.test.ts src/services/google src/services/receipt src/utils
+      run: bun test src/bot src/config src/database src/errors src/services/ai src/services/analytics "src/services/bank/*.test.ts" src/services/broadcast.test.ts src/services/currency src/services/dev-pipeline src/services/expense-recorder.test.ts src/services/google src/services/receipt src/utils
