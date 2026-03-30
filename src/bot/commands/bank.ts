@@ -495,20 +495,40 @@ export async function handleBankMergeCallback(
     return;
   }
 
-  const tx = database.bankTransactions.findById(txId, group.id);
-  if (!tx || tx.status !== 'pending') {
+  // Atomically claim: verify tx is still pending, expense not yet linked, then merge.
+  const mergeResult = database.db.transaction(() => {
+    const tx = database.bankTransactions.findById(txId, group.id);
+    if (!tx || tx.status !== 'pending') return 'tx_done' as const;
+
+    const expense = database.expenses.findById(expenseId);
+    if (!expense || expense.group_id !== group.id) return 'expense_missing' as const;
+
+    const alreadyLinked = database.db
+      .query<{ n: number }, [number]>(
+        'SELECT COUNT(*) as n FROM bank_transactions WHERE matched_expense_id = ?',
+      )
+      .get(expenseId);
+    if (alreadyLinked && alreadyLinked.n > 0) return 'expense_taken' as const;
+
+    mergeTransactionWithExpense(tx, group.id, expense.id);
+    database.bankTransactions.setEditInProgress(txId, false);
+    return expense;
+  })();
+
+  if (mergeResult === 'tx_done') {
     await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
     return;
   }
-
-  const expense = database.expenses.findById(expenseId);
-  if (!expense || expense.group_id !== group.id) {
+  if (mergeResult === 'expense_missing') {
     await ctx.answerCallbackQuery({ text: 'Расход не найден' });
     return;
   }
+  if (mergeResult === 'expense_taken') {
+    await ctx.answerCallbackQuery({ text: 'Расход уже привязан к другой транзакции' });
+    return;
+  }
 
-  mergeTransactionWithExpense(tx, group.id, expense.id);
-  database.bankTransactions.setEditInProgress(txId, false);
+  const expense = mergeResult;
 
   await ctx.answerCallbackQuery({ text: '✅ Объединено' });
   const messageId = ctx.message?.id;

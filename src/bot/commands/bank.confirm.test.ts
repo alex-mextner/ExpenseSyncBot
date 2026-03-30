@@ -49,8 +49,10 @@ const mockMerchantRules = {
 };
 
 // database.db.transaction — executes callback inline (no real transaction)
+// database.db.query — returns a stub with .get() that defaults to { n: 0 }
 const mockDb = {
   transaction: mock((fn: () => unknown) => fn),
+  query: mock(() => ({ get: mock(() => ({ n: 0 })) })),
 };
 
 mock.module('../../database', () => ({
@@ -91,6 +93,7 @@ const allMocks = [
   mockExpenses.findPotentialDuplicates,
   mockMerchantRules.insertRuleRequest,
   mockDb.transaction,
+  mockDb.query,
 ];
 
 afterEach(() => {
@@ -349,6 +352,7 @@ describe('handleBankMergeCallback', () => {
   beforeEach(() => {
     mockGroups.findByTelegramGroupId.mockImplementation(() => group);
     mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
+    mockDb.query.mockImplementation(() => ({ get: mock(() => ({ n: 0 })) }));
   });
 
   test('links transaction to existing expense', async () => {
@@ -406,6 +410,24 @@ describe('handleBankMergeCallback', () => {
     expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('обработана') }),
+    );
+  });
+
+  test('rejects when expense is already linked to another transaction (race condition)', async () => {
+    const tx = makeTx({ edit_in_progress: 1 });
+    const expense = makeExpense({ id: 50 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findById.mockImplementation(() => expense);
+    mockDb.query.mockImplementation(() => ({ get: mock(() => ({ n: 1 })) }));
+
+    const ctx = makeCallbackCtx();
+    const bot = makeBot();
+
+    await handleBankMergeCallback(ctx as never, bot as never, tx.id, expense.id, 100);
+
+    expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('уже привязан') }),
     );
   });
 });
