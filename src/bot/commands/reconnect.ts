@@ -184,7 +184,9 @@ async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Pro
 
 // ── Backups ──
 
-/** Copy the Google spreadsheet via Drive API. Returns backup spreadsheet URL or null on failure. */
+const BACKUP_NAME_PREFIX = 'Expenses Tracker — backup';
+
+/** Copy the Google spreadsheet via Drive API. Deletes previous backups first (recoverable from trash). */
 async function backupSpreadsheet(
   refreshToken: string,
   spreadsheetId: string,
@@ -192,10 +194,14 @@ async function backupSpreadsheet(
   try {
     const auth = getAuthenticatedClient(refreshToken);
     const drive = google.drive({ version: 'v3', auth });
+
+    // Delete previous backups (they go to trash, recoverable for 30 days)
+    await deletePreviousBackups(drive);
+
     const timestamp = format(new Date(), 'yyyy-MM-dd HH:mm');
     const copy = await drive.files.copy({
       fileId: spreadsheetId,
-      requestBody: { name: `Expenses Tracker — backup ${timestamp}` },
+      requestBody: { name: `${BACKUP_NAME_PREFIX} ${timestamp}` },
     });
     const backupId = copy.data.id;
     if (!backupId) {
@@ -208,6 +214,26 @@ async function backupSpreadsheet(
   } catch (err) {
     logger.error({ err }, '[RECONNECT] Sheet backup failed');
     return null;
+  }
+}
+
+/** Find and trash previous backup spreadsheets by name prefix. */
+async function deletePreviousBackups(drive: ReturnType<typeof google.drive>): Promise<void> {
+  try {
+    const res = await drive.files.list({
+      q: `name contains '${BACKUP_NAME_PREFIX}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
+      fields: 'files(id, name)',
+      pageSize: 50,
+    });
+    const files = res.data.files ?? [];
+    for (const file of files) {
+      if (file.id) {
+        await drive.files.update({ fileId: file.id, requestBody: { trashed: true } });
+        logger.info(`[RECONNECT] Trashed old backup: ${file.name} (${file.id})`);
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, '[RECONNECT] Failed to clean old backups');
   }
 }
 
