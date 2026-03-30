@@ -23,10 +23,12 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     if (group && setupDone) {
       let message = `👋 Бот настроен и готов к работе.\n\n${buildHelpText()}`;
 
-      if (!hasGoogle) {
+      if (hasGoogle) {
         message +=
-          `\n\n💡 Можно подключить Google Sheets (/connect) — ` +
-          `расходы будут дублироваться в таблицу, можно редактировать оттуда и делиться.`;
+          `\n\n🔄 /reconnect — если таблица перестала обновляться или сменился Google-аккаунт.`;
+      } else {
+        message +=
+          `\n\n💡 /connect — подключить Google Sheets, расходы будут дублироваться в таблицу.`;
       }
 
       await ctx.send(message, { parse_mode: 'HTML' });
