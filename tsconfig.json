@@ -30,6 +30,7 @@
     "exactOptionalPropertyTypes": true
   },
   "exclude": [
-    "src/services/bank/ZenPlugins"
+    "src/services/bank/ZenPlugins",
+    "miniapp"
   ]
 }
