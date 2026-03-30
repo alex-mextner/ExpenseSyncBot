@@ -2,7 +2,6 @@ import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
-import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
@@ -12,6 +11,7 @@ import {
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import type { GoogleConnectedGroup } from '../guards';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
@@ -370,12 +370,10 @@ export function getCurrencySymbol(currency: CurrencyCode): string {
  * - /budget set <Category> <Amount> - set budget for category
  * - /budget sync - sync budgets from Google Sheets
  */
-export async function handleBudgetCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
-  if (!group.spreadsheet_id || !group.google_refresh_token) {
-    await ctx.send('❌ Google Sheets не подключен. Используй /connect');
-    return;
-  }
-
+export async function handleBudgetCommand(
+  ctx: Ctx['Command'],
+  group: GoogleConnectedGroup,
+): Promise<void> {
   // Parse command arguments
   const fullText = ctx.text || '';
   const parts = fullText
@@ -439,7 +437,7 @@ export async function handleBudgetCommand(ctx: Ctx['Command'], group: Group): Pr
 /**
  * Show budget progress for current month
  */
-async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<void> {
+async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
@@ -521,7 +519,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: Group): Promise<vo
  */
 async function setBudget(
   ctx: Ctx['Command'],
-  group: Group,
+  group: GoogleConnectedGroup,
   categoryName: string,
   amount: number,
   currency: CurrencyCode,
@@ -656,12 +654,7 @@ export async function silentSyncBudgets(
 /**
  * Sync budgets from Google Sheets monthly tab to database
  */
-async function syncBudgets(ctx: Ctx['Command'], group: Group): Promise<void> {
-  if (!group.google_refresh_token || !group.spreadsheet_id) {
-    await ctx.send('Сначала подключи Google Sheets с помощью /connect');
-    return;
-  }
-
+async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
   try {
     const now = new Date();
     const currentMonthAbbr = monthAbbrFromDate(now);

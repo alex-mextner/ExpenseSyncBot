@@ -7,6 +7,18 @@ import type { Ctx } from './types';
 /** Handler that receives a resolved group — no need for manual group lookup. */
 export type GroupCommandHandler = (ctx: Ctx['Command'], group: Group) => Promise<void>;
 
+/** Group with Google Sheets fully connected — both token and spreadsheet are present. */
+export type GoogleConnectedGroup = Group & {
+  google_refresh_token: string;
+  spreadsheet_id: string;
+};
+
+/** Handler that receives a group guaranteed to have Google Sheets connected. */
+export type GoogleCommandHandler = (
+  ctx: Ctx['Command'],
+  group: GoogleConnectedGroup,
+) => Promise<void>;
+
 /**
  * Wraps a command handler with group-existence checks.
  * Rejects commands in private chats and groups that haven't run /connect yet.
@@ -28,5 +40,21 @@ export function requireGroup(handler: GroupCommandHandler): (ctx: Ctx['Command']
     }
 
     return handler(ctx, group);
+  };
+}
+
+/**
+ * Composes on top of requireGroup — additionally checks that Google Sheets is connected.
+ * Narrows the group type to GoogleConnectedGroup so downstream handlers
+ * can safely access google_refresh_token and spreadsheet_id as strings.
+ */
+export function requireGoogle(handler: GoogleCommandHandler): GroupCommandHandler {
+  return async (ctx, group) => {
+    if (!group.spreadsheet_id || !group.google_refresh_token) {
+      await ctx.send('❌ Google таблица не подключена. Используй /connect');
+      return;
+    }
+
+    return handler(ctx, group as GoogleConnectedGroup);
   };
 }

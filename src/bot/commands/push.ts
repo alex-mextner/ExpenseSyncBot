@@ -1,8 +1,9 @@
 import { database } from '../../database';
-import type { Expense, Group } from '../../database/types';
+import type { Expense } from '../../database/types';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import type { GoogleConnectedGroup } from '../guards';
 import type { Ctx } from '../types';
 
 const logger = createLogger('push');
@@ -35,12 +36,10 @@ function makeDbExpenseKey(expense: Expense): string {
 /**
  * /push command handler - push expenses from database to Google Sheet
  */
-export async function handlePushCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
-  if (!group.spreadsheet_id || !group.google_refresh_token) {
-    await ctx.send('❌ Google таблица не подключена. Используй /connect');
-    return;
-  }
-
+export async function handlePushCommand(
+  ctx: Ctx['Command'],
+  group: GoogleConnectedGroup,
+): Promise<void> {
   await ctx.send('🔄 Читаю данные из БД и Google Sheets...');
 
   try {

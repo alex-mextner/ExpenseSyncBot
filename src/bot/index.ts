@@ -24,7 +24,7 @@ import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
 import { registerMonthlyCron } from './cron';
-import { requireGroup } from './guards';
+import { requireGoogle, requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
@@ -96,7 +96,7 @@ export function createBot(): Bot {
   bot.command('prompt', requireGroup(handlePromptCommand));
   bot.command('topic', requireGroup(handleTopicCommand));
   bot.command('dev', requireGroup(handleDevCommand));
-  bot.command('sync', requireGroup(handleSyncCommand));
+  bot.command('sync', requireGroup(requireGoogle(handleSyncCommand)));
   bot.command(
     'bank',
     requireGroup((ctx, group) => handleBankCommand(ctx, group, bot)),
@@ -106,7 +106,7 @@ export function createBot(): Bot {
   bot.command('stats', withSync(requireGroup(handleStatsCommand), { expenses: true }));
   bot.command('sum', withSync(requireGroup(handleSumCommand), { expenses: true }));
   bot.command('total', withSync(requireGroup(handleSumCommand), { expenses: true }));
-  bot.command('push', withSync(requireGroup(handlePushCommand), { expenses: true }));
+  bot.command('push', withSync(requireGroup(requireGoogle(handlePushCommand)), { expenses: true }));
   bot.command('categories', withSync(requireGroup(handleCategoriesCommand), { expenses: true }));
 
   // Commands — require configured group + fresh expenses + budgets
@@ -114,7 +114,10 @@ export function createBot(): Bot {
     'advice',
     withSync(requireGroup(handleAdviceCommand), { expenses: true, budgets: true }),
   );
-  bot.command('budget', withSync(requireGroup(handleBudgetCommand), { budgets: true }));
+  bot.command(
+    'budget',
+    withSync(requireGroup(requireGoogle(handleBudgetCommand)), { budgets: true }),
+  );
 
   // Callback queries (inline keyboard buttons)
   bot.on('callback_query', (ctx) => handleCallbackQuery(ctx, bot));
