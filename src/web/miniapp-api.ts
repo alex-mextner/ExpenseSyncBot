@@ -135,7 +135,7 @@ export async function validateAndResolveContext(
     };
   }
 
-  // Check expiry separately so we can return the right error code
+  // Early expiry check: return INIT_DATA_EXPIRED code specifically (validateInitData returns null without distinction)
   const params = new URLSearchParams(rawInitData);
   const authDate = params.get('auth_date');
   if (authDate) {
