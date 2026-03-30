@@ -12,6 +12,7 @@ import { handleCategoriesCommand } from './commands/categories';
 import { handleConnectCommand } from './commands/connect';
 import { handleDevCommand, initDevPipeline } from './commands/dev';
 import { handleDisconnectCommand } from './commands/disconnect';
+import { handleFeedbackCommand } from './commands/feedback';
 import { handleHelpCommand } from './commands/help';
 import { handlePingCommand } from './commands/ping';
 import { handlePromptCommand } from './commands/prompt';
@@ -93,6 +94,7 @@ export function createBot(): Bot {
   bot.command('spreadsheet', requireGroup(handleSpreadsheetCommand));
   bot.command('settings', requireGroup(handleSettingsCommand));
   bot.command('disconnect', requireGroup(handleDisconnectCommand));
+  bot.command('feedback', requireGroup(handleFeedbackCommand));
   bot.command('prompt', requireGroup(handlePromptCommand));
   bot.command('topic', requireGroup(handleTopicCommand));
   bot.command('dev', requireGroup(handleDevCommand));
