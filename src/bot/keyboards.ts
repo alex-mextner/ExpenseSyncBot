@@ -1,18 +1,14 @@
 import { InlineKeyboard } from 'gramio';
-import {
-  BASE_CURRENCY,
-  type CurrencyCode,
-  KEYBOARD_TEXTS,
-  SUPPORTED_CURRENCIES,
-} from '../config/constants';
+import { BASE_CURRENCY, KEYBOARD_TEXTS, SUPPORTED_CURRENCIES } from '../config/constants';
 
 /**
  * Create currency set selection keyboard (Step 1)
  */
-export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []): InlineKeyboard {
+export function createCurrencyKeyboard(selectedCurrencies: string[] = []): InlineKeyboard {
   const keyboard = new InlineKeyboard();
+  const supportedSet = new Set<string>(SUPPORTED_CURRENCIES);
 
-  // Add currency buttons in rows of 3
+  // Add standard currency buttons in rows of 3
   for (let i = 0; i < SUPPORTED_CURRENCIES.length; i += 3) {
     const row = SUPPORTED_CURRENCIES.slice(i, i + 3);
 
@@ -25,6 +21,21 @@ export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []):
     keyboard.row();
   }
 
+  // Show custom currencies that aren't in SUPPORTED_CURRENCIES
+  const customCurrencies = selectedCurrencies.filter((c) => !supportedSet.has(c));
+  if (customCurrencies.length > 0) {
+    for (let i = 0; i < customCurrencies.length; i += 3) {
+      const row = customCurrencies.slice(i, i + 3);
+      for (const currency of row) {
+        keyboard.text(`✅ ${currency}`, `currency:${currency}`);
+      }
+      keyboard.row();
+    }
+  }
+
+  // Custom currency input button
+  keyboard.text('✏️ Ввести код валюты', 'currency:custom').row();
+
   // Add next button (not done)
   if (selectedCurrencies.length > 0) {
     keyboard.text(KEYBOARD_TEXTS.next, 'currency:next');
@@ -36,7 +47,7 @@ export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []):
 /**
  * Create default currency selection keyboard (Step 2)
  */
-export function createDefaultCurrencyKeyboard(enabledCurrencies: CurrencyCode[]): InlineKeyboard {
+export function createDefaultCurrencyKeyboard(enabledCurrencies: string[]): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   // Show only enabled currencies in rows of 3

@@ -113,6 +113,16 @@ export async function handleExpenseMessage(
     return true;
   }
 
+  // Custom currency input during onboarding — must be checked before setup completion
+  if (text && !text.startsWith('/')) {
+    const { isAwaitingCustomCurrency, handleCustomCurrencyInput } = await import(
+      '../commands/connect'
+    );
+    if (isAwaitingCustomCurrency(telegramGroupId)) {
+      return await handleCustomCurrencyInput(ctx, telegramGroupId);
+    }
+  }
+
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
