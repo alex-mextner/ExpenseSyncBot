@@ -2,6 +2,7 @@ import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 
 import { createLogger } from '../../utils/logger.ts';
@@ -14,30 +15,7 @@ const logger = createLogger('sum');
 /**
  * /sum and /total command handler - show current month expenses summary
  */
-export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   // Silent sync budgets from Google Sheets
   if (group.google_refresh_token) {
     const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);

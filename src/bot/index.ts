@@ -24,6 +24,7 @@ import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
 import { registerMonthlyCron } from './cron';
+import { requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
@@ -81,31 +82,39 @@ export function createBot(): Bot {
     };
   }
 
-  // Commands — no sync needed
+  // Commands — no group required
   bot.command('start', handleStartCommand);
   bot.command('help', handleHelpCommand);
   bot.command('connect', handleConnectCommand);
-  bot.command('spreadsheet', handleSpreadsheetCommand);
-  bot.command('settings', handleSettingsCommand);
   bot.command('reconnect', handleReconnectCommand);
-  bot.command('disconnect', handleDisconnectCommand);
-  bot.command('prompt', handlePromptCommand);
-  bot.command('topic', handleTopicCommand);
-  bot.command('dev', handleDevCommand);
   bot.command('ping', handlePingCommand);
-  bot.command('sync', handleSyncCommand);
-  bot.command('bank', (ctx) => handleBankCommand(ctx, bot));
 
-  // Commands — need fresh expenses
-  bot.command('stats', withSync(handleStatsCommand, { expenses: true }));
-  bot.command('sum', withSync(handleSumCommand, { expenses: true }));
-  bot.command('total', withSync(handleSumCommand, { expenses: true }));
-  bot.command('push', withSync(handlePushCommand, { expenses: true }));
-  bot.command('categories', withSync(handleCategoriesCommand, { expenses: true }));
+  // Commands — require configured group, no sync needed
+  bot.command('spreadsheet', requireGroup(handleSpreadsheetCommand));
+  bot.command('settings', requireGroup(handleSettingsCommand));
+  bot.command('disconnect', requireGroup(handleDisconnectCommand));
+  bot.command('prompt', requireGroup(handlePromptCommand));
+  bot.command('topic', requireGroup(handleTopicCommand));
+  bot.command('dev', requireGroup(handleDevCommand));
+  bot.command('sync', requireGroup(handleSyncCommand));
+  bot.command(
+    'bank',
+    requireGroup((ctx, group) => handleBankCommand(ctx, group, bot)),
+  );
 
-  // Commands — need fresh expenses + budgets
-  bot.command('advice', withSync(handleAdviceCommand, { expenses: true, budgets: true }));
-  bot.command('budget', withSync(handleBudgetCommand, { budgets: true }));
+  // Commands — require configured group + fresh expenses
+  bot.command('stats', withSync(requireGroup(handleStatsCommand), { expenses: true }));
+  bot.command('sum', withSync(requireGroup(handleSumCommand), { expenses: true }));
+  bot.command('total', withSync(requireGroup(handleSumCommand), { expenses: true }));
+  bot.command('push', withSync(requireGroup(handlePushCommand), { expenses: true }));
+  bot.command('categories', withSync(requireGroup(handleCategoriesCommand), { expenses: true }));
+
+  // Commands — require configured group + fresh expenses + budgets
+  bot.command(
+    'advice',
+    withSync(requireGroup(handleAdviceCommand), { expenses: true, budgets: true }),
+  );
+  bot.command('budget', withSync(requireGroup(handleBudgetCommand), { budgets: true }));
 
   // Callback queries (inline keyboard buttons)
   bot.on('callback_query', (ctx) => handleCallbackQuery(ctx, bot));

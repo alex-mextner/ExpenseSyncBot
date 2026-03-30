@@ -1,5 +1,5 @@
 import { database } from '../../database';
-import type { Expense } from '../../database/types';
+import type { Expense, Group } from '../../database/types';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
@@ -35,30 +35,7 @@ function makeDbExpenseKey(expense: Expense): string {
 /**
  * /push command handler - push expenses from database to Google Sheet
  */
-export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handlePushCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   if (!group.spreadsheet_id || !group.google_refresh_token) {
     await ctx.send('❌ Google таблица не подключена. Используй /connect');
     return;

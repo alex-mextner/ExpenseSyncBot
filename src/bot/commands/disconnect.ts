@@ -10,28 +10,6 @@ const logger = createLogger('disconnect');
  * /disconnect command handler — shows confirmation before deleting all group data
  */
 export async function handleDisconnectCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Нечего отключать.');
-    return;
-  }
-
   const message =
     '⚠️ <b>Отключение бота</b>\n\n' +
     'Будут удалены:\n' +

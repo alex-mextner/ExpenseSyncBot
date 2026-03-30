@@ -1,33 +1,11 @@
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import type { Ctx } from '../types';
 
 /**
  * /categories command handler
  */
-export async function handleCategoriesCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleCategoriesCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   const categories = database.categories.findByGroupId(group.id);
 
   if (categories.length === 0) {
