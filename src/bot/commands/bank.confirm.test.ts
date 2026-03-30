@@ -1,8 +1,8 @@
-// Tests for the two-step bank transaction confirm flow:
-// Принять → comment prompt → user types comment (or "Без комментария")
+// Tests for the bank transaction confirm flow:
+// Принять → dedup check → (auto-merge | merge prompt | comment prompt)
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { BankTransaction, Group, User } from '../../database/types';
+import type { BankTransaction, Expense, Group, User } from '../../database/types';
 
 // ─── Mutable mock state ───────────────────────────────────────────────────────
 
@@ -30,6 +30,18 @@ const mockBankConnections = {
 
 const mockExpenses = {
   create: mock((_data: unknown): { id: number } => ({ id: 99 })),
+  findById: mock((_id: number): Expense | null => null),
+  findPotentialDuplicates: mock(
+    (
+      _groupId: number,
+      _date: string,
+      _amount: number,
+      _currency: string,
+    ): {
+      exact: Expense[];
+      fuzzy: Expense[];
+    } => ({ exact: [], fuzzy: [] }),
+  ),
 };
 
 const mockMerchantRules = {
@@ -57,6 +69,8 @@ import { afterEach } from 'bun:test';
 import {
   handleBankConfirmCallback,
   handleBankEditReply,
+  handleBankMergeCallback,
+  handleBankNewCallback,
   handleBankNoCommentCallback,
 } from './bank';
 
@@ -73,6 +87,8 @@ const allMocks = [
   mockBankTransactions.setMatchedExpense,
   mockBankConnections.findActiveByGroupId,
   mockExpenses.create,
+  mockExpenses.findById,
+  mockExpenses.findPotentialDuplicates,
   mockMerchantRules.insertRuleRequest,
   mockDb.transaction,
 ];
@@ -149,6 +165,22 @@ function makeMsgCtx(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeExpense(overrides: Partial<Expense> = {}): Expense {
+  return {
+    id: 50,
+    group_id: 1,
+    user_id: 1,
+    date: '2026-03-29',
+    category: 'Кафе',
+    comment: '',
+    amount: 25.5,
+    currency: 'EUR',
+    eur_amount: 25.5,
+    created_at: '2026-03-29T09:00:00Z',
+    ...overrides,
+  };
+}
+
 function makeBot(sendMessageReturn: unknown = { message_id: 600 }) {
   return {
     api: {
@@ -166,6 +198,8 @@ describe('handleBankConfirmCallback', () => {
     mockUsers.findByTelegramId.mockImplementation(() => user);
     // By default: transaction() returns the callback; let tests override what findById returns
     mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
+    // By default: no duplicates found
+    mockExpenses.findPotentialDuplicates.mockImplementation(() => ({ exact: [], fuzzy: [] }));
   });
 
   test('sends comment prompt when transaction is pending', async () => {
@@ -253,6 +287,162 @@ describe('handleBankConfirmCallback', () => {
     expect(bot.api.sendMessage).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('Группа') }),
+    );
+  });
+
+  test('auto-merges when exact duplicate found', async () => {
+    const tx = makeTx();
+    const existing = makeExpense();
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findPotentialDuplicates.mockImplementation(() => ({
+      exact: [existing],
+      fuzzy: [],
+    }));
+    const ctx = makeCallbackCtx({ message: { id: 200 } });
+    const bot = makeBot();
+
+    await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
+
+    expect(mockBankTransactions.updateStatus).toHaveBeenCalledWith(tx.id, group.id, 'confirmed');
+    expect(mockBankTransactions.setMatchedExpense).toHaveBeenCalledWith(
+      tx.id,
+      group.id,
+      existing.id,
+    );
+    expect(mockExpenses.create).not.toHaveBeenCalled();
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('Объединено') }),
+    );
+  });
+
+  test('shows merge prompt when fuzzy duplicate found', async () => {
+    const tx = makeTx();
+    const nearby = makeExpense({ date: '2026-03-28', id: 51 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findPotentialDuplicates.mockImplementation(() => ({
+      exact: [],
+      fuzzy: [nearby],
+    }));
+    const ctx = makeCallbackCtx();
+    const bot = makeBot();
+
+    await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
+
+    expect(bot.api.sendMessage).toHaveBeenCalledTimes(1);
+    const params = bot.api.sendMessage.mock.calls[0]?.[0] as {
+      text: string;
+      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+    };
+    expect(params['text']).toContain('похожий расход');
+    const keyboard = params['reply_markup']['inline_keyboard'];
+    expect(keyboard[0]?.[0]?.['callback_data']).toBe(`bank_merge:${tx.id}:${nearby.id}`);
+    expect(keyboard[0]?.[1]?.['callback_data']).toBe(`bank_new:${tx.id}`);
+    expect(mockExpenses.create).not.toHaveBeenCalled();
+    expect(mockBankTransactions.setAwaitingComment).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tests: handleBankMergeCallback ───────────────────────────────────────────
+
+describe('handleBankMergeCallback', () => {
+  beforeEach(() => {
+    mockGroups.findByTelegramGroupId.mockImplementation(() => group);
+    mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
+  });
+
+  test('links transaction to existing expense', async () => {
+    const tx = makeTx({ edit_in_progress: 1 });
+    const expense = makeExpense({ id: 50 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findById.mockImplementation(() => expense);
+
+    const ctx = makeCallbackCtx({ message: { id: 300 } });
+    const bot = makeBot();
+
+    await handleBankMergeCallback(ctx as never, bot as never, tx.id, expense.id, 100);
+
+    expect(mockBankTransactions.updateStatus).toHaveBeenCalledWith(tx.id, group.id, 'confirmed');
+    expect(mockBankTransactions.setMatchedExpense).toHaveBeenCalledWith(
+      tx.id,
+      group.id,
+      expense.id,
+    );
+    expect(mockBankTransactions.setEditInProgress).toHaveBeenCalledWith(tx.id, false);
+    expect(mockExpenses.create).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('Объединено') }),
+    );
+  });
+
+  test('rejects when expense belongs to different group', async () => {
+    const tx = makeTx();
+    const expense = makeExpense({ group_id: 999 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findById.mockImplementation(() => expense);
+
+    const ctx = makeCallbackCtx();
+    const bot = makeBot();
+
+    await handleBankMergeCallback(ctx as never, bot as never, tx.id, expense.id, 100);
+
+    expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('Расход не найден') }),
+    );
+  });
+
+  test('rejects already-processed transaction', async () => {
+    const tx = makeTx({ status: 'confirmed' });
+    const expense = makeExpense();
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findById.mockImplementation(() => expense);
+
+    const ctx = makeCallbackCtx();
+    const bot = makeBot();
+
+    await handleBankMergeCallback(ctx as never, bot as never, tx.id, expense.id, 100);
+
+    expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('обработана') }),
+    );
+  });
+});
+
+// ─── Tests: handleBankNewCallback ────────────────────────────────────────────
+
+describe('handleBankNewCallback', () => {
+  beforeEach(() => {
+    mockGroups.findByTelegramGroupId.mockImplementation(() => group);
+  });
+
+  test('sets awaiting_comment and shows comment prompt', async () => {
+    const tx = makeTx({ edit_in_progress: 1 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    const ctx = makeCallbackCtx();
+    const bot = makeBot({ message_id: 700 });
+
+    await handleBankNewCallback(ctx as never, bot as never, tx.id, 100);
+
+    expect(mockBankTransactions.setAwaitingComment).toHaveBeenCalledWith(tx.id, true);
+    expect(bot.api.sendMessage).toHaveBeenCalledTimes(1);
+    const params = bot.api.sendMessage.mock.calls[0]?.[0] as { text: string };
+    expect(params['text'].toLowerCase()).toContain('комментарий');
+    expect(mockBankTransactions.setTelegramMessageId).toHaveBeenCalledWith(tx.id, 700);
+  });
+
+  test('rejects when transaction is not in edit_in_progress state', async () => {
+    const tx = makeTx({ edit_in_progress: 0 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    const ctx = makeCallbackCtx();
+    const bot = makeBot();
+
+    await handleBankNewCallback(ctx as never, bot as never, tx.id, 100);
+
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('обработана') }),
     );
   });
 });

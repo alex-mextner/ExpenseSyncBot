@@ -14,6 +14,8 @@ import {
   handleBankEditCallback,
   handleBankLetterCallback,
   handleBankLetterNavCallback,
+  handleBankMergeCallback,
+  handleBankNewCallback,
   handleBankNoCommentCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
@@ -186,6 +188,27 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_merge': {
+        const txId = Number(params[0]);
+        const expenseId = Number(params[1]);
+        if (!chatId || !txId || !expenseId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        break;
+      }
+
+      case 'bank_new': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankNewCallback(ctx, bot, txId, chatId);
         break;
       }
 
