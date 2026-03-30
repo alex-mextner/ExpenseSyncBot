@@ -15,12 +15,9 @@ describe('/help message', () => {
     expect(text).toContain('Запись расходов');
     expect(text).toContain('Фото чеков');
     expect(text).toContain('AI-ассистент');
-    expect(text).toContain('Работа с таблицей');
-    expect(text).toContain('Ручные правки');
-    expect(text).toContain('/sync');
-    expect(text).toContain('/push');
-    expect(text).toContain('/budget sync');
-    expect(text).toContain('EUR (calc)');
+    expect(text).toContain('Google-таблица');
+    expect(text).toContain('/spreadsheet');
+    expect(text).toContain('telegra.ph/ExpenseSyncBot');
   });
 
   it('does not mention Menu button', () => {

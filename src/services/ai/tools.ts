@@ -347,6 +347,36 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
     },
   },
   {
+    name: 'get_recurring_patterns',
+    description:
+      'Get all recurring expense patterns for the group (rent, subscriptions, etc.). Returns patterns with their status, expected amounts, and next expected dates.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'manage_recurring_pattern',
+    description:
+      'Pause, resume, dismiss, or delete a recurring expense pattern. Use get_recurring_patterns first to find the pattern ID.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pattern_id: {
+          type: 'number',
+          description: 'ID of the recurring pattern to manage',
+        },
+        action: {
+          type: 'string',
+          enum: ['pause', 'resume', 'dismiss', 'delete'],
+          description:
+            '"pause" — temporarily stop tracking. "resume" — reactivate a paused pattern. "dismiss" — permanently hide (won\'t be re-detected). "delete" — remove entirely.',
+        },
+      },
+      required: ['pattern_id', 'action'],
+    },
+  },
+  {
     name: 'find_missing_expenses',
     description:
       'Compare bank transactions vs recorded expenses. Returns unmatched bank debit transactions that may be missing from the expense log.',
@@ -382,6 +412,8 @@ export const TOOL_LABELS: Record<string, string> = {
   manage_category: 'Управляю категориями',
   get_bank_transactions: 'Загружаю банковские транзакции',
   get_bank_balances: 'Проверяю балансы счетов',
+  get_recurring_patterns: 'Загружаю повторяющиеся платежи',
+  manage_recurring_pattern: 'Управляю повторяющимся платежом',
   find_missing_expenses: 'Ищу пропущенные расходы',
   render_table: 'Рендерю таблицу',
   send_feedback: 'Отправляю фидбек',

@@ -366,6 +366,43 @@ export class ExpenseRepository {
   }
 
   /**
+   * Get recent expense examples grouped by category (for AI receipt categorization)
+   */
+  getRecentExamplesByCategory(
+    groupId: number,
+    limit: number = 5,
+  ): Map<string, Array<{ comment: string; amount: number; currency: string }>> {
+    const query = this.db.query<
+      { category: string; comment: string; amount: number; currency: string },
+      [number]
+    >(`
+      SELECT category, comment, amount, currency
+      FROM expenses
+      WHERE group_id = ? AND comment != ''
+      ORDER BY date DESC, created_at DESC
+      LIMIT 200
+    `);
+
+    const rows = query.all(groupId);
+    const result = new Map<string, Array<{ comment: string; amount: number; currency: string }>>();
+
+    for (const row of rows) {
+      const existing = result.get(row.category);
+      if (existing) {
+        if (existing.length < limit) {
+          existing.push({ comment: row.comment, amount: row.amount, currency: row.currency });
+        }
+      } else {
+        result.set(row.category, [
+          { comment: row.comment, amount: row.amount, currency: row.currency },
+        ]);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Count expenses in a date range
    */
   getCountForRange(groupId: number, startDate: string, endDate: string): number {

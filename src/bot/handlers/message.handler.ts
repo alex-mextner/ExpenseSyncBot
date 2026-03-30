@@ -359,14 +359,12 @@ export async function saveExpenseToSheet(
   const group = database.groups.findById(groupId);
   const pendingExpense = database.pendingExpenses.findById(pendingExpenseId);
 
-  if (!group || !pendingExpense || !group.spreadsheet_id || !group.google_refresh_token) {
+  if (!group || !pendingExpense) {
     logger.error(
       {
         data: {
           group: !!group,
           pendingExpense: !!pendingExpense,
-          spreadsheet_id: !!group?.spreadsheet_id,
-          refresh_token: !!group?.google_refresh_token,
         },
       },
       `[SAVE] ❌ Validation failed`,
@@ -374,8 +372,10 @@ export async function saveExpenseToSheet(
     throw new Error('Invalid group or pending expense');
   }
 
-  // Silent sync budgets from Google Sheets
-  await silentSyncBudgets(group.google_refresh_token, group.id);
+  // Silent sync budgets from Google Sheets (only if connected)
+  if (group.google_refresh_token) {
+    await silentSyncBudgets(group.google_refresh_token, group.id);
+  }
 
   const { getExpenseRecorder } = await import('../../services/expense-recorder');
   const recorder = getExpenseRecorder();
@@ -396,6 +396,20 @@ export async function saveExpenseToSheet(
   logger.info(
     `[SAVE] ✅ Recorded ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
   );
+
+  // Check recurring pattern match (fire-and-forget)
+  try {
+    const { checkRecurringMatch } = await import('../../services/analytics/recurring-matcher');
+    checkRecurringMatch(
+      groupId,
+      category,
+      pendingExpense.parsed_amount,
+      pendingExpense.parsed_currency,
+      currentDate,
+    );
+  } catch (err) {
+    logger.error({ err }, '[SAVE] Recurring pattern check failed');
+  }
 
   // Delete pending expense
   database.pendingExpenses.delete(pendingExpenseId);

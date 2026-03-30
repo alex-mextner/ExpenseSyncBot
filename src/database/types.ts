@@ -448,3 +448,38 @@ export interface CreateMerchantRuleRequestData {
   user_category?: string | null;
   user_comment?: string | null;
 }
+
+// ─── Recurring Pattern Types ────────────────────────────────────────────────
+
+export type RecurringPatternStatus = 'active' | 'paused' | 'dismissed';
+
+/**
+ * Recurring expense pattern detected from history
+ */
+export interface RecurringPattern {
+  id: number;
+  group_id: number;
+  category: string;
+  expected_amount: number;
+  currency: string;
+  interval_days: number;
+  expected_day: number | null;
+  tolerance_days: number;
+  last_seen_date: string | null;
+  next_expected_date: string | null;
+  status: RecurringPatternStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateRecurringPatternData {
+  group_id: number;
+  category: string;
+  expected_amount: number;
+  currency: string;
+  interval_days?: number;
+  expected_day?: number;
+  tolerance_days?: number;
+  last_seen_date?: string;
+  next_expected_date?: string;
+}

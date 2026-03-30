@@ -231,14 +231,19 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       }
     }
 
-    // Get existing categories for the group
+    // Get existing categories and recent examples for the group
     const categories = database.categories.findByGroupId(queueItem.group_id);
     const categoryNames = categories.map((c) => c.name);
+    const categoryExamples = database.expenses.getRecentExamplesByCategory(queueItem.group_id);
 
     // Extract expenses using AI
     let extractionResult: AIExtractionResult;
     try {
-      extractionResult = await extractExpensesFromReceipt(receiptData, categoryNames);
+      extractionResult = await extractExpensesFromReceipt(
+        receiptData,
+        categoryNames,
+        categoryExamples,
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[PHOTO_PROCESSOR] Failed to extract expenses: ${errorMessage}`);

@@ -148,17 +148,24 @@ export class ExpenseRecorder {
     const eurAmount = this.eurConverter.convertToEUR(data.amount, data.currency);
     const amounts = buildAmountsRecord(data.amount, data.currency, enabledCurrencies);
 
-    logger.info({ data: { ...data, eurAmount, rate } }, `[RECORD] Writing expense to sheet`);
+    // Write to Google Sheets if connected
+    if (refreshToken && spreadsheetId) {
+      logger.info({ data: { ...data, eurAmount, rate } }, `[RECORD] Writing expense to sheet`);
 
-    // Sheet write first — if it fails, no DB entry is created
-    await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
-      date: data.date,
-      category: data.category,
-      comment: data.comment,
-      amounts,
-      eurAmount,
-      rate,
-    });
+      await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
+        date: data.date,
+        category: data.category,
+        comment: data.comment,
+        amounts,
+        eurAmount,
+        rate,
+      });
+    } else {
+      logger.info(
+        { data: { ...data, eurAmount, rate } },
+        `[RECORD] Saving expense locally (no Google Sheets)`,
+      );
+    }
 
     const expense = this.expenses.create({
       group_id: groupId,
@@ -217,15 +224,17 @@ export class ExpenseRecorder {
       const comment = `Чек: ${categoryItems.map((i) => `${i.name} (${i.quantity}x${i.price})`).join(', ')}`;
       const amounts = buildAmountsRecord(totalAmount, currency, enabledCurrencies);
 
-      // Sheet write first
-      await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
-        date: currentDate,
-        category,
-        comment,
-        amounts,
-        eurAmount,
-        rate,
-      });
+      // Write to sheet if connected
+      if (refreshToken && spreadsheetId) {
+        await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
+          date: currentDate,
+          category,
+          comment,
+          amounts,
+          eurAmount,
+          rate,
+        });
+      }
 
       const expense = this.expenses.create({
         group_id: groupId,
@@ -265,6 +274,10 @@ export class ExpenseRecorder {
   async pushToSheet(groupId: number, expenseList: Expense[]): Promise<void> {
     const { refreshToken, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
+    if (!refreshToken || !spreadsheetId) {
+      throw new Error(`Group ${groupId} not connected to Google Sheets`);
+    }
+
     for (const expense of expenseList) {
       const amounts = buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies);
 
@@ -283,16 +296,13 @@ export class ExpenseRecorder {
   }
 
   private getGroupConfig(groupId: number): {
-    refreshToken: string;
-    spreadsheetId: string;
+    refreshToken: string | null;
+    spreadsheetId: string | null;
     enabledCurrencies: CurrencyCode[];
   } {
     const group = this.groups.findById(groupId);
     if (!group) {
       throw new Error(`Group ${groupId} not found`);
-    }
-    if (!group.google_refresh_token || !group.spreadsheet_id) {
-      throw new Error(`Group ${groupId} not configured for Google Sheets`);
     }
     return {
       refreshToken: group.google_refresh_token,

@@ -25,7 +25,11 @@ import {
   handleBankWizardStartCallback,
 } from '../commands/bank';
 import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
-import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
+import {
+  handleCurrencyCallback,
+  handleDefaultCurrencyCallback,
+  handleSetupChoiceCallback,
+} from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
@@ -78,6 +82,12 @@ export async function handleCallbackQuery(
 
   try {
     switch (action) {
+      case 'setup': {
+        const setupAction = params.join(':');
+        await handleSetupChoiceCallback(ctx, setupAction);
+        break;
+      }
+
       case 'currency': {
         const currencyAction = params[0];
         if (!currencyAction || !chatId) {
@@ -886,8 +896,8 @@ export async function saveReceiptExpenses(
 
   const group = database.groups.findById(groupId);
 
-  if (!group || !group.spreadsheet_id || !group.google_refresh_token) {
-    logger.error('[RECEIPT] Group not configured for Google Sheets');
+  if (!group) {
+    logger.error('[RECEIPT] Group not found');
     return;
   }
 
