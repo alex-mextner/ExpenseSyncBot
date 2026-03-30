@@ -107,6 +107,7 @@ function errorResponse(
 export type ValidContext = {
   ok: true;
   userId: number;
+  internalUserId: number;
   groupId: number;
   internalGroupId: number;
   corsHeaders: Record<string, string>;
@@ -181,7 +182,14 @@ export async function validateAndResolveContext(
     };
   }
 
-  return { ok: true, userId, groupId: telegramGroupId, internalGroupId, corsHeaders };
+  return {
+    ok: true,
+    userId,
+    internalUserId: user.id,
+    groupId: telegramGroupId,
+    internalGroupId,
+    corsHeaders,
+  };
 }
 
 /**
@@ -422,7 +430,7 @@ export async function handleMiniAppRequest(
             ? item.date
             : new Date().toISOString().slice(0, 10);
 
-        const result = await recorder.record(ctx.internalGroupId, ctx.userId, {
+        const result = await recorder.record(ctx.internalGroupId, ctx.internalUserId, {
           date,
           category: item.category as string,
           comment: item.name as string,
@@ -553,7 +561,7 @@ export async function handleMiniAppRequest(
       .query<DashboardRow, [number, number]>(
         'SELECT config, updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
       )
-      .get(ctx.internalGroupId, ctx.userId);
+      .get(ctx.internalGroupId, ctx.internalUserId);
 
     if (!row) {
       return new Response(JSON.stringify({ widgets: [], updatedAt: null }), {
@@ -603,7 +611,7 @@ export async function handleMiniAppRequest(
       .query<DashboardUpdatedAtRow, [number, number]>(
         'SELECT updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
       )
-      .get(ctx.internalGroupId, ctx.userId);
+      .get(ctx.internalGroupId, ctx.internalUserId);
 
     const clientUpdatedAt = typeof body.updatedAt === 'string' ? body.updatedAt : null;
 
@@ -622,12 +630,12 @@ export async function handleMiniAppRequest(
     if (existing) {
       database.db.run(
         'UPDATE dashboard_widgets SET config = ?, updated_at = ? WHERE group_id = ? AND user_id = ?',
-        [configJson, newUpdatedAt, ctx.internalGroupId, ctx.userId],
+        [configJson, newUpdatedAt, ctx.internalGroupId, ctx.internalUserId],
       );
     } else {
       database.db.run(
         'INSERT INTO dashboard_widgets (group_id, user_id, config, updated_at) VALUES (?, ?, ?, ?)',
-        [ctx.internalGroupId, ctx.userId, configJson, newUpdatedAt],
+        [ctx.internalGroupId, ctx.internalUserId, configJson, newUpdatedAt],
       );
     }
 

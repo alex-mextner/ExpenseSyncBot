@@ -327,6 +327,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.userId).toBe(42);
+      expect(result.internalUserId).toBe(MOCK_USER.id); // internal DB id, not telegram id
       expect(result.groupId).toBe(-1001234567);
       expect(result.internalGroupId).toBe(7);
       expect(result.corsHeaders['Access-Control-Allow-Origin']).toBe(CORS_ORIGIN);
@@ -779,6 +780,30 @@ describe('POST /api/receipt/confirm', () => {
     expect(mockEmitForGroup.mock.calls[0]?.[1]).toBe('expense_added');
   });
 
+  test('recorder receives internal DB user id, not telegram id', async () => {
+    // MOCK_USER.id = 1 (internal), telegram_id = 42
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockExpenseRecorderRecord.mockImplementation(() =>
+      Promise.resolve({ expense: { id: 88 }, eurAmount: 5 }),
+    );
+
+    const initData = buildInitData(42);
+    const req = makePostRequest(
+      CONFIRM_PATH,
+      {
+        groupId: GROUP_ID,
+        expenses: [{ name: 'Milk', total: 100, category: 'Food', currency: 'RSD' }],
+      },
+      initData,
+    );
+    await handleMiniAppRequest(req, CORS_ORIGIN);
+
+    // Second arg to record() must be internal DB user id (1), not telegram id (42)
+    expect(mockExpenseRecorderRecord.mock.calls[0]?.[1]).toBe(MOCK_USER.id);
+    expect(mockExpenseRecorderRecord.mock.calls[0]?.[1]).not.toBe(42);
+  });
+
   test('success with fileId → updates receipt_file_id in DB', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
@@ -974,6 +999,10 @@ describe('PUT /api/dashboard', () => {
     expect(body.ok).toBe(true);
     expect(typeof body.updatedAt).toBe('string');
     expect(mockDbRun.mock.calls.length).toBe(1);
+    // INSERT must use internal DB user id (1), not telegram id (42)
+    const insertArgs = mockDbRun.mock.calls[0]?.[1] as unknown[];
+    expect(insertArgs).toContain(MOCK_USER.id);
+    expect(insertArgs).not.toContain(42);
   });
 
   test('conflict when updatedAt mismatch → 409 CONFLICT', async () => {
