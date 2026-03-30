@@ -1,9 +1,15 @@
 // Tests for registry auto-discovery and preferences.xml parsing.
 
 import { describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BANK_REGISTRY, getBankList } from './registry';
 
-describe('BANK_REGISTRY auto-discovery', () => {
+const pluginsDir = join(dirname(fileURLToPath(import.meta.url)), 'ZenPlugins/src/plugins');
+const hasZenPlugins = existsSync(pluginsDir);
+
+describe.skipIf(!hasZenPlugins)('BANK_REGISTRY auto-discovery', () => {
   test('discovers multiple banks from ZenPlugins directory', () => {
     const list = getBankList();
     // At minimum the known banks we rely on
