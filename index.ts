@@ -47,7 +47,10 @@ async function main() {
 
 // Catch unhandled promise rejections and uncaught exceptions
 process.on('unhandledRejection', (reason) => {
-  logger.error({ err: reason }, '[PROCESS] Unhandled rejection');
+  logger.error(
+    { err: reason instanceof Error ? reason : new Error(String(reason)) },
+    '[PROCESS] Unhandled rejection',
+  );
 });
 process.on('uncaughtException', (error) => {
   logger.error({ err: error }, '[PROCESS] Uncaught exception');

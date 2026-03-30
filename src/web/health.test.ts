@@ -1,5 +1,6 @@
 // Tests for /health endpoint
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { database } from '../database';
 
 // Use a random port to avoid conflicts with running server
 const TEST_PORT = 19_876 + Math.floor(Math.random() * 1000);
@@ -7,7 +8,6 @@ let server: ReturnType<typeof Bun.serve>;
 
 beforeAll(() => {
   // Minimal server that replicates the /health route logic
-  const { database } = require('../database');
   server = Bun.serve({
     port: TEST_PORT,
     fetch(req) {

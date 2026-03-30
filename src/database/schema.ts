@@ -1029,6 +1029,13 @@ export function runMigrations(db: Database): void {
     {
       name: '037_encrypt_existing_refresh_tokens',
       up: () => {
+        if (!env.ENCRYPTION_KEY) {
+          logger.warn(
+            'ENCRYPTION_KEY not set — skipping migration 037, refresh tokens remain unencrypted',
+          );
+          return;
+        }
+
         const rows = db
           .query<{ id: number; google_refresh_token: string | null }, []>(
             'SELECT id, google_refresh_token FROM groups WHERE google_refresh_token IS NOT NULL',

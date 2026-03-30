@@ -10,7 +10,7 @@ interface EnvConfig {
   GOOGLE_REDIRECT_URI: string;
   OAUTH_SERVER_PORT: number;
   DATABASE_PATH: string;
-  ENCRYPTION_KEY: string;
+  ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
   HF_TOKEN: string;
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
@@ -42,7 +42,7 @@ function validateEnv(): EnvConfig {
     GOOGLE_REDIRECT_URI: getEnvVariable('GOOGLE_REDIRECT_URI'),
     OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000', 10),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
-    ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
+    ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY', false),
     HF_TOKEN: getEnvVariable('HF_TOKEN', false),
     ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
     AI_BASE_URL: getEnvVariable('AI_BASE_URL', false) || 'https://api.z.ai/api/anthropic',

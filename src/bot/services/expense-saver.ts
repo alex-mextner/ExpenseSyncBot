@@ -17,7 +17,7 @@ export async function saveExpenseToSheet(
   telegramGroupId?: number,
   bot?: BotInstance,
 ): Promise<void> {
-  logger.info(`[SAVE] Starting save to sheet...`);
+  logger.info('[SAVE] Starting save to sheet...');
 
   const user = database.users.findById(userId);
   const group = database.groups.findById(groupId);
@@ -77,27 +77,29 @@ export async function saveExpenseToSheet(
       eurAmount,
     });
 
-    logger.info(`[SAVE] ✅ Successfully wrote to Google Sheet`);
+    logger.info('[SAVE] ✅ Successfully wrote to Google Sheet');
   } catch (error) {
     logger.error({ err: error }, '[SAVE] ❌ Failed to write to Google Sheet');
     throw error;
   }
 
-  // Save to expenses table
-  logger.info(`[SAVE] Saving to local database...`);
-  database.expenses.create({
-    group_id: groupId,
-    user_id: userId,
-    date: currentDate,
-    category,
-    comment: pendingExpense.comment,
-    amount: pendingExpense.parsed_amount,
-    currency: pendingExpense.parsed_currency,
-    eur_amount: eurAmount,
-  });
+  // Save to expenses table and delete pending — atomic
+  logger.info('[SAVE] Saving to local database...');
+  database.transaction(() => {
+    database.expenses.create({
+      group_id: groupId,
+      user_id: userId,
+      date: currentDate,
+      category,
+      comment: pendingExpense.comment,
+      amount: pendingExpense.parsed_amount,
+      currency: pendingExpense.parsed_currency,
+      eur_amount: eurAmount,
+    });
 
-  // Delete pending expense
-  database.pendingExpenses.delete(pendingExpenseId);
+    // Delete pending expense
+    database.pendingExpenses.delete(pendingExpenseId);
+  });
   logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
 
   // Check budget limits

@@ -8,6 +8,7 @@ import { getTokensFromCode, resolveOAuthState } from '../services/google/oauth';
 import { encryptToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
 import { escapeHtml } from './html-escape';
+import { handleTempImage } from './temp-image.handler';
 
 const logger = createLogger('oauth-callback');
 
@@ -33,6 +34,10 @@ export function startOAuthServer(): void {
 
       if (url.pathname === '/callback') {
         return handleOAuthCallback(url);
+      }
+
+      if (url.pathname.startsWith('/temp-images/')) {
+        return handleTempImage(url);
       }
 
       if (url.pathname === '/health') {
