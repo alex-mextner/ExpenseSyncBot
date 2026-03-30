@@ -470,7 +470,11 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        try {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        } catch (err) {
+          logger.error({ err }, '[CALLBACK] Failed to delete category add message');
+        }
       }
 
       // Find and save pending expense
@@ -503,7 +507,7 @@ async function handleCategoryAction(
         await bot.api.sendMessage({
           chat_id: chatId,
           text: `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
-          reply_markup: keyboard.build(),
+          reply_markup: keyboard,
         });
       }
 
@@ -512,7 +516,7 @@ async function handleCategoryAction(
 
     case 'select': {
       // Show existing categories
-      const categories = database.categories.getCategoryNames(group.id);
+      const categories = database.categories.findByGroupId(group.id);
 
       if (categories.length === 0) {
         await ctx.answerCallbackQuery({ text: 'Нет сохраненных категорий' });
@@ -520,16 +524,28 @@ async function handleCategoryAction(
       }
 
       const keyboard = createCategoriesListKeyboard(categories);
-      await ctx.editReplyMarkup({
-        inline_keyboard: keyboard.build().inline_keyboard,
-      });
+      await ctx.editReplyMarkup(keyboard);
       await ctx.answerCallbackQuery({ text: 'Выбери категорию' });
       break;
     }
 
     case 'choose': {
-      // Choose existing category
-      const categoryName = rest.join(':');
+      // Choose existing category by ID
+      const categoryId = Number.parseInt(rest[0] ?? '', 10);
+
+      if (Number.isNaN(categoryId)) {
+        await ctx.answerCallbackQuery({ text: 'Некорректные данные' });
+        return;
+      }
+
+      const categoryRecord = database.categories.findById(categoryId);
+
+      if (!categoryRecord) {
+        await ctx.answerCallbackQuery({ text: 'Категория не найдена' });
+        return;
+      }
+
+      const categoryName = categoryRecord.name;
 
       // Find pending expense for this user
       const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
@@ -552,7 +568,11 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        try {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        } catch (err) {
+          logger.error({ err }, '[CALLBACK] Failed to delete category message');
+        }
       }
 
       // Save expense
