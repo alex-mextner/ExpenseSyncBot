@@ -2,6 +2,7 @@ import { env } from '../config/env';
 import { database } from '../database';
 import { getTokensFromCode } from '../services/google/oauth';
 import { createLogger } from '../utils/logger.ts';
+import { handleMiniAppRequest } from './miniapp-api.ts';
 
 const logger = createLogger('oauth-callback');
 
@@ -50,6 +51,10 @@ export function startOAuthServer(): void {
   const server = Bun.serve({
     port: env.OAUTH_SERVER_PORT,
     async fetch(req) {
+      const corsOrigin = env.MINIAPP_URL ?? 'https://expense-sync-bot-app.invntrm.ru';
+      const miniAppResponse = await handleMiniAppRequest(req, corsOrigin);
+      if (miniAppResponse !== null) return miniAppResponse;
+
       const url = new URL(req.url);
 
       if (url.pathname === '/callback') {
