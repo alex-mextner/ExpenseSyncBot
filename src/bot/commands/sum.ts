@@ -1,8 +1,11 @@
 /** /sum command handler — totals expenses for a date range with optional category filter */
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
-import { createBudgetSheet, hasBudgetSheet } from '../../services/google/sheets';
+import type { Group } from '../../database/types';
+import { convertCurrency, formatAmount } from '../../services/currency/converter';
+
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
@@ -13,39 +16,10 @@ const logger = createLogger('sum');
 /**
  * /sum and /total command handler - show current month expenses summary
  */
-export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('❌ Не удалось определить чат');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
-  await ctx.sendChatAction('typing');
-
+export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   // Silent sync budgets from Google Sheets
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    const syncedCount = await silentSyncBudgets(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      group.id,
-    );
+  if (group.google_refresh_token) {
+    const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
     if (syncedCount > 0) {
       await ctx.send(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
@@ -112,6 +86,16 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
   const difference = currentMonthTotal - averagePerMonth;
   const percentDifference = averagePerMonth > 0 ? (difference / averagePerMonth) * 100 : 0;
 
+  // Convert EUR totals to group's display currency for user output
+  const displayCurrency = group.default_currency;
+  const currentMonthTotalDisplay = convertCurrency(
+    currentMonthTotal,
+    BASE_CURRENCY,
+    displayCurrency,
+  );
+  const averagePerMonthDisplay = convertCurrency(averagePerMonth, BASE_CURRENCY, displayCurrency);
+  const differenceDisplay = convertCurrency(difference, BASE_CURRENCY, displayCurrency);
+
   // Calculate category statistics for current month
   const categoryTotals: Record<string, number> = {};
   for (const expense of currentMonthExpenses) {
@@ -173,15 +157,15 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
 
   // Build message
   let message = `📊 Расходы за ${format(now, 'LLLL yyyy')}\n\n`;
-  message += `💰 Всего: €${currentMonthTotal.toFixed(2)}\n`;
+  message += `💰 Всего: ${formatAmount(currentMonthTotalDisplay, displayCurrency)}\n`;
 
   if (monthsCount > 0) {
-    message += `📈 Средняя: €${averagePerMonth.toFixed(2)}\n`;
+    message += `📈 Средняя: ${formatAmount(averagePerMonthDisplay, displayCurrency)}\n`;
 
     if (difference > 0) {
-      message += `📊 Разница: +€${difference.toFixed(2)} (+${percentDifference.toFixed(1)}%)\n`;
+      message += `📊 Разница: +${formatAmount(differenceDisplay, displayCurrency)} (+${percentDifference.toFixed(1)}%)\n`;
     } else if (difference < 0) {
-      message += `📊 Разница: €${difference.toFixed(2)} (${percentDifference.toFixed(1)}%)\n`;
+      message += `📊 Разница: ${formatAmount(differenceDisplay, displayCurrency)} (${percentDifference.toFixed(1)}%)\n`;
     } else {
       message += `📊 Разница: точно в среднем\n`;
     }
@@ -194,7 +178,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
     const above = categoryDifferences.filter((c) => c.percent > 5);
     if (above.length > 0) {
       for (const { category, diff, percent } of above.slice(0, 3)) {
-        message += `  • ${category}: +€${diff.toFixed(2)} (+${percent.toFixed(1)}%)\n`;
+        const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
+        message += `  • ${category}: +${formatAmount(diffDisplay, displayCurrency)} (+${percent.toFixed(1)}%)\n`;
       }
     } else {
       message += `  • Нет категорий\n`;
@@ -206,7 +191,8 @@ export async function handleSumCommand(ctx: Ctx['Command']): Promise<void> {
       // Sort by percent ascending (most negative first)
       below.sort((a, b) => a.percent - b.percent);
       for (const { category, diff, percent } of below.slice(0, 3)) {
-        message += `  • ${category}: €${diff.toFixed(2)} (${percent.toFixed(1)}%)\n`;
+        const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
+        message += `  • ${category}: ${formatAmount(diffDisplay, displayCurrency)} (${percent.toFixed(1)}%)\n`;
       }
     } else {
       message += `  • Нет категорий\n`;
@@ -237,28 +223,6 @@ async function addBudgetInfo(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
-  // Ensure Budget sheet exists
-  if (group.google_refresh_token && group.spreadsheet_id) {
-    const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-    if (!hasSheet) {
-      const categories = database.categories.getCategoryNames(group.id);
-      if (categories.length > 0) {
-        try {
-          await createBudgetSheet(
-            group.google_refresh_token,
-            group.spreadsheet_id,
-            categories,
-            100,
-            group.default_currency,
-          );
-          logger.info('[SUM] Budget sheet created');
-        } catch (err) {
-          logger.error({ err: err }, '[SUM] Failed to create Budget sheet');
-        }
-      }
-    }
-  }
-
   // Get budgets for current month
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
@@ -275,35 +239,24 @@ async function addBudgetInfo(
       (categorySpending[expense.category] || 0) + expense.eur_amount;
   }
 
-  // Calculate budget progress
-  const budgetProgress = budgets.map((budget) => {
-    const spent = categorySpending[budget.category] || 0;
-    const percentage =
-      budget.limit_amount > 0 ? Math.round((spent / budget.limit_amount) * 100) : 0;
+  // Calculate budget progress — convert EUR spending to each budget's currency
+  const budgetProgress = budgets.map((budget) =>
+    buildBudgetProgressEntry(categorySpending[budget.category] || 0, budget),
+  );
 
-    return {
-      category: budget.category,
-      spent,
-      limit: budget.limit_amount,
-      percentage,
-      is_exceeded: spent > budget.limit_amount,
-      is_warning: percentage >= 90,
-    };
-  });
-
-  // Calculate total budget
-  const totalBudget = budgets.reduce((sum, b) => sum + b.limit_amount, 0);
-  const totalSpent = budgets.reduce((sum, b) => sum + (categorySpending[b.category] || 0), 0);
-  const totalPercentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+  // Calculate totals in group's display currency
+  const {
+    totalSpentDisplay,
+    totalBudgetDisplay,
+    percentage: totalPercentage,
+  } = buildBudgetTotals(categorySpending, budgets, group.default_currency);
 
   // Sort by percentage descending
   budgetProgress.sort((a, b) => b.percentage - a.percentage);
 
   // Build budget section
   let budgetMessage = `\n\n💰 Бюджет:\n`;
-  budgetMessage += `Всего: €${totalSpent.toFixed(2)} / €${totalBudget.toFixed(
-    2,
-  )} (${totalPercentage}%)\n\n`;
+  budgetMessage += `Всего: ${formatAmount(totalSpentDisplay, group.default_currency)} / ${formatAmount(totalBudgetDisplay, group.default_currency)} (${totalPercentage}%)\n\n`;
 
   // Show only exceeded and warning categories
   const importantCategories = budgetProgress.filter((bp) => bp.is_exceeded || bp.is_warning);
@@ -312,9 +265,7 @@ async function addBudgetInfo(
     for (const bp of importantCategories) {
       const emoji = getCategoryEmoji(bp.category);
       const status = bp.is_exceeded ? '🔴' : '⚠️';
-      budgetMessage += `${status} ${emoji} ${bp.category}: €${bp.spent.toFixed(
-        2,
-      )} / €${bp.limit.toFixed(2)} (${bp.percentage}%)\n`;
+      budgetMessage += `${status} ${emoji} ${bp.category}: ${formatAmount(bp.spentInCurrency, bp.currency)} / ${formatAmount(bp.limit, bp.currency)} (${bp.percentage}%)\n`;
     }
   }
 
@@ -324,4 +275,63 @@ async function addBudgetInfo(
   }
 
   await ctx.send(baseMessage + budgetMessage);
+}
+
+/**
+ * Compute progress for a single budget entry.
+ * spentEur — category spending in EUR; budget — with limit in budget.currency.
+ * Returns spending converted to budget currency with correct percentage.
+ */
+export function buildBudgetProgressEntry(
+  spentEur: number,
+  budget: { category: string; limit_amount: number; currency: string },
+): {
+  category: string;
+  spentInCurrency: number;
+  limit: number;
+  currency: CurrencyCode;
+  percentage: number;
+  is_exceeded: boolean;
+  is_warning: boolean;
+} {
+  const currency = budget.currency as CurrencyCode;
+  const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
+  const percentage =
+    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+  return {
+    category: budget.category,
+    spentInCurrency,
+    limit: budget.limit_amount,
+    currency,
+    percentage,
+    is_exceeded: spentInCurrency > budget.limit_amount,
+    is_warning: percentage >= 90 && spentInCurrency <= budget.limit_amount,
+  };
+}
+
+/**
+ * Compute overall budget totals in a given display currency.
+ * All spending is in EUR; all limits may be in different currencies.
+ */
+export function buildBudgetTotals(
+  categorySpendingEur: Record<string, number>,
+  budgets: Array<{ category: string; limit_amount: number; currency: string }>,
+  displayCurrency: CurrencyCode,
+): { totalSpentDisplay: number; totalBudgetDisplay: number; percentage: number } {
+  let totalSpentEur = 0;
+  let totalBudgetEur = 0;
+  for (const budget of budgets) {
+    totalSpentEur += categorySpendingEur[budget.category] ?? 0;
+    totalBudgetEur += convertCurrency(
+      budget.limit_amount,
+      budget.currency as CurrencyCode,
+      BASE_CURRENCY,
+    );
+  }
+  const totalSpentDisplay = convertCurrency(totalSpentEur, BASE_CURRENCY, displayCurrency);
+  const totalBudgetDisplay = convertCurrency(totalBudgetEur, BASE_CURRENCY, displayCurrency);
+  // Guard on display value: if all budgets have limit_amount=0, totalBudgetDisplay is 0 → return 0% not NaN
+  const percentage =
+    totalBudgetDisplay > 0 ? Math.round((totalSpentDisplay / totalBudgetDisplay) * 100) : 0;
+  return { totalSpentDisplay, totalBudgetDisplay, percentage };
 }

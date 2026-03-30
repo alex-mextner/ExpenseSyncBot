@@ -45,7 +45,7 @@ export function checkSmartTriggers(
 
   // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
   for (const br of snap.burnRates) {
-    if (br.status === 'exceeded') {
+    if (br.status === 'exceeded' && br.budget_limit > 0) {
       const topic = `budget_threshold:${br.category}:exceeded`;
       if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
         if (canSendAdvice(groupId, 'alert')) {
@@ -62,7 +62,7 @@ export function checkSmartTriggers(
           };
         }
       }
-    } else if (br.status === 'critical' || br.status === 'warning') {
+    } else if ((br.status === 'critical' || br.status === 'warning') && br.budget_limit > 0) {
       const threshold = br.status === 'critical' ? '100' : '80';
       const topic = `budget_threshold:${br.category}:${threshold}`;
       if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
@@ -163,6 +163,50 @@ export function checkSmartTriggers(
             data: { month: format(now, 'yyyy-MM') },
           };
         }
+      }
+    }
+  }
+
+  // === Trigger 6: Recurring expense missed ===
+  const overduePatterns = database.recurringPatterns.findOverdue(groupId, today);
+  const firstOverdue = overduePatterns[0];
+  if (firstOverdue) {
+    const topic = `recurring_missed:${firstOverdue.category}:${firstOverdue.next_expected_date}`;
+    if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+      if (canSendAdvice(groupId, 'quick')) {
+        return {
+          type: 'recurring_missed',
+          tier: 'quick',
+          topic,
+          data: {
+            category: firstOverdue.category,
+            expected_amount: firstOverdue.expected_amount,
+            currency: firstOverdue.currency,
+            next_expected_date: firstOverdue.next_expected_date,
+            overdue_count: overduePatterns.length,
+          },
+        };
+      }
+    }
+  }
+
+  // === Trigger 7: Pending bank transactions need review ===
+  const pendingConnections = database.bankConnections.findActiveByGroupId(groupId);
+  let totalPending = 0;
+  for (const conn of pendingConnections) {
+    totalPending += database.bankTransactions.findPendingByConnectionId(conn.id).length;
+  }
+  if (totalPending > 0) {
+    // Embed today's date to allow daily reminders (unlike other triggers which use monthly dedup)
+    const topic = `pending_bank_transactions:${today}`;
+    if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+      if (canSendAdvice(groupId, 'quick')) {
+        return {
+          type: 'pending_bank_transactions',
+          tier: 'quick',
+          topic,
+          data: { count: totalPending },
+        };
       }
     }
   }

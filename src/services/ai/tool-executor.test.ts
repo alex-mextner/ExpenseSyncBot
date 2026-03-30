@@ -38,6 +38,7 @@ const mockGroups = {
     enabled_currencies: ['EUR', 'USD'],
     custom_prompt: null,
     active_topic_id: null,
+    bank_panel_summary_message_id: null,
     created_at: '',
     updated_at: '',
   })),
@@ -60,12 +61,24 @@ mock.module('../../database', () => ({
 
 // Mock Google Sheets (used by sync/write tools)
 mock.module('../google/sheets', () => ({
-  readExpensesFromSheet: mock(() => Promise.resolve([])),
+  readExpensesFromSheet: mock(() => Promise.resolve({ expenses: [], errors: [] })),
   appendExpenseRow: mock(() => Promise.resolve()),
   hasBudgetSheet: mock(() => Promise.resolve(false)),
   createBudgetSheet: mock(() => Promise.resolve()),
   writeBudgetRow: mock(() => Promise.resolve()),
   readBudgetData: mock(() => Promise.resolve([])),
+}));
+
+// Mock ExpenseRecorder (used by add_expense tool)
+const mockRecord = mock(() => Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+mock.module('../expense-recorder', () => ({
+  getExpenseRecorder: () => ({ record: mockRecord }),
+}));
+
+// Mock budget commands — prevents dynamic import from pulling in the full
+// bot/commands/budget module (which imports writeMonthBudgetRow from sheets)
+mock.module('../../bot/commands/budget', () => ({
+  ensureFreshBudgets: mock(() => Promise.resolve()),
 }));
 
 // Import after mocks are set up
@@ -127,6 +140,7 @@ function resetAllMocks() {
     enabled_currencies: ['EUR', 'USD'],
     custom_prompt: null,
     active_topic_id: null,
+    bank_panel_summary_message_id: null,
     created_at: '',
     updated_at: '',
   });
@@ -244,7 +258,7 @@ describe('executeGetExpenses', () => {
     expect(result.output).toContain('Food');
     expect(result.output).toContain('[id:2]');
     expect(result.output).toContain('Transport');
-    expect(result.output).toContain('Total: 2 expenses | Page 1/1');
+    expect(result.output).toContain('Total: 2 expenses | Grand total:');
   });
 
   test('expense with no comment shows (no comment) in output', async () => {
@@ -341,7 +355,7 @@ describe('executeGetExpenses', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Food');
     expect(result.output).not.toContain('Transport');
-    expect(result.output).toContain('Total: 1 expenses | Page 1/1');
+    expect(result.output).toContain('Total: 1 expenses | Grand total:');
   });
 
   test('respects date range via period filter', async () => {
@@ -369,14 +383,14 @@ describe('executeGetExpenses', () => {
 
     const page1 = await executeTool('get_expenses', { page: 1 }, ctx);
     expect(page1.success).toBe(true);
-    expect(page1.output).toContain('Total: 150 expenses | Page 1/2');
+    expect(page1.output).toContain('Total: 150 expenses | Grand total:');
     expect(page1.output).toContain('[id:1]');
     expect(page1.output).toContain('[id:100]');
     expect(page1.output).not.toContain('[id:101]');
 
     const page2 = await executeTool('get_expenses', { page: 2 }, ctx);
     expect(page2.success).toBe(true);
-    expect(page2.output).toContain('Total: 150 expenses | Page 2/2');
+    expect(page2.output).toContain('Total: 150 expenses | Grand total:');
     expect(page2.output).toContain('[id:101]');
     expect(page2.output).toContain('[id:150]');
     expect(page2.output).not.toContain('[id:1]');
@@ -399,7 +413,7 @@ describe('executeGetExpenses', () => {
 
     const result = await executeTool('get_expenses', { page: 1, page_size: 10 }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Total: 30 expenses | Page 1/3');
+    expect(result.output).toContain('Total: 30 expenses | Grand total:');
     expect(result.output).toContain('[id:10]');
     expect(result.output).not.toContain('[id:11]');
   });
@@ -456,8 +470,8 @@ describe('executeGetBudgets', () => {
 describe('executeAddExpense', () => {
   beforeEach(resetAllMocks);
 
-  test('creates expense with correct fields', async () => {
-    mockExpenses.create.mockReturnValue({ id: 42 });
+  test('creates expense with correct fields via ExpenseRecorder', async () => {
+    mockRecord.mockResolvedValue({ expense: { id: 42 }, eurAmount: 25.5 });
 
     const result = await executeTool(
       'add_expense',
@@ -466,21 +480,17 @@ describe('executeAddExpense', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(mockExpenses.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        group_id: 1,
-        user_id: 123,
-        date: '2026-03-09',
-        category: 'Food',
-        comment: 'lunch',
-        amount: 25.5,
-        currency: 'EUR',
-      }),
-    );
+    expect(mockRecord).toHaveBeenCalledWith(1, 123, {
+      date: '2026-03-09',
+      category: 'Food',
+      comment: 'lunch',
+      amount: 25.5,
+      currency: 'EUR',
+    });
   });
 
   test('returns confirmation with amount and currency', async () => {
-    mockExpenses.create.mockReturnValue({ id: 99 });
+    mockRecord.mockResolvedValue({ expense: { id: 99 }, eurAmount: 43 });
 
     const result = await executeTool(
       'add_expense',
@@ -655,6 +665,7 @@ describe('executeGetGroupSettings', () => {
       enabled_currencies: ['EUR'],
       custom_prompt: 'Be brief and speak in Russian',
       active_topic_id: null,
+      bank_panel_summary_message_id: null,
       created_at: '',
       updated_at: '',
     });
@@ -712,7 +723,7 @@ describe('executeDeleteBudget', () => {
   test('rejects missing category', async () => {
     const result = await executeTool('delete_budget', {}, ctx);
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Category is required');
+    expect(result.error).toContain('category is required');
   });
 });
 
@@ -726,7 +737,7 @@ describe('executeSetCustomPrompt', () => {
       ctx,
     );
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Custom prompt set');
+    expect(result.output).toContain('Custom prompt updated');
     expect(mockGroups.update).toHaveBeenCalledWith(456, {
       custom_prompt: 'Always respond in Russian',
     });
@@ -752,13 +763,13 @@ describe('calculate tool', () => {
   test('result is rounded to 2 decimal places', async () => {
     const result = await executeTool('calculate', { expression: '100 / 3' }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toMatch(/^33\.33 /); // not 33.333333...
+    expect(result.output).toBe('33.33'); // pure math — no currency suffix
   });
 
-  test('uses group default currency when target_currency omitted', async () => {
+  test('pure math omits currency from output', async () => {
     const result = await executeTool('calculate', { expression: '50 + 50' }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('EUR'); // group default_currency is EUR
+    expect(result.output).toBe('100'); // no EUR suffix for currency-free expressions
   });
 
   test('returns error for unknown target_currency', async () => {
@@ -800,6 +811,27 @@ describe('calculate tool', () => {
     const value = parseFloat(result.output ?? '');
     expect(value).toBeGreaterThan(-200);
     expect(value).toBeLessThan(200);
+  });
+
+  test('large pure math result uses scientific notation', async () => {
+    const result = await executeTool('calculate', { expression: '63000000 / 0.5' }, ctx);
+    expect(result.success).toBe(true);
+    // 126000000 → 1.26e8
+    expect(result.output).toMatch(/e\d+/);
+    expect(result.output).not.toContain('EUR');
+  });
+
+  test('result under 1M uses decimal notation', async () => {
+    const result = await executeTool('calculate', { expression: '999999 * 1' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toBe('999999');
+    expect(result.output).not.toMatch(/e\d+/);
+  });
+
+  test('negative large result uses scientific notation with minus sign', async () => {
+    const result = await executeTool('calculate', { expression: '0 - 63000000 / 0.5' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/^-.*e\d+/);
   });
 });
 

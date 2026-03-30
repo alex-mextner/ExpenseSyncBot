@@ -20,6 +20,13 @@ export function createTestDb(): Database {
 export function clearTestDb(db: Database): void {
   db.exec(`
     DELETE FROM sync_snapshots;
+    DELETE FROM merchant_rule_requests;
+    DELETE FROM merchant_rules;
+    DELETE FROM bank_transactions;
+    DELETE FROM bank_accounts;
+    DELETE FROM bank_plugin_state;
+    DELETE FROM bank_credentials;
+    DELETE FROM bank_connections;
     DELETE FROM advice_log;
     DELETE FROM expense_items;
     DELETE FROM chat_messages;
@@ -30,6 +37,7 @@ export function clearTestDb(db: Database): void {
     DELETE FROM pending_expenses;
     DELETE FROM photo_processing_queue;
     DELETE FROM users;
+    DELETE FROM group_spreadsheets;
     DELETE FROM groups;
   `);
 }

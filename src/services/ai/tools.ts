@@ -34,7 +34,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         summary_only: {
           type: 'boolean',
           description:
-            'If true, return only aggregated totals by category instead of individual expenses',
+            'If true, return pre-calculated totals by category (count, total in display currency, breakdown by original currency). Use for any aggregation question — totals for a period, category breakdown, "what did X spend", "how much in total". Always prefer this over fetching individual records when you need a summary.',
         },
       },
     },
@@ -201,14 +201,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'calculate',
     description:
-      'Evaluate a math expression with optional currency amounts. Converts all currencies to the target currency using current exchange rates, then evaluates the expression. Supports percentages: "100$ - 7.5%" → 92.50. Use this for ANY arithmetic the user asks for — never calculate manually. Examples: "100$ - 70EUR" in USD, "1500 RSD + 50 EUR" in EUR, "100 * 3", "500€ - 10%", "300$ / 3" (split between 3 people).',
+      'Evaluate ANY math expression — financial or not. Currency amounts are optional and auto-converted. Use for ALL arithmetic: splitting bills, counting people, areas, ratios, percentages, currency conversion — anything. NEVER calculate manually.\n\nExamples:\n- {"expression": "100 * 3"}\n- {"expression": "100$ - 70 EUR", "target_currency": "USD"}\n- {"expression": "1500 RSD + 50 EUR", "target_currency": "EUR"}\n- {"expression": "500€ - 10%"}\n- {"expression": "1000000 / 6"}\n\nFor currency conversion (e.g. "what is 1 USD in RUB"): {"expression": "1 USD", "target_currency": "RUB"}. NEVER use "in" as an operator — it is not supported. Do NOT call get_exchange_rates first — this tool already uses live rates.',
     input_schema: {
       type: 'object' as const,
       properties: {
         expression: {
           type: 'string',
           description:
-            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /. Supports percentage: "EXPR - N%" or "EXPR + N%".',
+            'Math expression to evaluate. May contain currency amounts (e.g. "100$", "70 EUR", "50€"). Operators: +, -, *, /. Supports percentage: "EXPR - N%" or "EXPR + N%". For plain conversion: "1 USD" with target_currency set.',
         },
         target_currency: {
           type: 'string',
@@ -224,13 +224,19 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'set_custom_prompt',
     description:
-      'Set or clear the custom AI system prompt for the group. This prompt is appended to the default system prompt.',
+      'Set, append to, or clear the custom AI system prompt for the group. This is the ONLY persistent memory available — use it whenever the user says "remember", "note", "save", or asks to keep any fact, rule, or preference for future conversations. Prefer mode="append" to avoid overwriting existing notes. Examples: user says "remember that Lena has a hidden account" → append "Note: Lena has a hidden account."; user says "always reply in English" → append the rule. Act immediately without asking for confirmation.',
     input_schema: {
       type: 'object' as const,
       properties: {
         prompt: {
           type: 'string',
-          description: 'Custom prompt text. Set to empty string to clear.',
+          description: 'Text to save. For facts/notes use plain declarative sentences.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['set', 'append'],
+          description:
+            '"set" — replaces the entire prompt (use to rewrite rules from scratch). "append" (preferred) — adds text after the existing prompt, preserving previous notes.',
         },
       },
       required: ['prompt'],
@@ -255,6 +261,135 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       required: ['action', 'name'],
     },
   },
+
+  // === Bank tools ===
+  {
+    name: 'get_bank_transactions',
+    description:
+      'Get bank transactions for a period. All results are scoped to this group only. Use to answer questions about bank spending or reconciliation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        period: {
+          type: 'string',
+          description: '"current_month" | "last_month" | "YYYY-MM"',
+        },
+        bank_name: {
+          type: 'string',
+          description: 'Filter by bank registry key (e.g. "tbc"). Omit for all banks.',
+        },
+        status: {
+          type: 'string',
+          description: '"pending" | "confirmed" | "skipped" — omit for all statuses.',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_bank_balances',
+    description:
+      'Get current account balances from all connected banks for this group. By default returns only active (non-excluded) accounts.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        bank_name: {
+          type: 'string',
+          description:
+            'Optional: filter by bank registry key (case-insensitive substring match). The key comes from previous results — e.g. "tbc-ge", not "tbc". Omit to see all banks.',
+        },
+        include_excluded: {
+          type: 'boolean',
+          description:
+            'If true, include accounts that have been manually excluded/disabled (is_excluded=true). Default: false.',
+        },
+      },
+    },
+  },
+  {
+    name: 'send_feedback',
+    description:
+      'Send a feedback message or bug report to the bot admin. Use when a user explicitly asks to report a problem, send feedback, or contact support.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        message: {
+          type: 'string',
+          description: 'Feedback or bug report text to send to the admin.',
+        },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'render_table',
+    description: `Renders a Markdown table as a styled image and sends it to the chat.
+
+ALWAYS call this tool when you have tabular data (comparisons, category breakdowns, budgets, schedules, multi-column lists) — never skip it.
+Call IN PARALLEL with your text response. In the text, present the same data as a bullet list — never write raw Markdown table syntax there.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Heading shown above the table.',
+        },
+        markdown: {
+          type: 'string',
+          description:
+            'Markdown table syntax. Example: "| Категория | Сумма |\\n|---|---|\\n| Еда | 5000 ₽ |"',
+        },
+        caption: {
+          type: 'string',
+          description: 'Optional note shown below the table.',
+        },
+      },
+      required: ['title', 'markdown'],
+    },
+  },
+  {
+    name: 'get_recurring_patterns',
+    description:
+      'Get all recurring expense patterns for the group (rent, subscriptions, etc.). Returns patterns with their status, expected amounts, and next expected dates.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'manage_recurring_pattern',
+    description:
+      'Pause, resume, dismiss, or delete a recurring expense pattern. Use get_recurring_patterns first to find the pattern ID.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pattern_id: {
+          type: 'number',
+          description: 'ID of the recurring pattern to manage',
+        },
+        action: {
+          type: 'string',
+          enum: ['pause', 'resume', 'dismiss', 'delete'],
+          description:
+            '"pause" — temporarily stop tracking. "resume" — reactivate a paused pattern. "dismiss" — permanently hide (won\'t be re-detected). "delete" — remove entirely.',
+        },
+      },
+      required: ['pattern_id', 'action'],
+    },
+  },
+  {
+    name: 'find_missing_expenses',
+    description:
+      'Compare bank transactions vs recorded expenses. Returns unmatched bank debit transactions that may be missing from the expense log.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        period: {
+          type: 'string',
+          description: '"current_month" | "last_month" | "YYYY-MM"',
+        },
+      },
+    },
+  },
 ];
 
 /**
@@ -275,4 +410,11 @@ export const TOOL_LABELS: Record<string, string> = {
   calculate: 'Считаю',
   set_custom_prompt: 'Обновляю промпт',
   manage_category: 'Управляю категориями',
+  get_bank_transactions: 'Загружаю банковские транзакции',
+  get_bank_balances: 'Проверяю балансы счетов',
+  get_recurring_patterns: 'Загружаю повторяющиеся платежи',
+  manage_recurring_pattern: 'Управляю повторяющимся платежом',
+  find_missing_expenses: 'Ищу пропущенные расходы',
+  render_table: 'Рендерю таблицу',
+  send_feedback: 'Отправляю фидбек',
 };

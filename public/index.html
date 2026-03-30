@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ExpenseSyncBot — Telegram Expense Tracker</title>
+  <style>
+    :root { --accent: #2563eb; --accent-light: #dbeafe; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; --border: #e2e8f0; --shadow: rgba(0,0,0,.06); }
+    @media (prefers-color-scheme: dark) {
+      :root { --accent: #60a5fa; --accent-light: #1e3a5f; --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #94a3b8; --border: #334155; --shadow: rgba(0,0,0,.3); }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 3rem 1.5rem; }
+
+    /* Hero */
+    .hero { text-align: center; padding: 3rem 2rem; background: linear-gradient(135deg, #2563eb, #7c3aed); border-radius: 16px; color: #fff; margin-bottom: 1.5rem; }
+    .hero h1 { font-size: 2.5rem; margin-bottom: .25rem; letter-spacing: -.02em; }
+    .hero .tagline { font-size: 1.15rem; opacity: .9; margin-bottom: 2rem; }
+    .hero .cta { display: inline-block; padding: .85rem 2rem; background: #fff; color: #2563eb; text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 1rem; transition: transform .15s; }
+    .hero .cta:hover { transform: translateY(-2px); }
+
+    /* Cards grid */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: var(--card); border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px var(--shadow); }
+    .card h3 { font-size: 1rem; margin-bottom: .5rem; display: flex; align-items: center; gap: .5rem; }
+    .card p { font-size: .9rem; color: var(--muted); margin: 0; }
+    .icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+    .icon-blue { background: var(--accent-light); }
+    .icon-green { background: #dcfce7; }
+    .icon-purple { background: #f3e8ff; }
+    .icon-amber { background: #fef3c7; }
+    .icon-rose { background: #ffe4e6; }
+    .icon-cyan { background: #cffafe; }
+    .icon-teal { background: #ccfbf1; }
+
+    /* Sections */
+    .section { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px var(--shadow); margin-bottom: 1.5rem; }
+    .section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+
+    /* How it works */
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { display: flex; gap: .75rem; margin-bottom: 1rem; font-size: .95rem; align-items: flex-start; }
+    .steps li > span { min-width: 0; }
+    .steps li::before { counter-increment: step; content: counter(step); width: 28px; min-width: 28px; height: 28px; border-radius: 50%; background: #2563eb; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; margin-top: .2em; }
+    @media (max-width: 600px) {
+      .steps li { display: block; }
+      .steps li::before { display: inline-flex; vertical-align: middle; margin-right: .5rem; }
+    }
+    .steps code { background: var(--bg); padding: .1em .4em; border-radius: 4px; font-size: .85rem; }
+    .steps li:last-child { margin-bottom: 0; }
+
+    /* Google API */
+    .scope-list { list-style: none; padding: 0; }
+    .scope-list li { background: var(--bg); padding: .75rem 1rem; border-radius: 8px; margin-bottom: .5rem; font-size: .9rem; }
+    .scope-list li strong { color: var(--accent); }
+
+    /* Details / accordion */
+    details { border: 1px solid var(--border); border-radius: 8px; margin-bottom: .5rem; }
+    details[open] { border-color: var(--accent); }
+    summary { cursor: pointer; padding: .75rem 1rem; font-weight: 600; font-size: .95rem; list-style: none; display: flex; align-items: center; justify-content: space-between; }
+    summary::after { content: "+"; font-size: 1.2rem; color: var(--muted); transition: transform .2s; }
+    details[open] summary::after { content: "\2212"; }
+    summary::-webkit-details-marker { display: none; }
+    details .detail-body { padding: 0 1rem 1rem; font-size: .9rem; color: var(--muted); }
+    details .detail-body ul { padding-left: 1.25rem; margin: .5rem 0; }
+    details .detail-body li { margin-bottom: .25rem; }
+    details .detail-body code { background: var(--bg); padding: .1em .4em; border-radius: 4px; font-size: .85rem; }
+
+    /* Feature list in details */
+    .feature-list { list-style: none; padding: 0; }
+    .feature-list li { padding: .5rem 0; border-bottom: 1px solid var(--border); font-size: .9rem; }
+    .feature-list li:last-child { border-bottom: none; }
+    .feature-list code { background: var(--bg); padding: .1em .4em; border-radius: 4px; font-size: .85rem; }
+
+    /* Footer */
+    .links { text-align: center; padding: 1rem; font-size: .9rem; }
+    .links a { color: var(--accent); margin: 0 1rem; text-decoration: none; }
+    .links a:hover { text-decoration: underline; }
+    footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 1rem 0; }
+
+    /* Dark theme */
+    @media (prefers-color-scheme: dark) {
+      a { color: var(--accent); }
+      .icon-blue { background: #1e3a5f; }
+      .icon-green { background: #14532d; }
+      .icon-purple { background: #3b0764; }
+      .icon-amber { background: #451a03; }
+      .icon-rose { background: #4c0519; }
+      .icon-cyan { background: #083344; }
+      .icon-teal { background: #042f2e; }
+      .scope-list li { background: var(--bg); }
+      .scope-list li strong { color: var(--accent); }
+      details .detail-body code, .feature-list code { background: var(--bg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div class="hero">
+      <h1>ExpenseSyncBot</h1>
+      <p class="tagline">Track expenses in Telegram. Sync to Google Sheets. Automatically.</p>
+      <a class="cta" href="https://t.me/ExpenseSyncBot" target="_blank" rel="noopener">Open in Telegram</a>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3><span class="icon icon-blue">💲</span> Multi-Currency</h3>
+        <p>Track expenses in any currency — EUR, USD, RSD, AED and more. Automatic conversion and per-currency breakdowns.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-green">📊</span> Google Sheets Sync</h3>
+        <p>Every expense is synced to a personal Google Sheets spreadsheet in real time. Your data, your spreadsheet.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-purple">🏷️</span> Smart Categories</h3>
+        <p>Automatic category detection and custom categories. The bot remembers which categories you use for similar purchases.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-amber">📋</span> Budget Tracking</h3>
+        <p>Set monthly budgets by category. Get alerts when you're approaching the limit.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-rose">📸</span> Receipt Scanning</h3>
+        <p>Send a photo of a receipt — the bot reads it, extracts items, and logs each expense automatically.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-cyan">🤖</span> AI Analysis</h3>
+        <p>Ask the bot anything about your spending. Get personalized insights, trends, and daily financial advice.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon icon-teal">🏦</span> Bank Integration</h3>
+        <p>Connect your bank account to auto-import transactions. AI categorizes them and finds expenses you might have missed.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>How It Works</h2>
+      <ol class="steps">
+        <li><span>Add <strong>@ExpenseSyncBot</strong> to a family Telegram group (into a topic) or create a dedicated group for expenses</span></li>
+        <li><span>Run <strong>/connect</strong> and authorize your Google account</span></li>
+        <li><span>Send expenses as simple messages: <code>50 lunch</code>, <code>1200 RSD taxi</code>, <code>$30 groceries</code></span></li>
+        <li><span>The bot logs everything locally and syncs it to your Google Sheet</span></li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>All Features</h2>
+      <details>
+        <summary>AI Assistant</summary>
+        <div class="detail-body">
+          <p>Mention the bot in your group chat to talk to the AI assistant. It can:</p>
+          <ul>
+            <li>Answer questions about your spending — totals, breakdowns, trends</li>
+            <li>Add, edit, and delete expenses through natural language</li>
+            <li>Set and manage budgets</li>
+            <li>Convert currencies and do financial math</li>
+            <li>Analyze spending patterns and give personalized advice</li>
+            <li>Compare bank transactions with recorded expenses</li>
+            <li>Remember notes and rules you tell it</li>
+            <li>Send feedback to the bot administrator</li>
+          </ul>
+        </div>
+      </details>
+      <details>
+        <summary>Commands</summary>
+        <div class="detail-body">
+          <ul class="feature-list">
+            <li><code>/connect</code> — connect Google account and create a spreadsheet</li>
+            <li><code>/start</code> — show bot status and quick reference</li>
+            <li><code>/stats</code> — expense statistics and analytics</li>
+            <li><code>/sum</code> — sum expenses by period, category, or currency</li>
+            <li><code>/budget</code> — manage monthly budgets by category</li>
+            <li><code>/categories</code> — view and manage expense categories</li>
+            <li><code>/sync</code> — sync data from Google Sheets to local database</li>
+            <li><code>/spreadsheet</code> — get a link to your Google Sheet</li>
+            <li><code>/bank</code> — connect a bank account for auto-import</li>
+            <li><code>/settings</code> — view current group settings</li>
+            <li><code>/advice</code> — get daily AI financial advice</li>
+            <li><code>/disconnect</code> — delete all data and revoke access</li>
+          </ul>
+        </div>
+      </details>
+      <details>
+        <summary>Receipt Scanning</summary>
+        <div class="detail-body">
+          <p>Send a photo of any receipt to the group chat. The bot will:</p>
+          <ul>
+            <li>Extract individual items with prices using AI</li>
+            <li>Suggest categories for each item based on your history</li>
+            <li>Let you confirm, change category, or skip each item</li>
+            <li>Log confirmed items as separate expenses</li>
+          </ul>
+        </div>
+      </details>
+      <details>
+        <summary>Bank Integration</summary>
+        <div class="detail-body">
+          <p>Connect supported banks via <code>/bank</code> to automatically import transactions:</p>
+          <ul>
+            <li>AI categorizes each transaction based on merchant and MCC code</li>
+            <li>Review and confirm imported transactions before they become expenses</li>
+            <li>View real-time account balances</li>
+            <li>Find bank transactions that haven't been recorded as expenses yet</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+
+    <div class="section">
+      <h2>How It Uses Google APIs</h2>
+      <p style="font-size: .95rem; margin-bottom: 1rem;">When you connect your Google account, the bot creates a dedicated spreadsheet and writes your expenses into it. It also reads back changes you make manually — so you can edit expenses and budgets directly in the spreadsheet. The bot requests only two scopes:</p>
+      <ul class="scope-list">
+        <li><strong>Google Sheets API</strong> — to read and write expense data in the spreadsheet the bot creates for you.</li>
+        <li><strong>Google Drive API (drive.file)</strong> — to create new spreadsheet files. This scope is limited to files created by the bot — it does not access any other files on your Drive.</li>
+      </ul>
+      <p style="font-size: .9rem; color: var(--muted); margin-top: .75rem;">You can revoke access at any time through your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions</a> or by using the <code>/disconnect</code> command in Telegram.</p>
+    </div>
+
+    <div class="section">
+      <h2>FAQ</h2>
+      <details>
+        <summary>Is it free?</summary>
+        <div class="detail-body">
+          <p>Yes, ExpenseSyncBot is free to use. There are no paid plans or premium features.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Does the bot access my entire Google Drive?</summary>
+        <div class="detail-body">
+          <p>No. The bot uses the <code>drive.file</code> scope, which only allows access to files the bot itself created. It cannot see, read, or modify any other files on your Google Drive.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Can I use the bot in a private chat?</summary>
+        <div class="detail-body">
+          <p>No, the bot works only in group chats. Add it to an existing group or create a new one — even a group with just you and the bot works fine.</p>
+        </div>
+      </details>
+      <details>
+        <summary>How do I delete all my data?</summary>
+        <div class="detail-body">
+          <p>Use the <code>/disconnect</code> command in your group chat. This permanently deletes all expenses, budgets, categories, tokens, and conversation history from our servers. Your Google Sheets spreadsheet is not deleted — it stays in your Drive.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Which banks are supported?</summary>
+        <div class="detail-body">
+          <p>Bank integration uses plugins from the <a href="https://github.com/zenmoney/ZenPlugins/tree/master/src/plugins" target="_blank" rel="noopener">ZenPlugins repository</a> — see the full list of supported banks there. Use <code>/bank</code> in your group to connect one.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Can multiple people track expenses in one group?</summary>
+        <div class="detail-body">
+          <p>Yes. All group members can add expenses, and everything goes into a single shared Google Sheet. This makes it ideal for families or flatmates tracking shared budgets.</p>
+        </div>
+      </details>
+      <details>
+        <summary>How do I send feedback or report a bug?</summary>
+        <div class="detail-body">
+          <p>Mention the bot in your group and ask it to send feedback — for example, <code>@ExpenseSyncBot send feedback: the /stats command shows wrong totals</code>. Your message will be delivered to the administrator.</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="links">
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/terms">Terms of Service</a>
+    </div>
+
+    <footer>&copy; 2026 ExpenseSyncBot</footer>
+  </div>
+</body>
+</html>

@@ -1,4 +1,5 @@
 /** Expense message parser — extracts amount, currency, category, and comment from free-form text */
+import Big from 'big.js';
 import currency from 'currency.js';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 
@@ -12,10 +13,16 @@ export interface ParsedExpense {
 
 // ── Math expression evaluator (no eval/Function) ──────────────────────
 
-type MathToken = number | '+' | '-' | '*' | '/';
+type MathOperator = '+' | '-' | '*' | '/';
+// Numbers stored as strings so Big.js receives exact decimal representations (not parseFloat-imprecise floats)
+type MathToken = string | MathOperator;
+
+function isOperator(t: string): t is MathOperator {
+  return t === '+' || t === '-' || t === '*' || t === '/';
+}
 
 /**
- * Tokenize a cleaned math expression into alternating numbers and operators.
+ * Tokenize a cleaned math expression into alternating number strings and operators.
  * Returns null if the expression is structurally invalid.
  */
 function tokenize(expr: string): MathToken[] | null {
@@ -28,9 +35,8 @@ function tokenize(expr: string): MathToken[] | null {
       if (numStr.includes(',')) {
         numStr = numStr.replace(',', '.');
       }
-      const num = parseFloat(numStr);
-      if (Number.isNaN(num)) return null;
-      tokens.push(num);
+      if (Number.isNaN(parseFloat(numStr))) return null;
+      tokens.push(numStr);
     } else if (match[2]) {
       const op = match[2] === '×' ? '*' : match[2];
       tokens.push(op as MathToken);
@@ -41,62 +47,60 @@ function tokenize(expr: string): MathToken[] | null {
   if (tokens.length < 3 || tokens.length % 2 === 0) return null;
 
   for (let i = 0; i < tokens.length; i++) {
-    const isNumber = i % 2 === 0;
-    if (isNumber && typeof tokens[i] !== 'number') return null;
-    if (!isNumber && typeof tokens[i] !== 'string') return null;
+    const tok = tokens[i] as string;
+    const isNum = i % 2 === 0;
+    if (isNum && isOperator(tok)) return null;
+    if (!isNum && !isOperator(tok)) return null;
   }
 
   return tokens;
 }
 
 /**
- * Evaluate tokens with standard operator precedence (* / before +).
- * Returns null on division by zero.
+ * Evaluate tokens with standard operator precedence (* / before + -).
+ * Returns null on division by zero or Big.js error.
  */
-function evaluateTokens(tokens: MathToken[]): number | null {
+function evaluateTokens(tokens: MathToken[]): Big | null {
   if (!tokens || tokens.length === 0) return null;
 
-  // Phase 1: handle * and / (higher precedence)
-  const addQueue: MathToken[] = [];
-  let i = 0;
+  try {
+    // Phase 1: apply * and / immediately (higher precedence)
+    const values: Big[] = [new Big(tokens[0] as string)];
+    const ops: string[] = [];
 
-  while (i < tokens.length) {
-    if (i + 2 <= tokens.length) {
-      const op = tokens[i + 1];
+    let i = 1;
+    while (i < tokens.length - 1) {
+      const op = tokens[i] as string;
+      const right = new Big(tokens[i + 1] as string);
+
       if (op === '*' || op === '/') {
-        let left = tokens[i] as number;
-        // Consume all consecutive * and /
-        while (i + 2 < tokens.length && (tokens[i + 1] === '*' || tokens[i + 1] === '/')) {
-          const operator = tokens[i + 1] as string;
-          const right = tokens[i + 2] as number;
-          if (operator === '*') {
-            left *= right;
-          } else {
-            if (right === 0) return null;
-            left = left / right;
-          }
-          i += 2;
+        const left = values[values.length - 1] as Big;
+        if (op === '/') {
+          if (right.eq(0)) return null;
+          values[values.length - 1] = left.div(right);
+        } else {
+          values[values.length - 1] = left.times(right);
         }
-        addQueue.push(left);
-        i++;
-        continue;
+      } else {
+        ops.push(op);
+        values.push(right);
       }
+      i += 2;
     }
-    const token = tokens[i];
-    if (token !== undefined) addQueue.push(token);
-    i++;
-  }
 
-  // Phase 2: handle + (lower precedence)
-  let result = addQueue[0] as number;
-  for (let j = 1; j < addQueue.length; j += 2) {
-    const op = addQueue[j];
-    const right = addQueue[j + 1] as number;
-    if (op === '+') result += right;
-    else if (op === '-') result -= right;
-  }
+    // Phase 2: apply + and - (lower precedence, left to right)
+    let result = values[0] as Big;
+    for (let j = 0; j < ops.length; j++) {
+      const op = ops[j] as string;
+      const right = values[j + 1] as Big;
+      if (op === '+') result = result.plus(right);
+      else if (op === '-') result = result.minus(right);
+    }
 
-  return result;
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -104,38 +108,31 @@ function evaluateTokens(tokens: MathToken[]): number | null {
  * Supports: +, -, *, ×, /
  * Does NOT support: parentheses
  *
- * Returns null for invalid expressions, single numbers, overflow, or division by zero.
+ * Returns null for invalid expressions, single numbers, or division by zero.
+ * No upper bound on the result — callers apply their own limits as needed.
  *
- * Examples: "10*3" → 30, "100/4" → 25, "10*3+5" → 35, "100-70" → 30
+ * Examples: "10*3" → Big(30), "100/4" → Big(25), "10*3+5" → Big(35)
  */
-export function evaluateMathExpression(expr: string): number | null {
+export function evaluateMathExpressionBig(expr: string): Big | null {
   // Remove spaces
   const cleaned = expr.replace(/\s+/g, '');
 
-  // Safety: reject overly long expressions
-  if (cleaned.length > 50) return null;
-
-  // Validate: only digits, dots, commas, and operators +*/×
-  // Must have at least one operator (single numbers are not expressions)
-  if (!/^[\d.,]+([+\-*×/][\d.,]+)+$/.test(cleaned)) {
+  // Validate: only digits, optional single decimal separator, and operators +*/×
+  // Must have at least one operator (single numbers are not expressions).
+  // \d+(?:[.,]\d+)? prevents multi-separator tokens like 1.2.3
+  if (!/^\d+(?:[.,]\d+)?([+\-*×/]\d+(?:[.,]\d+)?)+$/.test(cleaned)) {
     return null;
   }
 
-  // Tokenize
   const tokens = tokenize(cleaned);
   if (!tokens) return null;
 
-  // Safety: max 10 operators
-  const opCount = tokens.filter((t) => typeof t === 'string').length;
-  if (opCount > 10) return null;
+  return evaluateTokens(tokens);
+}
 
-  // Evaluate with operator precedence (* / before +)
-  const result = evaluateTokens(tokens);
-
-  // Safety: reject unreasonable amounts
-  if (result === null || result >= 10_000_000) return null;
-
-  return result;
+/** Convenience wrapper that converts the Big result to a JS number. */
+function evaluateMathExpression(expr: string): number | null {
+  return evaluateMathExpressionBig(expr)?.toNumber() ?? null;
 }
 
 // ── End math expression evaluator ─────────────────────────────────────

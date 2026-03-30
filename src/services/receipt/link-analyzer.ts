@@ -1,6 +1,6 @@
 /** Receipt link analyzer — extracts URLs from messages and processes payment links into expenses */
 import type { BotInstance } from '../../bot/types';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
@@ -101,9 +101,11 @@ async function analyzeLink(
     if (content.length < 50) return null;
 
     const categories = database.categories.findByGroupId(groupId);
+    const categoryExamples = database.expenses.getRecentExamplesByCategory(groupId);
     const result = await extractExpensesFromReceipt(
       content,
       categories.map((c) => c.name),
+      categoryExamples,
     );
 
     if (!result.items?.length) return null;
@@ -111,7 +113,7 @@ async function analyzeLink(
     const group = database.groups.findById(groupId);
     return {
       items: result.items,
-      currency: result.currency || group?.default_currency || 'EUR',
+      currency: result.currency || group?.default_currency || BASE_CURRENCY,
     };
   } catch (error) {
     logger.error({ err: error }, '[LINK] Failed to analyze link');

@@ -1,10 +1,11 @@
-import { startOAuthServer } from './src/web/oauth-callback';
-import { startBot } from './src/bot';
+// Application entry point — initializes database, OAuth server, exchange rates, and starts the Telegram bot
+import { createStartupMigration, startBot } from './src/bot';
 import { database } from './src/database';
+import { scheduleNewsBroadcast } from './src/services/broadcast';
 import { updateExchangeRates } from './src/services/currency/converter';
 import { startTempImageCleanup } from './src/services/receipt/ocr-extractor';
-import { scheduleNewsBroadcast } from './src/services/broadcast';
 import { createLogger } from './src/utils/logger';
+import { startOAuthServer } from './src/web/oauth-callback';
 
 const logger = createLogger('main');
 
@@ -31,6 +32,9 @@ async function main() {
 
     logger.info('Starting Telegram bot...');
     const bot = await startBot();
+
+    // Run one-time year-split migration (idempotent)
+    await createStartupMigration(bot)();
 
     scheduleNewsBroadcast(bot);
 

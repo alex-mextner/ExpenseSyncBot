@@ -13,6 +13,7 @@ export interface Group {
   enabled_currencies: CurrencyCode[];
   custom_prompt: string | null;
   active_topic_id: number | null;
+  bank_panel_summary_message_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -29,6 +30,7 @@ export interface UpdateGroupData {
   enabled_currencies?: CurrencyCode[];
   custom_prompt?: string | null;
   active_topic_id?: number | null;
+  bank_panel_summary_message_id?: number | null;
 }
 
 /**
@@ -263,6 +265,16 @@ export interface UpdateReceiptItemData {
 }
 
 /**
+ * Per-year spreadsheet mapping for a group
+ */
+export interface GroupSpreadsheet {
+  id: number;
+  group_id: number;
+  year: number;
+  spreadsheet_id: string;
+}
+
+/**
  * Expense item model (detailed items linked to expenses)
  */
 export interface ExpenseItem {
@@ -283,4 +295,192 @@ export interface CreateExpenseItemData {
   quantity: number;
   price: number;
   total: number;
+}
+
+// ─── Bank Integration Types ─────────────────────────────────────────────────
+
+export interface BankConnection {
+  id: number;
+  group_id: number;
+  bank_name: string;
+  display_name: string;
+  status: 'setup' | 'active' | 'disconnected';
+  consecutive_failures: number;
+  last_sync_at: string | null;
+  last_error: string | null;
+  panel_message_id: number | null;
+  panel_message_thread_id: number | null;
+  created_at: string;
+}
+
+export interface CreateBankConnectionData {
+  group_id: number;
+  bank_name: string;
+  display_name: string;
+  status?: BankConnection['status'];
+}
+
+export interface UpdateBankConnectionData {
+  status?: BankConnection['status'];
+  consecutive_failures?: number;
+  last_sync_at?: string | null;
+  last_error?: string | null;
+  panel_message_id?: number | null;
+  panel_message_thread_id?: number | null;
+}
+
+export interface BankCredential {
+  connection_id: number;
+  encrypted_data: string;
+}
+
+export interface BankAccount {
+  id: number;
+  connection_id: number;
+  account_id: string;
+  title: string;
+  balance: number;
+  currency: string;
+  type: string | null;
+  is_excluded: number;
+  updated_at: string;
+}
+
+export interface UpsertBankAccountData {
+  connection_id: number;
+  account_id: string;
+  title: string;
+  balance: number;
+  currency: string;
+  type?: string | null;
+}
+
+export interface BankTransaction {
+  id: number;
+  connection_id: number;
+  external_id: string;
+  account_id: string | null;
+  date: string;
+  time: string | null;
+  amount: number;
+  sign_type: 'debit' | 'credit' | 'reversal';
+  currency: string;
+  merchant: string | null;
+  merchant_normalized: string | null;
+  mcc: number | null;
+  raw_data: string;
+  matched_expense_id: number | null;
+  telegram_message_id: number | null;
+  edit_in_progress: number;
+  awaiting_comment: number;
+  prefill_category: string | null;
+  prefill_comment: string | null;
+  status: 'pending' | 'confirmed' | 'skipped' | 'skipped_reversal';
+  created_at: string;
+}
+
+export interface CreateBankTransactionData {
+  connection_id: number;
+  external_id: string;
+  account_id?: string | null;
+  date: string;
+  time?: string | null;
+  amount: number;
+  sign_type: BankTransaction['sign_type'];
+  currency: string;
+  merchant?: string | null;
+  merchant_normalized?: string | null;
+  mcc?: number | null;
+  raw_data: string;
+  status: BankTransaction['status'];
+}
+
+export interface BankTransactionFilters {
+  period?: string;
+  bank_name?: string;
+  status?: BankTransaction['status'];
+}
+
+export interface MerchantRule {
+  id: number;
+  pattern: string;
+  flags: string;
+  replacement: string;
+  category: string | null;
+  confidence: number;
+  status: 'pending_review' | 'approved' | 'rejected';
+  source: 'ai' | 'manual';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMerchantRuleData {
+  pattern: string;
+  flags?: string;
+  replacement: string;
+  category?: string | null;
+  confidence?: number;
+  source?: MerchantRule['source'];
+}
+
+export interface UpdateMerchantRuleData {
+  pattern?: string;
+  replacement?: string;
+  category?: string | null;
+  confidence?: number;
+  status?: MerchantRule['status'];
+}
+
+export interface MerchantRuleRequest {
+  id: number;
+  merchant_raw: string;
+  mcc: number | null;
+  group_id: number | null;
+  user_category: string | null;
+  user_comment: string | null;
+  processed: number;
+  created_at: string;
+}
+
+export interface CreateMerchantRuleRequestData {
+  merchant_raw: string;
+  mcc?: number | null;
+  group_id?: number | null;
+  user_category?: string | null;
+  user_comment?: string | null;
+}
+
+// ─── Recurring Pattern Types ────────────────────────────────────────────────
+
+export type RecurringPatternStatus = 'active' | 'paused' | 'dismissed';
+
+/**
+ * Recurring expense pattern detected from history
+ */
+export interface RecurringPattern {
+  id: number;
+  group_id: number;
+  category: string;
+  expected_amount: number;
+  currency: string;
+  interval_days: number;
+  expected_day: number | null;
+  tolerance_days: number;
+  last_seen_date: string | null;
+  next_expected_date: string | null;
+  status: RecurringPatternStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateRecurringPatternData {
+  group_id: number;
+  category: string;
+  expected_amount: number;
+  currency: string;
+  interval_days?: number;
+  expected_day?: number;
+  tolerance_days?: number;
+  last_seen_date?: string;
+  next_expected_date?: string;
 }

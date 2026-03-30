@@ -4,6 +4,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import { BASE_CURRENCY } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
@@ -29,6 +30,7 @@ export async function handleAskQuestion(
   ctx: Ctx['Message'],
   question: string,
   bot: Bot,
+  isMention = false,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
@@ -91,7 +93,7 @@ export async function handleAskQuestion(
     return;
   }
 
-  await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName);
+  await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName, isMention);
 }
 
 /**
@@ -105,6 +107,7 @@ async function handleAskWithAnthropic(
   user: User,
   userName: string,
   userFullName: string,
+  isMention = false,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
 
@@ -116,6 +119,18 @@ async function handleAskWithAnthropic(
     userFullName,
     customPrompt: group.custom_prompt,
     telegramGroupId: group.telegram_group_id,
+    sendPhoto: async (imageBuffer) => {
+      // Runs outside topic middleware's AsyncLocalStorage scope — must pass message_thread_id explicitly.
+      const threadId = ctx.update?.message?.message_thread_id;
+      const file = new File([imageBuffer], 'table.png', { type: 'image/png' });
+      await bot.api.sendPhoto({
+        chat_id: chatId,
+        photo: file,
+        ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+      });
+    },
+    isMention,
+    isForumWithoutTopic: ctx.chat?.isForum === true && group.active_topic_id == null,
   };
 
   // Get recent chat history (last 10 messages / 5 pairs)
@@ -133,6 +148,9 @@ async function handleAskWithAnthropic(
     const agent = new ExpenseBotAgent(env.ANTHROPIC_API_KEY, agentCtx);
 
     const finalResponse = await agent.run(`${userName}: ${question}`, historyMessages, bot);
+
+    // Empty response means the agent chose to stay silent ([SKIP] signal)
+    if (!finalResponse) return;
 
     // Save only the final text response to chat history (not tool_use rounds)
     database.chatMessages.create({
@@ -156,30 +174,7 @@ async function handleAskWithAnthropic(
 /**
  * /advice command handler - request deep financial analysis (Tier 3)
  */
-export async function handleAdviceCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('❌ Не удалось определить чат');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleAdviceCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   // Deep analysis: Tier 3, manual trigger
   const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
   const trigger: TriggerResult = {
@@ -242,13 +237,17 @@ async function sendSmartAdvice(
   try {
     const tier = trigger.tier;
     const severity = computeOverallSeverity(snapshot);
-    const snapshotText = formatSnapshotForPrompt(snapshot);
+
+    // Get group for custom prompt and display currency
+    const group = database.groups.findById(groupId);
+    const snapshotText = formatSnapshotForPrompt(
+      snapshot,
+      groupId,
+      group?.default_currency ?? BASE_CURRENCY,
+    );
 
     // Get recent advice topics for anti-repetition
     const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);
-
-    // Get group for custom prompt
-    const group = database.groups.findById(groupId);
 
     // Build tier-specific prompt
     const advicePrompt = buildTieredPrompt(tier, severity, snapshotText, recentTopics, trigger);

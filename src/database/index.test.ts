@@ -1,7 +1,7 @@
 // Tests for DatabaseService — transaction helper
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { clearTestDb, createTestDb } from '../test-utils/db';
 import { DatabaseService } from './index';
 
@@ -76,6 +76,6 @@ describe('DatabaseService.transaction', () => {
 
     const after = service.expenses.findByGroupId(groupId);
     expect(after).toHaveLength(1);
-    expect(after[0]!.comment).toBe('commit test');
+    expect(after[0]?.comment).toBe('commit test');
   });
 });

@@ -1,5 +1,5 @@
 /** /settings and /reconnect command handlers — show current config and re-authorize Google OAuth */
-import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { Ctx } from '../types';
@@ -10,31 +10,8 @@ const logger = createLogger('cmd-settings');
 /**
  * /settings command handler
  */
-export async function handleSettingsCommand(ctx: Ctx['Command']): Promise<void> {
+export async function handleSettingsCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   try {
-    const chatId = ctx.chat?.id;
-    const chatType = ctx.chat?.type;
-
-    if (!chatId) {
-      await ctx.send('❌ Не удалось определить чат');
-      return;
-    }
-
-    // Only allow in groups
-    const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-    if (!isGroup) {
-      await ctx.send('❌ Эта команда работает только в группах.');
-      return;
-    }
-
-    const group = database.groups.findByTelegramGroupId(chatId);
-
-    if (!group) {
-      await ctx.send('❌ Группа не настроена. Используй /connect');
-      return;
-    }
-
     let message = '⚙️ Настройки группы:\n\n';
     message += `💱 Валюта по умолчанию: ${group.default_currency}\n`;
     message += `💵 Включенные валюты: ${group.enabled_currencies.join(', ')}\n`;

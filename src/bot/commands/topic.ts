@@ -1,5 +1,6 @@
 /** /topic command handler — restrict the bot to a specific Telegram forum topic */
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { Ctx } from '../types';
@@ -12,30 +13,9 @@ const logger = createLogger('cmd-topic');
  *   /topic - if called from a topic, bot will only listen to that topic
  *   /topic clear - clear topic restriction, bot listens to all messages
  */
-export async function handleTopicCommand(ctx: Ctx['Command']): Promise<void> {
+export async function handleTopicCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   try {
     const chatId = ctx.chat?.id;
-    const chatType = ctx.chat?.type;
-
-    if (!chatId) {
-      await ctx.send('❌ Не удалось определить чат');
-      return;
-    }
-
-    // Only allow in groups
-    const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-    if (!isGroup) {
-      await ctx.send('❌ Эта команда работает только в группах.');
-      return;
-    }
-
-    const group = database.groups.findByTelegramGroupId(chatId);
-
-    if (!group) {
-      await ctx.send('❌ Группа не настроена. Используй /connect');
-      return;
-    }
 
     // Get thread_id from message context
     const threadId = ctx.update?.message?.message_thread_id;

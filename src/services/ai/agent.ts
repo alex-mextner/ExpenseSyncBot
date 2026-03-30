@@ -7,13 +7,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
 import { AnthropicError, NetworkError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
-import { TelegramStreamWriter } from './telegram-stream';
+import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { TOOL_DEFINITIONS } from './tools';
 import type { AgentContext, ToolCallResult } from './types';
@@ -89,6 +90,14 @@ export class ExpenseBotAgent {
       );
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
+
+      // Skip signal — bot chose to stay silent, delete the placeholder message.
+      // Never skip on explicit @mention — user intentionally addressed the bot.
+      if (isSkipSignal(finalText) && !this.ctx.isMention) {
+        logger.info('[AGENT] Skip signal — staying silent');
+        await writer.deleteSentMessage();
+        return '';
+      }
 
       // --- Validation pass (only when no tools were called) ---
       if (toolCallNames.length === 0) {
@@ -282,6 +291,8 @@ export class ExpenseBotAgent {
               result.success,
               result.output,
               result.error,
+              result.data,
+              result.summary,
             );
             totalToolCalls++;
             toolCallNames.push(currentToolUse.name);
@@ -308,7 +319,9 @@ export class ExpenseBotAgent {
             type: 'tool_result' as const,
             tool_use_id: tr.id,
             content: tr.result.success
-              ? tr.result.output || 'Success'
+              ? tr.result.data !== undefined
+                ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
+                : tr.result.output || 'Success'
               : `Error: ${tr.result.error}`,
           })),
         });
@@ -359,8 +372,14 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 3. Adding an expense → call add_expense. NEVER say "done" without calling the tool.
 4. Deleting an expense → call get_expenses first (to find the ID), confirm with the user, then call delete_expense.
 5. User asks about "their" expenses → filter by a category matching their name.
-6. If you need totals by category → use summary_only: true in get_expenses.
-7. Arithmetic or currency conversion → call calculate. NEVER do math in your head. Reply with only the result number and currency code, nothing else. The tool uses live exchange rates.
+6. For ANY aggregation question (total for a period, breakdown by category, "what did X spend", "how much in total", "по итогам") → ALWAYS use summary_only: true in get_expenses. The tool returns pre-calculated totals per category. NEVER manually sum individual expense amounts — that's what the tool is for.
+7. ANY arithmetic whatsoever → ALWAYS call calculate. This includes non-financial math (counting, areas, ratios, etc.). NEVER do math in your head. The tool uses live exchange rates for currency conversion.
+8. After calling set_budget or delete_budget → ALWAYS call get_budgets immediately to get fresh data before writing the response. Never use values from a previous get_budgets call after modifying budgets.
+9. Bank balance questions → call get_bank_balances WITHOUT bank_name filter (omit it). If result data is empty, check the summary field and relay it to the user exactly — do NOT say the bank is not connected if the summary says otherwise. NEVER suggest /connect for bank issues — /connect is for Google Sheets only. For bank issues use /bank. If the user asks about disabled/excluded accounts → add include_excluded: true.
+10. Bank transaction history → call get_bank_transactions.
+11. Missing/unmatched bank expenses → call find_missing_expenses.
+12. User asks you to remember, note, or save ANYTHING — a fact about a person, an account, a rule, a preference, any context — → call set_custom_prompt with mode="append". NEVER say "got it", "noted", "запомнил", or "remembered" without calling the tool first. This includes phrases like "запомни что", "note that", "keep in mind", "учти что".
+13. Recurring patterns → call get_recurring_patterns. To manage (pause/resume/dismiss/delete) → call manage_recurring_pattern.
 
 ## FORMATTING
 Use ONLY these HTML tags (no Markdown, no ** or *):
@@ -370,8 +389,71 @@ Use ONLY these HTML tags (no Markdown, no ** or *):
 Escape < > & as &lt; &gt; &amp;
 Do NOT use <blockquote>, <u>, or any other tags — they are reserved for system UI.
 Do NOT invent links.
+NEVER use Markdown tables (|---|---| syntax) in chat messages — Telegram does not render them.
+When you have tabular data: ALWAYS call render_table with the full Markdown table AND present the same data as a bullet list in your text reply. Both actions are mandatory — never skip either.
+When displaying large amounts (≥ 1 million): prefer the suffix form — "1.5 млн RSD" over "1500000.00 RSD". Tool results include both forms (e.g. "1500000.00 (1.5 млн) RSD") — use the suffix form in your reply.
+
+## BOT CAPABILITIES — STRICTLY ONLY THESE
+This bot tracks expenses and budgets. It can:
+- Record, view, delete expenses (amount + currency + category + comment)
+- Track budgets per category/month
+- Sync with Google Sheets (/sync, /push)
+- Scan receipt photos (QR and OCR)
+- Give financial advice and analytics
+- Detect and track recurring monthly expenses (rent, subscriptions, etc.)
+- Calculate with currency conversion (calculator tool)
+- Connect bank accounts (/bank) to auto-import transactions with AI categorization
+- View real-time bank account balances (get_bank_balances tool)
+- Find bank transactions not yet recorded as expenses (find_missing_expenses tool)
+
+IMPORTANT: /connect is for Google Sheets integration only. /bank is for bank account integration (TBC, Kaspi, etc.).
+
+The bot CANNOT:
+- Create events, reminders, or calendar entries
+- Schedule tasks or appointments
+- Send notifications at specific times
+- Manage contacts, notes, or to-do lists
+- Process voice messages
+- Do anything unrelated to expense tracking
+
+NEVER mention, suggest, or describe features that are NOT listed above. If a user asks for something outside these capabilities — say directly that the bot doesn't support it.
+
+When a user asks "что ты умеешь?", "what can you do?", or similar — list your capabilities in plain language without mentioning tool names or technical details. Example:
+- Записывать и удалять расходы (сумма, валюта, категория, комментарий)
+- Вести бюджеты по категориям и месяцам
+- Сканировать чеки по фото (просто скинь фотку)
+- Показывать статистику и аналитику расходов
+- Синхронизировать данные с Google Sheets (в обе стороны)
+- Подключать банки и автоматически импортировать транзакции
+- Показывать балансы банковских счетов
+- Находить банковские транзакции, которые ещё не записаны как расходы
+- Конвертировать валюты и считать любые выражения
+- Отслеживать повторяющиеся расходы (аренда, подписки и т.д.)
+- Давать финансовые советы и отвечать на вопросы о тратах
+- Запоминать заметки и правила для группы
+- Отправлять фидбек и баг-репорты администратору
+
+## AVAILABLE COMMANDS
+${formatCommandsForPrompt()}
+
+## WHEN TO STAY SILENT
+Respond with exactly [SKIP] and nothing else unless the message contains a direct question or command for you.
+Stay silent ([SKIP]) when:
+- Someone makes a statement, shares a thought, or talks about plans ("надо будет обсудить", "хочу разобраться", "интересно было бы", "мог бы", "было бы хорошо")
+- Casual acknowledgements: "ok", "thanks", "понял", "окей", "хорошо", "+1", "ок"
+- People discussing something between themselves, even if the topic is about finances or this bot
+- Someone expresses an opinion or suggestion without asking you to do something right now
+Respond only when:
+- There is a direct question ("сколько?", "покажи", "что такое X?")
+- There is a direct command ("добавь", "удали", "покажи бюджет")
+- Someone explicitly addresses you by name or @mention
 
 Respond in Russian if the user writes in Russian, otherwise in English.`;
+
+    if (this.ctx.isForumWithoutTopic) {
+      prompt += `\n\nЭта группа использует топики (форум), но команда /topic ещё не настроена — бот слушает все топики.
+Если пользователь жалуется, что бот отвечает не там или реагирует когда не нужно — посоветуй перейти в топик для финансов и написать /topic, чтобы бот работал только в этом топике.`;
+    }
 
     if (this.ctx.customPrompt) {
       prompt += `\n\n=== CUSTOM GROUP INSTRUCTIONS ===\n${this.ctx.customPrompt}`;

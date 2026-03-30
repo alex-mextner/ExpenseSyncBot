@@ -14,6 +14,7 @@
 
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
 import { DevTaskState, STATE_EMOJI, STATE_LABELS } from '../../services/dev-pipeline/types';
 import { getErrorMessage } from '../../utils/error';
@@ -88,30 +89,8 @@ export function getPipelineInstance(): DevPipeline | null {
 /**
  * /dev command handler
  */
-export async function handleDevCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
+export async function handleDevCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   const telegramId = ctx.from?.id;
-
-  if (!chatId || !telegramId) {
-    await ctx.send('❌ Не удалось определить чат или пользователя');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('This command only works in groups.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('Group not configured. Use /connect first.');
-    return;
-  }
 
   // Ensure user exists
   let user = database.users.findByTelegramId(telegramId);
@@ -234,9 +213,7 @@ async function handleNewTask(
     // The pipeline sends its own notifications, so no need to reply here
   } catch (error) {
     logger.error({ err: error }, '[DEV-CMD] Failed to start task');
-    await ctx.send(
-      `Failed to start task: ${getErrorMessage(error)}`,
-    );
+    await ctx.send(`Failed to start task: ${getErrorMessage(error)}`);
   }
 }
 

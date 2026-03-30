@@ -113,7 +113,7 @@ The bot parses expense messages in multiple formats (see README.md for examples)
 
 #### 4. AI Integration (Hugging Face)
 
-Bot can answer questions about expenses when mentioned in groups: `@botname question`
+Bot can answer questions about expenses when mentioned in groups: `@ExpenseSyncBot question`
 
 **Implementation:** [src/bot/commands/ask.ts](src/bot/commands/ask.ts)
 
@@ -190,7 +190,7 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 
 - `/start` - Welcome & setup status
 - `/connect` - OAuth & initial setup
-- `/spreadsheet` (aliases: `/table`, `/sheet`, `/t`) - View spreadsheet URL
+- `/spreadsheet` - View spreadsheet URL
 - `/stats` - Expense statistics
 - `/sum` (alias: `/total`) - Sum expenses by filters
 - `/sync` - Manual sync to sheets
@@ -201,13 +201,13 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 - `/advice` - Get AI daily advice (groups only)
 - `/prompt` - Manage AI system prompt (groups only)
 
-### Group vs Personal Mode
+### Group-Only Mode
 
-Bot supports both personal chats and groups:
+Bot works **only in groups** (group / supergroup). Personal chat redirects user to their group with a link button.
 
-- **Personal:** Each user has own spreadsheet, categories, expenses
-- **Groups:** Shared spreadsheet/budget, multiple users contribute
-- Group mode was added later (migration 007) - users table has group_id
+- All commands check `isGroup` and reply with "работает только в группах" otherwise
+- One spreadsheet per group, shared between all members
+- `message.handler.ts` in private chat tries to find user's group and sends a link
 
 Check chat type: `ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'`
 
@@ -226,7 +226,51 @@ Uses `date-fns` library. Spreadsheet dates are in `DD.MM.YYYY` format (European)
 
 ### Currency Formatting
 
-Uses `currency.js` library. Display format matches currency (e.g., `$100.50`, `€50,00`, `1 900 RSD`).
+Uses `formatAmount(amount, currency)` from `src/services/currency/converter.ts`.
+For amounts ≥ 1 million, it outputs suffix form: `1.5 млн RSD`, `2 млрд RUB`.
+
+### EUR vs Default Currency — Critical Rules
+
+**EUR is the internal calculation currency only.** It is used for:
+- `eur_amount` field on every expense (cross-currency normalization)
+- Analytics calculations in `spending-analytics.ts`
+- AI context strings in `formatters.ts` and `tool-executor.ts`
+- Logs
+
+**Never display EUR to the user unless `group.default_currency === 'EUR'`.**
+
+Every group has `default_currency: CurrencyCode` — use it for all user-facing aggregate amounts.
+
+#### Display rules by context
+
+| What | Display currency |
+|------|-----------------|
+| Aggregate totals (`/sum`, `/stats`) | `group.default_currency` |
+| Budget spent / limit | `budget.currency` (user set this explicitly) |
+| Per-currency breakdown (`/stats`) | own currency (by definition) |
+| Receipt total | `summary.currency` (from receipt) |
+| AI financial context (`formatters.ts`) | `group.default_currency` |
+| AI tool results (`tool-executor.ts`) | `group.default_currency` for aggregates; original currency for individual expenses |
+| Logs | EUR (internal) |
+
+#### Pattern: aggregate total → default currency
+
+```ts
+const display = convertCurrency(eurTotal, 'EUR', group.default_currency);
+formatAmount(display, group.default_currency)
+```
+
+#### Pattern: budget progress → budget currency
+
+```ts
+// spending is always stored as EUR — convert to budget's currency before comparing
+const spentInCurrency = convertCurrency(spentEur, 'EUR', budget.currency as CurrencyCode);
+const percentage = budget.limit_amount > 0
+  ? Math.round((spentInCurrency / budget.limit_amount) * 100)
+  : 0;
+// display
+`${formatAmount(spentInCurrency, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%)`
+```
 
 ### Topic-Aware Messaging
 
@@ -238,6 +282,21 @@ Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/t
 - **DO pass `message_thread_id` explicitly** in background operations (photo-processor, broadcast, dev pipeline notify) since they run outside handler context
 - The middleware is registered in [src/bot/index.ts](src/bot/index.ts) before all handlers
 - Topic restriction checks still require extracting `message_thread_id` from context manually
+
+**Background workers: topic fallback pattern**
+
+When sending a message from a background worker (sync-service, cron jobs, etc.), use the bank panel thread with a fallback to the group's active topic:
+
+```ts
+const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
+await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text,
+  threadId !== null ? { message_thread_id: threadId } : undefined,
+);
+```
+
+Never send to the main chat (no thread) when the group has an `active_topic_id` — the user won't see messages from a topic-based group in the General channel.
+
+**Never send to personal (private) chats from background workers.** All messages from sync, cron, OTP prompts, and background jobs MUST go to `group.telegram_group_id` (always a group chat ID, never a user ID). If a message ends up in someone's personal chat, it means the wrong chat ID was used — check the DB.
 
 ### Testing
 
@@ -306,6 +365,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 8. **AI context size** - limit expense history to recent (e.g., 100000 items) to avoid token limits
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
+11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
 
 ## When Modifying Code
 
@@ -465,6 +525,11 @@ When renaming variables, constants, config keys, or any other interface:
 - **Exceptions** worth keeping old names: public API with external consumers, stable library interface, or explicit user decision.
 - If migration is feasible (internal code, DB rows can be updated, tests can be rewritten), propose full migration as the primary option. Final call is the programmer's.
 
+## Bot Identity
+
+- **Bot username:** `@ExpenseSyncBot` (set via `BOT_USERNAME` env var, default `'ExpenseSyncBot'`)
+- All user-facing messages that mention the bot must use `@${env.BOT_USERNAME}` — never hardcode `@бот` or any placeholder.
+
 ## Tone of Voice (bot messages)
 
 All user-facing bot messages must follow these rules:
@@ -482,6 +547,46 @@ After each task (push, fix, review-and-fix, deploy — any unit of work), answer
 2. **Есть ли что улучшить, исправить или убрать?** — name specific things, not vague hints. Open issues? Known limitations introduced? Stale comments or dead code noticed?
 
 Also scan the conversation history for items explicitly deferred, noted as "pending", or silently dropped mid-discussion. Surface them as concrete suggestions.
+
+**At the end of each session**, document any new hard-won lessons in the relevant section of this file. If lessons don't fit an existing section, add a new one. This is mandatory — knowledge that lives only in chat history is lost.
+
+## Working with Third-Party Submodules
+
+### Before Writing Any Code
+
+Always read existing files in the target submodule first — especially existing tests and utility files — to understand its style conventions. Writing code without checking leads to a full rewrite.
+
+Checklist before touching a third-party submodule:
+1. Look at 2-3 existing test files to understand the test style
+2. Note: semicolons? TypeScript annotations in tests? `import from` or globals? Mock patterns?
+3. Check how the submodule installs deps (npm vs bun — some deps fail with bun)
+
+### Test Placement
+
+Tests for code inside a submodule belong **inside the submodule directory**, not in the parent project. Placing them in the parent pulls the submodule's `.ts` files into the parent's strict tsconfig, causing cascading type errors from pre-existing issues in third-party code.
+
+### Biome Exclusion
+
+Third-party submodules must be excluded from `biome.jsonc`. Biome v2+ syntax: use `!path/to/submodule` (no trailing `/**`).
+
+### Submodule Fork Workflow
+
+When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
+1. Fork the repo to your own account
+2. Commit the fix to the fork
+3. Update `.gitmodules` to point to the fork URL
+4. On the server: `git submodule update --remote` fetches from the fork
+5. Open a PR to upstream — when merged, revert `.gitmodules` to the upstream URL
+
+**After every commit in the submodule**: push the branch to the fork immediately — `git -C src/services/bank/ZenPlugins push fork <branch>`. Don't leave local-only commits in submodules.
+
+### ZenPlugins-Specific Conventions
+
+- **No trailing semicolons** (ASI style)
+- **Leading `;` guard** before `(expression)` when previous line has no `;`
+- **No `import from 'bun:test'`** — use Jest/bun globals (`describe`, `it`, `expect`, etc.) directly
+- **Mock pattern**: `global.fetch = async (url, init?) => new Response(...)` — real `Response`, not a cast
+- **Install deps**: `npm install --ignore-scripts` (bun fails on some git-sourced deps like `pdf-extraction`)
 
 ## Telegram Bot API Limits
 

@@ -1,9 +1,10 @@
 // Tests for SyncSnapshotRepository — snapshot create, retrieve, pruning
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+
 import type { Database } from 'bun:sqlite';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
-import { SyncSnapshotRepository } from './sync-snapshot.repository';
 import { GroupRepository } from './group.repository';
+import { SyncSnapshotRepository } from './sync-snapshot.repository';
 
 let db: Database;
 let snapshots: SyncSnapshotRepository;
@@ -39,8 +40,9 @@ describe('SyncSnapshotRepository', () => {
 
     const latest = snapshots.getLatest(groupId);
     expect(latest).not.toBeNull();
-    expect(latest!.id).toBe(created.id);
+    expect(latest?.id).toBe(created.id);
 
+    // biome-ignore lint/style/noNonNullAssertion: test asserts not null above
     const parsed = JSON.parse(latest!.snapshot_data);
     expect(parsed).toHaveLength(2);
     expect(parsed[0].category).toBe('Food');
@@ -62,10 +64,11 @@ describe('SyncSnapshotRepository', () => {
       )
       .get(groupId);
 
-    expect(count!.count).toBe(3);
+    expect(count?.count).toBe(3);
 
     // Latest should be snapshot 4
     const latest = snapshots.getLatest(groupId);
+    // biome-ignore lint/style/noNonNullAssertion: test asserts not null via create
     const parsed = JSON.parse(latest!.snapshot_data);
     expect(parsed[0].n).toBe(4);
   });
@@ -79,7 +82,9 @@ describe('SyncSnapshotRepository', () => {
     const latest1 = snapshots.getLatest(groupId);
     const latest2 = snapshots.getLatest(group2.id);
 
+    // biome-ignore lint/style/noNonNullAssertion: test asserts not null via create
     expect(JSON.parse(latest1!.snapshot_data)[0].g).toBe(1);
+    // biome-ignore lint/style/noNonNullAssertion: test asserts not null via create
     expect(JSON.parse(latest2!.snapshot_data)[0].g).toBe(2);
   });
 });

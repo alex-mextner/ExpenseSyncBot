@@ -823,21 +823,18 @@ describe('429 rate limit handling', () => {
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
 
-    // First flush: sendMessage succeeds → sentMessageId set
+    // Pre-set sentMessageId so the placeholder-adoption path is bypassed for this test
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
-    (writer as any).fullText = 'initial text';
-    await writer.flush(true);
+    (writer as any).sentMessageId = 1;
 
-    // Second flush: editMessageText → 429 → wait → retry succeeds
+    // Flush: editMessageText → 429 → wait → retry succeeds
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
     (writer as any).fullText = 'updated text';
-    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
-    (writer as any).lastSentText = '';
     const start = Date.now();
     await writer.flush(true);
     const elapsed = Date.now() - start;
 
-    // Should have retried: 2 edit calls (original + retry)
+    // Should have retried: 2 edit calls (original 429 + retry success)
     expect(editCount).toBe(2);
     // Should have waited ~1 second for retry_after
     expect(elapsed).toBeGreaterThanOrEqual(900);
@@ -865,16 +862,13 @@ describe('429 rate limit handling', () => {
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
 
-    // First flush: sendMessage → sentMessageId set
+    // Pre-set sentMessageId so the placeholder-adoption path is bypassed for this test
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
-    (writer as any).fullText = 'initial';
-    await writer.flush(true);
+    (writer as any).sentMessageId = 1;
 
-    // Second flush: editMessageText → "not modified" (silently OK, no cooldown)
+    // First flush: editMessageText → "not modified" (silently OK, no cooldown)
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
     (writer as any).fullText = 'same text';
-    // biome-ignore lint/suspicious/noExplicitAny: reset to force new edit
-    (writer as any).lastSentText = '';
     await writer.flush(true);
     expect(editCount).toBe(1);
 
@@ -913,12 +907,11 @@ describe('flush mutex prevents concurrent API calls', () => {
     } as any;
     const writer = new TelegramStreamWriter(fakeBot, 123);
 
-    // First: establish sentMessageId via sendMessage
+    // Pre-set sentMessageId so the placeholder-adoption path is bypassed for this test
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
-    (writer as any).fullText = 'initial';
-    await writer.flush(true);
+    (writer as any).sentMessageId = 1;
 
-    // Now fire 20 concurrent flush(true) calls — simulating rapid token arrival
+    // Fire 20 concurrent flush(true) calls — simulating rapid token arrival
     // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
     (writer as any).fullText = 'updated text with many tokens';
     // biome-ignore lint/suspicious/noExplicitAny: reset to force different text
@@ -930,6 +923,54 @@ describe('flush mutex prevents concurrent API calls', () => {
     await Promise.all(promises);
 
     // Mutex ensures only 1 editMessageText call, not 20
+    expect(editCount).toBe(1);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private method
+    (writer as any).stopTyping();
+  });
+});
+
+// ── placeholder reuse (double-message race prevention) ───────────────
+
+describe('placeholder reuse prevents double-message race', () => {
+  test('reuses placeholder when flush fires before placeholder resolves', async () => {
+    let sendCount = 0;
+    let editCount = 0;
+    let resolvePlaceholder!: (id: number) => void;
+    const slowPlaceholder = new Promise<{ message_id: number }>((resolve) => {
+      resolvePlaceholder = (id) => resolve({ message_id: id });
+    });
+
+    const fakeBot = {
+      api: {
+        sendMessage: mock(async () => {
+          sendCount++;
+          return slowPlaceholder; // placeholder creation is artificially slow
+        }),
+        sendChatAction: () => Promise.resolve(),
+        deleteMessage: () => Promise.resolve(),
+        editMessageText: mock(() => {
+          editCount++;
+          return Promise.resolve();
+        }),
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+    } as any;
+
+    const writer = new TelegramStreamWriter(fakeBot, 123);
+
+    // Start a flush before the placeholder resolves — simulates the race
+    // biome-ignore lint/suspicious/noExplicitAny: direct field access for deterministic test
+    (writer as any).fullText = 'streaming content';
+    const flushPromise = writer.flush(true);
+
+    // Resolve placeholder while flush is awaiting it
+    resolvePlaceholder(1);
+    await flushPromise;
+
+    // Only 1 sendMessage (the placeholder), no extra sendMessage
+    expect(sendCount).toBe(1);
+    // Content delivered via editMessageText (placeholder reused, no new sendMessage)
     expect(editCount).toBe(1);
 
     // biome-ignore lint/suspicious/noExplicitAny: access private method

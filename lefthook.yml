@@ -10,4 +10,4 @@ pre-commit:
 pre-push:
   commands:
     tests:
-      run: bun test
+      run: bun test --path-ignore-patterns="**/ZenPlugins/**"

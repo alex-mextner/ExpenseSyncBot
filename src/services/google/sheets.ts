@@ -1,14 +1,14 @@
 /** Google Sheets service — creates spreadsheets, appends expense rows, and syncs budget data */
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
-import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';
+import { getCurrencySymbol, SPREADSHEET_CONFIG } from '../../config/constants';
 import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
+import type { MonthAbbr } from './month-abbr';
 import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
 
 const logger = createLogger('sheets');
-
 
 /**
  * Row data from spreadsheet
@@ -17,8 +17,19 @@ export interface SheetRow {
   date: string;
   amounts: Record<string, number>; // currency -> amount
   eurAmount: number;
+  rate: number | null; // exchange rate stored at write time (1 CURRENCY = rate EUR)
   category: string;
   comment: string;
+}
+
+/**
+ * Error describing a row with amounts in multiple currency columns
+ */
+export interface MultiCurrencyRowError {
+  row: number; // 1-based spreadsheet row
+  date: string;
+  currencies: string[]; // e.g. ["USD", "RSD"]
+  category: string;
 }
 
 /**
@@ -32,20 +43,21 @@ export async function createExpenseSpreadsheet(
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Build headers
+  // Build headers: Date | Currencies | EUR(calc) | Category | Comment | Rate
   const headers = [
     SPREADSHEET_CONFIG.headers[0], // Дата
-    ...enabledCurrencies.map((code) => `${code} (${CURRENCY_SYMBOLS[code]})`),
+    ...enabledCurrencies.map((code) => `${code} (${getCurrencySymbol(code)})`),
     SPREADSHEET_CONFIG.eurColumnHeader, // EUR (calc)
     SPREADSHEET_CONFIG.headers[1], // Категория
     SPREADSHEET_CONFIG.headers[2], // Комментарий
+    RATE_COLUMN_HEADER, // Rate (→EUR)
   ];
 
   // Create spreadsheet
   const response = await sheets.spreadsheets.create({
     requestBody: {
       properties: {
-        title: `Expenses Tracker - ${new Date().toLocaleDateString()}`,
+        title: `Expenses Tracker ${new Date().getFullYear()}`,
       },
       sheets: [
         {
@@ -105,15 +117,30 @@ export async function createExpenseSpreadsheet(
     });
   }
 
-  // Create empty Budget sheet with headers
-  await createEmptyBudgetSheet(refreshToken, spreadsheetId);
-
   return { spreadsheetId, spreadsheetUrl };
 }
 
 /**
  * Append expense row to spreadsheet
  */
+/**
+ * Column letter for a 0-based index (0=A, 1=B, ..., 25=Z, 26=AA)
+ */
+function colLetter(index: number): string {
+  let letter = '';
+  let n = index;
+  while (n >= 0) {
+    letter = String.fromCharCode(65 + (n % 26)) + letter;
+    n = Math.floor(n / 26) - 1;
+  }
+  return letter;
+}
+
+/**
+ * Rate column header constant
+ */
+const RATE_COLUMN_HEADER = 'Rate (→EUR)';
+
 export async function appendExpenseRow(
   refreshToken: string,
   spreadsheetId: string,
@@ -121,8 +148,9 @@ export async function appendExpenseRow(
     date: string;
     category: string;
     comment: string;
-    amounts: Record<CurrencyCode, number | null>; // Currency -> amount
+    amounts: Record<string, number | null>; // Currency -> amount
     eurAmount: number;
+    rate?: number; // Exchange rate used (1 CURRENCY = rate EUR)
   },
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
@@ -131,40 +159,85 @@ export async function appendExpenseRow(
   // Get headers to determine column order
   const headersResponse = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A1:Z1`,
+    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
   });
 
-  const headers = headersResponse.data.values?.[0] || [];
+  let headers: string[] = headersResponse.data.values?.[0] || [];
   logger.info({ data: headers }, `[SHEETS] Headers from spreadsheet`);
-  logger.info({ data }, `[SHEETS] Data to append`);
+
+  // Check if expense currency has a column; if not, insert one
+  const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
+  if (expenseCurrency) {
+    const hasCurrencyCol = headers.some((h) => h.startsWith(`${expenseCurrency} (`));
+    if (!hasCurrencyCol) {
+      headers = await insertCurrencyColumn(
+        sheets,
+        spreadsheetId,
+        headers,
+        expenseCurrency as CurrencyCode,
+      );
+    }
+  }
+
+  // Ensure Rate column exists
+  if (!headers.includes(RATE_COLUMN_HEADER)) {
+    headers = await ensureRateColumn(sheets, spreadsheetId, headers);
+  }
+
+  // Find column indices for formula generation
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  let amountColIdx = -1;
+  for (let i = 0; i < headers.length; i++) {
+    const code = headers[i]?.split(' ')[0];
+    if (code === expenseCurrency) {
+      amountColIdx = i;
+      break;
+    }
+  }
 
   // Build row values based on header order
   const row: (string | number | null)[] = [];
 
-  for (const header of headers) {
+  for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+    const header = headers[colIdx];
     if (header === SPREADSHEET_CONFIG.headers[0]) {
-      // Дата
-      logger.info(`[SHEETS] Adding date: ${data.date}`);
       row.push(data.date);
     } else if (header === SPREADSHEET_CONFIG.headers[1]) {
-      // Категория
-      logger.info(`[SHEETS] Adding category: ${data.category}`);
       row.push(data.category);
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
-      // Комментарий
-      logger.info(`[SHEETS] Adding comment: ${data.comment}`);
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      // EUR (calc)
-      logger.info(`[SHEETS] Adding EUR (calc): ${data.eurAmount}`);
-      row.push(data.eurAmount);
+      // EUR(calc) as formula: =AMOUNT*RATE (or static for EUR expenses / missing rate)
+      if (expenseCurrency === 'EUR' || !data.rate || amountColIdx === -1 || rateColIdx === -1) {
+        row.push(data.eurAmount);
+      } else {
+        // Formula placeholder — row number is filled in below after we know nextRow
+        row.push(`__EUR_FORMULA__`);
+      }
+    } else if (header === RATE_COLUMN_HEADER) {
+      row.push(data.rate ?? '');
     } else {
-      // Currency columns
-      const currencyCode = header.split(' ')[0] as CurrencyCode;
+      const currencyCode = header?.split(' ')[0] as CurrencyCode;
       const value = data.amounts[currencyCode] ?? '';
-      logger.info(`[SHEETS] Header "${header}" -> currency "${currencyCode}" -> value ${value}`);
       row.push(value);
     }
+  }
+
+  // Find last row to compute the target row number for the EUR formula placeholder
+  const dataResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+  });
+
+  const existingRows = dataResponse.data.values || [];
+  const nextRow = existingRows.length + 1;
+
+  // Replace EUR formula placeholder with actual formula now that we know the row
+  const formulaIdx = row.indexOf('__EUR_FORMULA__');
+  if (formulaIdx !== -1 && amountColIdx !== -1 && rateColIdx !== -1) {
+    const amountCell = `${colLetter(amountColIdx)}${nextRow}`;
+    const rateCell = `${colLetter(rateColIdx)}${nextRow}`;
+    row[formulaIdx] = `=${amountCell}*${rateCell}`;
   }
 
   logger.info({ data: row }, `[SHEETS] Final row`);
@@ -182,18 +255,177 @@ export async function appendExpenseRow(
   });
 
   // Log API response for debugging
-  const updatedRange = response.data.updates?.updatedRange;
   const updatedRows = response.data.updates?.updatedRows;
-  const updatedCells = response.data.updates?.updatedCells;
-
   logger.info(
-    `[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${updatedCells}`,
+    `[SHEETS] API response: range=${response.data.updates?.updatedRange}, rows=${updatedRows}, cells=${response.data.updates?.updatedCells}`,
   );
 
   if (!updatedRows || updatedRows === 0) {
     logger.error(
       `[SHEETS] No rows were appended! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
+  }
+}
+
+/**
+ * Insert a new currency column before EUR (calc) in an existing spreadsheet.
+ * Returns the updated headers array.
+ */
+async function insertCurrencyColumn(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  currentHeaders: string[],
+  currency: CurrencyCode,
+): Promise<string[]> {
+  const symbol = getCurrencySymbol(currency);
+  const newHeader = `${currency} (${symbol})`;
+
+  // Insert before EUR (calc)
+  const eurCalcIdx = currentHeaders.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const insertIdx = eurCalcIdx !== -1 ? eurCalcIdx : currentHeaders.length;
+
+  // Get sheet ID
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets?.find(
+    (s) => s.properties?.title === SPREADSHEET_CONFIG.sheetName,
+  );
+  const sheetId = sheet?.properties?.sheetId;
+
+  if (sheetId === undefined) {
+    logger.error('[SHEETS] Cannot find Expenses sheet ID for column insertion');
+    return currentHeaders;
+  }
+
+  // Insert column at position
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: 'COLUMNS',
+              startIndex: insertIdx,
+              endIndex: insertIdx + 1,
+            },
+          },
+        },
+        {
+          updateCells: {
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: { stringValue: newHeader },
+                    userEnteredFormat: {
+                      textFormat: { bold: true },
+                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                    },
+                  },
+                ],
+              },
+            ],
+            fields: 'userEnteredValue,userEnteredFormat',
+            start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Inserted currency column "${newHeader}" at index ${insertIdx}`);
+
+  // Return updated headers
+  const updated = [...currentHeaders];
+  updated.splice(insertIdx, 0, newHeader);
+  return updated;
+}
+
+/**
+ * Ensure the Rate (→EUR) column exists, appending it at the end if missing.
+ * Returns the updated headers array.
+ */
+async function ensureRateColumn(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  currentHeaders: string[],
+): Promise<string[]> {
+  // Append at end
+  const insertIdx = currentHeaders.length;
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets?.find(
+    (s) => s.properties?.title === SPREADSHEET_CONFIG.sheetName,
+  );
+  const sheetId = sheet?.properties?.sheetId;
+
+  if (sheetId === undefined) {
+    logger.error('[SHEETS] Cannot find Expenses sheet ID for rate column');
+    return currentHeaders;
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateCells: {
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: { stringValue: RATE_COLUMN_HEADER },
+                    userEnteredFormat: {
+                      textFormat: { bold: true },
+                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                    },
+                  },
+                ],
+              },
+            ],
+            fields: 'userEnteredValue,userEnteredFormat',
+            start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Added Rate column at index ${insertIdx}`);
+  return [...currentHeaders, RATE_COLUMN_HEADER];
+}
+
+/**
+ * Ensure spreadsheet has all required columns (currency columns + Rate).
+ * Call at bot startup for each configured group.
+ */
+export async function ensureSheetColumns(
+  refreshToken: string,
+  spreadsheetId: string,
+  enabledCurrencies: CurrencyCode[],
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const headersResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+  });
+
+  let headers: string[] = headersResponse.data.values?.[0] || [];
+
+  // Add missing currency columns
+  for (const currency of enabledCurrencies) {
+    const hasCurrencyCol = headers.some((h) => h.startsWith(`${currency} (`));
+    if (!hasCurrencyCol) {
+      headers = await insertCurrencyColumn(sheets, spreadsheetId, headers, currency);
+    }
+  }
+
+  // Add Rate column if missing
+  if (!headers.includes(RATE_COLUMN_HEADER)) {
+    await ensureRateColumn(sheets, spreadsheetId, headers);
   }
 }
 
@@ -230,146 +462,55 @@ export async function verifySpreadsheetAccess(
   }
 }
 
-/**
- * Budget sheet configuration
- */
-const BUDGET_SHEET_CONFIG = {
-  sheetName: 'Budget',
-  headers: ['Month', 'Category', 'Limit', 'Currency'],
-};
+// ── Monthly budget tab functions ────────────────────────────────────────────
 
-/**
- * Normalize month string to YYYY-MM format with leading zero.
- * Google Sheets may strip leading zeros (e.g., "2026-03" → "2026-3").
- */
-function normalizeMonth(month: string): string {
-  const match = month.match(/^(\d{4})-(\d{1,2})$/);
-  if (!match) return month;
-  const [, year, m] = match;
-  return `${year}-${(m ?? '').padStart(2, '0')}`;
+export interface BudgetRow {
+  category: string;
+  limit: number;
+  currency: CurrencyCode;
 }
 
-/**
- * Create empty Budget sheet with headers only
- */
-async function createEmptyBudgetSheet(refreshToken: string, spreadsheetId: string): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  // Check if Budget sheet already exists
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-  const existingSheet = spreadsheet.data.sheets?.find(
-    (sheet) => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName,
-  );
-
-  if (existingSheet) {
-    logger.info('[SHEETS] Budget sheet already exists');
-    return;
-  }
-
-  // Create Budget sheet with headers only
-  const addSheetResponse = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          addSheet: {
-            properties: {
-              title: BUDGET_SHEET_CONFIG.sheetName,
-              gridProperties: {
-                frozenRowCount: 1,
-              },
-            },
-          },
-        },
-      ],
-    },
-  });
-
-  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
-
-  // Build header row
-  const headers = BUDGET_SHEET_CONFIG.headers;
-  const headerRow = headers.map((header) => ({
-    userEnteredValue: { stringValue: header },
-    userEnteredFormat: {
-      textFormat: { bold: true },
-      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
-    },
-  }));
-
-  // Write header
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          updateCells: {
-            rows: [{ values: headerRow }],
-            fields: 'userEnteredValue,userEnteredFormat',
-            start: {
-              sheetId: budgetSheetId,
-              rowIndex: 0,
-              columnIndex: 0,
-            },
-          },
-        },
-        {
-          autoResizeDimensions: {
-            dimensions: {
-              sheetId: budgetSheetId,
-              dimension: 'COLUMNS',
-              startIndex: 0,
-              endIndex: headers.length,
-            },
-          },
-        },
-      ],
-    },
-  });
-
-  logger.info('[SHEETS] Empty Budget sheet created');
-}
+const MONTH_TAB_HEADERS = ['Category', 'Limit', 'Currency'];
 
 /**
- * Create Budget sheet in existing spreadsheet
+ * Check if a monthly budget tab (e.g. "Mar") exists in the spreadsheet
  */
-export async function createBudgetSheet(
+export async function monthTabExists(
   refreshToken: string,
   spreadsheetId: string,
-  categories: string[],
-  defaultLimit: number = 100,
-  currency: CurrencyCode = 'EUR',
+  month: MonthAbbr,
+): Promise<boolean> {
+  try {
+    const auth = getAuthenticatedClient(refreshToken);
+    const sheets = google.sheets({ version: 'v4', auth });
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    return !!spreadsheet.data.sheets?.find((s) => s.properties?.title === month);
+  } catch (err) {
+    logger.error({ err }, `[SHEETS] monthTabExists failed for ${month}`);
+    return false;
+  }
+}
+
+/**
+ * Create an empty monthly budget tab with header row (Category | Limit | Currency)
+ */
+export async function createEmptyMonthTab(
+  refreshToken: string,
+  spreadsheetId: string,
+  month: MonthAbbr,
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Check if Budget sheet already exists
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-  const existingSheet = spreadsheet.data.sheets?.find(
-    (sheet) => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName,
-  );
-
-  if (existingSheet) {
-    logger.info('[SHEETS] Budget sheet already exists');
-    return;
-  }
-
-  // Get current month in YYYY-MM format
-  const currentMonth = new Date().toISOString().slice(0, 7);
-
-  // Create Budget sheet
-  const addSheetResponse = await sheets.spreadsheets.batchUpdate({
+  const addResponse = await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
       requests: [
         {
           addSheet: {
             properties: {
-              title: BUDGET_SHEET_CONFIG.sheetName,
-              gridProperties: {
-                frozenRowCount: 1,
-              },
+              title: month,
+              gridProperties: { frozenRowCount: 1 },
             },
           },
         },
@@ -377,53 +518,41 @@ export async function createBudgetSheet(
     },
   });
 
-  const budgetSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
+  const sheetId = addResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  if (sheetId === undefined || sheetId === null) {
+    throw new Error(
+      `Failed to get sheetId for new month tab "${month}" in spreadsheet ${spreadsheetId}`,
+    );
+  }
 
-  // Build header row
-  const headers = BUDGET_SHEET_CONFIG.headers;
-
-  // Build data rows (header + default budgets for categories)
-  const rows = [
-    // Header row
-    headers.map((header) => ({
-      userEnteredValue: { stringValue: header },
-      userEnteredFormat: {
-        textFormat: { bold: true },
-        backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
-      },
-    })),
-    // Budget rows for each category
-    ...categories.map((category) => [
-      { userEnteredValue: { stringValue: currentMonth } },
-      { userEnteredValue: { stringValue: category } },
-      { userEnteredValue: { numberValue: defaultLimit } },
-      { userEnteredValue: { stringValue: currency } },
-    ]),
-  ];
-
-  // Write header and data
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
       requests: [
         {
           updateCells: {
-            rows: rows.map((row) => ({ values: row })),
+            rows: [
+              {
+                values: MONTH_TAB_HEADERS.map((header) => ({
+                  userEnteredValue: { stringValue: header },
+                  userEnteredFormat: {
+                    textFormat: { bold: true },
+                    backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                  },
+                })),
+              },
+            ],
             fields: 'userEnteredValue,userEnteredFormat',
-            start: {
-              sheetId: budgetSheetId,
-              rowIndex: 0,
-              columnIndex: 0,
-            },
+            start: { sheetId, rowIndex: 0, columnIndex: 0 },
           },
         },
         {
           autoResizeDimensions: {
             dimensions: {
-              sheetId: budgetSheetId,
+              sheetId,
               dimension: 'COLUMNS',
               startIndex: 0,
-              endIndex: headers.length,
+              endIndex: 3,
             },
           },
         },
@@ -431,153 +560,451 @@ export async function createBudgetSheet(
     },
   });
 
-  logger.info(`[SHEETS] Budget sheet created with ${categories.length} categories`);
+  logger.info(`[SHEETS] Created empty month tab: ${month}`);
 }
 
 /**
- * Read all budget data from Budget sheet
+ * Read all budget rows from a monthly tab
  */
-export async function readBudgetData(
+export async function readMonthBudget(
   refreshToken: string,
   spreadsheetId: string,
-): Promise<Array<{ month: string; category: string; limit: number; currency: CurrencyCode }>> {
+  month: MonthAbbr,
+): Promise<BudgetRow[]> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${BUDGET_SHEET_CONFIG.sheetName}!A2:D`,
+      range: `${month}!A2:C`,
     });
 
-    const rows = response.data.values || [];
-    const budgets: Array<{
-      month: string;
-      category: string;
-      limit: number;
-      currency: CurrencyCode;
-    }> = [];
-
-    for (const row of rows) {
-      if (row.length >= 3) {
-        const [month, category, limitStr, currencyStr] = row;
-        const limit = parseFloat(limitStr);
-
-        if (month && category && !Number.isNaN(limit)) {
-          budgets.push({
-            month: normalizeMonth(month.trim()),
-            category: category.trim(),
-            limit,
-            currency: (currencyStr?.trim() || 'EUR') as CurrencyCode,
-          });
-        }
-      }
-    }
-
-    return budgets;
+    const rows = response.data.values ?? [];
+    return rows
+      .filter((r) => r.length >= 2)
+      .map(([category, limitStr, currencyStr]) => ({
+        category: (category as string).trim(),
+        limit: parseFloat(limitStr as string),
+        currency: ((currencyStr as string | undefined)?.trim() || 'EUR') as CurrencyCode,
+      }))
+      .filter((r) => r.category && !Number.isNaN(r.limit));
   } catch (err) {
-    logger.error({ err: err }, '[SHEETS] Failed to read budget data');
+    logger.error({ err }, `[SHEETS] readMonthBudget failed for ${month}`);
     return [];
   }
 }
 
 /**
- * Write or update budget row in Budget sheet
+ * Write or update a single budget row in a monthly tab (upsert by category)
  */
-export async function writeBudgetRow(
+export async function writeMonthBudgetRow(
   refreshToken: string,
   spreadsheetId: string,
-  data: {
-    month: string;
-    category: string;
-    limit: number;
-    currency: CurrencyCode;
-  },
+  month: MonthAbbr,
+  row: BudgetRow,
 ): Promise<void> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Get all budget data to find if row exists
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${BUDGET_SHEET_CONFIG.sheetName}!A2:D`,
+    range: `${month}!A2:C`,
   });
 
-  const rows = response.data.values || [];
-  let rowIndex = -1;
-
-  // Find existing row for this month+category (normalize month for comparison)
-  const normalizedMonth = normalizeMonth(data.month);
-  for (let i = 0; i < rows.length; i++) {
-    const [month, category] = rows[i] ?? [];
+  const existingRows = response.data.values ?? [];
+  let targetRow = -1;
+  for (let i = 0; i < existingRows.length; i++) {
     if (
-      normalizeMonth(month?.trim() || '') === normalizedMonth &&
-      category?.trim().toLowerCase() === data.category.toLowerCase()
+      (existingRows[i]?.[0] as string | undefined)?.toLowerCase() === row.category.toLowerCase()
     ) {
-      rowIndex = i + 2; // +2 because: 1-indexed + header row
+      targetRow = i + 2; // 1-indexed + header row
       break;
     }
   }
 
-  const row = [data.month, data.category, data.limit, data.currency];
+  const values = [[row.category, row.limit, row.currency]];
 
-  if (rowIndex !== -1) {
-    // Update existing row
+  if (targetRow !== -1) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${BUDGET_SHEET_CONFIG.sheetName}!A${rowIndex}:D${rowIndex}`,
+      range: `${month}!A${targetRow}:C${targetRow}`,
       valueInputOption: 'RAW',
-      requestBody: {
-        values: [row],
-      },
+      requestBody: { values },
     });
   } else {
-    // Append new row
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${BUDGET_SHEET_CONFIG.sheetName}!A2:D`,
+      range: `${month}!A2:C`,
       valueInputOption: 'RAW',
-      requestBody: {
-        values: [row],
-      },
+      requestBody: { values },
     });
   }
 }
 
 /**
- * Check if Budget sheet exists
+ * Clone a monthly tab from one spreadsheet to another (cross-spreadsheet supported).
+ * Uses the Google Sheets copyTo API, then renames the resulting sheet.
  */
-export async function hasBudgetSheet(
+export async function cloneMonthTab(
+  refreshToken: string,
+  sourceSpreadsheetId: string,
+  sourceMonth: MonthAbbr,
+  targetSpreadsheetId: string,
+  targetMonth: MonthAbbr,
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  // Find source sheet ID
+  const sourceSpreadsheet = await sheets.spreadsheets.get({ spreadsheetId: sourceSpreadsheetId });
+  const sourceSheet = sourceSpreadsheet.data.sheets?.find(
+    (s) => s.properties?.title === sourceMonth,
+  );
+  const sourceSheetId = sourceSheet?.properties?.sheetId;
+  if (sourceSheetId === undefined || sourceSheetId === null) {
+    throw new Error(`Source tab "${sourceMonth}" not found in ${sourceSpreadsheetId}`);
+  }
+
+  // Copy sheet to target spreadsheet
+  const copyResponse = await sheets.spreadsheets.sheets.copyTo({
+    spreadsheetId: sourceSpreadsheetId,
+    sheetId: sourceSheetId,
+    requestBody: { destinationSpreadsheetId: targetSpreadsheetId },
+  });
+
+  const newSheetId = copyResponse.data.sheetId;
+  if (newSheetId === undefined || newSheetId === null) {
+    throw new Error('copyTo did not return a sheetId');
+  }
+
+  // Rename the copied sheet to targetMonth
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: targetSpreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateSheetProperties: {
+            properties: { sheetId: newSheetId, title: targetMonth },
+            fields: 'title',
+          },
+        },
+      ],
+    },
+  });
+
+  logger.info(`[SHEETS] Cloned ${sourceMonth} → ${targetMonth}`);
+}
+
+// ── Raw expense row helpers (used by year-split migration) ──────────────────
+
+const EXPENSES_TAB = 'Expenses';
+
+/**
+ * Read all data rows from the Expenses tab as raw string arrays.
+ * Skips the header row. Uses UNFORMATTED_VALUE to capture calculated values, not formulas.
+ * Note: formula cells (e.g. EUR calc column) become static values after a migration roundtrip.
+ * Row-relative formula references would break in the destination sheet anyway, so this is intentional.
+ */
+export async function readExpenseRowsRaw(
   refreshToken: string,
   spreadsheetId: string,
-): Promise<boolean> {
-  try {
-    const auth = getAuthenticatedClient(refreshToken);
-    const sheets = google.sheets({ version: 'v4', auth });
-
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-    const budgetSheet = spreadsheet.data.sheets?.find(
-      (sheet) => sheet.properties?.title === BUDGET_SHEET_CONFIG.sheetName,
-    );
-
-    return !!budgetSheet;
-  } catch (err) {
-    logger.error({ err: err }, '[SHEETS] Failed to check Budget sheet');
-    return false;
-  }
+): Promise<string[][]> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2:Z`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  return (response.data.values ?? []).map((row) =>
+    row.map((cell, colIdx) => {
+      const str = String(cell ?? '');
+      // Column 0 is always the date. Sheets stores date cells as serial numbers
+      // (days since Dec 30, 1899) when read with UNFORMATTED_VALUE.
+      // Convert back to ISO yyyy-MM-dd so the migration roundtrip preserves date format.
+      if (colIdx === 0) {
+        const serial = Number(str);
+        // 25569 = days between Sheets epoch (Dec 30, 1899) and Unix epoch (Jan 1, 1970)
+        if (!Number.isNaN(serial) && serial > 25569 && serial < 99999) {
+          const date = new Date((serial - 25569) * 86400 * 1000);
+          const y = date.getUTCFullYear();
+          const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+          const d = String(date.getUTCDate()).padStart(2, '0');
+          return `${y}-${mo}-${d}`;
+        }
+      }
+      return str;
+    }),
+  );
 }
 
 /**
- * Read all expenses from Google Sheet
+ * Sort the Expenses tab by column A (date) ascending, preserving the header row.
+ */
+export async function sortExpensesTab(refreshToken: string, spreadsheetId: string): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
+  const sheetId = expensesSheet?.properties?.sheetId;
+  if (sheetId === undefined) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          sortRange: {
+            range: {
+              sheetId,
+              startRowIndex: 1, // skip header
+              startColumnIndex: 0,
+            },
+            sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }],
+          },
+        },
+      ],
+    },
+  });
+}
+
+/** Rename a spreadsheet's title. */
+export async function renameSpreadsheet(
+  refreshToken: string,
+  spreadsheetId: string,
+  title: string,
+): Promise<void> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateSpreadsheetProperties: {
+            properties: { title },
+            fields: 'title',
+          },
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Scan the Expenses tab for date cells stored as serial numbers (migration artifact)
+ * and rewrite them as ISO yyyy-MM-dd strings. Returns the number of cells fixed.
+ */
+export async function repairDateSerials(
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<number> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2:A`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+
+  const rows = response.data.values ?? [];
+  const updates: { row: number; isoDate: string }[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const cell = String(rows[i]?.[0] ?? '');
+    const serial = Number(cell);
+    if (!Number.isNaN(serial) && serial > 25569 && serial < 99999) {
+      const date = new Date((serial - 25569) * 86400 * 1000);
+      const y = date.getUTCFullYear();
+      const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      updates.push({ row: i + 2, isoDate: `${y}-${mo}-${d}` }); // +2: 1-based row + skip header
+    }
+  }
+
+  if (updates.length === 0) return 0;
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: updates.map(({ row, isoDate }) => ({
+        range: `${EXPENSES_TAB}!A${row}`,
+        values: [[isoDate]],
+      })),
+    },
+  });
+
+  return updates.length;
+}
+
+/**
+ * Scan the Expenses tab for EUR (calc) cells that are static numbers (migration artifact)
+ * and rewrite them as =AMOUNT*RATE formulas. Skips EUR-denominated rows and rows without a rate.
+ * Returns the number of cells fixed.
+ */
+export async function repairEurFormulas(
+  refreshToken: string,
+  spreadsheetId: string,
+): Promise<number> {
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const headerResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!1:1`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const headers = (headerResponse.data.values?.[0] ?? []) as string[];
+
+  const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  if (eurColIdx === -1 || rateColIdx === -1) return 0;
+
+  // Non-EUR currency columns
+  const currencyCols: { idx: number }[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    const match = headers[i]?.match(/^([A-Z]{3})\s*\(/);
+    if (match?.[1] && match[1] !== 'EUR') {
+      currencyCols.push({ idx: i });
+    }
+  }
+  if (currencyCols.length === 0) return 0;
+
+  const lastCol = colLetter(headers.length - 1);
+  // FORMULA render option: formulas come back as "=C5*G5", static values as the number
+  const dataResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2:${lastCol}`,
+    valueRenderOption: 'FORMULA',
+  });
+  const rows = dataResponse.data.values ?? [];
+
+  const updates: { row: number; formula: string }[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] as (string | number | null | undefined)[];
+    if (!row || row.length === 0) continue;
+
+    const eurVal = row[eurColIdx];
+    // Already a formula — nothing to do
+    if (typeof eurVal === 'string' && eurVal.startsWith('=')) continue;
+    // Empty EUR cell — skip
+    if (eurVal === '' || eurVal === undefined || eurVal === null) continue;
+
+    // Find the non-EUR currency column with a positive amount
+    let amountColIdx = -1;
+    for (const { idx } of currencyCols) {
+      const val = row[idx];
+      if (val !== '' && val !== undefined && val !== null && Number(val) > 0) {
+        amountColIdx = idx;
+        break;
+      }
+    }
+    if (amountColIdx === -1) continue;
+
+    // Rate column must have a value
+    const rateVal = row[rateColIdx];
+    if (rateVal === '' || rateVal === undefined || rateVal === null) continue;
+
+    const sheetRow = i + 2; // 1-based row + skip header
+    updates.push({
+      row: sheetRow,
+      formula: `=${colLetter(amountColIdx)}${sheetRow}*${colLetter(rateColIdx)}${sheetRow}`,
+    });
+  }
+
+  if (updates.length === 0) return 0;
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: updates.map(({ row, formula }) => ({
+        range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
+        values: [[formula]],
+      })),
+    },
+  });
+
+  return updates.length;
+}
+
+/**
+ * Append raw rows to the Expenses tab.
+ */
+export async function appendExpenseRowsRaw(
+  refreshToken: string,
+  spreadsheetId: string,
+  rows: string[][],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A2`,
+    // USER_ENTERED so numeric strings are parsed as numbers (not stored as text).
+    // Formulas are not preserved (see readExpenseRowsRaw doc for rationale).
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: rows },
+  });
+}
+
+/**
+ * Delete rows from the Expenses tab by their 1-based sheet row indices.
+ * Sorted and processed in reverse order to avoid index shifting.
+ * Uses the Expenses tab's sheetId (resolved from spreadsheet metadata).
+ */
+export async function deleteExpenseRowsByIndex(
+  refreshToken: string,
+  spreadsheetId: string,
+  rowIndices: number[],
+): Promise<void> {
+  if (rowIndices.length === 0) return;
+  const auth = getAuthenticatedClient(refreshToken);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
+  const sheetId = expensesSheet?.properties?.sheetId;
+  if (sheetId === undefined) throw new Error(`"${EXPENSES_TAB}" tab not found in ${spreadsheetId}`);
+
+  // Process in reverse order to avoid row-index shifting
+  const sorted = [...rowIndices].sort((a, b) => b - a);
+
+  const requests = sorted.map((rowIdx) => ({
+    deleteDimension: {
+      range: {
+        sheetId,
+        dimension: 'ROWS' as const,
+        startIndex: rowIdx - 1, // 0-based
+        endIndex: rowIdx, // exclusive
+      },
+    },
+  }));
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+}
+
+/**
+ * Read all expenses from Google Sheet.
+ * Returns expenses and any rows with amounts in multiple currency columns (data errors).
  */
 export async function readExpensesFromSheet(
   refreshToken: string,
   spreadsheetId: string,
-): Promise<SheetRow[]> {
+): Promise<{ expenses: SheetRow[]; errors: MultiCurrencyRowError[] }> {
   const auth = getAuthenticatedClient(refreshToken);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Read all data from sheet
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${SPREADSHEET_CONFIG.sheetName}!A:Z`,
@@ -586,63 +1013,56 @@ export async function readExpensesFromSheet(
   const rows = response.data.values || [];
 
   if (rows.length === 0) {
-    return [];
+    return { expenses: [], errors: [] };
   }
 
-  // First row is headers
   const headers = rows[0] as string[];
   logger.info({ data: headers }, `[SHEETS] Headers`);
 
-  // Find column indices
-  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? ''); // Дата
-  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? ''); // Категория
-  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? ''); // Комментарий
-  const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader); // EUR (calc)
+  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? '');
+  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? '');
+  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? '');
+  const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const rateCol = headers.indexOf(RATE_COLUMN_HEADER);
 
   if (dateCol === -1 || categoryCol === -1 || commentCol === -1) {
     throw new Error('Required columns not found in spreadsheet');
   }
 
-  // Find currency columns (e.g., "USD ($)", "RSD (RSD)")
+  // Find currency columns
   const currencyColumns: Array<{ index: number; currency: string }> = [];
   for (let i = 0; i < headers.length; i++) {
-    const header = headers[i];
+    const header = headers[i] ?? '';
     if (
       header &&
       header !== SPREADSHEET_CONFIG.headers[0] &&
       header !== SPREADSHEET_CONFIG.headers[1] &&
       header !== SPREADSHEET_CONFIG.headers[2] &&
-      header !== SPREADSHEET_CONFIG.eurColumnHeader
+      header !== SPREADSHEET_CONFIG.eurColumnHeader &&
+      header !== RATE_COLUMN_HEADER
     ) {
-      // Extract currency code from "USD ($)" -> "USD"
       const match = header.match(/^([A-Z]{3})\s*\(/);
-      if (match) {
-        currencyColumns.push({ index: i, currency: match[1] ?? '' });
+      if (match?.[1]) {
+        currencyColumns.push({ index: i, currency: match[1] });
       }
     }
   }
 
-  logger.info({ data: currencyColumns }, `[SHEETS] Currency columns`);
-
-  // Parse data rows (skip header)
   const expenses: SheetRow[] = [];
+  const errors: MultiCurrencyRowError[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as string[];
+    if (!row || row.length === 0 || !row[dateCol]) continue;
 
-    // Skip empty rows
-    if (!row || row.length === 0 || !row[dateCol]) {
-      continue;
-    }
-
-    const date = row[dateCol];
+    const date = row[dateCol] ?? '';
     const category = row[categoryCol] || 'Без категории';
     const comment = row[commentCol] || '';
     const eurAmountStr = eurCol !== -1 ? row[eurCol] : null;
 
     // Parse amounts for each currency
     const amounts: Record<string, number> = {};
-    let foundAmount = false;
+    const foundCurrencies: string[] = [];
 
     for (const { index, currency } of currencyColumns) {
       const value = row[index];
@@ -650,39 +1070,62 @@ export async function readExpensesFromSheet(
         const parsed = parseFloat(value);
         if (!Number.isNaN(parsed) && parsed > 0) {
           amounts[currency] = parsed;
-          foundAmount = true;
+          foundCurrencies.push(currency);
         }
       }
     }
 
-    // Skip rows without any amounts
-    if (!foundAmount) {
-      continue;
+    // Flag rows with amounts in multiple currency columns
+    if (foundCurrencies.length > 1) {
+      errors.push({
+        row: i + 1, // 1-based for spreadsheet display
+        date,
+        currencies: foundCurrencies,
+        category,
+      });
+      continue; // skip this row — data is ambiguous
     }
 
-    // Use EUR amount from sheet if available, otherwise calculate
-    let eurAmount: number;
+    // No currency amount found — fall back to EUR(calc) as EUR amount
+    // (happens when expense was in a currency without a column in the sheet)
+    if (foundCurrencies.length === 0) {
+      const eurCalcVal = eurAmountStr ? parseFloat(eurAmountStr) : 0;
+      if (!eurCalcVal || eurCalcVal <= 0) continue; // truly empty row
 
+      amounts['EUR'] = eurCalcVal;
+      foundCurrencies.push('EUR');
+    }
+
+    // Read stored exchange rate
+    let rate: number | null = null;
+    if (rateCol !== -1) {
+      const rateStr = row[rateCol];
+      if (rateStr && rateStr.trim() !== '') {
+        const parsed = parseFloat(rateStr);
+        if (!Number.isNaN(parsed) && parsed > 0) {
+          rate = parsed;
+        }
+      }
+    }
+
+    // EUR amount: from sheet if available, otherwise recalculate
+    let eurAmount: number;
     if (eurAmountStr && eurAmountStr.trim() !== '') {
       const parsed = parseFloat(eurAmountStr);
       eurAmount = !Number.isNaN(parsed) ? parsed : 0;
     } else {
-      // Calculate EUR amount from the first non-null currency
-      eurAmount = 0;
-      for (const [curr, amt] of Object.entries(amounts)) {
-        eurAmount = convertToEUR(amt, curr as CurrencyCode);
-        break;
+      const [curr, amt] = Object.entries(amounts)[0] ?? [];
+      if (curr && amt) {
+        eurAmount = rate
+          ? Math.round(amt * rate * 100) / 100
+          : convertToEUR(amt, curr as CurrencyCode);
+      } else {
+        eurAmount = 0;
       }
     }
 
-    expenses.push({
-      date,
-      amounts,
-      eurAmount,
-      category,
-      comment,
-    });
+    expenses.push({ date, amounts, eurAmount, rate, category, comment });
   }
 
-  return expenses;
+  return { expenses, errors };
 }

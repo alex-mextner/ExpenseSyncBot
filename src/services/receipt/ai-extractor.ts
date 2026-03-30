@@ -44,10 +44,18 @@ export interface AIExtractionResult {
   currency?: CurrencyCode;
 }
 
+/** Category example from expense history, used to improve AI categorization */
+export interface CategoryExample {
+  comment: string;
+  amount: number;
+  currency: string;
+}
+
 /**
  * Extract expenses from receipt data using AI
  * @param receiptData - Receipt HTML or text data
  * @param existingCategories - List of existing categories in the group
+ * @param categoryExamples - Recent expense examples per category for better AI categorization
  * @param maxRetries - Maximum number of retry attempts (default: 3)
  * @returns Extracted receipt items
  * @throws Error if extraction fails after retries
@@ -55,6 +63,7 @@ export interface AIExtractionResult {
 export async function extractExpensesFromReceipt(
   receiptData: string,
   existingCategories: string[],
+  categoryExamples?: Map<string, CategoryExample[]>,
   maxRetries: number = 3,
 ): Promise<AIExtractionResult> {
   let lastError: Error | null = null;
@@ -70,7 +79,7 @@ export async function extractExpensesFromReceipt(
   }
 
   // Build prompt once
-  const prompt = buildExtractionPrompt(text, existingCategories);
+  const prompt = buildExtractionPrompt(text, existingCategories, categoryExamples);
 
   // Try each model in order
   for (const modelConfig of MODELS) {
@@ -294,9 +303,25 @@ export async function extractExpensesFromReceipt(
 }
 
 /**
+ * Format category examples as a prompt section for AI context
+ */
+function formatCategoryExamples(categoryExamples: Map<string, CategoryExample[]>): string {
+  const lines: string[] = [];
+  for (const [category, examples] of categoryExamples) {
+    const formatted = examples.map((e) => `${e.comment} (${e.amount}${e.currency})`).join(', ');
+    lines.push(`- ${category}: ${formatted}`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * Build extraction prompt for AI
  */
-function buildExtractionPrompt(receiptText: string, existingCategories: string[]): string {
+function buildExtractionPrompt(
+  receiptText: string,
+  existingCategories: string[],
+  categoryExamples?: Map<string, CategoryExample[]>,
+): string {
   const hasExistingCategories = existingCategories.length > 0;
 
   return `Extract all items from this receipt and return a JSON object with the following structure:
@@ -340,7 +365,15 @@ STRICT Rules:
 - Provide 2-3 alternative category names in "possible_categories"`
 }
 
-EXAMPLES of good categorization (use existing categories only):
+${
+  categoryExamples && categoryExamples.size > 0
+    ? `CATEGORY EXAMPLES FROM HISTORY:
+These are real expenses from this group. Use them to understand what belongs in each category:
+${formatCategoryExamples(categoryExamples)}
+
+`
+    : ''
+}EXAMPLES of good categorization (use existing categories only):
 - Item: "Молоко 3.2%" + existing ["Еда", "Разное", "Хобби"] → category: "Еда", possible_categories: ["Разное"]
 - Item: "Шуруп 4x50" + existing ["Инструменты", "Разное"] → category: "Инструменты", possible_categories: ["Разное"]
 

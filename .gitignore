@@ -34,7 +34,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 # Database
-data/
+data/*
+!data/.gitkeep
 *.db
 *.db-shm
 *.db-wal
@@ -44,4 +45,6 @@ temp-images/
 debug-images/
 
 # Other
+.claude/worktrees/.playwright-mcp
+.playwright-mcp
 .claude/worktrees/

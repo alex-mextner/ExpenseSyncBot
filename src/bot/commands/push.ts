@@ -1,13 +1,10 @@
 /** /push command handler — writes local expenses to Google Sheets and reconciles missing rows */
-import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
-import {
-  appendExpenseRow,
-  readExpensesFromSheet,
-  type SheetRow,
-} from '../../services/google/sheets';
+import { getExpenseRecorder } from '../../services/expense-recorder';
+import { readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import type { GoogleConnectedGroup } from '../guards';
 import type { Ctx } from '../types';
 
 const logger = createLogger('push');
@@ -40,35 +37,10 @@ function makeDbExpenseKey(expense: Expense): string {
 /**
  * /push command handler - push expenses from database to Google Sheet
  */
-export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('❌ Не удалось определить чат');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
-  if (!group.spreadsheet_id || !group.google_refresh_token) {
-    await ctx.send('❌ Google таблица не подключена. Используй /connect');
-    return;
-  }
-
+export async function handlePushCommand(
+  ctx: Ctx['Command'],
+  group: GoogleConnectedGroup,
+): Promise<void> {
   await ctx.send('🔄 Читаю данные из БД и Google Sheets...');
 
   try {
@@ -84,11 +56,15 @@ export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
       group.google_refresh_token,
       group.spreadsheet_id,
     );
-    logger.info(`[PUSH] Found ${sheetExpenses.length} expenses in sheet`);
+    logger.info(`[PUSH] Found ${sheetExpenses.expenses.length} expenses in sheet`);
+
+    if (sheetExpenses.errors.length > 0) {
+      logger.warn(`[PUSH] ${sheetExpenses.errors.length} rows with multi-currency amounts skipped`);
+    }
 
     // Create set of existing keys in sheet
     const existingKeys = new Set<string>();
-    for (const row of sheetExpenses) {
+    for (const row of sheetExpenses.expenses) {
       const key = makeSheetRowKey(row);
       if (key) {
         existingKeys.add(key);
@@ -112,7 +88,7 @@ export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
       await ctx.send(
         `✅ Все данные уже синхронизированы!\n\n` +
           `📊 В БД: ${dbExpenses.length}\n` +
-          `📋 В таблице: ${sheetExpenses.length}\n` +
+          `📋 В таблице: ${sheetExpenses.expenses.length}\n` +
           `➕ Добавлено: 0`,
       );
       return;
@@ -120,37 +96,14 @@ export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
 
     await ctx.send(`📤 Добавляю ${expensesToAdd.length} записей в таблицу...`);
 
-    // Add expenses to sheet
+    // Push expenses to sheet via ExpenseRecorder
+    const recorder = getExpenseRecorder();
     let addedCount = 0;
     let errorCount = 0;
 
     for (const expense of expensesToAdd) {
       try {
-        // Build amounts record for appendExpenseRow
-        const amounts: Record<CurrencyCode, number | null> = {
-          USD: null,
-          EUR: null,
-          RUB: null,
-          RSD: null,
-          GBP: null,
-          BYN: null,
-          CHF: null,
-          JPY: null,
-          CNY: null,
-          INR: null,
-          LKR: null,
-          AED: null,
-        };
-        amounts[expense.currency as CurrencyCode] = expense.amount;
-
-        await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
-          date: expense.date,
-          category: expense.category,
-          comment: expense.comment,
-          amounts,
-          eurAmount: expense.eur_amount,
-        });
-
+        await recorder.pushToSheet(group.id, [expense]);
         addedCount++;
 
         // Log progress every 10 items
@@ -168,7 +121,7 @@ export async function handlePushCommand(ctx: Ctx['Command']): Promise<void> {
     let message =
       `✅ Push завершён!\n\n` +
       `📊 В БД: ${dbExpenses.length}\n` +
-      `📋 Было в таблице: ${sheetExpenses.length}\n` +
+      `📋 Было в таблице: ${sheetExpenses.expenses.length}\n` +
       `➕ Добавлено: ${addedCount}`;
 
     if (errorCount > 0) {

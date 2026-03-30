@@ -67,11 +67,26 @@ export class AiDebugRunContext {
     );
   }
 
-  logToolResult(name: string, success: boolean, output?: string, error?: string): void {
+  logToolResult(
+    name: string,
+    success: boolean,
+    output?: string,
+    error?: string,
+    data?: unknown,
+    summary?: string,
+  ): void {
     const status = success ? 'OK' : 'ERROR';
-    const body = (output ?? error ?? '').slice(0, 400);
+    let body: string;
+    if (output !== undefined) {
+      body = output;
+    } else if (data !== undefined) {
+      const summaryPart = summary ? `${summary}\n` : '';
+      body = `${summaryPart}${JSON.stringify(data)}`;
+    } else {
+      body = error ?? '';
+    }
     this.parts.push(`TOOL RESULT: ${name} → ${status}`);
-    this.parts.push(`  ${body}`);
+    this.parts.push(`  ${body.slice(0, 400)}`);
   }
 
   logAiText(text: string): void {

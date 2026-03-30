@@ -1,9 +1,9 @@
 /** /start command handler */
-import { env } from '../../config/env';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { Ctx } from '../types';
+import { buildHelpText, EXPENSE_EXAMPLES } from './help';
 
 const logger = createLogger('cmd-start');
 
@@ -19,29 +19,36 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     }
 
     const isGroup = chatType === 'group' || chatType === 'supergroup';
-    const bot = env.BOT_USERNAME;
 
     if (isGroup) {
       const group = database.groups.findByTelegramGroupId(chatId);
+      const setupDone = database.groups.hasCompletedSetup(chatId);
+      const hasGoogle = !!(group?.google_refresh_token && group?.spreadsheet_id);
 
-      if (group && database.groups.hasCompletedSetup(chatId)) {
-        await ctx.send(
-          `👋 Бот настроен и готов к работе.\n\n` +
-            `Отправь расход: <code>100$ еда обед</code>\n` +
-            `Фото чека: бот разберёт позиции\n` +
-            `AI: <code>@${bot} вопрос</code>\n\n` +
-            `/help — все возможности бота`,
-          { parse_mode: 'HTML' },
-        );
+      if (group && setupDone) {
+        let message = `👋 Бот настроен и готов к работе.\n\n${buildHelpText()}`;
+
+        if (hasGoogle) {
+          message += `\n\n🔄 /reconnect — если таблица перестала обновляться или сменился Google-аккаунт.`;
+        } else {
+          message += `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
+        }
+
+        await ctx.send(message, { parse_mode: 'HTML' });
       } else {
         await ctx.send(
           `👋 Привет! Я помогу вести учёт расходов группы и синхронизировать их с Google Sheets.\n\n` +
+            `<b>Что умеет бот:</b>\n` +
+            `• Учёт расходов в нескольких валютах с автоконвертацией\n` +
+            `• Синхронизация с Google Sheets — редактируй и в таблице, и в боте\n` +
+            `• Сканирование чеков по фото\n` +
+            `• Бюджеты по категориям с уведомлениями\n` +
+            `• Подключение банков — автоимпорт транзакций\n` +
+            `• AI-ассистент — аналитика, советы, ответы на вопросы о расходах\n\n` +
             `<b>Как начать:</b>\n` +
-            `1. Набери /connect\n` +
-            `2. Нажми кнопку «Подключить Google» и авторизуйся\n` +
-            `3. Выбери валюты для учёта\n` +
-            `4. Готово — таблица создастся автоматически\n\n` +
-            `После настройки просто пиши расходы в чат: <code>100$ еда обед</code>`,
+            `Набери /connect и следуй инструкциям.\n\n` +
+            `<b>Формат расходов:</b>\n` +
+            EXPENSE_EXAMPLES,
           { parse_mode: 'HTML' },
         );
       }

@@ -1,7 +1,7 @@
 /** Photo processor — background worker that dequeues receipt photos and runs OCR + AI extraction */
 import type { Bot } from 'gramio';
 import { createReceiptSummaryKeyboard } from '../../bot/keyboards';
-import type { CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { escapeHtml } from '../../utils/html';
@@ -231,14 +231,19 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       }
     }
 
-    // Get existing categories for the group
+    // Get existing categories and recent examples for the group
     const categories = database.categories.findByGroupId(queueItem.group_id);
     const categoryNames = categories.map((c) => c.name);
+    const categoryExamples = database.expenses.getRecentExamplesByCategory(queueItem.group_id);
 
     // Extract expenses using AI
     let extractionResult: AIExtractionResult;
     try {
-      extractionResult = await extractExpensesFromReceipt(receiptData, categoryNames);
+      extractionResult = await extractExpensesFromReceipt(
+        receiptData,
+        categoryNames,
+        categoryExamples,
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to extract expenses');
@@ -275,7 +280,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
     // Get group default currency if AI didn't detect it
     const group = database.groups.findById(queueItem.group_id);
-    const currency = extractionResult.currency || group?.default_currency || 'EUR';
+    const currency = extractionResult.currency || group?.default_currency || BASE_CURRENCY;
 
     // Save receipt items to database
     saveExtractedItems(queueItemId, extractionResult.items, currency);

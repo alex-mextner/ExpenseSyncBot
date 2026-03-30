@@ -33,7 +33,10 @@ export const rateLimitPreRequest: Hooks.PreRequest = async (ctx) => {
   // Global 429 backoff
   const remaining = backoffUntil - Date.now();
   if (remaining > 0) {
-    logger.warn({ remaining, method: ctx.method }, '[RATE-LIMIT] Backoff active, waiting before call');
+    logger.warn(
+      { remaining, method: ctx.method },
+      '[RATE-LIMIT] Backoff active, waiting before call',
+    );
     await sleep(remaining);
   }
 

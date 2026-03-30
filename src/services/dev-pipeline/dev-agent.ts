@@ -217,8 +217,14 @@ export class DevAgent {
               name: block.name,
               input: block.input as Record<string, unknown>,
             });
+          } else {
+            logger.info(`[DEV-AGENT] Unexpected block type: ${(block as { type: string }).type}`);
           }
         }
+
+        logger.info(
+          `[DEV-AGENT] stop_reason=${response.stop_reason} toolCalls=${toolCalls.length} textLen=${finalText.length}`,
+        );
 
         if (toolCalls.length === 0 || response.stop_reason === 'end_turn') {
           break;
@@ -240,6 +246,27 @@ export class DevAgent {
         }
 
         messages.push({ role: 'user', content: toolResults });
+      }
+
+      // If the loop ended without any text output, nudge the model to write its answer.
+      if (!finalText.trim() && round < MAX_ROUNDS) {
+        logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
+        messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
+        const nudgeResponse = await this.anthropic.messages.create(
+          {
+            model: AI_MODEL,
+            max_tokens: 8192,
+            system: systemPrompt,
+            messages,
+          },
+          { signal: controller.signal },
+        );
+        for (const block of nudgeResponse.content) {
+          if (block.type === 'text') {
+            finalText += block.text;
+          }
+        }
+        logger.info(`[DEV-AGENT] Nudge result: textLen=${finalText.length}`);
       }
 
       return finalText;

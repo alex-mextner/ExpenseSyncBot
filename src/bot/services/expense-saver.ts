@@ -43,7 +43,7 @@ export async function saveExpenseToSheet(
   const { appendExpenseRow } = await import('../../services/google/sheets');
 
   // Silent sync budgets from Google Sheets
-  await silentSyncBudgets(group.google_refresh_token, group.spreadsheet_id, group.id);
+  await silentSyncBudgets(group.google_refresh_token, group.id);
 
   // Calculate EUR amount
   const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);

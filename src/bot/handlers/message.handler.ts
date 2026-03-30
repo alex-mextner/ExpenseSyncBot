@@ -1,7 +1,8 @@
 /** Text message handler — parses expense messages, handles receipt links, and routes AI mentions */
-import { MESSAGES } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
+import { convertCurrency } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
@@ -10,16 +11,36 @@ import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
+import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
 
+/** Track consecutive sheet write failures per group to suggest /reconnect */
+const sheetFailuresByGroup = new Map<number, number>();
+
+export function getSheetWriteErrorMessage(groupId: number): string {
+  const count = sheetFailuresByGroup.get(groupId) ?? 0;
+  sheetFailuresByGroup.set(groupId, count + 1);
+  if (count >= 1) {
+    return '❌ Не удалось записать расход в Google таблицу. Возможно, авторизация устарела — попробуй /reconnect';
+  }
+  return '❌ Не удалось записать расход в Google таблицу. Попробуй ещё раз.';
+}
+
+export function resetSheetWriteFailures(groupId: number): void {
+  sheetFailuresByGroup.delete(groupId);
+}
+
 /**
  * Handle expense message
  */
-export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance): Promise<void> {
+export async function handleExpenseMessage(
+  ctx: Ctx['Message'],
+  bot: BotInstance,
+): Promise<boolean> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
@@ -29,7 +50,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
 
   if (!telegramId || !messageId || !text) {
     logger.info(`[MSG] Ignoring: missing telegramId, messageId or text`);
-    return;
+    return true;
   }
 
   // Check if message is from group/supergroup
@@ -76,7 +97,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       );
     }
 
-    return;
+    return true;
   }
 
   const telegramGroupId = ctx.chat.id;
@@ -91,14 +112,38 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     // Group not set up yet
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} not found in database`);
     await ctx.send(`Группа не настроена. Для настройки используй команду /connect`);
-    return;
+    return true;
+  }
+
+  // Custom currency input during onboarding — must be checked before setup completion
+  if (text && !text.startsWith('/')) {
+    const { isAwaitingCustomCurrency, handleCustomCurrencyInput } = await import(
+      '../commands/connect'
+    );
+    if (isAwaitingCustomCurrency(telegramGroupId)) {
+      return await handleCustomCurrencyInput(ctx, telegramGroupId);
+    }
+  }
+
+  // Bank setup wizard — consume credential input before other checks
+  if (text && !text.startsWith('/')) {
+    const { handleWizardInput } = await import('../commands/bank');
+    const handled = await handleWizardInput(ctx, group.id, text, bot);
+    if (handled) return true;
   }
 
   // Check if group has completed setup
   if (!database.groups.hasCompletedSetup(telegramGroupId)) {
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
     await ctx.send('Завершите настройку группы: /connect');
-    return;
+    return true;
+  }
+
+  // Bank OTP — must be checked before topic restriction: the user may reply from any topic
+  // (the OTP prompt could land in a different thread than active_topic_id).
+  if (text && !text.startsWith('/')) {
+    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
+    if (resolveOtpForGroup(telegramGroupId, text)) return true;
   }
 
   // Check topic restriction
@@ -107,7 +152,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     logger.info(
       `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
     );
-    return;
+    return true;
   }
 
   logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
@@ -126,7 +171,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     logger.info(`[MSG] Updating user ${telegramId} group_id: ${user.group_id} → ${group.id}`);
     database.users.update(telegramId, { group_id: group.id });
     user = database.users.findByTelegramId(telegramId);
-    if (!user) return;
+    if (!user) return true;
   }
 
   // Check if we're waiting for design edit or code edit input
@@ -146,24 +191,39 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
           await pl.editDesign(pendingTaskId, text);
         }
       } catch (error) {
-        await ctx.send(`Failed: ${getErrorMessage(error)}`);
+        await ctx.send(getErrorMessage(error));
       }
     }
-    return;
+    return true;
+  }
+
+  // Check if we're waiting for feedback text input
+  const feedbackPromptId = consumePendingFeedback(telegramGroupId, telegramId);
+  if (feedbackPromptId !== null) {
+    await submitFeedback(ctx, group, text, { promptMessageId: feedbackPromptId, bot });
+    return true;
   }
 
   // Check if we're waiting for bulk correction text input
   const waitingBulkCorrection = database.photoQueue.findWaitingForBulkCorrection(group.id);
   if (waitingBulkCorrection) {
     await handleBulkCorrectionInput(ctx, bot, text, waitingBulkCorrection, group);
-    return;
+    return true;
   }
 
   // Check if we're waiting for category text input from user
   const waitingItem = database.receiptItems.findWaitingForCategoryInput(group.id);
   if (waitingItem) {
     await handleCategoryTextInput(ctx, bot, text, waitingItem, group.id);
-    return;
+    return true;
+  }
+
+  // Bank transaction edit flow — route replies to pending edit transactions
+  const replyToMessageId = ctx.update?.message?.reply_to_message?.message_id;
+  if (replyToMessageId && text) {
+    const { handleBankEditReply } = await import('../commands/bank');
+    const handled = await handleBankEditReply(ctx, telegramGroupId, text, replyToMessageId);
+    if (handled) return true;
   }
 
   // Check for URLs in message
@@ -177,7 +237,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
       group,
       user,
     );
-    if (hasPayment) return;
+    if (hasPayment) return true;
   }
 
   // Split message by lines and process each line
@@ -247,8 +307,17 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
     // If category exists, save directly
     if (categoryExists || !parsed.category) {
       logger.info(`[MSG] Line ${index + 1}: saving to sheet`);
-      await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId, bot);
-      successCount++;
+      try {
+        await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId, bot);
+        successCount++;
+      } catch (error) {
+        logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
+        database.pendingExpenses.delete(pendingExpense.id);
+        await bot.api.sendMessage({
+          chat_id: telegramGroupId,
+          text: getSheetWriteErrorMessage(group.id),
+        });
+      }
     }
   }
 
@@ -279,7 +348,7 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
         reply_markup: keyboard,
       });
     }
-    return;
+    return true;
   }
 
   // Success - no need to send message, reaction is enough
@@ -290,6 +359,8 @@ export async function handleExpenseMessage(ctx: Ctx['Message'], bot: BotInstance
   if (hasProcessedExpenses) {
     await maybeSmartAdvice(ctx, group.id);
   }
+
+  return hasProcessedExpenses;
 }
 
 /**
@@ -553,4 +624,21 @@ async function handleBulkCorrectionInput(
       { parse_mode: 'HTML' },
     );
   }
+}
+
+/**
+ * Compute budget alert status for a category.
+ * spentEur — total spending in EUR; budget — with limit in budget.currency.
+ * Returns spending converted to budget currency, percentage, and alert flags.
+ */
+export function buildBudgetAlertStatus(
+  spentEur: number,
+  budget: { limit_amount: number; currency: string },
+): { spentInCurrency: number; percentage: number; isExceeded: boolean; isWarning: boolean } {
+  const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency as CurrencyCode);
+  const percentage =
+    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+  const isExceeded = spentInCurrency > budget.limit_amount;
+  const isWarning = percentage >= 90 && !isExceeded;
+  return { spentInCurrency, percentage, isExceeded, isWarning };
 }

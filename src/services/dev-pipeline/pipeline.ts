@@ -18,8 +18,8 @@ import {
   createDevReviewKeyboard,
 } from '../../bot/keyboards';
 import { database } from '../../database';
-import { escapeHtml } from '../../utils/html';
 import { getErrorMessage } from '../../utils/error';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { runCodexReview } from './codex-integration';
 import { AgentAbortedError, DevAgent } from './dev-agent';
@@ -384,6 +384,10 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
     const questions = await this.runAgent(task.id, agent, systemPrompt, task.description);
 
+    if (!questions.trim()) {
+      throw new Error('Agent returned empty clarifying questions — no text blocks in response');
+    }
+
     // Save questions (task is already in CLARIFYING, no state transition needed)
     database.devTasks.update(task.id, {
       design: `QUESTIONS:\n${questions}`,
@@ -639,6 +643,10 @@ Be specific about file paths. Reference existing patterns in the codebase.
 Keep the plan concise — 20-40 lines max.`;
 
     const design = await this.runAgent(task.id, agent, systemPrompt, task.description);
+
+    if (!design.trim()) {
+      throw new Error('Agent returned empty design — no text blocks in response');
+    }
 
     const titleMatch = design.match(/TITLE:\s*(.+)/);
     const title = titleMatch?.[1]?.trim() || task.description.slice(0, 70);

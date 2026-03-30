@@ -1,16 +1,44 @@
 /** Inline keyboard callback handler — processes button presses for OAuth, budget, and receipt flows */
 import { format } from 'date-fns';
-import { MESSAGES } from '../../config/constants';
+import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
-import { createBudgetSheet, hasBudgetSheet, writeBudgetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
-import { handleCurrencyCallback, handleDefaultCurrencyCallback } from '../commands/connect';
+import {
+  handleBankAccountsCallback,
+  handleBankAccountToggleCallback,
+  handleBankAddCallback,
+  handleBankConfirmCallback,
+  handleBankDisconnectCallback,
+  handleBankDisconnectCancelCallback,
+  handleBankDisconnectConfirmCallback,
+  handleBankEditCallback,
+  handleBankLetterCallback,
+  handleBankLetterNavCallback,
+  handleBankMergeCallback,
+  handleBankNewCallback,
+  handleBankNoCommentCallback,
+  handleBankReconnectCallback,
+  handleBankSettingsBackCallback,
+  handleBankSettingsCallback,
+  handleBankSetupCallback,
+  handleBankSyncCallback,
+  handleBankWizardCancelCallback,
+  handleBankWizardStartCallback,
+} from '../commands/bank';
+import { normalizeCurrency } from '../commands/budget';
+import {
+  handleCurrencyCallback,
+  handleDefaultCurrencyCallback,
+  handleSetupChoiceCallback,
+} from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
+import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
+import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
+import { getSheetWriteErrorMessage } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -58,6 +86,22 @@ export async function handleCallbackQuery(
 
   try {
     switch (action) {
+      case 'feedback_cancel': {
+        if (chatId) cancelPendingFeedback(chatId);
+        await ctx.answerCallbackQuery({ text: '❌ Отменено' });
+        const msgId = ctx.message?.id;
+        if (msgId && chatId) {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: msgId });
+        }
+        break;
+      }
+
+      case 'setup': {
+        const setupAction = params.join(':');
+        await handleSetupChoiceCallback(ctx, setupAction);
+        break;
+      }
+
       case 'currency': {
         const currencyAction = params[0];
         if (!currencyAction || !chatId) {
@@ -119,6 +163,270 @@ export async function handleCallbackQuery(
         await handleDevCallback(ctx, params, telegramId, bot);
         break;
 
+      case 'bank_confirm': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankConfirmCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_edit': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankEditCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_nocomment': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_merge': {
+        const txId = Number(params[0]);
+        const expenseId = Number(params[1]);
+        if (!chatId || !txId || !expenseId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        break;
+      }
+
+      case 'bank_new': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankNewCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'merchant_approve': {
+        const ruleId = Number(params[0]);
+        if (!ruleId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        database.merchantRules.updateStatus(ruleId, 'approved');
+        await ctx.answerCallbackQuery({ text: '✅ Правило принято' });
+        if (chatId && ctx.message?.id) {
+          try {
+            await bot.api.editMessageReplyMarkup({
+              chat_id: chatId,
+              message_id: ctx.message.id,
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // message may be too old to edit
+          }
+        }
+        break;
+      }
+
+      case 'merchant_reject': {
+        const ruleId = Number(params[0]);
+        if (!ruleId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        database.merchantRules.updateStatus(ruleId, 'rejected');
+        await ctx.answerCallbackQuery({ text: '❌ Правило отклонено' });
+        if (chatId && ctx.message?.id) {
+          try {
+            await bot.api.editMessageReplyMarkup({
+              chat_id: chatId,
+              message_id: ctx.message.id,
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // message may be too old to edit
+          }
+        }
+        break;
+      }
+
+      case 'merchant_edit': {
+        const ruleId = Number(params[0]);
+        if (!ruleId || !chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await ctx.answerCallbackQuery();
+        // TODO: implement reply-based edit for merchant rules (out of scope for this task)
+        break;
+      }
+
+      case 'bank_setup': {
+        const bankKey = params[0];
+        if (!chatId || !bankKey) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSetupCallback(ctx, bot, bankKey, chatId);
+        break;
+      }
+
+      case 'bank_reconnect': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankReconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_wizard_start': {
+        const bankKey = params.join(':');
+        if (!chatId || !bankKey) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankWizardStartCallback(ctx, bot, bankKey, chatId);
+        break;
+      }
+
+      case 'bank_wizard_cancel': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankWizardCancelCallback(ctx, chatId);
+        break;
+      }
+
+      case 'bank_settings': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSettingsCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_sync': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSyncCallback(ctx, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect_confirm': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectConfirmCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_disconnect_cancel': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankDisconnectCancelCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_settings_back': {
+        const connId = Number(params[0]);
+        if (!chatId || !connId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSettingsBackCallback(ctx, bot, connId, chatId);
+        break;
+      }
+
+      case 'bank_add': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAddCallback(ctx, chatId);
+        break;
+      }
+
+      case 'bank_letter': {
+        const letter = params[0]?.toUpperCase();
+        if (!chatId || !letter) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankLetterCallback(ctx, bot, letter, chatId);
+        break;
+      }
+
+      case 'bank_letter_nav': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankLetterNavCallback(ctx, bot, chatId);
+        break;
+      }
+
+      case 'bank_accounts': {
+        const connectionId = Number(params[0]);
+        if (!chatId || !connectionId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAccountsCallback(ctx, bot, connectionId, chatId);
+        break;
+      }
+
+      case 'bank_account_toggle': {
+        const accountId = Number(params[0]);
+        const connectionId = Number(params[1]);
+        if (!chatId || !accountId || !connectionId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankAccountToggleCallback(ctx, bot, accountId, connectionId, chatId);
+        break;
+      }
+
+      case 'sync_more': {
+        await handleSyncMoreCallback(ctx, params, bot);
+        break;
+      }
+
+      case 'bsync_more': {
+        await handleBudgetSyncMoreCallback(ctx, params, bot);
+        break;
+      }
+
       default:
         await ctx.answerCallbackQuery({ text: 'Unknown action' });
     }
@@ -175,13 +483,26 @@ async function handleCategoryAction(
         (p) => p.detected_category === categoryName && p.status === 'pending_category',
       );
 
+      let expenseSaved = false;
       if (pending) {
         database.pendingExpenses.update(pending.id, { status: 'confirmed' });
-        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+        try {
+          await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+          expenseSaved = true;
+        } catch (error) {
+          logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
+          database.pendingExpenses.delete(pending.id);
+          if (chatId) {
+            await bot.api.sendMessage({
+              chat_id: chatId,
+              text: getSheetWriteErrorMessage(group.id),
+            });
+          }
+        }
       }
 
-      // Prompt for budget setup
-      if (chatId) {
+      // Prompt for budget setup only if expense was saved
+      if (expenseSaved && chatId) {
         const keyboard = createBudgetPromptKeyboard(categoryName, group.default_currency);
         await bot.api.sendMessage({
           chat_id: chatId,
@@ -239,7 +560,18 @@ async function handleCategoryAction(
       }
 
       // Save expense
-      await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+      try {
+        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+      } catch (error) {
+        logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
+        database.pendingExpenses.delete(pending.id);
+        if (chatId) {
+          await bot.api.sendMessage({
+            chat_id: chatId,
+            text: getSheetWriteErrorMessage(group.id),
+          });
+        }
+      }
       break;
     }
 
@@ -265,7 +597,17 @@ async function handleConfirmAction(
   params: string[],
   bot: BotInstance,
 ): Promise<void> {
+  const action = params[0] ?? '';
   const answer = params[1] ?? '';
+
+  if (action === 'disconnect') {
+    if (answer === 'yes') {
+      await handleDisconnectConfirm(ctx, bot);
+    } else {
+      await handleDisconnectCancel(ctx, bot);
+    }
+    return;
+  }
 
   if (answer === 'yes') {
     await ctx.answerCallbackQuery({ text: '✅ Подтверждено' });
@@ -330,33 +672,6 @@ async function handleBudgetAction(
         currency,
       });
 
-      // Ensure Budget sheet exists and write to Google Sheets
-      if (group.google_refresh_token && group.spreadsheet_id) {
-        try {
-          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-
-          if (!hasSheet) {
-            const categories = database.categories.getCategoryNames(group.id);
-            await createBudgetSheet(
-              group.google_refresh_token,
-              group.spreadsheet_id,
-              categories,
-              100,
-              currency,
-            );
-          }
-
-          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-            month: currentMonth,
-            category: category ?? '',
-            limit: amount,
-            currency: currency,
-          });
-        } catch (err) {
-          logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
-        }
-      }
-
       const currencySymbol = getCurrencySymbol(currency);
       await ctx.answerCallbackQuery({
         text: `✅ Бюджет установлен: ${currencySymbol}${amount}`,
@@ -398,33 +713,6 @@ async function handleBudgetAction(
         limit_amount: amount,
         currency: currency,
       });
-
-      // Ensure Budget sheet exists and write to Google Sheets
-      if (group.google_refresh_token && group.spreadsheet_id) {
-        try {
-          const hasSheet = await hasBudgetSheet(group.google_refresh_token, group.spreadsheet_id);
-
-          if (!hasSheet) {
-            const categories = database.categories.getCategoryNames(group.id);
-            await createBudgetSheet(
-              group.google_refresh_token,
-              group.spreadsheet_id,
-              categories,
-              100,
-              currency,
-            );
-          }
-
-          await writeBudgetRow(group.google_refresh_token, group.spreadsheet_id, {
-            month: currentMonth,
-            category: category ?? '',
-            limit: amount,
-            currency,
-          });
-        } catch (err) {
-          logger.error({ err: err }, '[BUDGET] Failed to write to Google Sheets');
-        }
-      }
 
       const currencySymbol = getCurrencySymbol(currency);
 
@@ -1191,4 +1479,109 @@ async function handleReceiptCancel(
     text: '❌ Обработка чека отменена',
     parse_mode: 'HTML',
   });
+}
+
+async function handleSyncMoreCallback(
+  ctx: Ctx['CallbackQuery'],
+  params: string[],
+  bot: BotInstance,
+): Promise<void> {
+  const [cacheKey, section] = params;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!cacheKey || !section || !chatId) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели' });
+    return;
+  }
+
+  const { getSyncCachedResult } = await import('../commands/sync');
+  const result = getSyncCachedResult(cacheKey);
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели. Выполни /sync заново.' });
+    return;
+  }
+
+  let items: Array<{
+    date: string;
+    amount: number;
+    currency: string;
+    category: string;
+    comment: string;
+    field?: string;
+  }>;
+  let label: string;
+  if (section === 'a') {
+    items = result.added.slice(10);
+    label = 'Добавлено';
+  } else if (section === 'd') {
+    items = result.deleted.slice(10);
+    label = 'Удалено';
+  } else {
+    items = result.updated.slice(10);
+    label = 'Обновлено';
+  }
+
+  const lines = [`📋 ${label} (ещё ${items.length}):`];
+  for (const e of items) {
+    const field = e.field ? ` (${e.field})` : '';
+    lines.push(
+      `  ${e.date} ${e.amount} ${e.currency} ${e.category}${e.comment ? ` ${e.comment}` : ''}${field}`,
+    );
+  }
+
+  let text = lines.join('\n');
+  if (text.length > 4096) text = `${text.slice(0, 4090)}\n...`;
+
+  await ctx.answerCallbackQuery();
+  await bot.api
+    .sendMessage({ chat_id: chatId, text })
+    .catch((err: unknown) => logger.error({ err }, '[CALLBACK] sync_more send failed'));
+}
+
+async function handleBudgetSyncMoreCallback(
+  ctx: Ctx['CallbackQuery'],
+  params: string[],
+  bot: BotInstance,
+): Promise<void> {
+  const [cacheKey, section] = params;
+  const chatId = ctx.message?.chat?.id;
+
+  if (!cacheKey || !section || !chatId) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели' });
+    return;
+  }
+
+  const { getBudgetSyncCachedResult } = await import('../commands/budget');
+  const result = getBudgetSyncCachedResult(cacheKey);
+  if (!result) {
+    await ctx.answerCallbackQuery({ text: 'Данные устарели. Перезапусти бота.' });
+    return;
+  }
+
+  let items: Array<{ category: string; limit: number; currency: string; oldLimit?: number }>;
+  let label: string;
+  if (section === 'a') {
+    items = result.added.slice(10);
+    label = 'Добавлено';
+  } else if (section === 'd') {
+    items = result.deleted.slice(10);
+    label = 'Удалено';
+  } else {
+    items = result.updated.slice(10);
+    label = 'Обновлено';
+  }
+
+  const lines = [`📋 Бюджеты — ${label} (ещё ${items.length}):`];
+  for (const e of items) {
+    const change = e.oldLimit !== undefined ? ` (было ${e.oldLimit})` : '';
+    lines.push(`  ${e.category}: ${e.limit} ${e.currency}${change}`);
+  }
+
+  let text = lines.join('\n');
+  if (text.length > 4096) text = `${text.slice(0, 4090)}\n...`;
+
+  await ctx.answerCallbackQuery();
+  await bot.api
+    .sendMessage({ chat_id: chatId, text })
+    .catch((err: unknown) => logger.error({ err }, '[CALLBACK] bsync_more send failed'));
 }

@@ -1,5 +1,6 @@
-/** /spreadsheet command handler — sends the Google Sheets URL for the group */
+/** /spreadsheet command handler — shows current year's spreadsheet and list of previous years */
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { getSpreadsheetUrl } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
@@ -10,40 +11,39 @@ const logger = createLogger('cmd-spreadsheet');
 /**
  * /spreadsheet command handler - get link to the Google Sheet
  */
-export async function handleSpreadsheetCommand(ctx: Ctx['Command']): Promise<void> {
+export async function handleSpreadsheetCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   try {
-    const chatId = ctx.chat?.id;
-    const chatType = ctx.chat?.type;
+    const currentYear = new Date().getFullYear();
+    const currentSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, currentYear);
+    const all = database.groupSpreadsheets.listAll(group.id);
 
-    if (!chatId) {
-      await ctx.send('❌ Не удалось определить чат');
+    if (!currentSpreadsheetId && all.length === 0) {
+      await ctx.send('Таблица не создана. Завершите настройку: /connect');
       return;
     }
 
-    // Only allow in groups
-    const isGroup = chatType === 'group' || chatType === 'supergroup';
+    let message = '';
 
-    if (!isGroup) {
-      await ctx.send('❌ Эта команда работает только в группах.');
-      return;
+    if (currentSpreadsheetId) {
+      message += `Таблица ${currentYear}:\n${getSpreadsheetUrl(currentSpreadsheetId)}\n`;
+    } else {
+      message += `Таблица за ${currentYear} ещё не создана.\n`;
     }
 
-    // Get group
-    const group = database.groups.findByTelegramGroupId(chatId);
-
-    if (!group) {
-      await ctx.send('❌ Группа не настроена. Используй /connect для настройки.');
-      return;
+    const previous = all.filter((e) => e.year < currentYear);
+    if (previous.length > 0) {
+      message += `\nПредыдущие годы:\n`;
+      for (const { year, spreadsheetId } of previous) {
+        message += `• ${year}: ${getSpreadsheetUrl(spreadsheetId)}\n`;
+      }
     }
 
-    if (!group.spreadsheet_id) {
-      await ctx.send('❌ Таблица не создана. Завершите настройку: /connect');
-      return;
-    }
+    message +=
+      `\nМожно редактировать прямо в таблице. После правок:\n` +
+      `• /sync — подхватить изменения расходов\n` +
+      `• /budget sync — подхватить изменения бюджетов`;
 
-    const spreadsheetUrl = getSpreadsheetUrl(group.spreadsheet_id);
-
-    await ctx.send(`📊 Ссылка на таблицу:\n\n${spreadsheetUrl}`);
+    await ctx.send(message.trim());
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /spreadsheet');
     await ctx.send(formatErrorForUser(error));

@@ -1,5 +1,6 @@
 /** /prompt command handler — view or set the custom AI system prompt for a group */
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { Ctx } from '../types';
@@ -13,31 +14,10 @@ const logger = createLogger('cmd-prompt');
  *   /prompt <text> - set custom prompt
  *   /prompt clear - clear custom prompt
  */
-export async function handlePromptCommand(ctx: Ctx['Command']): Promise<void> {
+export async function handlePromptCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
+  const chatId = ctx.chat?.id;
+
   try {
-    const chatId = ctx.chat?.id;
-    const chatType = ctx.chat?.type;
-
-    if (!chatId) {
-      await ctx.send('❌ Не удалось определить чат');
-      return;
-    }
-
-    // Only allow in groups
-    const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-    if (!isGroup) {
-      await ctx.send('❌ Эта команда работает только в группах.');
-      return;
-    }
-
-    const group = database.groups.findByTelegramGroupId(chatId);
-
-    if (!group) {
-      await ctx.send('❌ Группа не настроена. Используй /connect');
-      return;
-    }
-
     // Get command argument
     const commandText = ctx.text || '';
     const args = commandText.split(/\s+/).slice(1).join(' ').trim();

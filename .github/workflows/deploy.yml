@@ -10,14 +10,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
       - uses: oven-sh/setup-bun@v2
-      - run: bun install
+      - name: Install dependencies
+        run: bun install
       - run: bun run type-check
       - run: bun run lint
-      - run: bun test
+      - name: Run tests
+        run: bun test
 
   deploy:
-    needs: test
+    needs: [test]
     runs-on: ubuntu-latest
 
     steps:
@@ -30,14 +34,18 @@ jobs:
           script: |
             set -e
             cd /var/www/ExpenseSyncBot
-
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
 
             echo "📥 Pulling latest changes..."
+            git remote prune origin
             git pull origin main
+            git submodule update --init
 
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
+
+            echo "📦 Installing ZenPlugins dependencies..."
+            /var/www/.bun/bin/bun install --cwd src/services/bank/ZenPlugins
 
             echo "🔧 Making start script executable..."
             chmod +x start.sh
@@ -45,13 +53,16 @@ jobs:
             echo "📜 Rotating logs before restart..."
             STAMP=$(date +%Y-%m-%d_%H-%M-%S)
             cd logs
-            for f in error.log out.log; do
+            for f in error.log out.log healthcheck.log; do
               if [ -s "$f" ]; then
                 mv "$f" "${f%.log}_${STAMP}.log"
                 gzip "${f%.log}_${STAMP}.log"
               fi
             done
             cd ..
+
+            echo "🔄 Reloading Caddy..."
+            caddy reload --config /etc/caddy/Caddyfile
 
             echo "🔄 Reloading PM2 process..."
             /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env
@@ -60,3 +71,40 @@ jobs:
 
             echo "📊 PM2 status:"
             /var/www/.bun/bin/pm2 list
+
+      - name: Notify deploy success
+        if: success()
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+          TEXT=$(printf '✅ <b>Deployed</b> <code>%s</code>\n%s' "${COMMIT_SHA:0:7}" "$FIRST_LINE")
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat_id, text: $text, parse_mode: "HTML"}')"
+
+  notify-failure:
+    name: Notify on failure
+    needs: [test, deploy]
+    if: always() && (needs.test.result == 'failure' || needs.deploy.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure notification
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+          TEXT=$(printf '❌ <b>Deploy failed</b> <code>%s</code>\n%s\n\n<a href="%s">View run</a>' "${COMMIT_SHA:0:7}" "$FIRST_LINE" "$RUN_URL")
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
+              '{chat_id: $chat_id, text: $text, parse_mode: "HTML", disable_web_page_preview: true}')"

@@ -20,7 +20,7 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
     case 'set_budget':
       return [
         input['category'],
-        input['amount'] && `${input['amount']} ${input['currency'] || ''}`.trim(),
+        input['amount'] != null && `${input['amount']} ${input['currency'] || ''}`.trim(),
       ]
         .filter(Boolean)
         .join(', ');
@@ -50,9 +50,20 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
       return [input['action'], input['name']].filter(Boolean).join(' ');
     case 'set_custom_prompt':
       return input['prompt'] ? `${String(input['prompt']).length} символов` : 'очистка';
+    case 'calculate':
+      return input['expression'] ? String(input['expression']) : '';
     default:
       return '';
   }
+}
+
+/**
+ * Returns true if the AI response is a skip signal — bot chose to stay silent.
+ * Recognized signals: [SKIP], ..., or empty string.
+ */
+export function isSkipSignal(text: string): boolean {
+  const t = text.trim();
+  return t === '[SKIP]' || t === '...' || t === '';
 }
 
 const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
@@ -61,10 +72,10 @@ const MAX_MESSAGE_LENGTH = 4000;
 
 export class TelegramStreamWriter {
   private sentMessageId: number | null = null;
-  private placeholderMessageId: number | null = null;
+  private placeholderIdPromise: Promise<number | null>;
   private fullText = ''; // current round's accumulated text
   private historyText = ''; // clean final AI text for chat history
-  private lastFlushTime = 0;
+  private lastFlushTime = Date.now();
   private lastSentText = ''; // last display text actually sent
   private lastErrorTime = 0;
   private flushInProgress = false; // mutex: prevents concurrent API calls
@@ -79,16 +90,15 @@ export class TelegramStreamWriter {
     private bot: Bot,
     private chatId: number,
   ) {
-    // Send placeholder and keep "typing" status alive
-    this.bot.api
+    // Send placeholder; sendOrEdit will edit it in-place instead of creating a new message,
+    // which prevents double-message race when the API call resolves after streaming begins.
+    this.placeholderIdPromise = this.bot.api
       .sendMessage({
         chat_id: this.chatId,
         text: '⏳ Минутку...',
       })
-      .then((msg) => {
-        this.placeholderMessageId = msg.message_id;
-      })
-      .catch(() => {});
+      .then((msg) => msg.message_id)
+      .catch(() => null);
 
     this.typingInterval = setInterval(() => {
       if (!this.sentMessageId) {
@@ -109,30 +119,18 @@ export class TelegramStreamWriter {
       clearInterval(this.typingInterval);
       this.typingInterval = null;
     }
-    this.deletePlaceholder();
-  }
-
-  private deletePlaceholder(): void {
-    if (this.placeholderMessageId) {
-      const id = this.placeholderMessageId;
-      this.placeholderMessageId = null;
-      this.bot.api
-        .deleteMessage({
-          chat_id: this.chatId,
-          message_id: id,
-        })
-        .catch(() => {});
-    }
   }
 
   /**
    * Reset writer state for a retry pass (validation rejection).
    * Keeps the existing Telegram message ID so edits continue in-place.
+   * Clears error cooldown so the retry can flush tool indicators immediately.
    */
   reset(): void {
     this.fullText = '';
     this.historyText = '';
     this.lastSentText = '';
+    this.lastErrorTime = 0;
     this.toolLabel = null;
     this.pendingIndicators = [];
     this.toolLines = [];
@@ -142,8 +140,13 @@ export class TelegramStreamWriter {
 
   /**
    * Append text delta from streaming — triggers a rate-limited flush automatically.
+   * Resets the throttle window at the start of each round so the first flush waits
+   * 1 second from when streaming actually begins, not from when the writer was created.
    */
   appendText(delta: string): void {
+    if (this.fullText === '') {
+      this.lastFlushTime = Date.now();
+    }
     this.fullText += delta;
     void this.flush(false);
   }
@@ -214,6 +217,7 @@ export class TelegramStreamWriter {
     }
     this.fullText = '';
     this.lastSentText = '';
+    this.lastFlushTime = Date.now();
   }
 
   /**
@@ -292,6 +296,13 @@ export class TelegramStreamWriter {
     if (text === this.lastSentText) return;
 
     try {
+      if (!this.sentMessageId) {
+        // Reuse the placeholder — avoids creating a second message if the API call
+        // resolves after streaming has already begun (double-message race condition).
+        const placeholderId = await this.placeholderIdPromise;
+        this.sentMessageId = placeholderId;
+      }
+
       if (this.sentMessageId) {
         await this.bot.api.editMessageText({
           chat_id: this.chatId,
@@ -300,6 +311,7 @@ export class TelegramStreamWriter {
           parse_mode: 'HTML',
         });
       } else {
+        // Placeholder creation failed — fall back to a new message
         const sent = await this.bot.api.sendMessage({
           chat_id: this.chatId,
           text,
@@ -437,6 +449,19 @@ export class TelegramStreamWriter {
     }
 
     return truncated;
+  }
+
+  /**
+   * Delete the sent message from Telegram (used when bot decides to stay silent).
+   * Falls back to the placeholder if sentMessageId wasn't set yet.
+   */
+  async deleteSentMessage(): Promise<void> {
+    this.stopTyping();
+    const messageId = this.sentMessageId ?? (await this.placeholderIdPromise);
+    if (messageId) {
+      this.sentMessageId = null;
+      this.bot.api.deleteMessage({ chat_id: this.chatId, message_id: messageId }).catch(() => {});
+    }
   }
 
   private splitIntoChunks(text: string, maxLength: number): string[] {

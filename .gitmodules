@@ -1,0 +1,3 @@
+[submodule "src/services/bank/ZenPlugins"]
+	path = src/services/bank/ZenPlugins
+	url = https://github.com/alex-mextner/ZenPlugins.git

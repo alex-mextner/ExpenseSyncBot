@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import Anthropic from '@anthropic-ai/sdk';
 import { ExpenseBotAgent } from './agent';
+import * as responseValidator from './response-validator';
 import type { AgentContext } from './types';
 
 // Minimal AgentContext with all required fields
@@ -100,6 +101,8 @@ describe('ExpenseBotAgent', () => {
   beforeEach(() => {
     agent = new ExpenseBotAgent('test-api-key', makeCtx());
     mockBot = makeMockBot();
+    // Prevent real API calls from the response validator
+    spyOn(responseValidator, 'validateResponse').mockResolvedValue({ approved: true });
   });
 
   afterEach(() => {
@@ -405,6 +408,20 @@ describe('ExpenseBotAgent', () => {
       const callArgs = getCallArgs(streamSpy);
       const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
       expect(systemBlocks.at(0)?.text).not.toContain('CUSTOM GROUP INSTRUCTIONS');
+    });
+
+    it('system prompt includes set_custom_prompt mutation rule', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
+        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
+      );
+
+      await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
+
+      const callArgs = getCallArgs(streamSpy);
+      const systemBlocks = callArgs.system as Array<{ type: string; text: string }>;
+      expect(systemBlocks.at(0)?.text).toContain('set_custom_prompt');
+      expect(systemBlocks.at(0)?.text).toContain('NEVER say "got it"');
     });
 
     it('system block has cache_control ephemeral', async () => {

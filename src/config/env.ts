@@ -17,6 +17,8 @@ interface EnvConfig {
   AI_MODEL: string;
   AI_VALIDATION_MODEL: string;
   GITHUB_TOKEN: string;
+  BOT_ADMIN_CHAT_ID: number | null;
+  LARGE_TX_THRESHOLD_EUR: number;
   AI_DEBUG_LOGS: boolean;
   NODE_ENV: 'development' | 'production';
 }
@@ -43,10 +45,14 @@ function validateEnv(): EnvConfig {
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
     HF_TOKEN: getEnvVariable('HF_TOKEN', false),
     ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
-    AI_BASE_URL: getEnvVariable('AI_BASE_URL', false),
-    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-4.7',
+    AI_BASE_URL: getEnvVariable('AI_BASE_URL', false) || 'https://api.z.ai/api/anthropic',
+    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-5',
     AI_VALIDATION_MODEL: getEnvVariable('AI_VALIDATION_MODEL', false) || 'glm-4.7-flash',
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
+    BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']
+      ? parseInt(process.env['BOT_ADMIN_CHAT_ID'], 10)
+      : null,
+    LARGE_TX_THRESHOLD_EUR: parseInt(process.env['LARGE_TX_THRESHOLD_EUR'] || '100', 10),
     AI_DEBUG_LOGS: process.env['AI_DEBUG_LOGS'] === 'true',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
   };

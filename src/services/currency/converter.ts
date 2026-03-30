@@ -1,32 +1,72 @@
 /** Currency converter — converts amounts between currencies using hardcoded EUR-based exchange rates */
-import type { CurrencyCode } from '../../config/constants';
+import Big from 'big.js';
+import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('converter');
 
 /**
- * Fallback exchange rates (to EUR)
- * Used when API is unavailable
+ * Fallback exchange rates (to EUR), stored as strings for exact decimal representation.
+ * Used when API is unavailable. Numbers derived from this via parseFloat.
  */
-const FALLBACK_RATES: Record<CurrencyCode, number> = {
-  EUR: 1.0,
-  USD: 0.93, // 1 USD = 0.93 EUR
-  RUB: 0.0093, // 1 RUB = 0.0093 EUR (approx 108 RUB = 1 EUR)
-  RSD: 0.0086, // 1 RSD = 0.0086 EUR (approx 117 RSD = 1 EUR)
-  GBP: 1.18, // 1 GBP = 1.18 EUR
-  BYN: 0.28, // 1 BYN = 0.28 EUR (approx 3.5 BYN = 1 EUR)
-  CHF: 1.05, // 1 CHF = 1.05 EUR
-  JPY: 0.0062, // 1 JPY = 0.0062 EUR (approx 161 JPY = 1 EUR)
-  CNY: 0.13, // 1 CNY = 0.13 EUR (approx 7.7 CNY = 1 EUR)
-  INR: 0.011, // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
-  LKR: 0.0028, // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
-  AED: 0.25, // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
+const FALLBACK_RATES_STR: Record<CurrencyCode, string> = {
+  EUR: '1',
+  USD: '0.93', // 1 USD = 0.93 EUR
+  RUB: '0.0093', // 1 RUB = 0.0093 EUR (approx 108 RUB = 1 EUR)
+  RSD: '0.0086', // 1 RSD = 0.0086 EUR (approx 117 RSD = 1 EUR)
+  GBP: '1.18', // 1 GBP = 1.18 EUR
+  BYN: '0.28', // 1 BYN = 0.28 EUR (approx 3.5 BYN = 1 EUR)
+  CHF: '1.05', // 1 CHF = 1.05 EUR
+  JPY: '0.0062', // 1 JPY = 0.0062 EUR (approx 161 JPY = 1 EUR)
+  CNY: '0.13', // 1 CNY = 0.13 EUR (approx 7.7 CNY = 1 EUR)
+  INR: '0.011', // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
+  LKR: '0.0028', // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
+  AED: '0.25', // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
 };
+
+const FALLBACK_RATES: Record<CurrencyCode, number> = Object.fromEntries(
+  Object.entries(FALLBACK_RATES_STR).map(([k, v]) => [k, parseFloat(v)]),
+) as Record<CurrencyCode, number>;
+
+/**
+ * Fallback rates for currencies used by bank plugins but not in SUPPORTED_CURRENCIES.
+ * These are approximate values for when the API is unavailable.
+ */
+const BANK_FALLBACK_RATES: Record<string, number> = {
+  GEL: 1 / 2.94, // Georgian Lari (~2.94 GEL = 1 EUR)
+  KZT: 1 / 514, // Kazakh Tenge
+  AMD: 1 / 408, // Armenian Dram
+  UAH: 1 / 44, // Ukrainian Hryvnia
+  UZS: 1 / 13500, // Uzbek Som
+  AZN: 1 / 1.84, // Azerbaijani Manat
+  TRY: 1 / 35, // Turkish Lira
+  ILS: 1 / 3.96, // Israeli Shekel
+  PLN: 1 / 4.28, // Polish Zloty
+  CZK: 1 / 25.2, // Czech Koruna
+  HUF: 1 / 400, // Hungarian Forint
+  RON: 1 / 4.97, // Romanian Leu
+  BGN: 1 / 1.96, // Bulgarian Lev
+  HRK: 1 / 7.53, // Croatian Kuna
+  MKD: 1 / 61.5, // Macedonian Denar
+  BAM: 1 / 1.96, // Bosnian Mark
+  RSD: 1 / 117, // Serbian Dinar (duplicate of SUPPORTED, kept for lookup convenience)
+};
+
+/**
+ * Currencies to cache from the API. Starts with SUPPORTED_CURRENCIES.
+ * Grows lazily — when convertAnyToEUR encounters a new code it registers it here
+ * so the next scheduled fetch will include it.
+ */
+const knownCurrencies: Set<string> = new Set(SUPPORTED_CURRENCIES);
 
 /**
  * Cache for API exchange rates
  */
 let cachedRates: Record<CurrencyCode, number> | null = null;
+// Rates for knownCurrencies fetched from API — used by convertAnyToEUR
+let cachedAllRates: Record<string, number> | null = null;
+// String-precision rates derived from API response via Big.js division (used by convertCurrencyBig)
+let cachedRatesStr: Record<CurrencyCode, string> | null = null;
 let cacheTimestamp: number = 0;
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
@@ -79,6 +119,36 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
       AED: 1 / (data.rates['AED'] || 1),
     };
 
+    // Build string-precision rates for Big.js arithmetic.
+    // API gives "1 EUR = X currency" → we compute "1 currency = 1/X EUR" via Big.js division
+    // to avoid float imprecision in convertCurrencyBig.
+    const toRateStr = (apiKey: string): string =>
+      new Big(1).div(new Big(String(data.rates[apiKey] || 1))).toFixed(15);
+    cachedRatesStr = {
+      EUR: '1',
+      USD: toRateStr('USD'),
+      RUB: toRateStr('RUB'),
+      RSD: toRateStr('RSD'),
+      GBP: toRateStr('GBP'),
+      BYN: toRateStr('BYN'),
+      CHF: toRateStr('CHF'),
+      JPY: toRateStr('JPY'),
+      CNY: toRateStr('CNY'),
+      INR: toRateStr('INR'),
+      LKR: toRateStr('LKR'),
+      AED: toRateStr('AED'),
+    };
+
+    // Store rates for known currencies only — populated lazily as new currencies are encountered.
+    const allRates: Record<string, number> = { EUR: 1.0 };
+    for (const currency of knownCurrencies) {
+      const apiRate = data.rates[currency];
+      if (typeof apiRate === 'number' && apiRate > 0) {
+        allRates[currency] = 1 / apiRate;
+      }
+    }
+    cachedAllRates = allRates;
+
     logger.info('[CURRENCY] ✅ Successfully fetched exchange rates from API');
     logger.info('[CURRENCY] Exchange rates (to EUR):');
     logger.info(`  /1 USD = €${(1 / rates.USD).toFixed(4)}`);
@@ -121,6 +191,10 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
     return apiRates;
   }
 
+  // API failed — reset caches so all callers fall back to hardcoded rates
+  cachedRatesStr = null;
+  cachedAllRates = null;
+
   // Fallback to hardcoded rates
   logger.info('[CURRENCY] Using fallback exchange rates');
   return FALLBACK_RATES;
@@ -130,7 +204,7 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
  * Convert amount to EUR
  */
 export function convertToEUR(amount: number, fromCurrency: CurrencyCode): number {
-  if (fromCurrency === 'EUR') {
+  if (fromCurrency === BASE_CURRENCY) {
     return amount;
   }
 
@@ -173,6 +247,28 @@ export function convertCurrency(
 }
 
 /**
+ * Convert amount to EUR for any ISO 4217 currency code, including those outside SUPPORTED_CURRENCIES.
+ * Uses live API rates (all currencies), then SUPPORTED_CURRENCIES fallback, then BANK_FALLBACK_RATES.
+ * If the currency is completely unknown, logs a warning and returns the amount unchanged.
+ * Intended for bank transaction processing where the currency comes from the bank plugin.
+ */
+export function convertAnyToEUR(amount: number, currency: string): number {
+  if (currency === 'EUR') return amount;
+  // Register so the next scheduled API fetch caches this currency's live rate.
+  knownCurrencies.add(currency);
+  const rate =
+    cachedAllRates?.[currency] ??
+    cachedRates?.[currency as CurrencyCode] ??
+    FALLBACK_RATES[currency as CurrencyCode] ??
+    BANK_FALLBACK_RATES[currency];
+  if (rate === undefined) {
+    logger.warn({ currency }, 'convertAnyToEUR: no rate found, treating as EUR');
+    return Math.round(amount * 100) / 100;
+  }
+  return Math.round(amount * rate * 100) / 100;
+}
+
+/**
  * Get exchange rate for currency
  */
 export function getExchangeRate(currency: CurrencyCode): number {
@@ -181,10 +277,35 @@ export function getExchangeRate(currency: CurrencyCode): number {
 }
 
 /**
- * Format amount with currency symbol
+ * Format amount with currency code.
+ *
+ * User-facing (default): amounts >= 1M shown as "1.5 млн RSD".
+ * AI context (aiContext=true): includes exact decimal plus suffix in parens,
+ * e.g. "1500000.00 (1.5 млн) RSD", so the model can use whichever form fits.
  */
-export function formatAmount(amount: number, currency: CurrencyCode): string {
-  return `${amount.toFixed(2)} ${currency}`;
+export function formatAmount(amount: number, currency: CurrencyCode, aiContext = false): string {
+  const abs = Math.abs(amount);
+
+  if (aiContext) {
+    const exact = amount.toFixed(2);
+    if (abs >= 1_000_000_000) {
+      return `${exact} (${+(amount / 1_000_000_000).toFixed(2)} млрд) ${currency}`;
+    }
+    if (abs >= 1_000_000) {
+      return `${exact} (${+(amount / 1_000_000).toFixed(2)} млн) ${currency}`;
+    }
+    return `${exact} ${currency}`;
+  }
+
+  let num: string;
+  if (abs >= 1_000_000_000) {
+    num = `${+(amount / 1_000_000_000).toFixed(2)} млрд`;
+  } else if (abs >= 1_000_000) {
+    num = `${+(amount / 1_000_000).toFixed(2)} млн`;
+  } else {
+    num = amount.toFixed(2);
+  }
+  return `${num} ${currency}`;
 }
 
 /**
@@ -203,6 +324,28 @@ export function getAllExchangeRates(): Record<CurrencyCode, number> {
 }
 
 /**
+ * Convert amount between currencies using exact Big.js arithmetic.
+ * Preserves full decimal precision — no intermediate rounding.
+ * Uses live API rates (as precise strings via Big.js division) when available,
+ * falls back to FALLBACK_RATES_STR otherwise.
+ * Intended for the AI calculator where intermediate rounding causes visible errors.
+ */
+export function convertCurrencyBig(amount: Big, from: CurrencyCode, to: CurrencyCode): Big {
+  if (from === to) return amount;
+
+  const rateTable = cachedRatesStr ?? FALLBACK_RATES_STR;
+  const fromRateStr = rateTable[from];
+  const toRateStr = rateTable[to];
+
+  if (!fromRateStr || !toRateStr) {
+    throw new Error(`Exchange rate not found for ${from} or ${to}`);
+  }
+
+  // rates[X] = "1 X = Y EUR" → from→EUR→to
+  return amount.times(new Big(fromRateStr)).div(new Big(toRateStr));
+}
+
+/**
  * Format exchange rates for AI context
  */
 export function formatExchangeRatesForAI(): string {
@@ -217,7 +360,7 @@ export function formatExchangeRatesForAI(): string {
   };
 
   for (const currency of Object.keys(rates) as CurrencyCode[]) {
-    if (currency !== 'EUR') {
+    if (currency !== BASE_CURRENCY) {
       lines.push(formatRate(currency));
     }
   }

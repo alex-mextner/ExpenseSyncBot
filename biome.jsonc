@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!node_modules/**", "!data/**", "!dist/**"]
+    "includes": [
+      "**",
+      "!node_modules",
+      "!data",
+      "!dist",
+      "!scripts",
+      "!src/services/bank/ZenPlugins"
+    ]
   },
   "formatter": {
     "enabled": true,

@@ -8,7 +8,6 @@ import { getTokensFromCode, resolveOAuthState } from '../services/google/oauth';
 import { encryptToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
 import { escapeHtml } from './html-escape';
-import { handleTempImage } from './temp-image.handler';
 
 const logger = createLogger('oauth-callback');
 
@@ -43,11 +42,6 @@ export function startOAuthServer(): void {
         } catch {
           return Response.json({ status: 'error' }, { status: 503 });
         }
-      }
-
-      // Serve temporary images for OCR processing
-      if (url.pathname.startsWith('/temp-images/')) {
-        return handleTempImage(url);
       }
 
       return new Response('Not Found', { status: 404 });
@@ -242,7 +236,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       },
     );
   } catch (err) {
-    logger.error({ err: err }, 'Error handling OAuth callback');
+    logger.error({ err }, 'Error handling OAuth callback');
 
     notifyTelegramError(groupId, err instanceof Error ? err.message : 'Unknown error').catch(
       (notifyErr) => {

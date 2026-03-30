@@ -180,6 +180,8 @@ export type TriggerType =
   | 'velocity_spike'
   | 'weekly_check'
   | 'first_expense_of_month'
+  | 'recurring_missed'
+  | 'pending_bank_transactions'
   | 'manual';
 
 export type OverallSeverity = 'good' | 'watch' | 'concern' | 'critical';

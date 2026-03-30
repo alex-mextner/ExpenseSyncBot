@@ -10,23 +10,22 @@ const logger = createLogger('broadcast');
 function buildNewsMessage(): string {
   const bot = env.BOT_USERNAME;
   return `\
-🆕 <b>Что нового в боте</b>
+🆕 <b>Что нового в финансовом боте</b>
 
-<b>📸 Фото чеков</b>
-Отправь фото чека — бот разберёт все позиции и предложит подтвердить каждую. Нужно чтобы был чётко виден QR-код или текст с суммами.
+<b>🤖 AI без упоминания бота</b>
+Теперь можно задавать вопросы прямо в чат — без <code>@${bot}</code>. Бот отвечает на все сообщения, кроме переписки людей между собой.
 
-<b>🧮 AI-калькулятор</b>
-ChatGPT, Claude и другие нейронки регулярно считают неправильно — это известная проблема. У нашего бота настоящий калькулятор — спроси через <code>@${bot}</code>:
-<i>«сколько мы потратили на еду в евро?»</i>
-<i>«100$ + 70€ + 2000 RSD — сколько в евро?»</i>
-<i>«раздели ужин на троих»</i>
-<i>«500€ минус 10% скидка»</i>
+<b>🏦 Подключение банков (/bank)</b>
+Через команду /bank можно подключить свой банк и автоматически тянуть транзакции. Проверено на TBC — поддерживаются все банки, куда добрались наши эмигранты.
 
-<b>🤖 AI точнее и надёжнее</b>
-Бот стал лучше отвечать на вопросы — перепроверяет себя и реже ошибается.
+<b>💸 Удобное отображение сумм</b>
+Большие числа теперь форматируются читаемо: 1 500 вместо 1500, миллионы — с сокращением.
 
-<b>💡 /help</b>
-Добавили полную справку — /help покажет все возможности бота.`;
+<b>📊 Бюджеты по месяцам</b>
+Бюджеты теперь разнесены по отдельным вкладкам — каждый месяц на своём листе. Ручная синхронизация после правок в таблице больше не нужна. Каждый год будет создаваться новая таблица.
+
+<b>🏷 Гибкое распознавание категорий</b>
+Бот лучше распознаёт категорию трат — работает даже при опечатках и сокращениях.`;
 }
 
 let alreadySent = false;
@@ -71,14 +70,14 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
  * Schedule news broadcast for March 24 at 12:00 UTC (one-time)
  */
 export function scheduleNewsBroadcast(bot: Bot): void {
-  // Run at 12:00 on March 24 only — stops after execution
-  const task = cron.schedule('0 12 24 3 *', () => {
-    logger.info('[BROADCAST] Cron triggered — March 24 12:00');
+  // Run at 12:00 on March 29 only — stops after execution
+  const task = cron.schedule('0 12 29 3 *', () => {
+    logger.info('[BROADCAST] Cron triggered — March 29 12:00');
     broadcastToAllGroups(bot).then(() => {
       task.stop();
       logger.info('[BROADCAST] Cron task stopped after execution');
     });
   });
 
-  logger.info('📢 News broadcast scheduled for March 24 at 12:00');
+  logger.info('📢 News broadcast scheduled for March 29 at 12:00');
 }
