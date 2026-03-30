@@ -27,7 +27,8 @@
       "Bash(node_modules/.bin/biome lint:fix src/services/bank/sync-service.ts)",
       "Bash(/tmp/extract_issues.txt:*)",
       "Read(//tmp/**)",
-      "Bash(gh secret:*)"
+      "Bash(gh secret:*)",
+      "Bash(./node_modules/.bin/jest)"
     ],
     "deny": [],
     "ask": []

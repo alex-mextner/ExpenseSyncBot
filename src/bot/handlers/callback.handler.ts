@@ -1,8 +1,7 @@
 import { format } from 'date-fns';
-import { MESSAGES } from '../../config/constants';
+import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
-
 import { createLogger } from '../../utils/logger.ts';
 import {
   handleBankAccountsCallback,
@@ -15,6 +14,8 @@ import {
   handleBankEditCallback,
   handleBankLetterCallback,
   handleBankLetterNavCallback,
+  handleBankMergeCallback,
+  handleBankNewCallback,
   handleBankNoCommentCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
@@ -24,7 +25,7 @@ import {
   handleBankWizardCancelCallback,
   handleBankWizardStartCallback,
 } from '../commands/bank';
-import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
+import { normalizeCurrency } from '../commands/budget';
 import {
   handleCurrencyCallback,
   handleDefaultCurrencyCallback,
@@ -32,6 +33,7 @@ import {
 } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
+import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
 import { getSheetWriteErrorMessage, saveExpenseToSheet } from './message.handler';
@@ -82,6 +84,16 @@ export async function handleCallbackQuery(
 
   try {
     switch (action) {
+      case 'feedback_cancel': {
+        if (chatId) cancelPendingFeedback(chatId);
+        await ctx.answerCallbackQuery({ text: '❌ Отменено' });
+        const msgId = ctx.message?.id;
+        if (msgId && chatId) {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: msgId });
+        }
+        break;
+      }
+
       case 'setup': {
         const setupAction = params.join(':');
         await handleSetupChoiceCallback(ctx, setupAction);
@@ -176,6 +188,27 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_merge': {
+        const txId = Number(params[0]);
+        const expenseId = Number(params[1]);
+        if (!chatId || !txId || !expenseId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        break;
+      }
+
+      case 'bank_new': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankNewCallback(ctx, bot, txId, chatId);
         break;
       }
 
@@ -437,7 +470,11 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        try {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        } catch (err) {
+          logger.error({ err }, '[CALLBACK] Failed to delete category add message');
+        }
       }
 
       // Find and save pending expense
@@ -470,7 +507,7 @@ async function handleCategoryAction(
         await bot.api.sendMessage({
           chat_id: chatId,
           text: `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
-          reply_markup: keyboard.build(),
+          reply_markup: keyboard,
         });
       }
 
@@ -479,7 +516,7 @@ async function handleCategoryAction(
 
     case 'select': {
       // Show existing categories
-      const categories = database.categories.getCategoryNames(group.id);
+      const categories = database.categories.findByGroupId(group.id);
 
       if (categories.length === 0) {
         await ctx.answerCallbackQuery({ text: 'Нет сохраненных категорий' });
@@ -487,16 +524,28 @@ async function handleCategoryAction(
       }
 
       const keyboard = createCategoriesListKeyboard(categories);
-      await ctx.editReplyMarkup({
-        inline_keyboard: keyboard.build().inline_keyboard,
-      });
+      await ctx.editReplyMarkup(keyboard);
       await ctx.answerCallbackQuery({ text: 'Выбери категорию' });
       break;
     }
 
     case 'choose': {
-      // Choose existing category
-      const categoryName = rest.join(':');
+      // Choose existing category by ID
+      const categoryId = Number.parseInt(rest[0] ?? '', 10);
+
+      if (Number.isNaN(categoryId)) {
+        await ctx.answerCallbackQuery({ text: 'Некорректные данные' });
+        return;
+      }
+
+      const categoryRecord = database.categories.findById(categoryId);
+
+      if (!categoryRecord) {
+        await ctx.answerCallbackQuery({ text: 'Категория не найдена' });
+        return;
+      }
+
+      const categoryName = categoryRecord.name;
 
       // Find pending expense for this user
       const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
@@ -519,7 +568,11 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        try {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        } catch (err) {
+          logger.error({ err }, '[CALLBACK] Failed to delete category message');
+        }
       }
 
       // Save expense

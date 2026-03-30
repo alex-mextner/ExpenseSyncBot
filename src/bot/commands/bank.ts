@@ -381,14 +381,13 @@ export async function handleBankConfirmCallback(
     return;
   }
 
-  // Atomically claim the transaction for comment prompt — prevent double-claiming.
+  // Atomically claim the transaction — prevent double-claiming.
   const claimed = database.db.transaction(() => {
     const freshTx = database.bankTransactions.findById(txId, group.id);
     if (!freshTx) return null;
     if (freshTx.status !== 'pending') return false;
     if (freshTx.edit_in_progress === 1) return 'edit'; // someone's editing it
     database.bankTransactions.setEditInProgress(txId, true);
-    database.bankTransactions.setAwaitingComment(txId, true);
     return freshTx;
   })();
 
@@ -405,9 +404,65 @@ export async function handleBankConfirmCallback(
     return;
   }
 
+  // Check for duplicate expenses before asking for a comment.
+  const { exact, fuzzy } = database.expenses.findPotentialDuplicates(
+    group.id,
+    claimed.date,
+    claimed.amount,
+    claimed.currency,
+  );
+
+  if (exact.length > 0) {
+    // Auto-merge: link the bank transaction to the existing expense silently.
+    const existing = exact[0];
+    if (!existing) return; // length > 0 guarantees this, but TypeScript needs it
+    mergeTransactionWithExpense(claimed, group.id, existing.id);
+    database.bankTransactions.setEditInProgress(txId, false);
+
+    await ctx.answerCallbackQuery({ text: '✅ Объединено с существующим расходом' });
+    const messageId = ctx.message?.id;
+    if (messageId) {
+      try {
+        await bot.api.editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          text: `✅ Объединено: ${existing.category} (${existing.amount} ${existing.currency})`,
+        });
+      } catch {
+        // message may be too old to edit
+      }
+    }
+    return;
+  }
+
+  if (fuzzy.length > 0) {
+    // Show merge-or-new prompt — let the user decide.
+    const match = fuzzy[0];
+    if (!match) return; // length > 0 guarantees this, but TypeScript needs it
+    const commentPart = match.comment ? ` — ${match.comment}` : '';
+    await ctx.answerCallbackQuery();
+
+    const replyToMsgId = claimed.telegram_message_id ?? undefined;
+    await bot.api.sendMessage({
+      chat_id: chatId,
+      text: `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nОбъединить или создать новый?`,
+      ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🔗 Объединить', callback_data: `bank_merge:${txId}:${match.id}` },
+            { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
+          ],
+        ],
+      },
+    });
+    return;
+  }
+
+  // No duplicates — ask user to enter a comment or skip it.
+  database.bankTransactions.setAwaitingComment(txId, true);
   await ctx.answerCallbackQuery();
 
-  // Ask user to enter a comment or skip it
   const replyToMsgId = claimed.telegram_message_id ?? undefined;
   const promptMsg = await bot.api.sendMessage({
     chat_id: chatId,
@@ -420,6 +475,111 @@ export async function handleBankConfirmCallback(
 
   if (promptMsg?.message_id) {
     // Store prompt message id so handleBankEditReply can match the reply
+    database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
+  }
+}
+
+/**
+ * Handles "Объединить" button — links bank transaction to an existing expense.
+ */
+export async function handleBankMergeCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  txId: number,
+  expenseId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  // Atomically claim: verify tx is still pending, expense not yet linked, then merge.
+  const mergeResult = database.db.transaction(() => {
+    const tx = database.bankTransactions.findById(txId, group.id);
+    if (!tx || tx.status !== 'pending') return 'tx_done' as const;
+
+    const expense = database.expenses.findById(expenseId);
+    if (!expense || expense.group_id !== group.id) return 'expense_missing' as const;
+
+    const alreadyLinked = database.db
+      .query<{ n: number }, [number]>(
+        'SELECT COUNT(*) as n FROM bank_transactions WHERE matched_expense_id = ?',
+      )
+      .get(expenseId);
+    if (alreadyLinked && alreadyLinked.n > 0) return 'expense_taken' as const;
+
+    mergeTransactionWithExpense(tx, group.id, expense.id);
+    database.bankTransactions.setEditInProgress(txId, false);
+    return expense;
+  })();
+
+  if (mergeResult === 'tx_done') {
+    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
+    return;
+  }
+  if (mergeResult === 'expense_missing') {
+    await ctx.answerCallbackQuery({ text: 'Расход не найден' });
+    return;
+  }
+  if (mergeResult === 'expense_taken') {
+    await ctx.answerCallbackQuery({ text: 'Расход уже привязан к другой транзакции' });
+    return;
+  }
+
+  const expense = mergeResult;
+
+  await ctx.answerCallbackQuery({ text: '✅ Объединено' });
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: `✅ Объединено: ${expense.category} (${expense.amount} ${expense.currency})`,
+      });
+    } catch {
+      // message may be too old to edit
+    }
+  }
+}
+
+/**
+ * Handles "Новый расход" button after a fuzzy-match prompt — proceeds to the comment step.
+ */
+export async function handleBankNewCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  txId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const tx = database.bankTransactions.findById(txId, group.id);
+  if (!tx || tx.status !== 'pending' || tx.edit_in_progress !== 1) {
+    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
+    return;
+  }
+
+  database.bankTransactions.setAwaitingComment(txId, true);
+  await ctx.answerCallbackQuery();
+
+  const replyToMsgId = tx.telegram_message_id ?? undefined;
+  const promptMsg = await bot.api.sendMessage({
+    chat_id: chatId,
+    text: `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
+    ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
+    },
+  });
+
+  if (promptMsg?.message_id) {
     database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
   }
 }
@@ -671,6 +831,18 @@ export async function handleBankAccountToggleCallback(
 
   // Refresh the accounts list
   await handleBankAccountsCallback(ctx, bot, connectionId, chatId);
+}
+
+/**
+ * Link a bank transaction to an existing expense without creating a new one.
+ */
+function mergeTransactionWithExpense(
+  tx: import('../../database/types').BankTransaction,
+  groupId: number,
+  expenseId: number,
+): void {
+  database.bankTransactions.updateStatus(tx.id, groupId, 'confirmed');
+  database.bankTransactions.setMatchedExpense(tx.id, groupId, expenseId);
 }
 
 /**

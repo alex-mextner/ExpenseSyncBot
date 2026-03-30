@@ -259,34 +259,21 @@ describe('GroupRepository', () => {
   });
 
   describe('hasCompletedSetup', () => {
-    test('returns false for new group without oauth', () => {
+    // hasCompletedSetup checks default_currency + enabled_currencies (not OAuth)
+    test('returns true for new group with default currency (USD default)', () => {
       repo.create({ telegram_group_id: 700 });
-      expect(repo.hasCompletedSetup(700)).toBe(false);
+      expect(repo.hasCompletedSetup(700)).toBe(true);
     });
 
-    test('returns false with only token', () => {
-      repo.create({ telegram_group_id: 701 });
-      repo.update(701, { google_refresh_token: 'tok' });
-      expect(repo.hasCompletedSetup(701)).toBe(false);
-    });
-
-    test('returns false with token and spreadsheet but empty currencies', () => {
+    test('returns false when enabled_currencies is empty', () => {
       repo.create({ telegram_group_id: 702 });
-      repo.update(702, {
-        google_refresh_token: 'tok',
-        spreadsheet_id: 'ss',
-        enabled_currencies: [],
-      });
+      repo.update(702, { enabled_currencies: [] });
       expect(repo.hasCompletedSetup(702)).toBe(false);
     });
 
-    test('returns true when token, spreadsheet, and currencies all set', () => {
+    test('returns true when default_currency and enabled_currencies are set', () => {
       repo.create({ telegram_group_id: 703 });
-      repo.update(703, {
-        google_refresh_token: 'tok',
-        spreadsheet_id: 'ss',
-        enabled_currencies: ['EUR'],
-      });
+      repo.update(703, { default_currency: 'EUR', enabled_currencies: ['EUR'] });
       expect(repo.hasCompletedSetup(703)).toBe(true);
     });
 

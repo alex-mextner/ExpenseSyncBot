@@ -1,7 +1,7 @@
 import { InlineKeyboard } from 'gramio';
 import {
   BASE_CURRENCY,
-  type CurrencyCode,
+  getCurrencySymbol,
   KEYBOARD_TEXTS,
   SUPPORTED_CURRENCIES,
 } from '../config/constants';
@@ -9,10 +9,11 @@ import {
 /**
  * Create currency set selection keyboard (Step 1)
  */
-export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []): InlineKeyboard {
+export function createCurrencyKeyboard(selectedCurrencies: string[] = []): InlineKeyboard {
   const keyboard = new InlineKeyboard();
+  const supportedSet = new Set<string>(SUPPORTED_CURRENCIES);
 
-  // Add currency buttons in rows of 3
+  // Add standard currency buttons in rows of 3
   for (let i = 0; i < SUPPORTED_CURRENCIES.length; i += 3) {
     const row = SUPPORTED_CURRENCIES.slice(i, i + 3);
 
@@ -25,6 +26,21 @@ export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []):
     keyboard.row();
   }
 
+  // Show custom currencies that aren't in SUPPORTED_CURRENCIES
+  const customCurrencies = selectedCurrencies.filter((c) => !supportedSet.has(c));
+  if (customCurrencies.length > 0) {
+    for (let i = 0; i < customCurrencies.length; i += 3) {
+      const row = customCurrencies.slice(i, i + 3);
+      for (const currency of row) {
+        keyboard.text(`✅ ${currency}`, `currency:${currency}`);
+      }
+      keyboard.row();
+    }
+  }
+
+  // Custom currency input button
+  keyboard.text('✏️ Ввести код валюты', 'currency:custom').row();
+
   // Add next button (not done)
   if (selectedCurrencies.length > 0) {
     keyboard.text(KEYBOARD_TEXTS.next, 'currency:next');
@@ -36,7 +52,7 @@ export function createCurrencyKeyboard(selectedCurrencies: CurrencyCode[] = []):
 /**
  * Create default currency selection keyboard (Step 2)
  */
-export function createDefaultCurrencyKeyboard(enabledCurrencies: CurrencyCode[]): InlineKeyboard {
+export function createDefaultCurrencyKeyboard(enabledCurrencies: string[]): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   // Show only enabled currencies in rows of 3
@@ -54,13 +70,27 @@ export function createDefaultCurrencyKeyboard(enabledCurrencies: CurrencyCode[])
 }
 
 /**
+ * Truncate callback_data to fit Telegram's 64-byte limit.
+ * Avoids splitting multi-byte (Cyrillic) characters.
+ */
+function fitCallbackData(prefix: string, value: string): string {
+  const full = `${prefix}${value}`;
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(full);
+  if (encoded.length <= 64) return full;
+  const decoder = new TextDecoder();
+  // Slice at 64 bytes and decode — TextDecoder handles partial multi-byte gracefully
+  return decoder.decode(encoded.slice(0, 64)).replace(/\uFFFD$/, '');
+}
+
+/**
  * Create category confirmation keyboard
  */
 export function createCategoryConfirmKeyboard(category: string): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   keyboard
-    .text(KEYBOARD_TEXTS.addNewCategory, `category:add:${category}`)
+    .text(KEYBOARD_TEXTS.addNewCategory, fitCallbackData('category:add:', category))
     .row()
     .text(KEYBOARD_TEXTS.selectExistingCategory, 'category:select')
     .row()
@@ -70,13 +100,16 @@ export function createCategoryConfirmKeyboard(category: string): InlineKeyboard 
 }
 
 /**
- * Create existing categories keyboard
+ * Create existing categories keyboard.
+ * Uses category IDs in callback_data to avoid 64-byte limit overflow for long names.
  */
-export function createCategoriesListKeyboard(categories: string[]): InlineKeyboard {
+export function createCategoriesListKeyboard(
+  categories: Array<{ id: number; name: string }>,
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   for (const category of categories) {
-    keyboard.text(category, `category:choose:${category}`).row();
+    keyboard.text(category.name, `category:choose:${category.id}`).row();
   }
 
   keyboard.text(KEYBOARD_TEXTS.cancel, 'category:cancel');
@@ -104,14 +137,7 @@ export function createBudgetPromptKeyboard(
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol =
-    defaultCurrency === 'EUR'
-      ? '€'
-      : defaultCurrency === 'USD'
-        ? '$'
-        : defaultCurrency === 'RUB'
-          ? '₽'
-          : defaultCurrency;
+  const currencySymbol = getCurrencySymbol(defaultCurrency);
 
   keyboard
     .text(
@@ -134,8 +160,7 @@ export function createAddCategoryWithBudgetKeyboard(
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol =
-    currency === 'EUR' ? '€' : currency === 'USD' ? '$' : currency === 'RUB' ? '₽' : currency;
+  const currencySymbol = getCurrencySymbol(currency);
 
   keyboard
     .text(

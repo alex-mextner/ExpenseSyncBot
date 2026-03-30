@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
-import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';
+import { getCurrencySymbol, SPREADSHEET_CONFIG } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
 import type { MonthAbbr } from './month-abbr';
@@ -44,7 +44,7 @@ export async function createExpenseSpreadsheet(
   // Build headers: Date | Currencies | EUR(calc) | Category | Comment | Rate
   const headers = [
     SPREADSHEET_CONFIG.headers[0], // Дата
-    ...enabledCurrencies.map((code) => `${code} (${CURRENCY_SYMBOLS[code]})`),
+    ...enabledCurrencies.map((code) => `${code} (${getCurrencySymbol(code)})`),
     SPREADSHEET_CONFIG.eurColumnHeader, // EUR (calc)
     SPREADSHEET_CONFIG.headers[1], // Категория
     SPREADSHEET_CONFIG.headers[2], // Комментарий
@@ -273,7 +273,7 @@ async function insertCurrencyColumn(
   currentHeaders: string[],
   currency: CurrencyCode,
 ): Promise<string[]> {
-  const symbol = CURRENCY_SYMBOLS[currency] || currency;
+  const symbol = getCurrencySymbol(currency);
   const newHeader = `${currency} (${symbol})`;
 
   // Insert before EUR (calc)

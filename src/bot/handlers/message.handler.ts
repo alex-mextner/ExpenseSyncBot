@@ -11,6 +11,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { silentSyncBudgets } from '../commands/budget';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
+import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
 
@@ -113,6 +114,16 @@ export async function handleExpenseMessage(
     return true;
   }
 
+  // Custom currency input during onboarding — must be checked before setup completion
+  if (text && !text.startsWith('/')) {
+    const { isAwaitingCustomCurrency, handleCustomCurrencyInput } = await import(
+      '../commands/connect'
+    );
+    if (isAwaitingCustomCurrency(telegramGroupId)) {
+      return await handleCustomCurrencyInput(ctx, telegramGroupId);
+    }
+  }
+
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
@@ -182,6 +193,13 @@ export async function handleExpenseMessage(
         await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    return true;
+  }
+
+  // Check if we're waiting for feedback text input
+  const feedbackPromptId = consumePendingFeedback(telegramGroupId, telegramId);
+  if (feedbackPromptId !== null) {
+    await submitFeedback(ctx, group, text, { promptMessageId: feedbackPromptId, bot });
     return true;
   }
 

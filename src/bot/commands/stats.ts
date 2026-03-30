@@ -1,4 +1,4 @@
-import { BASE_CURRENCY, CURRENCY_SYMBOLS, type CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -27,8 +27,7 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
 
   message += `\n**Последние ${recentExpenses.length} расходов:**\n`;
   for (const expense of recentExpenses) {
-    const symbol =
-      CURRENCY_SYMBOLS[expense.currency as keyof typeof CURRENCY_SYMBOLS] || expense.currency;
+    const symbol = getCurrencySymbol(expense.currency);
     message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;
   }
 

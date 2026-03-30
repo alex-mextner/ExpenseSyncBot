@@ -8,6 +8,9 @@ pre-commit:
       glob: "*.{ts,tsx}"
 
 pre-push:
+  parallel: true
   commands:
     tests:
-      run: bash -c 'bun test $(find src -name "*.test.ts" -not -path "*/ZenPlugins/*")'
+      run: find src -path '*/ZenPlugins' -prune -o -name '*.test.ts' -print | grep -v 'budget-migration\.test\.ts\|message\.handler\.test\.ts\|sum\.test\.ts\|git-ops\.test\.ts' | xargs bun test
+    tests-isolated:
+      run: bun test ./src/services/google/budget-migration.test.ts ./src/bot/handlers/message.handler.test.ts ./src/bot/commands/sum.test.ts

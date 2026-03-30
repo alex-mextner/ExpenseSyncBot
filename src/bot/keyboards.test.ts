@@ -157,11 +157,44 @@ describe('createCategoryConfirmKeyboard', () => {
       expect(btn.text.length).toBeGreaterThan(0);
     }
   });
+
+  it('truncates callback_data for long category names to fit 64-byte limit', () => {
+    const longCategory = 'Абвгдежзиклмнопрстуфхцчшщэюя';
+    const kb = createCategoryConfirmKeyboard(longCategory);
+    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
+    const encoder = new TextEncoder();
+    expect(encoder.encode(addBtn?.callback_data ?? '').length).toBeLessThanOrEqual(64);
+  });
+
+  it('regression: Cyrillic category with 20+ chars stays within 64-byte limit', () => {
+    // Bug: "Продукты питания и напитки" (50 Cyrillic bytes + 13 prefix bytes = 63+)
+    // caused BUTTON_DATA_INVALID from Telegram API
+    const cyrillicCategory = 'Продукты питания и напитки домашние';
+    const kb = createCategoryConfirmKeyboard(cyrillicCategory);
+    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
+    const encoder = new TextEncoder();
+    const byteLength = encoder.encode(addBtn?.callback_data ?? '').length;
+    expect(byteLength).toBeLessThanOrEqual(64);
+    // Truncated but still a valid string (no broken UTF-8)
+    expect(addBtn?.callback_data).toStartWith('category:add:');
+    expect(addBtn?.callback_data?.length).toBeGreaterThan('category:add:'.length);
+  });
+
+  it('regression: short ASCII category is not truncated', () => {
+    const kb = createCategoryConfirmKeyboard('Food');
+    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
+    expect(addBtn?.callback_data).toBe('category:add:Food');
+  });
 });
 
 describe('createCategoriesListKeyboard', () => {
+  const cats = [
+    { id: 1, name: 'Food' },
+    { id: 2, name: 'Transport' },
+    { id: 3, name: 'Health' },
+  ];
+
   it('shows a button for each category', () => {
-    const cats = ['Food', 'Transport', 'Health'];
     const kb = createCategoriesListKeyboard(cats);
     const texts = allButtons(kb).map((b) => b.text);
     expect(texts).toContain('Food');
@@ -169,14 +202,14 @@ describe('createCategoriesListKeyboard', () => {
     expect(texts).toContain('Health');
   });
 
-  it('category buttons have callback_data category:choose:<name>', () => {
-    const kb = createCategoriesListKeyboard(['Food']);
+  it('category buttons have callback_data category:choose:<id>', () => {
+    const kb = createCategoriesListKeyboard([{ id: 42, name: 'Food' }]);
     const btn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:choose:'));
-    expect(btn?.callback_data).toBe('category:choose:Food');
+    expect(btn?.callback_data).toBe('category:choose:42');
   });
 
   it('cancel button always present', () => {
-    const kb = createCategoriesListKeyboard(['Food']);
+    const kb = createCategoriesListKeyboard([{ id: 1, name: 'Food' }]);
     const cancelBtn = allButtons(kb).find((b) => b.callback_data === 'category:cancel');
     expect(cancelBtn).toBeTruthy();
   });
@@ -185,6 +218,32 @@ describe('createCategoriesListKeyboard', () => {
     const kb = createCategoriesListKeyboard([]);
     const cancelBtn = allButtons(kb).find((b) => b.callback_data === 'category:cancel');
     expect(cancelBtn).toBeTruthy();
+  });
+
+  it('regression: uses numeric ID, not category name, in callback_data', () => {
+    // Bug: long Cyrillic names in callback_data exceeded Telegram's 64-byte limit
+    // causing BUTTON_DATA_INVALID (400 error) → "Internal error!" for users
+    const longCyrillicName = 'Продукты питания и напитки домашние';
+    const kb = createCategoriesListKeyboard([{ id: 7, name: longCyrillicName }]);
+    const btn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:choose:'));
+    // callback_data must contain the numeric ID, not the name
+    expect(btn?.callback_data).toBe('category:choose:7');
+    // button text still shows the human-readable name
+    expect(btn?.text).toBe(longCyrillicName);
+  });
+
+  it('regression: callback_data always within 64-byte limit regardless of name length', () => {
+    const categories = [
+      { id: 1, name: 'Абвгдежзиклмнопрстуфхцчшщэюяабвгдежзиклмнопрстуфхцчшщэюя' },
+      { id: 999999, name: 'Ресторан' },
+    ];
+    const kb = createCategoriesListKeyboard(categories);
+    const encoder = new TextEncoder();
+    for (const btn of allButtons(kb)) {
+      if (btn.callback_data) {
+        expect(encoder.encode(btn.callback_data).length).toBeLessThanOrEqual(64);
+      }
+    }
   });
 });
 

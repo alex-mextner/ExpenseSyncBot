@@ -53,6 +53,60 @@ export class ExpenseRepository {
   }
 
   /**
+   * Find expenses that may be duplicates of a bank transaction.
+   * Returns exact matches (same date, ±1% amount, same currency) and fuzzy matches (±1 day).
+   * Only considers expenses not already linked to a bank transaction.
+   */
+  findPotentialDuplicates(
+    groupId: number,
+    date: string,
+    amount: number,
+    currency: string,
+  ): { exact: Expense[]; fuzzy: Expense[] } {
+    const notLinked = `
+      AND NOT EXISTS (
+        SELECT 1 FROM bank_transactions bt WHERE bt.matched_expense_id = e.id
+      )
+    `;
+    const amountTolerance = amount * 0.01;
+
+    const exact = this.db
+      .query<Expense, [number, string, string, number, number]>(`
+        SELECT e.* FROM expenses e
+        WHERE e.group_id = ?
+          AND e.date = ?
+          AND e.currency = ?
+          AND ABS(e.amount - ?) <= ?
+          ${notLinked}
+        ORDER BY e.created_at DESC
+        LIMIT 5
+      `)
+      .all(groupId, date, currency, amount, amountTolerance);
+
+    const exactIds = new Set(exact.map((e) => e.id));
+
+    const fuzzy = this.db
+      .query<Expense, [number, string, string, string, string, number, number, string]>(`
+        SELECT e.* FROM expenses e
+        WHERE e.group_id = ?
+          AND e.date >= date(?, '-1 day')
+          AND e.date <= date(?, '+1 day')
+          AND e.date != ?
+          AND e.currency = ?
+          AND ABS(e.amount - ?) <= ?
+          ${notLinked}
+        ORDER BY ABS(julianday(e.date) - julianday(?)) ASC, e.created_at DESC
+        LIMIT 5
+      `)
+      .all(groupId, date, date, date, currency, amount, amountTolerance, date);
+
+    return {
+      exact,
+      fuzzy: fuzzy.filter((e) => !exactIds.has(e.id)),
+    };
+  }
+
+  /**
    * Create new expense
    */
   create(data: CreateExpenseData): Expense {
