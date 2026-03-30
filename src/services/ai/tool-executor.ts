@@ -12,6 +12,7 @@ import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
+import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
 import type { AgentContext, ToolResult } from './types';
 
@@ -510,7 +511,7 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
 
   try {
     const { silentSyncBudgets } = await import('../../bot/commands/budget');
-    await silentSyncBudgets(group.google_refresh_token, ctx.groupId);
+    await silentSyncBudgets(googleConn(group), ctx.groupId);
     return { success: true, output: 'Budgets synced to Google Sheets.' };
   } catch (err) {
     logger.error({ err }, '[TOOL] executeSyncBudgets failed');

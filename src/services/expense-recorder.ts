@@ -7,6 +7,7 @@ import type { ExpenseItemsRepository } from '../database/repositories/expense-it
 import type { GroupRepository } from '../database/repositories/group.repository';
 import type { Expense } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
+import type { GoogleConn } from './google/sheets';
 
 let _instance: ExpenseRecorder | null = null;
 
@@ -39,7 +40,7 @@ const logger = createLogger('expense-recorder');
  */
 export interface SheetWriter {
   appendExpenseRow(
-    refreshToken: string,
+    conn: GoogleConn,
     spreadsheetId: string,
     data: {
       date: string;
@@ -142,17 +143,17 @@ export class ExpenseRecorder {
     userId: number,
     data: RecordExpenseData,
   ): Promise<RecordExpenseResult> {
-    const { refreshToken, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
     const rate = this.eurConverter.getExchangeRate(data.currency);
     const eurAmount = this.eurConverter.convertToEUR(data.amount, data.currency);
     const amounts = buildAmountsRecord(data.amount, data.currency, enabledCurrencies);
 
     // Write to Google Sheets if connected
-    if (refreshToken && spreadsheetId) {
+    if (conn && spreadsheetId) {
       logger.info({ data: { ...data, eurAmount, rate } }, `[RECORD] Writing expense to sheet`);
 
-      await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
+      await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
         date: data.date,
         category: data.category,
         comment: data.comment,
@@ -195,7 +196,7 @@ export class ExpenseRecorder {
   ): Promise<RecordExpenseResult[]> {
     if (items.length === 0) return [];
 
-    const { refreshToken, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
     // Group items by category
     const byCategory = new Map<string, RecordReceiptItem[]>();
@@ -225,8 +226,8 @@ export class ExpenseRecorder {
       const amounts = buildAmountsRecord(totalAmount, currency, enabledCurrencies);
 
       // Write to sheet if connected
-      if (refreshToken && spreadsheetId) {
-        await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
+      if (conn && spreadsheetId) {
+        await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
           date: currentDate,
           category,
           comment,
@@ -272,9 +273,9 @@ export class ExpenseRecorder {
    * Push existing DB expenses to sheet (no new DB entries)
    */
   async pushToSheet(groupId: number, expenseList: Expense[]): Promise<void> {
-    const { refreshToken, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
-    if (!refreshToken || !spreadsheetId) {
+    if (!conn || !spreadsheetId) {
       throw new Error(`Group ${groupId} not connected to Google Sheets`);
     }
 
@@ -283,7 +284,7 @@ export class ExpenseRecorder {
 
       // Rate omitted: DB expenses store eur_amount but not the original rate.
       // Re-deriving rate from eur_amount/amount would give a stale approximation.
-      await this.sheetWriter.appendExpenseRow(refreshToken, spreadsheetId, {
+      await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
         date: expense.date,
         category: expense.category,
         comment: expense.comment,
@@ -296,7 +297,7 @@ export class ExpenseRecorder {
   }
 
   private getGroupConfig(groupId: number): {
-    refreshToken: string | null;
+    conn: GoogleConn | null;
     spreadsheetId: string | null;
     enabledCurrencies: CurrencyCode[];
   } {
@@ -305,7 +306,12 @@ export class ExpenseRecorder {
       throw new Error(`Group ${groupId} not found`);
     }
     return {
-      refreshToken: group.google_refresh_token,
+      conn: group.google_refresh_token
+        ? {
+            refreshToken: group.google_refresh_token,
+            oauthClient: group.oauth_client,
+          }
+        : null,
       spreadsheetId: group.spreadsheet_id,
       enabledCurrencies: group.enabled_currencies,
     };

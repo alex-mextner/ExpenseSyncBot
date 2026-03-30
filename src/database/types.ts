@@ -1,6 +1,8 @@
 /** Database model types — TypeScript interfaces for all SQLite table rows */
 import type { CurrencyCode } from '../config/constants';
 
+export type OAuthClientType = 'legacy' | 'current';
+
 /**
  * Group model (Telegram group/supergroup)
  */
@@ -13,8 +15,8 @@ export interface Group {
   enabled_currencies: CurrencyCode[];
   custom_prompt: string | null;
   active_topic_id: number | null;
-  oauth_client: 'legacy' | 'service_account';
   bank_panel_summary_message_id: number | null;
+  oauth_client: OAuthClientType;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +34,7 @@ export interface UpdateGroupData {
   custom_prompt?: string | null;
   active_topic_id?: number | null;
   bank_panel_summary_message_id?: number | null;
+  oauth_client?: OAuthClientType;
 }
 
 /**

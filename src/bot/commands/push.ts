@@ -2,7 +2,7 @@
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
 import { getExpenseRecorder } from '../../services/expense-recorder';
-import { readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
+import { googleConn, readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import type { GoogleConnectedGroup } from '../guards';
 import { sendToChat } from '../send';
@@ -54,10 +54,7 @@ export async function handlePushCommand(
 
     // Read all expenses from sheet
     logger.info(`[PUSH] Reading expenses from Google Sheet`);
-    const sheetExpenses = await readExpensesFromSheet(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-    );
+    const sheetExpenses = await readExpensesFromSheet(googleConn(group), group.spreadsheet_id);
     logger.info(`[PUSH] Found ${sheetExpenses.expenses.length} expenses in sheet`);
 
     if (sheetExpenses.errors.length > 0) {

@@ -11,6 +11,8 @@ import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/o
 import {
   createEmptyMonthTab,
   createExpenseSpreadsheet,
+  type GoogleConn,
+  googleConn,
   monthTabExists,
   readExpensesFromSheet,
   readMonthBudget,
@@ -116,16 +118,15 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
       return;
     }
 
+    const conn = googleConn(freshGroup);
+
     // Step 0: Create backups before any modifications
     const expenses = database.expenses.findByGroupId(freshGroup.id, 100000);
     const budgets = database.budgets.findByGroupId(freshGroup.id);
     report.snapshotId = database.syncSnapshots.saveSnapshot(freshGroup.id, expenses, budgets);
     report.snapshotExpenses = expenses.length;
     report.snapshotBudgets = budgets.length;
-    report.sheetBackupUrl = await backupSpreadsheet(
-      freshGroup.google_refresh_token,
-      freshGroup.spreadsheet_id,
-    );
+    report.sheetBackupUrl = await backupSpreadsheet(conn, freshGroup.spreadsheet_id);
 
     // Step 1: Ensure current-year spreadsheet exists
     report.yearCreated = await ensureCurrentYearSpreadsheet(freshGroup);
@@ -133,7 +134,7 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
     // Step 2: Sheet → DB expenses (add-only, never deletes)
     report.sheetToDbExpenses = await importExpensesFromSheet(
       freshGroup.id,
-      freshGroup.google_refresh_token,
+      conn,
       freshGroup.spreadsheet_id,
     );
 
@@ -162,12 +163,9 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
 const BACKUP_NAME_PREFIX = 'Expenses Tracker — backup';
 
 /** Copy the Google spreadsheet via Drive API. Deletes previous backups first (recoverable from trash). */
-async function backupSpreadsheet(
-  refreshToken: string,
-  spreadsheetId: string,
-): Promise<string | null> {
+async function backupSpreadsheet(conn: GoogleConn, spreadsheetId: string): Promise<string | null> {
   try {
-    const auth = getAuthenticatedClient(refreshToken);
+    const auth = getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
     const drive = google.drive({ version: 'v3', auth });
 
     // Delete previous backups (they go to trash, recoverable for 30 days)
@@ -225,7 +223,7 @@ async function ensureCurrentYearSpreadsheet(group: Group): Promise<number | null
 
   logger.info(`[RECONNECT] Creating ${currentYear} spreadsheet for group ${group.id}`);
   const { spreadsheetId } = await createExpenseSpreadsheet(
-    group.google_refresh_token,
+    googleConn(group),
     group.default_currency,
     group.enabled_currencies,
   );
@@ -250,7 +248,7 @@ async function pushMissingExpensesToSheet(group: Group): Promise<number> {
   if (dbExpenses.length === 0) return 0;
 
   const { expenses: sheetExpenses } = await readExpensesFromSheet(
-    group.google_refresh_token,
+    googleConn(group),
     group.spreadsheet_id,
   );
 
@@ -296,6 +294,7 @@ function sheetRowKey(row: SheetRow): string | null {
 async function importBudgetsFromSheet(group: Group): Promise<number> {
   if (!group.google_refresh_token || !group.spreadsheet_id) return 0;
 
+  const conn = googleConn(group);
   const currentYear = new Date().getFullYear();
   const spreadsheetId =
     database.groupSpreadsheets.getByYear(group.id, currentYear) ?? group.spreadsheet_id;
@@ -303,14 +302,10 @@ async function importBudgetsFromSheet(group: Group): Promise<number> {
   let imported = 0;
 
   for (const monthAbbr of MONTH_ABBREVS) {
-    const exists = await monthTabExists(group.google_refresh_token, spreadsheetId, monthAbbr);
+    const exists = await monthTabExists(conn, spreadsheetId, monthAbbr);
     if (!exists) continue;
 
-    const budgetsFromSheet = await readMonthBudget(
-      group.google_refresh_token,
-      spreadsheetId,
-      monthAbbr,
-    );
+    const budgetsFromSheet = await readMonthBudget(conn, spreadsheetId, monthAbbr);
     if (budgetsFromSheet.length === 0) continue;
 
     const monthIndex = MONTH_ABBREVS.indexOf(monthAbbr) + 1;
@@ -352,6 +347,7 @@ async function syncBudgetsToSheet(
     return { tabsCreated: [], rowsWritten: 0 };
   }
 
+  const conn = googleConn(group);
   const currentYear = new Date().getFullYear();
   const spreadsheetId =
     database.groupSpreadsheets.getByYear(group.id, currentYear) ?? group.spreadsheet_id;
@@ -380,9 +376,9 @@ async function syncBudgetsToSheet(
 
   for (const [monthAbbr, budgets] of budgetsByMonth) {
     // Create tab if missing
-    const exists = await monthTabExists(group.google_refresh_token, spreadsheetId, monthAbbr);
+    const exists = await monthTabExists(conn, spreadsheetId, monthAbbr);
     if (!exists) {
-      await createEmptyMonthTab(group.google_refresh_token, spreadsheetId, monthAbbr);
+      await createEmptyMonthTab(conn, spreadsheetId, monthAbbr);
       tabsCreated.push(monthAbbr);
       logger.info(`[RECONNECT] Created budget tab ${monthAbbr} for group ${group.id}`);
     }
@@ -390,7 +386,7 @@ async function syncBudgetsToSheet(
     // Write each budget row (upserts by category)
     for (const budget of budgets) {
       try {
-        await writeMonthBudgetRow(group.google_refresh_token, spreadsheetId, monthAbbr, {
+        await writeMonthBudgetRow(conn, spreadsheetId, monthAbbr, {
           category: budget.category,
           limit: budget.limit_amount,
           currency: budget.currency,

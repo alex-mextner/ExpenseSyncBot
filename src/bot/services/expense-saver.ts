@@ -5,6 +5,7 @@ import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { silentSyncBudgets } from '../commands/budget';
 import type { BotInstance } from '../types';
@@ -47,7 +48,7 @@ export async function saveExpenseToSheet(
   const { appendExpenseRow } = await import('../../services/google/sheets');
 
   // Silent sync budgets from Google Sheets
-  await silentSyncBudgets(group.google_refresh_token, group.id);
+  await silentSyncBudgets(googleConn(group), group.id);
 
   // Calculate EUR amount
   const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);
@@ -73,7 +74,7 @@ export async function saveExpenseToSheet(
   );
 
   try {
-    await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
+    await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
       date: currentDate,
       category,
       comment: pendingExpense.comment,
@@ -247,7 +248,7 @@ export async function saveReceiptExpenses(
 
     // Append to Google Sheet
     try {
-      await appendExpenseRow(group.google_refresh_token, group.spreadsheet_id, {
+      await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
         date: currentDate,
         category,
         comment,
