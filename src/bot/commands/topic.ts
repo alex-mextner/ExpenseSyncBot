@@ -1,4 +1,5 @@
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import type { Ctx } from '../types';
 
 /**
@@ -7,29 +8,8 @@ import type { Ctx } from '../types';
  *   /topic - if called from a topic, bot will only listen to that topic
  *   /topic clear - clear topic restriction, bot listens to all messages
  */
-export async function handleTopicCommand(ctx: Ctx['Command']): Promise<void> {
+export async function handleTopicCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
 
   // Get thread_id from message context
   const threadId = ctx.update?.message?.message_thread_id;

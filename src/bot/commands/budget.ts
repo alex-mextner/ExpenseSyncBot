@@ -370,30 +370,7 @@ export function getCurrencySymbol(currency: CurrencyCode): string {
  * - /budget set <Category> <Amount> - set budget for category
  * - /budget sync - sync budgets from Google Sheets
  */
-export async function handleBudgetCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleBudgetCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   if (!group.spreadsheet_id || !group.google_refresh_token) {
     await ctx.send('❌ Google Sheets не подключен. Используй /connect');
     return;

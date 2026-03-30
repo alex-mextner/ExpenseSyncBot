@@ -173,30 +173,7 @@ async function handleAskWithAnthropic(
 /**
  * /advice command handler - request deep financial analysis (Tier 3)
  */
-export async function handleAdviceCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleAdviceCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   // Deep analysis: Tier 3, manual trigger
   const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
   const trigger: TriggerResult = {

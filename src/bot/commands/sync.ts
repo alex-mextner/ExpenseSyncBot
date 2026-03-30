@@ -2,7 +2,7 @@
 
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
-import type { Expense } from '../../database/types';
+import type { Expense, Group } from '../../database/types';
 import {
   type MultiCurrencyRowError,
   readExpensesFromSheet,
@@ -463,27 +463,7 @@ export async function ensureFreshExpenses(
 /**
  * /sync command handler
  */
-export async function handleSyncCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleSyncCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   if (!group.spreadsheet_id || !group.google_refresh_token) {
     await ctx.send('❌ Google таблица не подключена. Используй /connect');
     return;

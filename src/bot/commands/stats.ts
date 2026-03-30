@@ -1,5 +1,6 @@
 import { BASE_CURRENCY, CURRENCY_SYMBOLS, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
@@ -7,30 +8,7 @@ import { maybeSmartAdvice } from './ask';
 /**
  * /stats command handler
  */
-export async function handleStatsCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  // Only allow in groups
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-
-  if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
-    return;
-  }
-
+export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   // Get expenses stats
   const recentExpenses = database.expenses.findByGroupId(group.id, 10);
   const totalsByCurrency = database.expenses.getTotalsByCurrency(group.id);

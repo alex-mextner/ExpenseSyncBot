@@ -28,18 +28,11 @@ const wizardPromptMessages = new Map<number, WizardPromptEntry>();
 
 // ─── /bank command entry point ───────────────────────────────────────────────
 
-export async function handleBankCommand(ctx: Ctx['Message'], bot: BotInstance): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-
-  if (!isGroup || !chatId) {
-    await ctx.send('Команда /bank работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) return;
-
+export async function handleBankCommand(
+  ctx: Ctx['Command'],
+  group: Group,
+  bot: BotInstance,
+): Promise<void> {
   // Clean up stale setup sessions
   for (const id of database.bankConnections.deleteStaleSetup(group.id)) {
     wizardPromptMessages.delete(id);

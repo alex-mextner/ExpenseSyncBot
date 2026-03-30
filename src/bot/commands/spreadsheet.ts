@@ -1,30 +1,11 @@
 // /spreadsheet command — shows current year's spreadsheet and list of previous years
 
 import { database } from '../../database';
+import type { Group } from '../../database/types';
 import { getSpreadsheetUrl } from '../../services/google/sheets';
 import type { Ctx } from '../types';
 
-export async function handleSpreadsheetCommand(ctx: Ctx['Command']): Promise<void> {
-  const chatId = ctx.chat?.id;
-  const chatType = ctx.chat?.type;
-
-  if (!chatId) {
-    await ctx.send('Error: Unable to identify chat');
-    return;
-  }
-
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-  if (!isGroup) {
-    await ctx.send('Эта команда работает только в группах.');
-    return;
-  }
-
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.send('Группа не настроена. Используй /connect для настройки.');
-    return;
-  }
-
+export async function handleSpreadsheetCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
   const currentYear = new Date().getFullYear();
   const currentSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, currentYear);
   const all = database.groupSpreadsheets.listAll(group.id);
