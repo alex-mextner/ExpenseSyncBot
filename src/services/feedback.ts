@@ -10,7 +10,7 @@ interface FeedbackParams {
   message: string;
   groupId: number;
   chatId: number;
-  userName?: string;
+  userName?: string | undefined;
 }
 
 interface FeedbackResult {

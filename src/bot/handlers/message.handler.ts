@@ -11,6 +11,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { silentSyncBudgets } from '../commands/budget';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
+import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
 
@@ -182,6 +183,12 @@ export async function handleExpenseMessage(
         await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    return true;
+  }
+
+  // Check if we're waiting for feedback text input
+  if (consumePendingFeedback(telegramGroupId, telegramId)) {
+    await submitFeedback(ctx, group, text);
     return true;
   }
 
