@@ -393,7 +393,7 @@ When displaying large amounts (≥ 1 million): prefer the suffix form — "1.5 �
 This bot tracks expenses and budgets. It can:
 - Record, view, delete expenses (amount + currency + category + comment)
 - Track budgets per category/month
-- Sync with Google Sheets (/sync, /push)
+- Google Sheets integration (automatic sync, manual edits are picked up)
 - Scan receipt photos (QR and OCR)
 - Give financial advice and analytics
 - Detect and track recurring monthly expenses (rent, subscriptions, etc.)

@@ -397,7 +397,7 @@ export async function saveExpenseToSheet(
     `[SAVE] ✅ Recorded ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
   );
 
-  // Check recurring pattern match (fire-and-forget)
+  // Check recurring pattern match (synchronous, lightweight DB queries)
   try {
     const { checkRecurringMatch } = await import('../../services/analytics/recurring-matcher');
     checkRecurringMatch(
