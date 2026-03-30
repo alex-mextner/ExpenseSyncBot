@@ -51,15 +51,10 @@ export async function handleDisconnectConfirm(
 
   try {
     // group_spreadsheets lacks ON DELETE CASCADE — delete manually before the group
-    database.db.exec('BEGIN');
-    try {
+    database.transaction(() => {
       database.groupSpreadsheets.deleteByGroupId(group.id);
       database.groups.delete(chatId);
-      database.db.exec('COMMIT');
-    } catch (txErr) {
-      database.db.exec('ROLLBACK');
-      throw txErr;
-    }
+    });
 
     logger.info(
       { groupId: group.id, telegramGroupId: chatId },

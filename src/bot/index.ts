@@ -1,3 +1,4 @@
+/** Bot entry point — creates the GramIO Bot instance, registers all commands and middleware */
 import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { database } from '../database';
@@ -5,6 +6,7 @@ import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
+import { setBotInstance } from '../web/oauth-callback';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
@@ -184,6 +186,11 @@ export function createBot(): Bot {
     }
   });
 
+  // Global error handler — catches unhandled errors in bot middleware/handlers
+  bot.onError(({ kind, error }) => {
+    logger.error({ err: error, kind }, '[BOT] Unhandled error');
+  });
+
   // Register monthly budget tab cron
   registerMonthlyCron(bot);
 
@@ -199,6 +206,9 @@ export async function startBot(): Promise<Bot> {
   logger.info('🤖 Starting bot...');
   await bot.start();
   logger.info('✓ Bot started successfully');
+
+  // Register bot instance for OAuth callback to send Telegram messages
+  setBotInstance(bot);
 
   // Register commands in Telegram menu (from single source of truth)
   const { BOT_COMMANDS } = await import('./command-descriptions');

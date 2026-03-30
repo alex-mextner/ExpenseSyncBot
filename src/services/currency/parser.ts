@@ -1,3 +1,4 @@
+/** Expense message parser — extracts amount, currency, category, and comment from free-form text */
 import Big from 'big.js';
 import currency from 'currency.js';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';

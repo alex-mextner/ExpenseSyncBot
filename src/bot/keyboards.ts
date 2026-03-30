@@ -1,3 +1,4 @@
+/** Inline keyboard builders for currency selection, budget prompts, and receipt confirmation */
 import { InlineKeyboard } from 'gramio';
 import {
   BASE_CURRENCY,

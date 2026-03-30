@@ -1,3 +1,4 @@
+/** Expense items repository — stores individual line items extracted from receipt photos */
 import type { Database } from 'bun:sqlite';
 import type { CreateExpenseItemData, ExpenseItem } from '../types';
 

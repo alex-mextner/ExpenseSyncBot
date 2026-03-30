@@ -111,11 +111,10 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     // Cron syncs must not start if no plugin state exists yet — it means the user hasn't
     // completed the initial setup (login OTP + device trust). Starting would send unwanted SMS.
     if (!allowOtp) {
-      const hasState = database.db
-        .query<{ cnt: number }, [number]>(
-          'SELECT COUNT(*) as cnt FROM bank_plugin_state WHERE connection_id = ?',
-        )
-        .get(connectionId);
+      const hasState = database.queryOne<{ cnt: number }>(
+        'SELECT COUNT(*) as cnt FROM bank_plugin_state WHERE connection_id = ?',
+        connectionId,
+      );
       if (!hasState || hasState.cnt === 0) {
         logger.info({ connectionId }, 'Skipping cron sync — plugin not initialized yet');
         return;
@@ -239,7 +238,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     let transactions: ZenTransaction[] = [];
 
     try {
-      const shim = createZenMoneyShim(connectionId, database.db, preferences, readLineImpl);
+      const shim = createZenMoneyShim(connectionId, database.getDb(), preferences, readLineImpl);
       shimRef.current = shim;
       (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
       // assert() is a ZenPlugins global not available in Bun — set before plugin runs.

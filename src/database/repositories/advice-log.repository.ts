@@ -1,3 +1,4 @@
+/** Advice log repository — tracks when AI advice was last sent per group to enforce cooldowns */
 import type { Database } from 'bun:sqlite';
 import type { AdviceLog, CreateAdviceLogData } from '../../services/analytics/types';
 

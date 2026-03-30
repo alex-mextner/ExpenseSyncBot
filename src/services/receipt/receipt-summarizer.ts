@@ -1,3 +1,4 @@
+/** Receipt summarizer — uses Hugging Face to generate a human-readable summary of receipt items */
 import { InferenceClient } from '@huggingface/inference';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';

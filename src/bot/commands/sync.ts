@@ -1,5 +1,4 @@
-// /sync command — diff-based sync from Google Sheet to local database
-
+/** /sync command handler — imports expenses from Google Sheets into the local database */
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
@@ -9,6 +8,7 @@ import {
   type SheetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { formatErrorForUser } from '../bot-error-formatter';
 import type { GoogleConnectedGroup } from '../guards';
 import type { BotInstance, Ctx } from '../types';
 
@@ -258,6 +258,46 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
 }
 
 /** Format sync result as Telegram message */
+function formatSyncResult(result: SyncResult): string {
+  const lines: string[] = ['✅ Синхронизация завершена!\n'];
+
+  const total = result.unchanged + result.added.length + result.updated.length;
+  lines.push(`💾 Всего в БД: ${total}`);
+  lines.push(`✓ Без изменений: ${result.unchanged}`);
+
+  if (result.added.length > 0) {
+    lines.push(`\n➕ Добавлено: ${result.added.length}`);
+    for (const e of result.added.slice(0, 10)) {
+      lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
+    }
+    if (result.added.length > 10) lines.push(`  ...и ещё ${result.added.length - 10}`);
+  }
+
+  if (result.deleted.length > 0) {
+    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
+    for (const e of result.deleted.slice(0, 10)) {
+      lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
+    }
+    if (result.deleted.length > 10) lines.push(`  ...и ещё ${result.deleted.length - 10}`);
+  }
+
+  if (result.updated.length > 0) {
+    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
+    for (const e of result.updated.slice(0, 10)) {
+      lines.push(
+        `  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)} (${e.field})`,
+      );
+    }
+    if (result.updated.length > 10) lines.push(`  ...и ещё ${result.updated.length - 10}`);
+  }
+
+  if (result.createdCategories.length > 0) {
+    lines.push(`\n📁 Новые категории: ${result.createdCategories.join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
+
 /**
  * One-directional import: read expenses from an arbitrary spreadsheet and add any
  * that are missing from the DB. Never deletes. Returns the number of inserted rows.
@@ -297,46 +337,6 @@ export async function importExpensesFromSheet(
     inserted++;
   }
   return inserted;
-}
-
-function formatSyncResult(result: SyncResult): string {
-  const lines: string[] = ['✅ Синхронизация завершена!\n'];
-
-  const total = result.unchanged + result.added.length + result.updated.length;
-  lines.push(`💾 Всего в БД: ${total}`);
-  lines.push(`✓ Без изменений: ${result.unchanged}`);
-
-  if (result.added.length > 0) {
-    lines.push(`\n➕ Добавлено: ${result.added.length}`);
-    for (const e of result.added.slice(0, 10)) {
-      lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
-    }
-    if (result.added.length > 10) lines.push(`  ...и ещё ${result.added.length - 10}`);
-  }
-
-  if (result.deleted.length > 0) {
-    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
-    for (const e of result.deleted.slice(0, 10)) {
-      lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
-    }
-    if (result.deleted.length > 10) lines.push(`  ...и ещё ${result.deleted.length - 10}`);
-  }
-
-  if (result.updated.length > 0) {
-    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
-    for (const e of result.updated.slice(0, 10)) {
-      lines.push(
-        `  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)} (${e.field})`,
-      );
-    }
-    if (result.updated.length > 10) lines.push(`  ...и ещё ${result.updated.length - 10}`);
-  }
-
-  if (result.createdCategories.length > 0) {
-    lines.push(`\n📁 Новые категории: ${result.createdCategories.join(', ')}`);
-  }
-
-  return lines.join('\n');
 }
 
 // ── Auto-sync with cooldown ──
@@ -467,15 +467,36 @@ export async function ensureFreshExpenses(
 }
 
 /**
- * /sync command handler
+ * /sync command handler - sync expenses from Google Sheet to database.
+ * Usage: /sync — pull from sheet, /sync rollback — restore last snapshot.
  */
 export async function handleSyncCommand(
   ctx: Ctx['Command'],
   group: GoogleConnectedGroup,
 ): Promise<void> {
+  // Check for "rollback" argument
+  const commandText = ctx.text || '';
+  const args = commandText.split(/\s+/).slice(1).join(' ').trim();
+
+  if (args.toLowerCase() === 'rollback') {
+    await handleSyncRollback(ctx, group.id);
+    return;
+  }
+
   await ctx.send('🔄 Синхронизирую...');
 
   try {
+    // Save snapshot of current expenses + budgets BEFORE sync (enables rollback)
+    const currentExpenses = database.expenses.findByGroupId(group.id);
+    const currentBudgets = database.budgets.findByGroupId(group.id);
+    let snapshotId: string | null = null;
+    if (currentExpenses.length > 0 || currentBudgets.length > 0) {
+      snapshotId = database.syncSnapshots.saveSnapshot(group.id, currentExpenses, currentBudgets);
+      logger.info(
+        `[SYNC] Saved snapshot ${snapshotId}: ${currentExpenses.length} expenses, ${currentBudgets.length} budgets`,
+      );
+    }
+
     const result = await syncExpenses(group.id);
     lastExpenseSyncByGroup.set(group.id, Date.now());
 
@@ -488,11 +509,76 @@ export async function handleSyncCommand(
       );
     }
 
-    await ctx.send(formatSyncResult(result));
+    const msg = formatSyncResult(result);
+    const suffix =
+      currentExpenses.length > 0 ? '\n\n<i>Если что-то пошло не так — /sync rollback</i>' : '';
+    await ctx.send(msg + suffix, { parse_mode: 'HTML' });
   } catch (error) {
     logger.error({ err: error }, '[SYNC] Sync failed');
+    await ctx.send(formatErrorForUser(error));
+  }
+}
+
+/**
+ * Handle /sync rollback — restore expenses from the latest snapshot
+ */
+async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise<void> {
+  const snapshots = database.syncSnapshots.listSnapshots(groupId);
+
+  if (snapshots.length === 0) {
+    await ctx.send('❌ Нет сохранённых снимков для отката. Откат доступен после /sync.');
+    return;
+  }
+
+  // Safe: length > 0 checked above
+  const latest = snapshots[0];
+  if (!latest) return;
+  const snapshotDate = new Date(latest.createdAt).toLocaleString('ru-RU');
+
+  await ctx.send(
+    `🔄 Восстанавливаю ${latest.expenseCount} расходов и ${latest.budgetCount} бюджетов из снимка от ${snapshotDate}...`,
+  );
+
+  try {
+    const expenses = database.syncSnapshots.getExpenseSnapshots(latest.snapshotId);
+    const budgets = database.syncSnapshots.getBudgetSnapshots(latest.snapshotId);
+
+    database.transaction(() => {
+      database.expenses.deleteAllByGroupId(groupId);
+
+      for (const expense of expenses) {
+        database.expenses.create({
+          group_id: expense.group_id,
+          user_id: expense.user_id,
+          date: expense.date,
+          category: expense.category,
+          comment: expense.comment || '',
+          amount: expense.amount,
+          currency: expense.currency,
+          eur_amount: expense.eur_amount,
+        });
+      }
+
+      for (const budget of budgets) {
+        database.budgets.setBudget({
+          group_id: budget.group_id,
+          category: budget.category,
+          month: budget.month,
+          limit_amount: budget.limit_amount,
+          currency: budget.currency,
+        });
+      }
+    });
+
     await ctx.send(
-      `❌ Ошибка синхронизации: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      `✅ Откат завершён! Восстановлено ${expenses.length} расходов и ${budgets.length} бюджетов.`,
     );
+
+    logger.info(
+      `[SYNC] Rollback complete for group ${groupId}: ${expenses.length} expenses, ${budgets.length} budgets restored`,
+    );
+  } catch (error) {
+    logger.error({ err: error }, '[SYNC] Rollback failed');
+    await ctx.send('❌ Ошибка при откате. Попробуй ещё раз.');
   }
 }

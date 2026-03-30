@@ -1,3 +1,4 @@
+/** User repository — manages user accounts and their association with groups */
 import type { Database } from 'bun:sqlite';
 import type { CreateUserData, UpdateUserData, User } from '../types';
 

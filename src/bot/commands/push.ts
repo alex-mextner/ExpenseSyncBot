@@ -1,3 +1,4 @@
+/** /push command handler — writes local expenses to Google Sheets and reconciles missing rows */
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
 import { getExpenseRecorder } from '../../services/expense-recorder';

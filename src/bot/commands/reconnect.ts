@@ -18,7 +18,6 @@ import {
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { registerOAuthState, unregisterOAuthState } from '../../web/oauth-callback';
 import type { Ctx } from '../types';
 import { importExpensesFromSheet } from './sync';
 
@@ -63,36 +62,10 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
     { parse_mode: 'HTML', reply_markup: authKeyboard },
   );
 
-  const refreshToken = await new Promise<string>((resolve, reject) => {
-    registerOAuthState(group.id, resolve, reject);
-
-    setTimeout(
-      () => {
-        unregisterOAuthState(group.id);
-        reject(new Error('OAuth timeout'));
-      },
-      5 * 60 * 1000,
-    );
-  }).catch((err) => {
-    logger.error({ err }, '[CMD] OAuth error during reconnect');
-    return null;
-  });
-
-  if (!refreshToken) {
-    // Check if token was saved to DB by the callback anyway (race condition)
-    const updatedGroup = database.groups.findByTelegramGroupId(chatId);
-    if (updatedGroup?.google_refresh_token) {
-      logger.info(`[CMD] OAuth timeout but token found in DB for group ${group.id}`);
-      await fullSyncAfterReconnect(ctx, group.id);
-      return;
-    }
-    await ctx.send('❌ Не удалось переподключить Google аккаунт. Попробуй ещё раз: /reconnect');
-    return;
-  }
-
-  logger.info(`[CMD] ✅ Reconnect OAuth successful for group ${group.id}`);
-  await ctx.send('✅ Google аккаунт переподключён!');
-  await fullSyncAfterReconnect(ctx, group.id);
+  // OAuth flow continues asynchronously: the callback server saves the token to DB,
+  // then notifies the group. After that, fullSyncAfterReconnect can be triggered
+  // manually via /sync or automatically by the callback handler.
+  logger.info(`[CMD] OAuth URL sent for reconnect, group ${group.id}`);
 }
 
 // ── Full bidirectional sync ──
@@ -118,7 +91,7 @@ interface FullSyncReport {
  * 4. Sheet → DB budgets (import from all month tabs)
  * 5. DB → Sheet budgets (ensure tabs + write rows)
  */
-async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Promise<void> {
+export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Promise<void> {
   const report: FullSyncReport = {
     snapshotId: null,
     snapshotExpenses: 0,

@@ -1,4 +1,5 @@
-import type { Database } from 'bun:sqlite';
+/** Database singleton — initializes all repositories and exposes them via a shared `database` object */
+import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { AdviceLogRepository } from './repositories/advice-log.repository';
 import { BankAccountsRepository } from './repositories/bank-accounts.repository';
 import { BankConnectionsRepository } from './repositories/bank-connections.repository';
@@ -25,7 +26,7 @@ import { setupDatabase } from './schema';
  * Database instance and repositories
  */
 export class DatabaseService {
-  public db: Database;
+  private db: Database;
   public groups: GroupRepository;
   public groupSpreadsheets: GroupSpreadsheetRepository;
   public users: UserRepository;
@@ -38,6 +39,7 @@ export class DatabaseService {
   public receiptItems: ReceiptItemsRepository;
   public expenseItems: ExpenseItemsRepository;
   public adviceLogs: AdviceLogRepository;
+  public syncSnapshots: SyncSnapshotRepository;
   public devTasks: DevTaskRepository;
   public bankConnections: BankConnectionsRepository;
   public bankCredentials: BankCredentialsRepository;
@@ -45,10 +47,9 @@ export class DatabaseService {
   public bankTransactions: BankTransactionsRepository;
   public merchantRules: MerchantRulesRepository;
   public recurringPatterns: RecurringPatternRepository;
-  public syncSnapshots: SyncSnapshotRepository;
 
-  constructor() {
-    this.db = setupDatabase();
+  constructor(db?: Database) {
+    this.db = db ?? setupDatabase();
     this.groups = new GroupRepository(this.db);
     this.groupSpreadsheets = new GroupSpreadsheetRepository(this.db);
     this.users = new UserRepository(this.db);
@@ -61,6 +62,7 @@ export class DatabaseService {
     this.receiptItems = new ReceiptItemsRepository(this.db);
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);
+    this.syncSnapshots = new SyncSnapshotRepository(this.db);
     this.devTasks = new DevTaskRepository(this.db);
     this.bankConnections = new BankConnectionsRepository(this.db);
     this.bankCredentials = new BankCredentialsRepository(this.db);
@@ -68,7 +70,49 @@ export class DatabaseService {
     this.bankTransactions = new BankTransactionsRepository(this.db);
     this.merchantRules = new MerchantRulesRepository(this.db);
     this.recurringPatterns = new RecurringPatternRepository(this.db);
-    this.syncSnapshots = new SyncSnapshotRepository(this.db);
+  }
+
+  /**
+   * Run a function inside a SQLite transaction — rolls back on error
+   */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
+  /**
+   * Execute a raw SQL query and return all matching rows.
+   * Use only when no repository method covers the query.
+   */
+  queryAll<T>(sql: string, ...params: SQLQueryBindings[]): T[] {
+    return this.db.query<T, SQLQueryBindings[]>(sql).all(...params);
+  }
+
+  /**
+   * Execute a raw SQL query and return the first matching row, or null.
+   * Use only when no repository method covers the query.
+   */
+  queryOne<T>(sql: string, ...params: SQLQueryBindings[]): T | null {
+    return this.db.query<T, SQLQueryBindings[]>(sql).get(...params);
+  }
+
+  /**
+   * Execute a raw SQL statement that returns no rows (INSERT/UPDATE/DELETE).
+   * Use only when no repository method covers the operation.
+   */
+  exec(sql: string, ...params: SQLQueryBindings[]): void {
+    if (params.length === 0) {
+      this.db.exec(sql);
+    } else {
+      this.db.query(sql).run(...params);
+    }
+  }
+
+  /**
+   * Provide raw Database access for low-level services (e.g. ZenMoney shim)
+   * that must prepare statements at construction time.
+   */
+  getDb(): Database {
+    return this.db;
   }
 
   /**

@@ -1,3 +1,4 @@
+/** Photo message handler — queues incoming photos for receipt OCR processing */
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';

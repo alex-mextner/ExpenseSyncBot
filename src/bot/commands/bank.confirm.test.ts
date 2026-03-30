@@ -48,8 +48,10 @@ const mockMerchantRules = {
   insertRuleRequest: mock((_data: unknown): void => {}),
 };
 
-// database.db.transaction — executes callback inline (no real transaction)
-// database.db.query — returns a stub with .get() that defaults to { n: 0 }
+// database.transaction — executes callback inline (no real transaction)
+// database.queryOne — returns null by default (no race-condition conflict)
+const mockTransaction = mock((fn: () => unknown) => fn());
+const mockQueryOne = mock((_sql: string, ..._params: unknown[]): unknown => null);
 const mockDb = {
   transaction: mock((fn: () => unknown) => fn),
   query: mock(() => ({ get: mock(() => ({ n: 0 })) })),
@@ -64,6 +66,8 @@ mock.module('../../database', () => ({
     expenses: mockExpenses,
     merchantRules: mockMerchantRules,
     db: mockDb,
+    transaction: mockTransaction,
+    queryOne: mockQueryOne,
   },
 }));
 
@@ -92,6 +96,8 @@ const allMocks = [
   mockExpenses.findById,
   mockExpenses.findPotentialDuplicates,
   mockMerchantRules.insertRuleRequest,
+  mockTransaction,
+  mockQueryOne,
   mockDb.transaction,
   mockDb.query,
 ];
@@ -199,7 +205,8 @@ describe('handleBankConfirmCallback', () => {
   beforeEach(() => {
     mockGroups.findByTelegramGroupId.mockImplementation(() => group);
     mockUsers.findByTelegramId.mockImplementation(() => user);
-    // By default: transaction() returns the callback; let tests override what findById returns
+    // By default: transaction() calls the callback and returns its result
+    mockTransaction.mockImplementation((fn: () => unknown) => fn());
     mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
     // By default: no duplicates found
     mockExpenses.findPotentialDuplicates.mockImplementation(() => ({ exact: [], fuzzy: [] }));
@@ -351,6 +358,8 @@ describe('handleBankConfirmCallback', () => {
 describe('handleBankMergeCallback', () => {
   beforeEach(() => {
     mockGroups.findByTelegramGroupId.mockImplementation(() => group);
+    mockTransaction.mockImplementation((fn: () => unknown) => fn());
+    mockQueryOne.mockImplementation(() => ({ n: 0 }));
     mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
     mockDb.query.mockImplementation(() => ({ get: mock(() => ({ n: 0 })) }));
   });
@@ -418,7 +427,7 @@ describe('handleBankMergeCallback', () => {
     const expense = makeExpense({ id: 50 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findById.mockImplementation(() => expense);
-    mockDb.query.mockImplementation(() => ({ get: mock(() => ({ n: 1 })) }));
+    mockQueryOne.mockImplementation(() => ({ n: 1 }));
 
     const ctx = makeCallbackCtx();
     const bot = makeBot();
@@ -608,6 +617,7 @@ describe('handleBankNoCommentCallback', () => {
   beforeEach(() => {
     mockGroups.findByTelegramGroupId.mockImplementation(() => group);
     mockUsers.findByTelegramId.mockImplementation(() => user);
+    mockTransaction.mockImplementation((fn: () => unknown) => fn());
     mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
     mockExpenses.create.mockImplementation(() => ({ id: 99 }));
   });

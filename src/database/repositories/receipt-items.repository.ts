@@ -1,3 +1,4 @@
+/** Receipt items repository — stores parsed line items from receipts before user confirmation */
 import type { Database } from 'bun:sqlite';
 import type { CreateReceiptItemData, ReceiptItem, UpdateReceiptItemData } from '../types';
 

@@ -3,8 +3,8 @@
  * the agent's answer for hallucinations, missing tool calls, and data integrity.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger.ts';
-import { AI_BASE_URL, AI_MODEL } from './agent';
 
 const logger = createLogger('response-validator');
 
@@ -56,7 +56,7 @@ ${input.response.substring(0, 2000)}`;
 
   const anthropic = new Anthropic({
     apiKey,
-    baseURL: AI_BASE_URL || undefined,
+    baseURL: env.AI_BASE_URL || undefined,
   });
 
   const controller = new AbortController();
@@ -65,7 +65,7 @@ ${input.response.substring(0, 2000)}`;
   try {
     const result = await anthropic.messages.create(
       {
-        model: AI_MODEL,
+        model: env.AI_VALIDATION_MODEL,
         max_tokens: VALIDATION_MAX_TOKENS,
         system: VALIDATION_PROMPT,
         messages: [{ role: 'user', content: userContent }],

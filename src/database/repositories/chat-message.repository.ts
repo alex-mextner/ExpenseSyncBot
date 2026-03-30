@@ -1,3 +1,4 @@
+/** Chat message repository — stores AI conversation history per group for multi-turn context */
 import type { Database } from 'bun:sqlite';
 import type { ChatMessage, CreateChatMessageData } from '../types';
 

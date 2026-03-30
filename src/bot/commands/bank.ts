@@ -382,14 +382,14 @@ export async function handleBankConfirmCallback(
   }
 
   // Atomically claim the transaction — prevent double-claiming.
-  const claimed = database.db.transaction(() => {
+  const claimed = database.transaction(() => {
     const freshTx = database.bankTransactions.findById(txId, group.id);
     if (!freshTx) return null;
     if (freshTx.status !== 'pending') return false;
     if (freshTx.edit_in_progress === 1) return 'edit'; // someone's editing it
     database.bankTransactions.setEditInProgress(txId, true);
     return freshTx;
-  })();
+  });
 
   if (claimed === null) {
     await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });
@@ -496,24 +496,23 @@ export async function handleBankMergeCallback(
   }
 
   // Atomically claim: verify tx is still pending, expense not yet linked, then merge.
-  const mergeResult = database.db.transaction(() => {
+  const mergeResult = database.transaction(() => {
     const tx = database.bankTransactions.findById(txId, group.id);
     if (!tx || tx.status !== 'pending') return 'tx_done' as const;
 
     const expense = database.expenses.findById(expenseId);
     if (!expense || expense.group_id !== group.id) return 'expense_missing' as const;
 
-    const alreadyLinked = database.db
-      .query<{ n: number }, [number]>(
-        'SELECT COUNT(*) as n FROM bank_transactions WHERE matched_expense_id = ?',
-      )
-      .get(expenseId);
+    const alreadyLinked = database.queryOne<{ n: number }>(
+      'SELECT COUNT(*) as n FROM bank_transactions WHERE matched_expense_id = ?',
+      expenseId,
+    );
     if (alreadyLinked && alreadyLinked.n > 0) return 'expense_taken' as const;
 
     mergeTransactionWithExpense(tx, group.id, expense.id);
     database.bankTransactions.setEditInProgress(txId, false);
     return expense;
-  })();
+  });
 
   if (mergeResult === 'tx_done') {
     await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
@@ -714,12 +713,12 @@ export async function handleBankNoCommentCallback(
     return;
   }
 
-  const confirmed = database.db.transaction(() => {
+  const confirmed = database.transaction(() => {
     const freshTx = database.bankTransactions.findById(txId, group.id);
     if (!freshTx) return null;
     if (freshTx.status !== 'pending') return false;
     return freshTx;
-  })();
+  });
 
   if (confirmed === null) {
     await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });

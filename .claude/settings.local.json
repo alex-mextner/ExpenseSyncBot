@@ -24,11 +24,10 @@
       "Bash(bunx knip:*)",
       "Bash(npm view:*)",
       "Bash(/Users/ultra/xp/ExpenseSyncBot/node_modules/.bin/biome lint:*)",
-      "Bash(node_modules/.bin/biome lint:fix src/services/bank/sync-service.ts)",
-      "Bash(/tmp/extract_issues.txt:*)",
-      "Read(//tmp/**)",
+      "Bash(./node_modules/.bin/biome lint:*)",
       "Bash(gh secret:*)",
-      "Bash(./node_modules/.bin/jest)"
+      "Bash(./node_modules/.bin/jest)",
+      "Bash(/usr/bin/git diff:*)"
     ],
     "deny": [],
     "ask": []

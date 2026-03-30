@@ -1,3 +1,4 @@
+/** /budget command handler — create, view, and edit spending budgets per category */
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import {
@@ -605,27 +606,37 @@ export async function silentSyncBudgets(
     );
     if (budgetsFromSheet.length === 0) return 0;
 
-    let syncedCount = 0;
-    for (const b of budgetsFromSheet) {
-      if (!database.categories.exists(groupId, b.category)) {
-        database.categories.create({ group_id: groupId, name: b.category });
+    // Wrap all DB writes in a transaction for atomicity
+    const syncedCount = database.transaction(() => {
+      let count = 0;
+
+      for (const b of budgetsFromSheet) {
+        if (!database.categories.exists(groupId, b.category)) {
+          database.categories.create({ group_id: groupId, name: b.category });
+        }
+
+        const existing = database.budgets.findByGroupCategoryMonth(
+          groupId,
+          b.category,
+          currentMonth,
+        );
+        const hasChanged =
+          !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
+
+        if (hasChanged) {
+          database.budgets.setBudget({
+            group_id: groupId,
+            category: b.category,
+            month: currentMonth,
+            limit_amount: b.limit,
+            currency: b.currency,
+          });
+          count++;
+        }
       }
 
-      const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
-      const hasChanged =
-        !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
-
-      if (hasChanged) {
-        database.budgets.setBudget({
-          group_id: groupId,
-          category: b.category,
-          month: currentMonth,
-          limit_amount: b.limit,
-          currency: b.currency,
-        });
-        syncedCount++;
-      }
-    }
+      return count;
+    });
 
     return syncedCount;
   } catch (err) {

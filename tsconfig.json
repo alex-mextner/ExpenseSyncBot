@@ -29,7 +29,5 @@
     "noPropertyAccessFromIndexSignature": true,
     "exactOptionalPropertyTypes": true
   },
-  "exclude": [
-    "src/services/bank/ZenPlugins"
-  ]
+  "exclude": ["src/services/bank/ZenPlugins"]
 }

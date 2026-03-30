@@ -11,7 +11,6 @@ import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { registerOAuthState, unregisterOAuthState } from '../../web/oauth-callback';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import type { Ctx } from '../types';
 
@@ -40,7 +39,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 
   if (!telegramId || !chatId) {
     logger.info(`[CMD] Error: missing telegramId or chatId`);
-    await ctx.send('Error: Unable to identify user or chat');
+    await ctx.send('❌ Не удалось определить пользователя или чат');
     return;
   }
 
@@ -82,7 +81,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 
     // If group has completed setup without Google, offer to connect Google
     if (database.groups.hasCompletedSetup(chatId) && !group.google_refresh_token) {
-      await startGoogleOAuth(ctx, group.id, chatId);
+      await startGoogleOAuth(ctx, group.id);
       return;
     }
   }
@@ -130,7 +129,7 @@ export async function handleSetupChoiceCallback(
 
   if (choice === 'google') {
     await ctx.answerCallbackQuery({ text: 'Подключаем Google...' });
-    await startGoogleOAuth(ctx, groupId, group.telegram_group_id);
+    await startGoogleOAuth(ctx, groupId);
   } else if (choice === 'skip_google') {
     await ctx.answerCallbackQuery({ text: 'Google пропущен' });
     await ctx.editText('⏩ Google Sheets пропущен. Можно подключить позже через /connect.');
@@ -144,8 +143,8 @@ export async function handleSetupChoiceCallback(
 async function startGoogleOAuth(
   ctx: Ctx['Command'] | Ctx['CallbackQuery'],
   groupId: number,
-  chatId: number,
 ): Promise<void> {
+  // Generate OAuth URL — state is a UUID mapped to group ID server-side
   logger.info(`[CMD] Generating OAuth URL for group ${groupId}`);
   const authUrl = generateAuthUrl(groupId);
 
@@ -156,57 +155,13 @@ async function startGoogleOAuth(
       `Один из участников группы должен:\n` +
       `1. Нажать на кнопку ниже\n` +
       `2. Разрешить доступ к Google Sheets\n\n` +
-      `После авторизации вернись сюда, я продолжу настройку.`,
+      `После авторизации бот автоматически продолжит настройку.`,
     { reply_markup: authKeyboard },
   );
 
-  // Wait for OAuth callback
-  logger.info(`[CMD] Waiting for OAuth callback for group ${groupId}...`);
-  const refreshToken = await new Promise<string>((resolve, reject) => {
-    registerOAuthState(groupId, resolve, reject);
-
-    // Timeout after 5 minutes
-    setTimeout(
-      () => {
-        unregisterOAuthState(groupId);
-        reject(new Error('OAuth timeout'));
-      },
-      5 * 60 * 1000,
-    );
-  }).catch((err) => {
-    logger.error({ err: err }, '[CMD] ❌ OAuth error');
-    return null;
-  });
-
-  if (!refreshToken) {
-    // Check if token was saved to DB by the callback anyway (race condition)
-    const updatedGroup = database.groups.findByTelegramGroupId(chatId);
-    if (updatedGroup?.google_refresh_token && updatedGroup?.spreadsheet_id) {
-      // Group is fully configured — silently ignore the timeout
-      logger.info(`[CMD] OAuth timeout but group ${groupId} already configured, ignoring`);
-      return;
-    }
-    if (updatedGroup?.google_refresh_token) {
-      logger.info(`[CMD] ✅ OAuth token found in DB despite timeout for group ${groupId}`);
-      // Continue to currency selection below
-    } else {
-      logger.info(`[CMD] ❌ OAuth failed for group ${groupId}`);
-      await ctx.send('❌ Не удалось подключить Google аккаунт. Попробуй еще раз: /connect');
-      return;
-    }
-  } else {
-    logger.info(`[CMD] ✅ OAuth successful for group ${groupId}`);
-    await ctx.send(MESSAGES.authSuccess);
-  }
-
-  // If group already has currencies (reconnecting Google), go straight to spreadsheet creation
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (group && group.enabled_currencies.length > 0 && group.default_currency) {
-    await createSpreadsheetForGroup(ctx, chatId);
-    return;
-  }
-
-  await startCurrencySelection(ctx, chatId);
+  // OAuth flow continues asynchronously: the callback server saves the token to DB,
+  // then notifies the group via notifyTelegramSuccess (sends authSuccess + currency keyboard).
+  logger.info(`[CMD] OAuth URL sent to group ${groupId}, waiting for user to authorize`);
 }
 
 /**
@@ -444,7 +399,7 @@ async function createSpreadsheetForGroup(
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
-    logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
+    logger.error({ err }, '[CMD] ❌ Error creating spreadsheet');
     await ctx.send('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
 }

@@ -1,3 +1,4 @@
+/** Spending analytics — computes financial snapshots with trends, anomalies, and budget burn rates */
 import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';

@@ -37,16 +37,16 @@ function buildMccHistory(groupId: number, mccs: number[]): Map<number, string[]>
   if (mccs.length === 0) return result;
 
   for (const mcc of mccs) {
-    const rows = database.db
-      .query<{ category: string }, [number, number]>(
-        `SELECT DISTINCT e.category
-         FROM bank_transactions bt
-         JOIN expenses e ON bt.matched_expense_id = e.id
-         WHERE bt.mcc = ? AND e.group_id = ?
-         ORDER BY e.created_at DESC
-         LIMIT 5`,
-      )
-      .all(mcc, groupId);
+    const rows = database.queryAll<{ category: string }>(
+      `SELECT DISTINCT e.category
+       FROM bank_transactions bt
+       JOIN expenses e ON bt.matched_expense_id = e.id
+       WHERE bt.mcc = ? AND e.group_id = ?
+       ORDER BY e.created_at DESC
+       LIMIT 5`,
+      mcc,
+      groupId,
+    );
 
     if (rows.length > 0) {
       result.set(

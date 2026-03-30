@@ -1,3 +1,4 @@
+/** Inline keyboard callback handler — processes button presses for OAuth, budget, and receipt flows */
 import { format } from 'date-fns';
 import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
@@ -35,8 +36,9 @@ import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
+import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
-import { getSheetWriteErrorMessage, saveExpenseToSheet } from './message.handler';
+import { getSheetWriteErrorMessage } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -432,7 +434,9 @@ export async function handleCallbackQuery(
     logger.error({ err: error }, `[CALLBACK] Unhandled error for action "${data}"`);
     try {
       await ctx.answerCallbackQuery({ text: 'Internal error' });
-    } catch {}
+    } catch {
+      // Best-effort error notification — original error already logged above
+    }
   }
 }
 
@@ -933,65 +937,6 @@ async function handleReceiptItemOther(
 }
 
 /**
- * Save all confirmed receipt items as expenses via ExpenseRecorder
- */
-export async function saveReceiptExpenses(
-  photoQueueId: number,
-  groupId: number,
-  userId: number,
-  bot: BotInstance,
-): Promise<void> {
-  const confirmedItems = database.receiptItems.findConfirmedByPhotoQueueId(photoQueueId);
-
-  if (confirmedItems.length === 0) {
-    return;
-  }
-
-  const group = database.groups.findById(groupId);
-
-  if (!group) {
-    logger.error('[RECEIPT] Group not found');
-    return;
-  }
-
-  const { getExpenseRecorder } = await import('../../services/expense-recorder');
-  const recorder = getExpenseRecorder();
-
-  // Build receipt items for batch recording
-  const receiptItems = confirmedItems
-    .filter(
-      (item): item is typeof item & { confirmed_category: string } =>
-        item.confirmed_category !== null,
-    )
-    .map((item) => ({
-      name: item.name_ru,
-      nameOriginal: item.name_original || null,
-      quantity: item.quantity,
-      price: item.price,
-      total: item.total,
-      currency: item.currency,
-      category: item.confirmed_category,
-    }));
-
-  await recorder.recordBatch(groupId, userId, receiptItems);
-
-  // Delete all processed receipt items (confirmed + skipped)
-  database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
-
-  // Notify user
-  const totalItems = confirmedItems.length;
-  const categories = new Set(confirmedItems.map((i) => i.confirmed_category).filter(Boolean));
-
-  await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${categories.size}`,
-    parse_mode: 'HTML',
-  });
-
-  logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${categories.size} categories)`);
-}
-
-/**
  * Handle "use found category" button
  */
 async function handleUseFoundCategory(
@@ -1334,7 +1279,9 @@ async function handleReceiptAcceptAll(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Save to Google Sheets
@@ -1410,7 +1357,9 @@ async function handleReceiptItemwise(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Show first item
@@ -1501,7 +1450,9 @@ async function handleReceiptAcceptBulk(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Save to Google Sheets
@@ -1537,7 +1488,9 @@ async function handleReceiptCancel(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Send cancellation notification
