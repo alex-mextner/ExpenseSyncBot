@@ -370,21 +370,24 @@ export async function handleCustomCurrencyInput(
 
   awaitingCustomCurrency.delete(chatId);
 
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) return true;
+
   if (!isValidCurrencyCode(text)) {
+    const keyboard = createCurrencyKeyboard(group.enabled_currencies);
     await ctx.send(
       `❌ <code>${text}</code> — не похоже на код валюты.\n\n` +
         'Код валюты — 3 латинские буквы (например USD, EUR, TRY, PLN).\n' +
-        'Попробуй ещё раз, нажав «✏️ Ввести код валюты».',
-      { parse_mode: 'HTML' },
+        'Попробуй ещё раз, нажав «✏️ Ввести код валюты».\n\n' +
+        `📊 Выбрано: ${group.enabled_currencies.join(', ') || 'нет'}`,
+      { parse_mode: 'HTML', reply_markup: keyboard },
     );
     return true;
   }
 
   const code = text as CurrencyCode; // runtime-valid ISO code, may be outside SUPPORTED_CURRENCIES
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) return true;
-
   const enabledCurrencies = [...group.enabled_currencies];
+
   if (enabledCurrencies.includes(code)) {
     await ctx.send(`✅ ${code} уже в наборе.`);
   } else {
