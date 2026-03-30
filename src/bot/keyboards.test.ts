@@ -157,11 +157,24 @@ describe('createCategoryConfirmKeyboard', () => {
       expect(btn.text.length).toBeGreaterThan(0);
     }
   });
+
+  it('truncates callback_data for long category names to fit 64-byte limit', () => {
+    const longCategory = 'Абвгдежзиклмнопрстуфхцчшщэюя';
+    const kb = createCategoryConfirmKeyboard(longCategory);
+    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
+    const encoder = new TextEncoder();
+    expect(encoder.encode(addBtn?.callback_data ?? '').length).toBeLessThanOrEqual(64);
+  });
 });
 
 describe('createCategoriesListKeyboard', () => {
+  const cats = [
+    { id: 1, name: 'Food' },
+    { id: 2, name: 'Transport' },
+    { id: 3, name: 'Health' },
+  ];
+
   it('shows a button for each category', () => {
-    const cats = ['Food', 'Transport', 'Health'];
     const kb = createCategoriesListKeyboard(cats);
     const texts = allButtons(kb).map((b) => b.text);
     expect(texts).toContain('Food');
@@ -169,14 +182,14 @@ describe('createCategoriesListKeyboard', () => {
     expect(texts).toContain('Health');
   });
 
-  it('category buttons have callback_data category:choose:<name>', () => {
-    const kb = createCategoriesListKeyboard(['Food']);
+  it('category buttons have callback_data category:choose:<id>', () => {
+    const kb = createCategoriesListKeyboard([{ id: 42, name: 'Food' }]);
     const btn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:choose:'));
-    expect(btn?.callback_data).toBe('category:choose:Food');
+    expect(btn?.callback_data).toBe('category:choose:42');
   });
 
   it('cancel button always present', () => {
-    const kb = createCategoriesListKeyboard(['Food']);
+    const kb = createCategoriesListKeyboard([{ id: 1, name: 'Food' }]);
     const cancelBtn = allButtons(kb).find((b) => b.callback_data === 'category:cancel');
     expect(cancelBtn).toBeTruthy();
   });
