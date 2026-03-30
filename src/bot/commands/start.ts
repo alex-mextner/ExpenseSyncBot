@@ -1,16 +1,7 @@
 /** /start command handler */
 import { database } from '../../database';
 import type { Ctx } from '../types';
-
-const EXPENSE_EXAMPLES =
-  `<code>сумма [валюта] категория [комментарий]</code>\n` +
-  `Например:\n` +
-  `<code>100 еда круассаны и кофе</code> — валюта по умолчанию\n` +
-  `<code>100д подписки клод</code> — доллары\n` +
-  `<code>1000 благ</code> — сокращённо «благотворительность»\n` +
-  `<code>10 000/8 развлечения пейнтбол</code> — калькулятор\n` +
-  `<code>1 900 RSD транспорт такси</code> — пробел в числе, код валюты\n` +
-  `<code>3*150 продукты 3 йогурта</code> — умножение`;
+import { EXPENSE_EXAMPLES, buildHelpText } from './help';
 
 export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
@@ -30,17 +21,7 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     const hasGoogle = !!(group?.google_refresh_token && group?.spreadsheet_id);
 
     if (group && setupDone) {
-      let message =
-        `👋 Бот настроен и готов к работе.\n\n` +
-        `<b>Как записать расход:</b>\n` +
-        `${EXPENSE_EXAMPLES}\n\n` +
-        `<b>Ещё:</b>\n` +
-        `• Фото чека — бот разберёт позиции\n` +
-        `• Бюджеты по категориям: /budget\n` +
-        `• Подключение банка: /bank\n` +
-        `• Пиши свободным текстом — AI-ассистент ответит на вопросы о расходах\n` +
-        `• /sum — итого за месяц по категориям и сравнение со средним\n` +
-        `• /stats — общая статистика по валютам и последние расходы`;
+      let message = `👋 Бот настроен и готов к работе.\n\n${buildHelpText()}`;
 
       if (!hasGoogle) {
         message +=
