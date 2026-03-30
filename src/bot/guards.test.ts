@@ -1,21 +1,10 @@
 // Tests for command guards — requireGroup and requireGoogle wrappers
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { database } from '../database';
 import type { Group } from '../database/types';
 import { requireGoogle, requireGroup } from './guards';
 
-// Mock database — include all group methods that may be used by co-running test files
-const mockFindByTelegramGroupId = mock((): Group | null => null);
-const mockGetAll = mock((): Group[] => []);
-const mockFindById = mock((): Group | null => null);
-mock.module('../database', () => ({
-  database: {
-    groups: {
-      findByTelegramGroupId: mockFindByTelegramGroupId,
-      findById: mockFindById,
-      getAll: mockGetAll,
-    },
-  },
-}));
+let findSpy: ReturnType<typeof spyOn<typeof database.groups, 'findByTelegramGroupId'>>;
 
 function makeGroup(id: number, telegramGroupId: number): Group {
   return {
@@ -52,7 +41,11 @@ function createMockCtx(overrides: { chatId?: number; chatType?: string } = {}) {
 
 describe('requireGroup', () => {
   beforeEach(() => {
-    mockFindByTelegramGroupId.mockReset();
+    findSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    mock.restore();
   });
 
   test('rejects private chats', async () => {
@@ -80,7 +73,6 @@ describe('requireGroup', () => {
   test('rejects unconfigured group', async () => {
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
-    mockFindByTelegramGroupId.mockReturnValue(null);
     const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await wrapped(ctx as never);
@@ -93,7 +85,7 @@ describe('requireGroup', () => {
     const fakeGroup = makeGroup(1, 123);
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
-    mockFindByTelegramGroupId.mockReturnValue(fakeGroup);
+    findSpy.mockReturnValue(fakeGroup);
     const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await wrapped(ctx as never);
@@ -107,7 +99,7 @@ describe('requireGroup', () => {
     const fakeGroup = makeGroup(2, 456);
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
-    mockFindByTelegramGroupId.mockReturnValue(fakeGroup);
+    findSpy.mockReturnValue(fakeGroup);
     const { ctx, sent } = createMockCtx({ chatId: 456, chatType: 'supergroup' });
 
     await wrapped(ctx as never);
@@ -119,6 +111,10 @@ describe('requireGroup', () => {
 });
 
 describe('requireGoogle', () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
   test('rejects group without Google token', async () => {
     const group = makeGroup(1, 123);
     const handler = mock(() => Promise.resolve());
