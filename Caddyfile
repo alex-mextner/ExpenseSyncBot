@@ -36,6 +36,11 @@ expense-sync-bot.invntrm.ru {
 		reverse_proxy localhost:3311
 	}
 
+	# Mini App API endpoints
+	handle /api/* {
+		reverse_proxy localhost:3311
+	}
+
 	# Everything else
 	handle {
 		respond "Not Found" 404
@@ -44,6 +49,25 @@ expense-sync-bot.invntrm.ru {
 	# Logging
 	log {
 		output file /var/log/caddy/expensesyncbot.log
+		format console
+	}
+}
+
+expense-sync-bot-app.invntrm.ru {
+	# Mini App frontend (Vite build)
+	root * /var/www/ExpenseSyncBot/miniapp/dist
+	file_server
+
+	# SPA fallback — serve index.html for client-side routing
+	try_files {path} /index.html
+
+	# API requests proxied to the Bun server (same-origin CORS via Caddy)
+	handle /api/* {
+		reverse_proxy localhost:3311
+	}
+
+	log {
+		output file /var/log/caddy/miniapp.log
 		format console
 	}
 }
