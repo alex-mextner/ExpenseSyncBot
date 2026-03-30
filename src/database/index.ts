@@ -17,6 +17,7 @@ import { PendingExpenseRepository } from './repositories/pending-expense.reposit
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
 import { RecurringPatternRepository } from './repositories/recurring-pattern.repository';
+import { SyncSnapshotRepository } from './repositories/sync-snapshot.repository';
 import { UserRepository } from './repositories/user.repository';
 import { setupDatabase } from './schema';
 
@@ -44,6 +45,7 @@ export class DatabaseService {
   public bankTransactions: BankTransactionsRepository;
   public merchantRules: MerchantRulesRepository;
   public recurringPatterns: RecurringPatternRepository;
+  public syncSnapshots: SyncSnapshotRepository;
 
   constructor() {
     this.db = setupDatabase();
@@ -66,6 +68,7 @@ export class DatabaseService {
     this.bankTransactions = new BankTransactionsRepository(this.db);
     this.merchantRules = new MerchantRulesRepository(this.db);
     this.recurringPatterns = new RecurringPatternRepository(this.db);
+    this.syncSnapshots = new SyncSnapshotRepository(this.db);
   }
 
   /**

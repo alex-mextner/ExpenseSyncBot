@@ -1,10 +1,8 @@
 // /reconnect command — re-authorize Google account, ensure spreadsheets exist, full bidirectional sync
 
-import { copyFile } from 'node:fs/promises';
 import { format } from 'date-fns';
 import { google } from 'googleapis';
 import { InlineKeyboard } from 'gramio';
-import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
 import { getExpenseRecorder } from '../../services/expense-recorder';
@@ -100,7 +98,9 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
 // ── Full bidirectional sync ──
 
 interface FullSyncReport {
-  dbBackupPath: string | null;
+  snapshotId: string | null;
+  snapshotExpenses: number;
+  snapshotBudgets: number;
   sheetBackupUrl: string | null;
   yearCreated: number | null;
   sheetToDbExpenses: number;
@@ -120,7 +120,9 @@ interface FullSyncReport {
  */
 async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Promise<void> {
   const report: FullSyncReport = {
-    dbBackupPath: null,
+    snapshotId: null,
+    snapshotExpenses: 0,
+    snapshotBudgets: 0,
     sheetBackupUrl: null,
     yearCreated: null,
     sheetToDbExpenses: 0,
@@ -140,7 +142,11 @@ async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Pro
     }
 
     // Step 0: Create backups before any modifications
-    report.dbBackupPath = await backupDatabase();
+    const expenses = database.expenses.findByGroupId(freshGroup.id, 100000);
+    const budgets = database.budgets.findByGroupId(freshGroup.id);
+    report.snapshotId = database.syncSnapshots.saveSnapshot(freshGroup.id, expenses, budgets);
+    report.snapshotExpenses = expenses.length;
+    report.snapshotBudgets = budgets.length;
     report.sheetBackupUrl = await backupSpreadsheet(
       freshGroup.google_refresh_token,
       freshGroup.spreadsheet_id,
@@ -177,20 +183,6 @@ async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Pro
 }
 
 // ── Backups ──
-
-/** Copy the SQLite database file before sync. Returns backup file path or null on failure. */
-async function backupDatabase(): Promise<string | null> {
-  try {
-    const timestamp = format(new Date(), 'yyyy-MM-dd_HH-mm-ss');
-    const backupPath = `${env.DATABASE_PATH}.bak-${timestamp}`;
-    await copyFile(env.DATABASE_PATH, backupPath);
-    logger.info(`[RECONNECT] DB backup created: ${backupPath}`);
-    return backupPath;
-  } catch (err) {
-    logger.error({ err }, '[RECONNECT] DB backup failed');
-    return null;
-  }
-}
 
 /** Copy the Google spreadsheet via Drive API. Returns backup spreadsheet URL or null on failure. */
 async function backupSpreadsheet(
@@ -418,9 +410,11 @@ function formatFullSyncReport(report: FullSyncReport): string {
   const lines: string[] = ['✅ Синхронизация завершена!\n'];
 
   // Backup info
-  if (report.dbBackupPath || report.sheetBackupUrl) {
+  if (report.snapshotId || report.sheetBackupUrl) {
     lines.push('💾 Бекапы:');
-    if (report.dbBackupPath) lines.push(`  БД: ${report.dbBackupPath}`);
+    if (report.snapshotId) {
+      lines.push(`  БД: ${report.snapshotExpenses} расходов + ${report.snapshotBudgets} бюджетов`);
+    }
     if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
     lines.push('');
   }

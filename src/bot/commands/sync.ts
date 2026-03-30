@@ -93,6 +93,11 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
 
   logger.info(`[SYNC] Sheet: ${sheetExpenses.length} expenses, ${errors.length} errors`);
 
+  // Snapshot current state before destructive sync (deletes + updates)
+  const allExpenses = database.expenses.findByGroupId(groupId, 100000);
+  const allBudgets = database.budgets.findByGroupId(groupId);
+  database.syncSnapshots.saveSnapshot(groupId, allExpenses, allBudgets);
+
   // Determine the year this spreadsheet covers so we only compare DB expenses
   // from that year. Without this, syncing a 2026-only sheet would delete all
   // prior-year DB expenses that don't appear in it.
