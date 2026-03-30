@@ -21,7 +21,7 @@ import type {
   AccountReferenceByData,
   Merchant,
   Transaction as ZenPluginsTransaction,
-} from './ZenPlugins/src/types/zenmoney';
+} from './zenmoney-types';
 
 const logger = createLogger('sync-service');
 

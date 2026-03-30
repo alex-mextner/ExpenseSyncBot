@@ -16,6 +16,7 @@ function makeGroup(id: number, telegramGroupId: number): Group {
     enabled_currencies: ['EUR'],
     custom_prompt: null,
     active_topic_id: null,
+    oauth_client: 'legacy' as const,
     bank_panel_summary_message_id: null,
     created_at: '2024-01-01',
     updated_at: '2024-01-01',
