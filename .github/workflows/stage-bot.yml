@@ -8,14 +8,17 @@ jobs:
   stage-bot:
     runs-on: ubuntu-latest
 
+    permissions:
+      pull-requests: write
+
     steps:
       - name: Deploy or stop stage bot
+        id: deploy
         uses: appleboy/ssh-action@v1
         with:
           host: 104.248.84.190
           username: www-data
           key: ${{ secrets.DIGITAL_OCEAN_SSH_KEY }}
-          script_stop: true
           script: |
             set -e
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
@@ -57,12 +60,65 @@ jobs:
             cd "$WORKTREE"
             $BUN install
 
-            $PM2 describe expensesyncbot-stage > /dev/null 2>&1 \
-              && $PM2 restart expensesyncbot-stage \
-              || $PM2 start src/index.ts \
-                   --name expensesyncbot-stage \
-                   --interpreter $BUN \
-                   -- --env-file $ENV_FILE
+            $PM2 delete expensesyncbot-stage 2>/dev/null || true
+            $PM2 start index.ts \
+                 --name expensesyncbot-stage \
+                 --interpreter $BUN \
+                 --cwd "$WORKTREE" \
+                 -- --env-file $ENV_FILE
 
             echo "✅ Stage bot deployed"
             $PM2 list
+
+      - name: Comment on PR with stage bot link
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- stage-bot-comment -->';
+            const body = `${marker}\n🤖 **Stage bot deployed!** Test it: https://t.me/ExpenseSyncStageBot\n\nBranch: \`${{ github.head_ref }}\` @ \`${context.sha.slice(0, 7)}\``;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Comment PR closed
+        if: github.event.action == 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- stage-bot-comment -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: `${marker}\n🛑 Stage bot stopped. PR closed.`,
+              });
+            }
