@@ -3,27 +3,37 @@
 import { InlineKeyboard } from 'gramio';
 import type { Group } from '../../database/types';
 import { sendFeedback } from '../../services/feedback';
-import type { Ctx } from '../types';
+import type { BotInstance, Ctx } from '../types';
 
-/** In-memory map: chatId → userId waiting to type feedback */
-const pendingFeedback = new Map<number, number>();
+interface PendingFeedbackState {
+  userId: number;
+  promptMessageId: number;
+}
+
+/** In-memory map: chatId → pending feedback state */
+const pendingFeedback = new Map<number, PendingFeedbackState>();
 
 /**
  * Check if a user has pending feedback input, consume it if so.
- * Called from message handler.
+ * Returns the prompt message ID to delete, or null.
  */
-export function consumePendingFeedback(chatId: number, userId: number): boolean {
+export function consumePendingFeedback(chatId: number, userId: number): number | null {
   const pending = pendingFeedback.get(chatId);
-  if (pending === userId) {
+  if (pending?.userId === userId) {
     pendingFeedback.delete(chatId);
-    return true;
+    return pending.promptMessageId;
   }
-  return false;
+  return null;
 }
 
 /** Cancel pending feedback for a chat (called from callback handler). */
 export function cancelPendingFeedback(chatId: number): void {
   pendingFeedback.delete(chatId);
+}
+
+/** Set pending feedback state (exported for tests). */
+export function setPendingFeedback(chatId: number, userId: number, promptMessageId: number): void {
+  pendingFeedback.set(chatId, { userId, promptMessageId });
 }
 
 /**
@@ -36,11 +46,12 @@ export async function handleFeedbackCommand(ctx: Ctx['Command'], group: Group): 
   const message = text.replace(/^\/feedback(@\S+)?\s*/, '').trim();
 
   if (!message) {
-    pendingFeedback.set(ctx.chat.id, ctx.from.id);
     const keyboard = new InlineKeyboard().text('❌ Отмена', 'feedback_cancel');
-    await ctx.send('💬 Напиши сообщение с отзывом или описанием бага следующим сообщением:', {
-      reply_markup: keyboard,
-    });
+    const sent = await ctx.send(
+      '💬 Напиши сообщение с отзывом или описанием бага следующим сообщением:',
+      { reply_markup: keyboard },
+    );
+    pendingFeedback.set(ctx.chat.id, { userId: ctx.from.id, promptMessageId: sent.id });
     return;
   }
 
@@ -52,6 +63,7 @@ export async function submitFeedback(
   ctx: Ctx['Command'] | Ctx['Message'],
   group: Group,
   message: string,
+  opts?: { promptMessageId?: number; bot?: BotInstance },
 ): Promise<void> {
   const result = await sendFeedback({
     message,
@@ -62,6 +74,12 @@ export async function submitFeedback(
 
   if (result.success) {
     await ctx.send('✅ Фидбек отправлен, спасибо!');
+    // Delete the prompt message with Cancel button
+    if (opts?.promptMessageId && opts.bot) {
+      await opts.bot.api
+        .deleteMessage({ chat_id: ctx.chat.id, message_id: opts.promptMessageId })
+        .catch(() => {});
+    }
   } else {
     await ctx.send(`❌ Не удалось отправить фидбек: ${result.error}`);
   }

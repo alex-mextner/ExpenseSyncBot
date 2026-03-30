@@ -80,4 +80,40 @@ describe('sendFeedback', () => {
 
     (env as { BOT_ADMIN_CHAT_ID: number | null }).BOT_ADMIN_CHAT_ID = origValue;
   });
+
+  it('escapes HTML in userName and message', async () => {
+    const { env } = await import('../config/env');
+    const origValue = env.BOT_ADMIN_CHAT_ID;
+    (env as { BOT_ADMIN_CHAT_ID: number | null }).BOT_ADMIN_CHAT_ID = 999;
+
+    spyOn(database.groups, 'findById').mockReturnValue({
+      id: 1,
+      telegram_group_id: 123,
+      default_currency: 'EUR',
+      enabled_currencies: ['EUR'],
+      custom_prompt: null,
+      google_refresh_token: null,
+      spreadsheet_id: null,
+      active_topic_id: null,
+      bank_panel_summary_message_id: null,
+      created_at: '',
+      updated_at: '',
+    });
+
+    await sendFeedback({
+      message: '<script>alert("xss")</script>',
+      groupId: 1,
+      chatId: 123,
+      userName: '<b>hacker</b>',
+    });
+
+    const callArgs = sendMessageSpy.mock.calls[0];
+    const text = callArgs?.[2] as string;
+    // HTML entities must be escaped
+    expect(text).toContain('&lt;script&gt;');
+    expect(text).not.toContain('<script>');
+    expect(text).toContain('&lt;b&gt;hacker&lt;/b&gt;');
+
+    (env as { BOT_ADMIN_CHAT_ID: number | null }).BOT_ADMIN_CHAT_ID = origValue;
+  });
 });

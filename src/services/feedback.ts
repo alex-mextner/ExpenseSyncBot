@@ -1,6 +1,7 @@
 // Send user feedback to the bot admin via Telegram
 import { env } from '../config/env';
 import { database } from '../database';
+import { escapeHtml } from '../utils/html';
 import { createLogger } from '../utils/logger.ts';
 import { sendMessage } from './bank/telegram-sender';
 
@@ -36,8 +37,10 @@ export async function sendFeedback(params: FeedbackParams): Promise<FeedbackResu
 
   const group = database.groups.findById(groupId);
   const groupLabel = group ? `<b>${group.telegram_group_id}</b>` : String(chatId);
-  const userLabel = userName ? ` от <b>${userName}</b>` : '';
-  const text = `💬 Фидбек из группы ${groupLabel}${userLabel}:\n\n${message}`;
+  const safeUserName = userName ? escapeHtml(userName) : undefined;
+  const userLabel = safeUserName ? ` от <b>${safeUserName}</b>` : '';
+  const safeMessage = escapeHtml(message);
+  const text = `💬 Фидбек из группы ${groupLabel}${userLabel}:\n\n${safeMessage}`;
 
   await sendMessage(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text);
   logger.info({ groupId, chatId }, 'Feedback sent to admin');

@@ -187,8 +187,9 @@ export async function handleExpenseMessage(
   }
 
   // Check if we're waiting for feedback text input
-  if (consumePendingFeedback(telegramGroupId, telegramId)) {
-    await submitFeedback(ctx, group, text);
+  const feedbackPromptId = consumePendingFeedback(telegramGroupId, telegramId);
+  if (feedbackPromptId !== null) {
+    await submitFeedback(ctx, group, text, { promptMessageId: feedbackPromptId, bot });
     return true;
   }
 
