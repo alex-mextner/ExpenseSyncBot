@@ -5,10 +5,10 @@ import type { Ctx } from '../types';
 const EXPENSE_EXAMPLES =
   `<code>100 еда круассаны и кофе</code> — валюта по умолчанию\n` +
   `<code>100д подписки клод</code> — доллары\n` +
-  `<code>1000 благ</code> — без комментария\n` +
+  `<code>1000 благ</code> — сокращённо «благотворительность»\n` +
   `<code>10000€/8 развлечения пейнтбол</code> — калькулятор\n` +
   `<code>1 900 RSD транспорт такси</code> — код валюты\n` +
-  `<code>3*150 ресторан ужин с друзьями</code> — умножение`;
+  `<code>3*150 продукты 3 йогурта</code> — умножение`;
 
 export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
