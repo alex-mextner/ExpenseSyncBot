@@ -41,9 +41,10 @@
 
     /* How it works */
     .steps { counter-reset: step; list-style: none; padding: 0; }
-    .steps li { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: .95rem; align-items: flex-start; }
+    .steps li { display: flex; gap: .75rem; margin-bottom: 1rem; font-size: .95rem; align-items: flex-start; }
+    .steps li > span { min-width: 0; }
     .steps li::before { counter-increment: step; content: counter(step); width: 28px; min-width: 28px; height: 28px; border-radius: 50%; background: #2563eb; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; margin-top: .2em; }
-    .steps code { background: var(--bg); padding: .1em .4em; border-radius: 4px; font-size: .85rem; white-space: nowrap; }
+    .steps code { background: var(--bg); padding: .1em .4em; border-radius: 4px; font-size: .85rem; }
     .steps li:last-child { margin-bottom: 0; }
 
     /* Google API */
