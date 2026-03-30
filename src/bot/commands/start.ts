@@ -7,7 +7,7 @@ const EXPENSE_EXAMPLES =
   `<code>100д подписки клод</code> — доллары\n` +
   `<code>1000 благ</code> — сокращённо «благотворительность»\n` +
   `<code>10000€/8 развлечения пейнтбол</code> — калькулятор\n` +
-  `<code>1 900 RSD транспорт такси</code> — код валюты\n` +
+  `<code>1 900 RSD транспорт такси</code> — пробел в числе, код валюты\n` +
   `<code>3*150 продукты 3 йогурта</code> — умножение`;
 
 export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
