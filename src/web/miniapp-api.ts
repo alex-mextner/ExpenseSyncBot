@@ -1,7 +1,9 @@
-// Mini App API handler: HMAC initData validation and routing skeleton for /api/* endpoints
+// Mini App API handler: HMAC initData validation and routing for /api/* endpoints
 import { createHmac } from 'node:crypto';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
+import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
+import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
 import { createLogger } from '../utils/logger.ts';
 
 const logger = createLogger('miniapp-api');
@@ -195,6 +197,68 @@ export async function handleMiniAppRequest(
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // Route handlers will be added in tasks 2.x and 3.x
+  if (url.pathname === '/api/receipt/scan' && req.method === 'POST') {
+    const groupIdParam = url.searchParams.get('groupId');
+    const telegramGroupId = groupIdParam ? parseInt(groupIdParam, 10) : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(
+        400,
+        'Missing or invalid groupId query param',
+        'BAD_REQUEST',
+        corsHeaders,
+      );
+    }
+
+    let body: { qrData?: unknown };
+    try {
+      body = (await req.json()) as { qrData?: unknown };
+    } catch {
+      return errorResponse(400, 'Invalid JSON body', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const { qrData } = body;
+    if (typeof qrData !== 'string' || qrData.trim() === '') {
+      return errorResponse(400, 'Missing required field: qrData', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    try {
+      const html = await fetchReceiptData(qrData);
+      const categoryNames = database.categories
+        .findByGroupId(ctx.internalGroupId)
+        .map((c) => c.name);
+      const result = await extractExpensesFromReceipt(html, categoryNames);
+
+      const items = result.items.map((item) => ({
+        name: item.name_ru,
+        qty: item.quantity,
+        price: item.price,
+        total: item.total,
+        category: item.category,
+      }));
+
+      return new Response(
+        JSON.stringify({
+          items,
+          ...(result.currency !== undefined ? { currency: result.currency } : {}),
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+        },
+      );
+    } catch (err) {
+      logger.error({ err }, 'Receipt scan failed');
+      return errorResponse(
+        500,
+        err instanceof Error ? err.message : 'Receipt scan failed',
+        'SCAN_FAILED',
+        corsHeaders,
+      );
+    }
+  }
+
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
 }
