@@ -1019,6 +1019,38 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Created recurring_patterns table');
       },
     },
+    {
+      name: '037_create_dashboard_widgets',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS dashboard_widgets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            config TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_widgets_user_group
+          ON dashboard_widgets(group_id, user_id);
+        `);
+        logger.info('✓ Created dashboard_widgets table');
+      },
+    },
+    {
+      name: '038_add_receipt_file_id_to_expenses',
+      up: () => {
+        const cols = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('expenses')
+          WHERE name = 'receipt_file_id'
+        `);
+        if (cols.get()?.count === 0) {
+          db.exec(`ALTER TABLE expenses ADD COLUMN receipt_file_id TEXT`);
+          logger.info('✓ Added receipt_file_id to expenses');
+        }
+      },
+    },
   ];
 
   // Check and run migrations
