@@ -149,15 +149,15 @@ async function startGoogleOAuth(
   const authUrl = generateAuthUrl(groupId);
 
   const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
+  const text =
+    '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
+    'После авторизации вернись сюда — я продолжу настройку.';
 
-  await ctx.send(
-    `🔐 Подключение Google аккаунта для группы\n\n` +
-      `Один из участников группы должен:\n` +
-      `1. Нажать на кнопку ниже\n` +
-      `2. Разрешить доступ к Google Sheets\n\n` +
-      `После авторизации бот автоматически продолжит настройку.`,
-    { reply_markup: authKeyboard },
-  );
+  if ('editText' in ctx && typeof ctx.editText === 'function') {
+    await ctx.editText(text, { reply_markup: authKeyboard });
+  } else {
+    await ctx.send(text, { reply_markup: authKeyboard });
+  }
 
   // OAuth flow continues asynchronously: the callback server saves the token to DB,
   // then notifies the group via notifyTelegramSuccess (sends authSuccess + currency keyboard).
