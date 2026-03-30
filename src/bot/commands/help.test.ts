@@ -19,8 +19,7 @@ describe('/help message', () => {
     expect(text).toContain('Ручные правки');
     expect(text).toContain('/sync');
     expect(text).toContain('/push');
-    expect(text).toContain('/budget sync');
-    expect(text).toContain('EUR (calc)');
+    expect(text).toContain('expense-sync-bot.invntrm.ru');
   });
 
   it('does not mention Menu button', () => {
