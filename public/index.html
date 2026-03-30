@@ -5,22 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ExpenseSyncBot — Telegram Expense Tracker</title>
   <style>
-    :root { --accent: #2563eb; --accent-light: #dbeafe; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; --border: #e2e8f0; }
+    :root { --accent: #2563eb; --accent-light: #dbeafe; --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b; --border: #e2e8f0; --shadow: rgba(0,0,0,.06); }
+    @media (prefers-color-scheme: dark) {
+      :root { --accent: #60a5fa; --accent-light: #1e3a5f; --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #94a3b8; --border: #334155; --shadow: rgba(0,0,0,.3); }
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
     .container { max-width: 800px; margin: 0 auto; padding: 3rem 1.5rem; }
 
     /* Hero */
-    .hero { text-align: center; padding: 3rem 2rem; background: linear-gradient(135deg, var(--accent), #7c3aed); border-radius: 16px; color: #fff; margin-bottom: 1.5rem; }
+    .hero { text-align: center; padding: 3rem 2rem; background: linear-gradient(135deg, #2563eb, #7c3aed); border-radius: 16px; color: #fff; margin-bottom: 1.5rem; }
     .hero h1 { font-size: 2.5rem; margin-bottom: .25rem; letter-spacing: -.02em; }
     .hero .tagline { font-size: 1.15rem; opacity: .9; margin-bottom: 2rem; }
-    .hero .cta { display: inline-block; padding: .85rem 2rem; background: #fff; color: var(--accent); text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 1rem; transition: transform .15s; }
+    .hero .cta { display: inline-block; padding: .85rem 2rem; background: #fff; color: #2563eb; text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 1rem; transition: transform .15s; }
     .hero .cta:hover { transform: translateY(-2px); }
 
     /* Cards grid */
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
     @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
-    .card { background: var(--card); border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .card { background: var(--card); border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px var(--shadow); }
     .card h3 { font-size: 1rem; margin-bottom: .5rem; display: flex; align-items: center; gap: .5rem; }
     .card p { font-size: .9rem; color: var(--muted); margin: 0; }
     .icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
@@ -33,14 +36,14 @@
     .icon-teal { background: #ccfbf1; }
 
     /* Sections */
-    .section { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); margin-bottom: 1.5rem; }
+    .section { background: var(--card); border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px var(--shadow); margin-bottom: 1.5rem; }
     .section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
 
     /* How it works */
     .steps { counter-reset: step; list-style: none; padding: 0; }
-    .steps li { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: .95rem; align-items: baseline; }
-    .steps li::before { counter-increment: step; content: counter(step); width: 28px; min-width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; position: relative; top: .15em; }
-    .steps code { word-break: break-all; }
+    .steps li { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: .95rem; align-items: flex-start; }
+    .steps li::before { counter-increment: step; content: counter(step); width: 28px; min-width: 28px; height: 28px; border-radius: 50%; background: #2563eb; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; margin-top: .2em; }
+    .steps code { background: var(--bg); padding: .1em .4em; border-radius: 4px; font-size: .85rem; white-space: nowrap; }
     .steps li:last-child { margin-bottom: 0; }
 
     /* Google API */
@@ -71,6 +74,21 @@
     .links a { color: var(--accent); margin: 0 1rem; text-decoration: none; }
     .links a:hover { text-decoration: underline; }
     footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 1rem 0; }
+
+    /* Dark theme */
+    @media (prefers-color-scheme: dark) {
+      a { color: var(--accent); }
+      .icon-blue { background: #1e3a5f; }
+      .icon-green { background: #14532d; }
+      .icon-purple { background: #3b0764; }
+      .icon-amber { background: #451a03; }
+      .icon-rose { background: #4c0519; }
+      .icon-cyan { background: #083344; }
+      .icon-teal { background: #042f2e; }
+      .scope-list li { background: var(--bg); }
+      .scope-list li strong { color: var(--accent); }
+      details .detail-body code, .feature-list code { background: var(--bg); }
+    }
   </style>
 </head>
 <body>
@@ -116,10 +134,10 @@
     <div class="section">
       <h2>How It Works</h2>
       <ol class="steps">
-        <li>Add <strong>@ExpenseSyncBot</strong> to a family Telegram group (into a topic) or create a dedicated group for expenses</li>
-        <li>Run <strong>/connect</strong> and authorize your Google account</li>
-        <li>Send expenses as simple messages: <code>50 lunch</code>, <code>1200 RSD taxi</code>, <code>$30 groceries</code></li>
-        <li>The bot logs everything locally and syncs it to your Google Sheet</li>
+        <li><span>Add <strong>@ExpenseSyncBot</strong> to a family Telegram group (into a topic) or create a dedicated group for expenses</span></li>
+        <li><span>Run <strong>/connect</strong> and authorize your Google account</span></li>
+        <li><span>Send expenses as simple messages: <code>50 lunch</code>, <code>1200 RSD taxi</code>, <code>$30 groceries</code></span></li>
+        <li><span>The bot logs everything locally and syncs it to your Google Sheet</span></li>
       </ol>
     </div>
 
@@ -225,7 +243,7 @@
       <details>
         <summary>Which banks are supported?</summary>
         <div class="detail-body">
-          <p>Bank integration is available for select banks. Use <code>/bank</code> in your group to see the list of currently supported banks and connect one.</p>
+          <p>Bank integration uses plugins from the <a href="https://github.com/alex-mextner/ZenPlugins/tree/master/src/plugins" target="_blank" rel="noopener">ZenPlugins repository</a> — see the full list of supported banks there. Use <code>/bank</code> in your group to connect one.</p>
         </div>
       </details>
       <details>
