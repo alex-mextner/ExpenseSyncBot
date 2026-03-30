@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Group } from '../database/types';
 import { requireGoogle, requireGroup } from './guards';
 
-// Mock database
+// Mock database — include all group methods that may be used by co-running test files
 const mockFindByTelegramGroupId = mock((): Group | null => null);
+const mockGetAll = mock((): Group[] => []);
+const mockFindById = mock((): Group | null => null);
 mock.module('../database', () => ({
   database: {
     groups: {
       findByTelegramGroupId: mockFindByTelegramGroupId,
+      findById: mockFindById,
+      getAll: mockGetAll,
     },
   },
 }));

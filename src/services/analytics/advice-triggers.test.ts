@@ -27,6 +27,10 @@ const mockBankAccounts = {
   findByGroupId: mock(() => []),
 };
 
+const mockRecurringPatterns = {
+  findOverdue: mock(() => []),
+};
+
 mock.module('../../database', () => ({
   database: {
     adviceLogs: mockAdviceLogs,
@@ -34,6 +38,7 @@ mock.module('../../database', () => ({
     bankConnections: mockBankConnections,
     bankTransactions: mockBankTransactions,
     bankAccounts: mockBankAccounts,
+    recurringPatterns: mockRecurringPatterns,
   },
 }));
 
