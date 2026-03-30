@@ -321,6 +321,7 @@ export async function handleDefaultCurrencyCallback(
       { parse_mode: 'HTML' },
     );
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
   }
 }
@@ -351,9 +352,36 @@ async function createSpreadsheetForGroup(
     database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
     await ctx.send(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
+    await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
     logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
     await ctx.send('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
+}
+
+/**
+ * If the group is a forum, recommend running /topic in the finance topic.
+ * Sent as a separate message so the main completion message stays clean.
+ */
+async function sendTopicRecommendation(
+  ctx: Ctx['CallbackQuery'] | Ctx['Command'],
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (group?.active_topic_id) return; // already configured
+
+  const isForum = 'chat' in ctx && ctx.chat && 'isForum' in ctx.chat && ctx.chat.isForum === true;
+  if (!isForum) return;
+
+  await ctx.send(
+    `💡 <b>У тебя группа с топиками</b>\n\n` +
+      `Сейчас бот слушает все топики — любое сообщение с числом он может принять за расход, ` +
+      `а разговоры попытается обработать.\n\n` +
+      `Чтобы бот работал только в одном топике (например, «Финансы»):\n` +
+      `1. Перейди в нужный топик\n` +
+      `2. Напиши там /topic\n\n` +
+      `После этого в остальных топиках бот не будет реагировать на сообщения.`,
+    { parse_mode: 'HTML' },
+  );
 }
