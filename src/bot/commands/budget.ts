@@ -1,6 +1,8 @@
 import { endOfMonth, format, startOfMonth } from 'date-fns';
+import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
@@ -454,6 +456,13 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
 
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
+  const keyboard = env.MINIAPP_URL
+    ? new InlineKeyboard().webApp(
+        '📊 Дашборд',
+        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=dashboard`,
+      )
+    : undefined;
+
   if (budgets.length === 0) {
     await ctx.send(
       `Бюджет на ${currentMonthName}\n\n` +
@@ -461,6 +470,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
         `Используй:\n` +
         `• /budget set <Категория> <Сумма>\n` +
         `• /budget sync — синхронизировать с Google Sheets`,
+      keyboard ? { reply_markup: keyboard } : {},
     );
     await maybeSmartAdvice(ctx, group.id);
     return;
@@ -510,7 +520,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  await ctx.send(message.trim());
+  await ctx.send(message.trim(), keyboard ? { reply_markup: keyboard } : {});
   await maybeSmartAdvice(ctx, group.id);
 }
 

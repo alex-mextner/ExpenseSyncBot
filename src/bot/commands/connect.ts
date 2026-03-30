@@ -1,6 +1,7 @@
 /** /connect command handler — group setup with optional Google Sheets */
 import { InlineKeyboard } from 'gramio';
 import { type CurrencyCode, MESSAGES } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
@@ -321,6 +322,7 @@ export async function handleDefaultCurrencyCallback(
       { parse_mode: 'HTML' },
     );
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    await setMiniAppMenuButton(ctx, chatId);
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
   }
@@ -352,12 +354,35 @@ async function createSpreadsheetForGroup(
     database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
     await ctx.send(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
+    await setMiniAppMenuButton(ctx, chatId);
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
     logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
     await ctx.send('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
+}
+
+/**
+ * Set a persistent Mini App menu button for the chat after successful setup.
+ */
+async function setMiniAppMenuButton(
+  ctx: Ctx['CallbackQuery'] | Ctx['Command'],
+  chatId: number,
+): Promise<void> {
+  if (!env.MINIAPP_URL) return;
+  await ctx.bot.api
+    .setChatMenuButton({
+      chat_id: chatId,
+      menu_button: {
+        type: 'web_app',
+        text: 'Расходы',
+        web_app: { url: `${env.MINIAPP_URL}?groupId=${chatId}` },
+      },
+    })
+    .catch((err) => {
+      logger.warn({ err }, '[CMD] Failed to set chat menu button, continuing');
+    });
 }
 
 /**

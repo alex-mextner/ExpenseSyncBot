@@ -1,5 +1,7 @@
 import { format } from 'date-fns';
+import { InlineKeyboard } from 'gramio';
 import { MESSAGES } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
 
@@ -929,10 +931,18 @@ export async function saveReceiptExpenses(
   const totalItems = confirmedItems.length;
   const categories = new Set(confirmedItems.map((i) => i.confirmed_category).filter(Boolean));
 
+  const scanButton = env.MINIAPP_URL
+    ? new InlineKeyboard().webApp(
+        '📷 Сканировать чек',
+        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=scanner`,
+      )
+    : undefined;
+
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
     text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${categories.size}`,
     parse_mode: 'HTML',
+    ...(scanButton ? { reply_markup: scanButton } : {}),
   });
 
   logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${categories.size} categories)`);
