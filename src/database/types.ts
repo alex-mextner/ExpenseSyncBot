@@ -473,6 +473,35 @@ export interface RecurringPattern {
   updated_at: string;
 }
 
+// ─── Sync Snapshot Types ──────────────────────────────────────────────────
+
+export interface ExpenseSnapshot {
+  id: number;
+  snapshot_id: string;
+  group_id: number;
+  expense_id: number;
+  user_id: number;
+  date: string;
+  category: string;
+  comment: string;
+  amount: number;
+  currency: CurrencyCode;
+  eur_amount: number;
+  created_at: string;
+}
+
+export interface BudgetSnapshot {
+  id: number;
+  snapshot_id: string;
+  group_id: number;
+  budget_id: number;
+  category: string;
+  month: string;
+  limit_amount: number;
+  currency: CurrencyCode;
+  created_at: string;
+}
+
 export interface CreateRecurringPatternData {
   group_id: number;
   category: string;

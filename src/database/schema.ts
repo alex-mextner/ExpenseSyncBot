@@ -1060,19 +1060,56 @@ export function runMigrations(db: Database): void {
       },
     },
     {
-      name: '038_create_sync_snapshots_table',
+      name: '038_create_sync_snapshots',
       up: () => {
         db.exec(`
-          CREATE TABLE IF NOT EXISTS sync_snapshots (
+          CREATE TABLE IF NOT EXISTS expense_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            group_id INTEGER NOT NULL,
-            snapshot_data TEXT NOT NULL,
-            expense_count INTEGER NOT NULL,
-            created_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (group_id) REFERENCES groups(id)
+            snapshot_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            expense_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            eur_amount REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
           );
         `);
-        logger.info('✓ Created sync_snapshots table');
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expense_snapshots_snapshot
+          ON expense_snapshots(snapshot_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expense_snapshots_group
+          ON expense_snapshots(group_id);
+        `);
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS budget_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            budget_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            month TEXT NOT NULL,
+            limit_amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budget_snapshots_snapshot
+          ON budget_snapshots(snapshot_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budget_snapshots_group
+          ON budget_snapshots(group_id);
+        `);
+
+        logger.info('✓ Created expense_snapshots and budget_snapshots tables');
       },
     },
     {

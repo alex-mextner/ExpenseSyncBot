@@ -610,6 +610,7 @@ Never send a caption > 1 024 — it silently fails for non-Premium users.
 - Max **100 buttons total**
 - Total `reply_markup` JSON: **10 KB** — easy to exceed with 100 buttons with long labels
 - `callback_data` per button: **64 bytes** (UTF-8). Exceeding → `400 BUTTON_DATA_INVALID`. Store state server-side, pass a short key.
+  - **Cyrillic is 2 bytes per char** — a 20-char Russian category name = 40 bytes, plus prefix easily exceeds 64. Always use numeric IDs (DB primary keys) in `callback_data`, never raw user-supplied strings. If a human-readable value is unavoidable, truncate at byte boundaries (see `fitCallbackData` in `keyboards.ts`).
 
 ### Commands
 - Command name: **1–32 chars** (lowercase a-z, 0-9, `_`)

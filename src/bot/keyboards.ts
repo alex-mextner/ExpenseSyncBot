@@ -71,13 +71,27 @@ export function createDefaultCurrencyKeyboard(enabledCurrencies: string[]): Inli
 }
 
 /**
+ * Truncate callback_data to fit Telegram's 64-byte limit.
+ * Avoids splitting multi-byte (Cyrillic) characters.
+ */
+function fitCallbackData(prefix: string, value: string): string {
+  const full = `${prefix}${value}`;
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(full);
+  if (encoded.length <= 64) return full;
+  const decoder = new TextDecoder();
+  // Slice at 64 bytes and decode — TextDecoder handles partial multi-byte gracefully
+  return decoder.decode(encoded.slice(0, 64)).replace(/\uFFFD$/, '');
+}
+
+/**
  * Create category confirmation keyboard
  */
 export function createCategoryConfirmKeyboard(category: string): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   keyboard
-    .text(KEYBOARD_TEXTS.addNewCategory, `category:add:${category}`)
+    .text(KEYBOARD_TEXTS.addNewCategory, fitCallbackData('category:add:', category))
     .row()
     .text(KEYBOARD_TEXTS.selectExistingCategory, 'category:select')
     .row()
@@ -87,13 +101,16 @@ export function createCategoryConfirmKeyboard(category: string): InlineKeyboard 
 }
 
 /**
- * Create existing categories keyboard
+ * Create existing categories keyboard.
+ * Uses category IDs in callback_data to avoid 64-byte limit overflow for long names.
  */
-export function createCategoriesListKeyboard(categories: string[]): InlineKeyboard {
+export function createCategoriesListKeyboard(
+  categories: Array<{ id: number; name: string }>,
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   for (const category of categories) {
-    keyboard.text(category, `category:choose:${category}`).row();
+    keyboard.text(category.name, `category:choose:${category.id}`).row();
   }
 
   keyboard.text(KEYBOARD_TEXTS.cancel, 'category:cancel');

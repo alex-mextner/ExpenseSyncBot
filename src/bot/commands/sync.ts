@@ -93,6 +93,11 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
 
   logger.info(`[SYNC] Sheet: ${sheetExpenses.length} expenses, ${errors.length} errors`);
 
+  // Snapshot current state before destructive sync (deletes + updates)
+  const allExpenses = database.expenses.findByGroupId(groupId, 100000);
+  const allBudgets = database.budgets.findByGroupId(groupId);
+  database.syncSnapshots.saveSnapshot(groupId, allExpenses, allBudgets);
+
   // Determine the year this spreadsheet covers so we only compare DB expenses
   // from that year. Without this, syncing a 2026-only sheet would delete all
   // prior-year DB expenses that don't appear in it.
@@ -481,11 +486,15 @@ export async function handleSyncCommand(
   await ctx.send('🔄 Синхронизирую...');
 
   try {
-    // Save snapshot of current expenses BEFORE sync (enables rollback)
+    // Save snapshot of current expenses + budgets BEFORE sync (enables rollback)
     const currentExpenses = database.expenses.findByGroupId(group.id);
-    if (currentExpenses.length > 0) {
-      database.syncSnapshots.create(group.id, currentExpenses, currentExpenses.length);
-      logger.info(`[SYNC] Saved snapshot of ${currentExpenses.length} expenses`);
+    const currentBudgets = database.budgets.findByGroupId(group.id);
+    let snapshotId: string | null = null;
+    if (currentExpenses.length > 0 || currentBudgets.length > 0) {
+      snapshotId = database.syncSnapshots.saveSnapshot(group.id, currentExpenses, currentBudgets);
+      logger.info(
+        `[SYNC] Saved snapshot ${snapshotId}: ${currentExpenses.length} expenses, ${currentBudgets.length} budgets`,
+      );
     }
 
     const result = await syncExpenses(group.id);
@@ -514,30 +523,25 @@ export async function handleSyncCommand(
  * Handle /sync rollback — restore expenses from the latest snapshot
  */
 async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise<void> {
-  const snapshot = database.syncSnapshots.getLatest(groupId);
+  const snapshots = database.syncSnapshots.listSnapshots(groupId);
 
-  if (!snapshot) {
+  if (snapshots.length === 0) {
     await ctx.send('❌ Нет сохранённых снимков для отката. Откат доступен после /sync.');
     return;
   }
 
-  const snapshotDate = new Date(snapshot.created_at).toLocaleString('ru-RU');
+  // Safe: length > 0 checked above
+  const latest = snapshots[0];
+  if (!latest) return;
+  const snapshotDate = new Date(latest.createdAt).toLocaleString('ru-RU');
 
   await ctx.send(
-    `🔄 Восстанавливаю ${snapshot.expense_count} расходов из снимка от ${snapshotDate}...`,
+    `🔄 Восстанавливаю ${latest.expenseCount} расходов и ${latest.budgetCount} бюджетов из снимка от ${snapshotDate}...`,
   );
 
   try {
-    const expenses = JSON.parse(snapshot.snapshot_data) as Array<{
-      group_id: number;
-      user_id: number;
-      date: string;
-      category: string;
-      comment: string;
-      amount: number;
-      currency: CurrencyCode;
-      eur_amount: number;
-    }>;
+    const expenses = database.syncSnapshots.getExpenseSnapshots(latest.snapshotId);
+    const budgets = database.syncSnapshots.getBudgetSnapshots(latest.snapshotId);
 
     database.transaction(() => {
       database.expenses.deleteAllByGroupId(groupId);
@@ -554,12 +558,24 @@ async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise
           eur_amount: expense.eur_amount,
         });
       }
+
+      for (const budget of budgets) {
+        database.budgets.setBudget({
+          group_id: budget.group_id,
+          category: budget.category,
+          month: budget.month,
+          limit_amount: budget.limit_amount,
+          currency: budget.currency,
+        });
+      }
     });
 
-    await ctx.send(`✅ Откат завершён! Восстановлено ${expenses.length} расходов.`);
+    await ctx.send(
+      `✅ Откат завершён! Восстановлено ${expenses.length} расходов и ${budgets.length} бюджетов.`,
+    );
 
     logger.info(
-      `[SYNC] Rollback complete for group ${groupId}: ${expenses.length} expenses restored`,
+      `[SYNC] Rollback complete for group ${groupId}: ${expenses.length} expenses, ${budgets.length} budgets restored`,
     );
   } catch (error) {
     logger.error({ err: error }, '[SYNC] Rollback failed');

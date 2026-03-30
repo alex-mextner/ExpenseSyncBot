@@ -526,7 +526,7 @@ async function setBudget(
       `Категория "${normalizedCategory}" не существует.\n\n` +
         `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом ${currencySymbol}${amount}?\n\n` +
         `Или выбери из существующих:\n${existingCategories.join(', ')}`,
-      { reply_markup: keyboard.build() },
+      { reply_markup: keyboard },
     );
     return;
   }
