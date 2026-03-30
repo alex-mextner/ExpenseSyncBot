@@ -58,6 +58,10 @@ export class SyncSnapshotRepository {
     logger.info(
       `[SNAPSHOT] Saved snapshot ${snapshotId} for group ${groupId}: ${expenses.length} expenses, ${budgets.length} budgets`,
     );
+
+    // Auto-cleanup old snapshots (keep 30 days)
+    this.cleanOldSnapshots(30);
+
     return snapshotId;
   }
 
@@ -108,14 +112,30 @@ export class SyncSnapshotRepository {
     cutoff.setDate(cutoff.getDate() - daysToKeep);
     const cutoffStr = cutoff.toISOString();
 
-    let deleted = 0;
+    const countBefore =
+      this.db
+        .query<{ cnt: number }, []>(
+          'SELECT (SELECT COUNT(*) FROM expense_snapshots) + (SELECT COUNT(*) FROM budget_snapshots) as cnt',
+        )
+        .get()?.cnt ?? 0;
+
+    const deleteExpenses = this.db.prepare('DELETE FROM expense_snapshots WHERE created_at < ?');
+    const deleteBudgets = this.db.prepare('DELETE FROM budget_snapshots WHERE created_at < ?');
+
     const tx = this.db.transaction(() => {
-      const r1 = this.db.exec(`DELETE FROM expense_snapshots WHERE created_at < '${cutoffStr}'`);
-      const r2 = this.db.exec(`DELETE FROM budget_snapshots WHERE created_at < '${cutoffStr}'`);
-      deleted = (r1.changes ?? 0) + (r2.changes ?? 0);
+      deleteExpenses.run(cutoffStr);
+      deleteBudgets.run(cutoffStr);
     });
     tx();
 
+    const countAfter =
+      this.db
+        .query<{ cnt: number }, []>(
+          'SELECT (SELECT COUNT(*) FROM expense_snapshots) + (SELECT COUNT(*) FROM budget_snapshots) as cnt',
+        )
+        .get()?.cnt ?? 0;
+
+    const deleted = countBefore - countAfter;
     if (deleted > 0) {
       logger.info(`[SNAPSHOT] Cleaned ${deleted} snapshot rows older than ${daysToKeep} days`);
     }

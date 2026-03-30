@@ -56,12 +56,12 @@ jobs:
             cd "$WORKTREE"
             $BUN install
 
-            $PM2 describe expensesyncbot-stage > /dev/null 2>&1 \
-              && $PM2 restart expensesyncbot-stage \
-              || $PM2 start src/index.ts \
-                   --name expensesyncbot-stage \
-                   --interpreter $BUN \
-                   -- --env-file $ENV_FILE
+            $PM2 delete expensesyncbot-stage 2>/dev/null || true
+            $PM2 start src/index.ts \
+                 --name expensesyncbot-stage \
+                 --interpreter $BUN \
+                 --cwd "$WORKTREE" \
+                 -- --env-file $ENV_FILE
 
             echo "✅ Stage bot deployed"
             $PM2 list

@@ -297,18 +297,16 @@ async function pushMissingExpensesToSheet(group: Group): Promise<number> {
 
   logger.info(`[RECONNECT] Pushing ${missing.length} missing expenses to sheet`);
   const recorder = getExpenseRecorder();
-  let pushed = 0;
-  for (const expense of missing) {
-    try {
-      await recorder.pushToSheet(group.id, [expense]);
-      pushed++;
-    } catch (err) {
-      logger.error({ err }, `[RECONNECT] Failed to push expense ${expense.id}`);
-    }
+  try {
+    await recorder.pushToSheet(group.id, missing);
+  } catch (err) {
+    logger.error({ err }, '[RECONNECT] Failed to push missing expenses to sheet');
+    return 0;
   }
-  return pushed;
+  return missing.length;
 }
 
+/** Build dedup key from first currency in the row (multi-currency rows are filtered upstream) */
 function sheetRowKey(row: SheetRow): string | null {
   for (const [currency, amount] of Object.entries(row.amounts)) {
     return `${row.date}|${row.category}|${amount}|${currency}`;
