@@ -1,6 +1,7 @@
 /** /start command handler */
 import { database } from '../../database';
 import type { Ctx } from '../types';
+import { EXPENSE_EXAMPLES, buildHelpText } from './help';
 
 export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
@@ -20,21 +21,14 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     const hasGoogle = !!(group?.google_refresh_token && group?.spreadsheet_id);
 
     if (group && setupDone) {
-      let message =
-        `👋 Бот настроен и готов к работе.\n\n` +
-        `<b>Основные возможности:</b>\n` +
-        `• Расход: <code>100$ еда обед</code>\n` +
-        `• Фото чека — бот разберёт позиции\n` +
-        `• Бюджеты по категориям: /budget\n` +
-        `• Подключение банка: /bank\n` +
-        `• Пиши свободным текстом — AI-ассистент ответит на вопросы о расходах\n` +
-        `• /sum — итого за месяц по категориям и сравнение со средним\n` +
-        `• /stats — общая статистика по валютам и последние расходы`;
+      let message = `👋 Бот настроен и готов к работе.\n\n${buildHelpText()}`;
 
-      if (!hasGoogle) {
+      if (hasGoogle) {
         message +=
-          `\n\n💡 Можно подключить Google Sheets (/connect) — ` +
-          `расходы будут дублироваться в таблицу, можно редактировать оттуда и делиться.`;
+          `\n\n🔄 /reconnect — если таблица перестала обновляться или сменился Google-аккаунт.`;
+      } else {
+        message +=
+          `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
       }
 
       await ctx.send(message, { parse_mode: 'HTML' });
@@ -50,7 +44,8 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
           `• AI-ассистент — аналитика, советы, ответы на вопросы о расходах\n\n` +
           `<b>Как начать:</b>\n` +
           `Набери /connect и следуй инструкциям.\n\n` +
-          `После настройки просто пиши расходы в чат: <code>100$ еда обед</code>`,
+          `<b>Формат расходов:</b>\n` +
+          EXPENSE_EXAMPLES,
         { parse_mode: 'HTML' },
       );
     }
