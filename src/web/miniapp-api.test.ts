@@ -349,7 +349,7 @@ describe('POST /api/receipt/scan', () => {
     mockFetch.mockReset();
   });
 
-  test('missing qrData → 400 BAD_REQUEST', async () => {
+  test('missing qr → 400 BAD_REQUEST', async () => {
     const initData = buildInitData(42);
     const req = makePostRequest(SCAN_PATH, {}, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
@@ -359,9 +359,9 @@ describe('POST /api/receipt/scan', () => {
     expect(body.code).toBe('BAD_REQUEST');
   });
 
-  test('empty qrData string → 400 BAD_REQUEST', async () => {
+  test('empty qr string → 400 BAD_REQUEST', async () => {
     const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qrData: '   ' }, initData);
+    const req = makePostRequest(SCAN_PATH, { qr: '   ' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(400);
@@ -389,7 +389,7 @@ describe('POST /api/receipt/scan', () => {
   test('auth failure propagates → 401', async () => {
     // No auth header — body validation happens before auth
     mockFindByTelegramId.mockImplementation(() => null);
-    const req = makePostRequest(SCAN_PATH, { qrData: 'https://receipt.example.com' });
+    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' });
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(401);
@@ -402,7 +402,7 @@ describe('POST /api/receipt/scan', () => {
     mockFetchReceiptData.mockImplementation(() => Promise.reject(new Error('Network error')));
 
     const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qrData: 'https://receipt.example.com' }, initData);
+    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(500);
@@ -421,7 +421,7 @@ describe('POST /api/receipt/scan', () => {
     );
 
     const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qrData: 'https://receipt.example.com' }, initData);
+    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(500);
@@ -454,7 +454,7 @@ describe('POST /api/receipt/scan', () => {
     );
 
     const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qrData: 'https://receipt.example.com' }, initData);
+    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(200);
@@ -500,7 +500,7 @@ describe('POST /api/receipt/scan', () => {
     );
 
     const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qrData: 'https://receipt.example.com' }, initData);
+    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(200);
@@ -531,7 +531,7 @@ describe('POST /api/receipt/scan', () => {
     );
 
     const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qrData: 'https://receipt.example.com' }, initData);
+    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     await handleMiniAppRequest(req, CORS_ORIGIN);
 
     expect(mockCategoriesFindByGroupId.mock.calls.length).toBe(1);
@@ -595,6 +595,43 @@ describe('POST /api/receipt/ocr', () => {
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(401);
+  });
+
+  test('wrong MIME type → 415 UNSUPPORTED_MEDIA_TYPE', async () => {
+    const initData = buildInitData(42);
+    const formData = new FormData();
+    formData.append(
+      'image',
+      new Blob([Buffer.from('fake-png')], { type: 'image/png' }),
+      'receipt.png',
+    );
+    const req = new Request(`https://server${OCR_PATH}`, {
+      method: 'POST',
+      headers: { 'X-Telegram-Init-Data': initData },
+      body: formData,
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(415);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+  });
+
+  test('image exceeds 2 MB → 413 PAYLOAD_TOO_LARGE', async () => {
+    const initData = buildInitData(42);
+    const bigBuffer = Buffer.alloc(2 * 1024 * 1024 + 1);
+    const formData = new FormData();
+    formData.append('image', new Blob([bigBuffer], { type: 'image/jpeg' }), 'big.jpg');
+    const req = new Request(`https://server${OCR_PATH}`, {
+      method: 'POST',
+      headers: { 'X-Telegram-Init-Data': initData },
+      body: formData,
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('PAYLOAD_TOO_LARGE');
   });
 
   test('OCR failure → 500 OCR_FAILED', async () => {

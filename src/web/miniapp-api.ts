@@ -223,24 +223,24 @@ export async function handleMiniAppRequest(
       );
     }
 
-    let body: { qrData?: unknown };
+    let body: { qr?: unknown };
     try {
-      body = (await req.json()) as { qrData?: unknown };
+      body = (await req.json()) as { qr?: unknown };
     } catch (parseError) {
       logger.warn({ err: parseError }, 'Failed to parse request body');
       return errorResponse(400, 'Invalid JSON body', 'BAD_REQUEST', corsHeaders);
     }
 
-    const { qrData } = body;
-    if (typeof qrData !== 'string' || qrData.trim() === '') {
-      return errorResponse(400, 'Missing required field: qrData', 'BAD_REQUEST', corsHeaders);
+    const { qr } = body;
+    if (typeof qr !== 'string' || qr.trim() === '') {
+      return errorResponse(400, 'Missing required field: qr', 'BAD_REQUEST', corsHeaders);
     }
 
     const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
     if (!ctx.ok) return ctx.response;
 
     try {
-      const html = await fetchReceiptData(qrData);
+      const html = await fetchReceiptData(qr);
       const categoryNames = database.categories
         .findByGroupId(ctx.internalGroupId)
         .map((c) => c.name);
@@ -295,14 +295,30 @@ export async function handleMiniAppRequest(
       return errorResponse(400, 'Invalid multipart form data', 'BAD_REQUEST', corsHeaders);
     }
 
+    if (imageBlob.type !== 'image/jpeg') {
+      return errorResponse(
+        415,
+        'Only image/jpeg is accepted',
+        'UNSUPPORTED_MEDIA_TYPE',
+        corsHeaders,
+      );
+    }
+
+    const MAX_BYTES = 2 * 1024 * 1024;
+    if (imageBlob.size > MAX_BYTES) {
+      return errorResponse(413, 'Image exceeds 2 MB limit', 'PAYLOAD_TOO_LARGE', corsHeaders);
+    }
+
     const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
     if (!ctx.ok) return ctx.response;
 
+    let rawBuffer: Buffer | null = null;
+    let compressedBuffer: Buffer | null = null;
     try {
-      const rawBuffer = Buffer.from(await imageBlob.arrayBuffer());
-      const compressedBuffer = await sharp(rawBuffer)
-        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
+      rawBuffer = Buffer.from(await imageBlob.arrayBuffer());
+      compressedBuffer = await sharp(rawBuffer)
+        .resize(1800, 1800, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 85 })
         .toBuffer();
 
       const ocrText = await extractTextFromImageBuffer(compressedBuffer);
@@ -360,6 +376,9 @@ export async function handleMiniAppRequest(
     } catch (err) {
       logger.error({ err }, 'OCR processing failed');
       return errorResponse(500, 'OCR processing failed', 'OCR_FAILED', corsHeaders);
+    } finally {
+      rawBuffer = null;
+      compressedBuffer = null;
     }
   }
 
@@ -448,7 +467,11 @@ export async function handleMiniAppRequest(
         created++;
       }
 
-      emitForGroup(ctx.internalGroupId, 'expense_added');
+      try {
+        emitForGroup(ctx.internalGroupId, 'expense_added');
+      } catch (emitError) {
+        logger.warn({ err: emitError }, 'SSE emit failed, continuing');
+      }
 
       return new Response(JSON.stringify({ created }), {
         status: 200,
