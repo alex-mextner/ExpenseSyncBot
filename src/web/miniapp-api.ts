@@ -1,7 +1,7 @@
 // Mini App API handler: HMAC initData validation and routing for /api/* endpoints
 import { createHmac } from 'node:crypto';
 import sharp from 'sharp';
-import type { CurrencyCode } from '../config/constants.ts';
+import { type CurrencyCode, isValidCurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
 import { convertCurrency } from '../services/currency/converter.ts';
@@ -281,17 +281,21 @@ export async function handleMiniAppRequest(
       );
     }
 
+    // Authenticate before consuming the request body to avoid processing untrusted uploads
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
     let imageBlob: Blob | null = null;
     try {
       const formData = await req.formData();
       const field = formData.get('image');
       if (!field || !(field instanceof Blob)) {
-        return errorResponse(400, 'Missing required field: image', 'BAD_REQUEST', corsHeaders);
+        return errorResponse(400, 'Missing required field: image', 'BAD_REQUEST', ctx.corsHeaders);
       }
       imageBlob = field;
     } catch (parseError) {
       logger.warn({ err: parseError }, 'Failed to parse multipart form data');
-      return errorResponse(400, 'Invalid multipart form data', 'BAD_REQUEST', corsHeaders);
+      return errorResponse(400, 'Invalid multipart form data', 'BAD_REQUEST', ctx.corsHeaders);
     }
 
     if (imageBlob.type !== 'image/jpeg') {
@@ -299,17 +303,14 @@ export async function handleMiniAppRequest(
         415,
         'Only image/jpeg is accepted',
         'UNSUPPORTED_MEDIA_TYPE',
-        corsHeaders,
+        ctx.corsHeaders,
       );
     }
 
     const MAX_BYTES = 2 * 1024 * 1024;
     if (imageBlob.size > MAX_BYTES) {
-      return errorResponse(413, 'Image exceeds 2 MB limit', 'PAYLOAD_TOO_LARGE', corsHeaders);
+      return errorResponse(413, 'Image exceeds 2 MB limit', 'PAYLOAD_TOO_LARGE', ctx.corsHeaders);
     }
-
-    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
-    if (!ctx.ok) return ctx.response;
 
     let rawBuffer: Buffer | null = null;
     let compressedBuffer: Buffer | null = null;
@@ -421,12 +422,15 @@ export async function handleMiniAppRequest(
       if (
         typeof item.name !== 'string' ||
         typeof item.total !== 'number' ||
+        !Number.isFinite(item.total) ||
+        item.total <= 0 ||
         typeof item.category !== 'string' ||
-        typeof item.currency !== 'string'
+        typeof item.currency !== 'string' ||
+        !isValidCurrencyCode(item.currency)
       ) {
         return errorResponse(
           400,
-          'Each expense must have name (string), total (number), category (string), currency (string)',
+          'Each expense must have name (string), total (positive finite number), category (string), currency (valid ISO code)',
           'BAD_REQUEST',
           corsHeaders,
         );
@@ -443,8 +447,9 @@ export async function handleMiniAppRequest(
       let created = 0;
 
       for (const item of expenseInputs) {
+        const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
         const date =
-          typeof item.date === 'string' && item.date.length > 0
+          typeof item.date === 'string' && ISO_DATE_RE.test(item.date)
             ? item.date
             : new Date().toISOString().slice(0, 10);
 
@@ -630,41 +635,48 @@ export async function handleMiniAppRequest(
       updated_at: string;
     }
 
-    const existing = database.queryOne<DashboardUpdatedAtRow>(
-      'SELECT updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
-      ctx.internalGroupId,
-      ctx.internalUserId,
-    );
-
     const clientUpdatedAt = typeof body.updatedAt === 'string' ? body.updatedAt : null;
+    const newUpdatedAt = new Date().toISOString();
+    const configJson = JSON.stringify(Array.isArray(body.widgets) ? body.widgets : []);
 
-    if (existing && clientUpdatedAt !== null && existing.updated_at !== clientUpdatedAt) {
+    // SELECT + UPDATE/INSERT must be atomic to prevent lost updates under concurrent writes
+    const conflict = database.transaction(() => {
+      const row = database.queryOne<DashboardUpdatedAtRow>(
+        'SELECT updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
+        ctx.internalGroupId,
+        ctx.internalUserId,
+      );
+
+      if (row && clientUpdatedAt !== null && row.updated_at !== clientUpdatedAt) {
+        return true; // conflict
+      }
+
+      if (row) {
+        database.exec(
+          'UPDATE dashboard_widgets SET config = ?, updated_at = ? WHERE group_id = ? AND user_id = ?',
+          configJson,
+          newUpdatedAt,
+          ctx.internalGroupId,
+          ctx.internalUserId,
+        );
+      } else {
+        database.exec(
+          'INSERT INTO dashboard_widgets (group_id, user_id, config, updated_at) VALUES (?, ?, ?, ?)',
+          ctx.internalGroupId,
+          ctx.internalUserId,
+          configJson,
+          newUpdatedAt,
+        );
+      }
+      return false;
+    });
+
+    if (conflict) {
       return errorResponse(
         409,
         'Dashboard was modified by another client',
         'CONFLICT',
-        corsHeaders,
-      );
-    }
-
-    const newUpdatedAt = new Date().toISOString();
-    const configJson = JSON.stringify(Array.isArray(body.widgets) ? body.widgets : []);
-
-    if (existing) {
-      database.exec(
-        'UPDATE dashboard_widgets SET config = ?, updated_at = ? WHERE group_id = ? AND user_id = ?',
-        configJson,
-        newUpdatedAt,
-        ctx.internalGroupId,
-        ctx.internalUserId,
-      );
-    } else {
-      database.exec(
-        'INSERT INTO dashboard_widgets (group_id, user_id, config, updated_at) VALUES (?, ?, ?, ?)',
-        ctx.internalGroupId,
-        ctx.internalUserId,
-        configJson,
-        newUpdatedAt,
+        ctx.corsHeaders,
       );
     }
 

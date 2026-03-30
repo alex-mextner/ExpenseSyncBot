@@ -113,6 +113,7 @@ mock.module('../database/index.ts', () => ({
     queryOne: mockDbQueryOne,
     queryAll: mockDbQueryAll,
     exec: mockDbExec,
+    transaction: (fn: () => unknown) => fn(),
   },
 }));
 
@@ -576,6 +577,8 @@ describe('POST /api/receipt/ocr', () => {
   });
 
   test('missing image field → 400 BAD_REQUEST', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 })); // membership check
     const initData = buildInitData(42);
     const req = makeOcrRequest(OCR_PATH, false, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
@@ -594,6 +597,8 @@ describe('POST /api/receipt/ocr', () => {
   });
 
   test('wrong MIME type → 415 UNSUPPORTED_MEDIA_TYPE', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 })); // membership check
     const initData = buildInitData(42);
     const formData = new FormData();
     formData.append(
@@ -614,6 +619,8 @@ describe('POST /api/receipt/ocr', () => {
   });
 
   test('image exceeds 2 MB → 413 PAYLOAD_TOO_LARGE', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 })); // membership check
     const initData = buildInitData(42);
     const bigBuffer = Buffer.alloc(2 * 1024 * 1024 + 1);
     const formData = new FormData();

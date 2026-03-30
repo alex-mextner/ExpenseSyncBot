@@ -10,10 +10,7 @@ export async function handleScanCommand(ctx: Ctx['Command'], group: Group): Prom
       '📷 Открыть сканер',
       `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=scanner`,
     );
-    await ctx.send(
-      'Открой сканер чеков в Mini App:',
-      ...(keyboard ? [{ reply_markup: keyboard }] : []),
-    );
+    await ctx.send('Открой сканер чеков в Mini App:', { reply_markup: keyboard });
   } else {
     await ctx.send(
       'Сканер чеков доступен через Mini App бота. Попроси администратора настроить MINIAPP_URL.',
