@@ -18,6 +18,7 @@ import {
   createDevReviewKeyboard,
 } from '../../bot/keyboards';
 import { database } from '../../database';
+import { getErrorMessage } from '../../utils/error';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { runCodexReview } from './codex-integration';
@@ -274,7 +275,7 @@ export class DevPipeline {
       }
 
       logger.error({ err: error }, `[DEV-PIPELINE] Error processing task #${task.id}`);
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = getErrorMessage(error);
 
       // Re-read task from DB to get the actual current state (task object may be stale)
       const freshTask = database.devTasks.findById(task.id);
@@ -284,9 +285,10 @@ export class DevPipeline {
             error_log: errorMsg,
             failed_at_state: freshTask.state,
           });
-        } catch {
+        } catch (transitionErr) {
           logger.error(
-            `[DEV-PIPELINE] Cannot transition task #${task.id} from ${freshTask.state} to FAILED`,
+            { err: transitionErr, taskId: task.id, fromState: freshTask.state },
+            '[DEV-PIPELINE] Cannot transition task to FAILED',
           );
         }
       }
@@ -913,6 +915,7 @@ WORKFLOW:
       const result = await $`git -C ${worktreePath} log main..HEAD --oneline`.quiet().nothrow();
       return result.text().trim().length > 0;
     } catch {
+      // Expected: git command may fail if worktree is gone
       return false;
     }
   }

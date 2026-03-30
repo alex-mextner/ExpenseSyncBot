@@ -1,3 +1,4 @@
+/** Analytics formatters — converts financial snapshots into LLM-readable text for advice prompts */
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../currency/converter';

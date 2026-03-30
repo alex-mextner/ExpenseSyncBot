@@ -1,7 +1,7 @@
 // Tests for OTP manager — pending request lifecycle.
 // Uses an in-memory SQLite so bank-sync and bot processes can be tested in isolation.
 
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 
 const testDb = new Database(':memory:');
@@ -18,7 +18,21 @@ testDb.exec(`
 `);
 
 // Must mock before importing otp-manager (dynamic import below ensures order)
-mock.module('../../database', () => ({ database: { db: testDb } }));
+mock.module('../../database', () => ({
+  database: {
+    db: testDb,
+    exec(sql: string, ...params: unknown[]) {
+      if (params.length === 0) {
+        testDb.exec(sql);
+      } else {
+        testDb.query(sql).run(...(params as Parameters<ReturnType<typeof testDb.query>['run']>));
+      }
+    },
+    queryOne<T>(sql: string, ...params: SQLQueryBindings[]): T | null {
+      return testDb.query<T, SQLQueryBindings[]>(sql).get(...params);
+    },
+  },
+}));
 
 const { cancelOtpRequest, registerOtpRequest, resolveOtpForGroup } = await import('./otp-manager');
 

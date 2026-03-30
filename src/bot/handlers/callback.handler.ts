@@ -1,10 +1,8 @@
+/** Inline keyboard callback handler — processes button presses for OAuth, budget, and receipt flows */
 import { format } from 'date-fns';
-import { InlineKeyboard } from 'gramio';
-import { MESSAGES } from '../../config/constants';
-import { env } from '../../config/env';
+import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
-
 import { createLogger } from '../../utils/logger.ts';
 import {
   handleBankAccountsCallback,
@@ -17,6 +15,8 @@ import {
   handleBankEditCallback,
   handleBankLetterCallback,
   handleBankLetterNavCallback,
+  handleBankMergeCallback,
+  handleBankNewCallback,
   handleBankNoCommentCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
@@ -26,7 +26,7 @@ import {
   handleBankWizardCancelCallback,
   handleBankWizardStartCallback,
 } from '../commands/bank';
-import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
+import { normalizeCurrency } from '../commands/budget';
 import {
   handleCurrencyCallback,
   handleDefaultCurrencyCallback,
@@ -34,9 +34,11 @@ import {
 } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
+import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
+import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
-import { getSheetWriteErrorMessage, saveExpenseToSheet } from './message.handler';
+import { getSheetWriteErrorMessage } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -84,6 +86,16 @@ export async function handleCallbackQuery(
 
   try {
     switch (action) {
+      case 'feedback_cancel': {
+        if (chatId) cancelPendingFeedback(chatId);
+        await ctx.answerCallbackQuery({ text: '❌ Отменено' });
+        const msgId = ctx.message?.id;
+        if (msgId && chatId) {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: msgId });
+        }
+        break;
+      }
+
       case 'setup': {
         const setupAction = params.join(':');
         await handleSetupChoiceCallback(ctx, setupAction);
@@ -178,6 +190,27 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        break;
+      }
+
+      case 'bank_merge': {
+        const txId = Number(params[0]);
+        const expenseId = Number(params[1]);
+        if (!chatId || !txId || !expenseId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        break;
+      }
+
+      case 'bank_new': {
+        const txId = Number(params[0]);
+        if (!chatId || !txId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankNewCallback(ctx, bot, txId, chatId);
         break;
       }
 
@@ -401,7 +434,9 @@ export async function handleCallbackQuery(
     logger.error({ err: error }, `[CALLBACK] Unhandled error for action "${data}"`);
     try {
       await ctx.answerCallbackQuery({ text: 'Internal error' });
-    } catch {}
+    } catch {
+      // Best-effort error notification — original error already logged above
+    }
   }
 }
 
@@ -439,7 +474,11 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        try {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        } catch (err) {
+          logger.error({ err }, '[CALLBACK] Failed to delete category add message');
+        }
       }
 
       // Find and save pending expense
@@ -472,7 +511,7 @@ async function handleCategoryAction(
         await bot.api.sendMessage({
           chat_id: chatId,
           text: `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
-          reply_markup: keyboard.build(),
+          reply_markup: keyboard,
         });
       }
 
@@ -481,7 +520,7 @@ async function handleCategoryAction(
 
     case 'select': {
       // Show existing categories
-      const categories = database.categories.getCategoryNames(group.id);
+      const categories = database.categories.findByGroupId(group.id);
 
       if (categories.length === 0) {
         await ctx.answerCallbackQuery({ text: 'Нет сохраненных категорий' });
@@ -489,16 +528,28 @@ async function handleCategoryAction(
       }
 
       const keyboard = createCategoriesListKeyboard(categories);
-      await ctx.editReplyMarkup({
-        inline_keyboard: keyboard.build().inline_keyboard,
-      });
+      await ctx.editReplyMarkup(keyboard);
       await ctx.answerCallbackQuery({ text: 'Выбери категорию' });
       break;
     }
 
     case 'choose': {
-      // Choose existing category
-      const categoryName = rest.join(':');
+      // Choose existing category by ID
+      const categoryId = Number.parseInt(rest[0] ?? '', 10);
+
+      if (Number.isNaN(categoryId)) {
+        await ctx.answerCallbackQuery({ text: 'Некорректные данные' });
+        return;
+      }
+
+      const categoryRecord = database.categories.findById(categoryId);
+
+      if (!categoryRecord) {
+        await ctx.answerCallbackQuery({ text: 'Категория не найдена' });
+        return;
+      }
+
+      const categoryName = categoryRecord.name;
 
       // Find pending expense for this user
       const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
@@ -521,7 +572,11 @@ async function handleCategoryAction(
       const messageId = ctx.message?.id;
       const chatId = ctx.message?.chat?.id;
       if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        try {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+        } catch (err) {
+          logger.error({ err }, '[CALLBACK] Failed to delete category message');
+        }
       }
 
       // Save expense
@@ -882,73 +937,6 @@ async function handleReceiptItemOther(
 }
 
 /**
- * Save all confirmed receipt items as expenses via ExpenseRecorder
- */
-export async function saveReceiptExpenses(
-  photoQueueId: number,
-  groupId: number,
-  userId: number,
-  bot: BotInstance,
-): Promise<void> {
-  const confirmedItems = database.receiptItems.findConfirmedByPhotoQueueId(photoQueueId);
-
-  if (confirmedItems.length === 0) {
-    return;
-  }
-
-  const group = database.groups.findById(groupId);
-
-  if (!group) {
-    logger.error('[RECEIPT] Group not found');
-    return;
-  }
-
-  const { getExpenseRecorder } = await import('../../services/expense-recorder');
-  const recorder = getExpenseRecorder();
-
-  // Build receipt items for batch recording
-  const receiptItems = confirmedItems
-    .filter(
-      (item): item is typeof item & { confirmed_category: string } =>
-        item.confirmed_category !== null,
-    )
-    .map((item) => ({
-      name: item.name_ru,
-      nameOriginal: item.name_original || null,
-      quantity: item.quantity,
-      price: item.price,
-      total: item.total,
-      currency: item.currency,
-      category: item.confirmed_category,
-    }));
-
-  await recorder.recordBatch(groupId, userId, receiptItems);
-
-  // Delete all processed receipt items (confirmed + skipped)
-  database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
-
-  // Notify user
-  const totalItems = confirmedItems.length;
-  const categories = new Set(confirmedItems.map((i) => i.confirmed_category).filter(Boolean));
-
-  const scanButton = env.MINIAPP_URL
-    ? new InlineKeyboard().webApp(
-        '📷 Сканировать чек',
-        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=scanner`,
-      )
-    : undefined;
-
-  await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${categories.size}`,
-    parse_mode: 'HTML',
-    ...(scanButton ? { reply_markup: scanButton } : {}),
-  });
-
-  logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${categories.size} categories)`);
-}
-
-/**
  * Handle "use found category" button
  */
 async function handleUseFoundCategory(
@@ -1291,7 +1279,9 @@ async function handleReceiptAcceptAll(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Save to Google Sheets
@@ -1367,7 +1357,9 @@ async function handleReceiptItemwise(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Show first item
@@ -1458,7 +1450,9 @@ async function handleReceiptAcceptBulk(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Save to Google Sheets
@@ -1494,7 +1488,9 @@ async function handleReceiptCancel(
   if (messageId && chatId) {
     try {
       await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {}
+    } catch {
+      // Expected: message may already be deleted
+    }
   }
 
   // Send cancellation notification

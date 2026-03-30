@@ -1,3 +1,4 @@
+/** Expense repository — CRUD and query operations for expense records */
 import type { Database } from 'bun:sqlite';
 import type {
   CategoryTotal,
@@ -42,14 +43,69 @@ export class ExpenseRepository {
   /**
    * Find expenses by date range
    */
-  findByDateRange(groupId: number, startDate: string, endDate: string): Expense[] {
-    const query = this.db.query<Expense, [number, string, string]>(`
+  findByDateRange(groupId: number, startDate: string, endDate: string, limit = 1000): Expense[] {
+    const query = this.db.query<Expense, [number, string, string, number]>(`
       SELECT * FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
       ORDER BY date DESC
+      LIMIT ?
     `);
 
-    return query.all(groupId, startDate, endDate);
+    return query.all(groupId, startDate, endDate, limit);
+  }
+
+  /**
+   * Find expenses that may be duplicates of a bank transaction.
+   * Returns exact matches (same date, ±1% amount, same currency) and fuzzy matches (±1 day).
+   * Only considers expenses not already linked to a bank transaction.
+   */
+  findPotentialDuplicates(
+    groupId: number,
+    date: string,
+    amount: number,
+    currency: string,
+  ): { exact: Expense[]; fuzzy: Expense[] } {
+    const notLinked = `
+      AND NOT EXISTS (
+        SELECT 1 FROM bank_transactions bt WHERE bt.matched_expense_id = e.id
+      )
+    `;
+    const amountTolerance = amount * 0.01;
+
+    const exact = this.db
+      .query<Expense, [number, string, string, number, number]>(`
+        SELECT e.* FROM expenses e
+        WHERE e.group_id = ?
+          AND e.date = ?
+          AND e.currency = ?
+          AND ABS(e.amount - ?) <= ?
+          ${notLinked}
+        ORDER BY e.created_at DESC
+        LIMIT 5
+      `)
+      .all(groupId, date, currency, amount, amountTolerance);
+
+    const exactIds = new Set(exact.map((e) => e.id));
+
+    const fuzzy = this.db
+      .query<Expense, [number, string, string, string, string, number, number, string]>(`
+        SELECT e.* FROM expenses e
+        WHERE e.group_id = ?
+          AND e.date >= date(?, '-1 day')
+          AND e.date <= date(?, '+1 day')
+          AND e.date != ?
+          AND e.currency = ?
+          AND ABS(e.amount - ?) <= ?
+          ${notLinked}
+        ORDER BY ABS(julianday(e.date) - julianday(?)) ASC, e.created_at DESC
+        LIMIT 5
+      `)
+      .all(groupId, date, date, date, currency, amount, amountTolerance, date);
+
+    return {
+      exact,
+      fuzzy: fuzzy.filter((e) => !exactIds.has(e.id)),
+    };
   }
 
   /**
@@ -148,14 +204,15 @@ export class ExpenseRepository {
   /**
    * Get expenses by category
    */
-  findByCategory(groupId: number, category: string): Expense[] {
-    const query = this.db.query<Expense, [number, string]>(`
+  findByCategory(groupId: number, category: string, limit = 1000): Expense[] {
+    const query = this.db.query<Expense, [number, string, number]>(`
       SELECT * FROM expenses
       WHERE group_id = ? AND category = ?
       ORDER BY date DESC
+      LIMIT ?
     `);
 
-    return query.all(groupId, category);
+    return query.all(groupId, category, limit);
   }
 
   /**
@@ -414,5 +471,19 @@ export class ExpenseRepository {
 
     const result = query.get(groupId, startDate, endDate);
     return result?.count || 0;
+  }
+
+  /**
+   * Sum eur_amount for a given category and date range (SQL-level aggregation)
+   */
+  sumByCategory(groupId: number, category: string, dateFrom: string, dateTo: string): number {
+    const result = this.db
+      .query<{ total: number }, [number, string, string, string]>(
+        `SELECT COALESCE(SUM(eur_amount), 0) as total
+         FROM expenses
+         WHERE group_id = ? AND category = ? AND date >= ? AND date <= ?`,
+      )
+      .get(groupId, category, dateFrom, dateTo);
+    return result?.total ?? 0;
   }
 }

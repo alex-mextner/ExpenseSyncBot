@@ -1,7 +1,15 @@
 // Tests for OAuth URL generation and client setup (no live API calls)
 
 import { describe, expect, it } from 'bun:test';
-import { generateAuthUrl, getAuthenticatedClient } from './oauth';
+import {
+  generateAuthUrl,
+  getAuthenticatedClient,
+  isTokenExpiredError,
+  registerOAuthState,
+  resolveOAuthState,
+} from './oauth';
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 describe('generateAuthUrl', () => {
   it('returns a string URL', () => {
@@ -18,14 +26,29 @@ describe('generateAuthUrl', () => {
     expect(generateAuthUrl(123)).toContain('access_type=offline');
   });
 
-  it('contains the user ID in state param', () => {
-    expect(generateAuthUrl(456)).toContain('456');
+  it('state param is a UUID, not the raw group ID', () => {
+    const groupId = 456;
+    const url = generateAuthUrl(groupId);
+    const parsed = new URL(url);
+    const state = parsed.searchParams.get('state') ?? '';
+    expect(state).not.toBe('');
+    expect(UUID_PATTERN.test(state)).toBe(true);
+    // Raw groupId must NOT appear as the state value
+    expect(state).not.toBe(groupId.toString());
   });
 
-  it('different user IDs produce different URLs', () => {
+  it('different group IDs produce different URLs (different UUIDs)', () => {
     const url1 = generateAuthUrl(1);
     const url2 = generateAuthUrl(2);
     expect(url1).not.toBe(url2);
+  });
+
+  it('same group ID called twice produces different UUIDs (non-deterministic)', () => {
+    const url1 = generateAuthUrl(42);
+    const url2 = generateAuthUrl(42);
+    const state1 = new URL(url1).searchParams.get('state');
+    const state2 = new URL(url2).searchParams.get('state');
+    expect(state1).not.toBe(state2);
   });
 
   it('contains prompt=consent', () => {
@@ -40,18 +63,51 @@ describe('generateAuthUrl', () => {
   it('contains https protocol', () => {
     expect(generateAuthUrl(1)).toContain('https://');
   });
+});
 
-  it('large user ID is included correctly', () => {
-    const bigId = 9999999999;
-    expect(generateAuthUrl(bigId)).toContain(bigId.toString());
+describe('registerOAuthState', () => {
+  it('returns a UUID string', () => {
+    const uuid = registerOAuthState(100);
+    expect(UUID_PATTERN.test(uuid)).toBe(true);
   });
 
-  it('user ID 0 is included in URL', () => {
-    expect(generateAuthUrl(0)).toContain('0');
+  it('returns a different UUID each call for same groupId', () => {
+    const uuid1 = registerOAuthState(200);
+    const uuid2 = registerOAuthState(200);
+    expect(uuid1).not.toBe(uuid2);
+  });
+});
+
+describe('resolveOAuthState', () => {
+  it('returns groupId for a valid registered state', () => {
+    const groupId = 999;
+    const uuid = registerOAuthState(groupId);
+    expect(resolveOAuthState(uuid)).toBe(groupId);
   });
 
-  it('negative user ID is included in URL', () => {
-    expect(generateAuthUrl(-1)).toContain('-1');
+  it('returns null for an unknown state', () => {
+    expect(resolveOAuthState('00000000-0000-0000-0000-000000000000')).toBeNull();
+  });
+
+  it('is one-time use — returns null on second call', () => {
+    const groupId = 777;
+    const uuid = registerOAuthState(groupId);
+    expect(resolveOAuthState(uuid)).toBe(groupId);
+    expect(resolveOAuthState(uuid)).toBeNull();
+  });
+
+  it('returns null for expired state (past TTL)', () => {
+    const groupId = 555;
+    const uuid = registerOAuthState(groupId, -1); // already expired
+    expect(resolveOAuthState(uuid)).toBeNull();
+  });
+
+  it('generateAuthUrl registers a resolvable state', () => {
+    const groupId = 321;
+    const url = generateAuthUrl(groupId);
+    const state = new URL(url).searchParams.get('state') ?? '';
+    expect(state).not.toBe('');
+    expect(resolveOAuthState(state)).toBe(groupId);
   });
 });
 
@@ -95,5 +151,30 @@ describe('getAuthenticatedClient', () => {
   it('returned client has setCredentials method', () => {
     const client = getAuthenticatedClient('token');
     expect(typeof client.setCredentials).toBe('function');
+  });
+});
+
+describe('isTokenExpiredError', () => {
+  it('detects invalid_grant', () => {
+    expect(isTokenExpiredError(new Error('invalid_grant'))).toBe(true);
+  });
+
+  it('detects Token has been expired or revoked', () => {
+    expect(isTokenExpiredError(new Error('Token has been expired or revoked'))).toBe(true);
+  });
+
+  it('detects 401 Unauthorized', () => {
+    expect(isTokenExpiredError(new Error('Request failed with status 401'))).toBe(true);
+  });
+
+  it('does not match unrelated errors', () => {
+    expect(isTokenExpiredError(new Error('Network timeout'))).toBe(false);
+    expect(isTokenExpiredError(new Error('ECONNREFUSED'))).toBe(false);
+  });
+
+  it('returns false for non-Error values', () => {
+    expect(isTokenExpiredError('string')).toBe(false);
+    expect(isTokenExpiredError(null)).toBe(false);
+    expect(isTokenExpiredError(42)).toBe(false);
   });
 });

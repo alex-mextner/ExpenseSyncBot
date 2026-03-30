@@ -1,7 +1,13 @@
+/** /budget command handler — create, view, and edit spending budgets per category */
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';
-import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import {
+  BASE_CURRENCY,
+  CURRENCY_ALIASES,
+  type CurrencyCode,
+  getCurrencySymbol,
+} from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -343,28 +349,6 @@ export function normalizeCurrency(currencyStr: string): CurrencyCode | null {
 }
 
 /**
- * Get currency symbol for display
- */
-export function getCurrencySymbol(currency: CurrencyCode): string {
-  switch (currency) {
-    case 'EUR':
-      return '€';
-    case 'USD':
-      return '$';
-    case 'RUB':
-      return '₽';
-    case 'GBP':
-      return '£';
-    case 'JPY':
-      return '¥';
-    case 'CNY':
-      return '¥';
-    default:
-      return currency;
-  }
-}
-
-/**
  * /budget command handler
  *
  * Usage:
@@ -552,7 +536,7 @@ async function setBudget(
       `Категория "${normalizedCategory}" не существует.\n\n` +
         `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом ${currencySymbol}${amount}?\n\n` +
         `Или выбери из существующих:\n${existingCategories.join(', ')}`,
-      { reply_markup: keyboard.build() },
+      { reply_markup: keyboard },
     );
     return;
   }
@@ -632,27 +616,37 @@ export async function silentSyncBudgets(
     );
     if (budgetsFromSheet.length === 0) return 0;
 
-    let syncedCount = 0;
-    for (const b of budgetsFromSheet) {
-      if (!database.categories.exists(groupId, b.category)) {
-        database.categories.create({ group_id: groupId, name: b.category });
+    // Wrap all DB writes in a transaction for atomicity
+    const syncedCount = database.transaction(() => {
+      let count = 0;
+
+      for (const b of budgetsFromSheet) {
+        if (!database.categories.exists(groupId, b.category)) {
+          database.categories.create({ group_id: groupId, name: b.category });
+        }
+
+        const existing = database.budgets.findByGroupCategoryMonth(
+          groupId,
+          b.category,
+          currentMonth,
+        );
+        const hasChanged =
+          !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
+
+        if (hasChanged) {
+          database.budgets.setBudget({
+            group_id: groupId,
+            category: b.category,
+            month: currentMonth,
+            limit_amount: b.limit,
+            currency: b.currency,
+          });
+          count++;
+        }
       }
 
-      const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
-      const hasChanged =
-        !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
-
-      if (hasChanged) {
-        database.budgets.setBudget({
-          group_id: groupId,
-          category: b.category,
-          month: currentMonth,
-          limit_amount: b.limit,
-          currency: b.currency,
-        });
-        syncedCount++;
-      }
-    }
+      return count;
+    });
 
     return syncedCount;
   } catch (err) {

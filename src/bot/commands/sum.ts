@@ -1,3 +1,4 @@
+/** /sum command handler — totals expenses for a date range with optional category filter */
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';

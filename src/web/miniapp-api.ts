@@ -68,16 +68,15 @@ interface MembershipRow {
 
 /** Check that userId is a member of the group identified by telegram_group_id */
 function resolveGroupMembership(telegramGroupId: number, userId: number): number | null {
-  const row = database.db
-    .query<MembershipRow, { groupId: number; userId: number }>(
-      `SELECT g.id FROM groups g
-       WHERE g.telegram_group_id = :groupId
-         AND EXISTS (
-           SELECT 1 FROM users u
-           WHERE u.telegram_id = :userId AND u.group_id = g.id
-         )`,
-    )
-    .get({ groupId: telegramGroupId, userId });
+  const row = database.queryOne<MembershipRow>(
+    `SELECT g.id FROM groups g
+     WHERE g.telegram_group_id = ? AND EXISTS (
+       SELECT 1 FROM users u
+       WHERE u.telegram_id = ? AND u.group_id = g.id
+     )`,
+    telegramGroupId,
+    userId,
+  );
 
   return row ? row.id : null;
 }
@@ -458,10 +457,11 @@ export async function handleMiniAppRequest(
         });
 
         if (fileId) {
-          database.db.run('UPDATE expenses SET receipt_file_id = ? WHERE id = ?', [
+          database.exec(
+            'UPDATE expenses SET receipt_file_id = ? WHERE id = ?',
             fileId,
             result.expense.id,
-          ]);
+          );
         }
 
         created++;
@@ -517,14 +517,14 @@ export async function handleMiniAppRequest(
       total: number;
     }
 
-    const rows = database.db
-      .query<CategoryRow, [number, string]>(
-        `SELECT category, SUM(eur_amount) as total
-         FROM expenses
-         WHERE group_id = ? AND date LIKE ?
-         GROUP BY category`,
-      )
-      .all(ctx.internalGroupId, `${period}-%`);
+    const rows = database.queryAll<CategoryRow>(
+      `SELECT category, SUM(eur_amount) as total
+       FROM expenses
+       WHERE group_id = ? AND date LIKE ?
+       GROUP BY category`,
+      ctx.internalGroupId,
+      `${period}-%`,
+    );
 
     const defaultCurrency = group.default_currency as CurrencyCode;
 
@@ -580,11 +580,11 @@ export async function handleMiniAppRequest(
       updated_at: string;
     }
 
-    const row = database.db
-      .query<DashboardRow, [number, number]>(
-        'SELECT config, updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
-      )
-      .get(ctx.internalGroupId, ctx.internalUserId);
+    const row = database.queryOne<DashboardRow>(
+      'SELECT config, updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
+      ctx.internalGroupId,
+      ctx.internalUserId,
+    );
 
     if (!row) {
       return new Response(JSON.stringify({ widgets: [], updatedAt: null }), {
@@ -630,11 +630,11 @@ export async function handleMiniAppRequest(
       updated_at: string;
     }
 
-    const existing = database.db
-      .query<DashboardUpdatedAtRow, [number, number]>(
-        'SELECT updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
-      )
-      .get(ctx.internalGroupId, ctx.internalUserId);
+    const existing = database.queryOne<DashboardUpdatedAtRow>(
+      'SELECT updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
+      ctx.internalGroupId,
+      ctx.internalUserId,
+    );
 
     const clientUpdatedAt = typeof body.updatedAt === 'string' ? body.updatedAt : null;
 
@@ -651,14 +651,20 @@ export async function handleMiniAppRequest(
     const configJson = JSON.stringify(Array.isArray(body.widgets) ? body.widgets : []);
 
     if (existing) {
-      database.db.run(
+      database.exec(
         'UPDATE dashboard_widgets SET config = ?, updated_at = ? WHERE group_id = ? AND user_id = ?',
-        [configJson, newUpdatedAt, ctx.internalGroupId, ctx.internalUserId],
+        configJson,
+        newUpdatedAt,
+        ctx.internalGroupId,
+        ctx.internalUserId,
       );
     } else {
-      database.db.run(
+      database.exec(
         'INSERT INTO dashboard_widgets (group_id, user_id, config, updated_at) VALUES (?, ?, ?, ?)',
-        [ctx.internalGroupId, ctx.internalUserId, configJson, newUpdatedAt],
+        ctx.internalGroupId,
+        ctx.internalUserId,
+        configJson,
+        newUpdatedAt,
       );
     }
 

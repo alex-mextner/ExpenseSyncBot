@@ -18,18 +18,18 @@ const mockFindByTelegramId = mock(
       updated_at: string;
     } | null,
 );
-// Generic get mock — used by membership checks, dashboard queries, analytics, etc.
+// Generic queryOne mock — used by membership checks, dashboard queries, analytics, etc.
 // Union covers all row shapes returned across the different query calls in tests.
 type MockDbRow =
   | { id: number }
   | { config: string; updated_at: string }
   | { updated_at: string }
   | null;
-const mockDbQueryGet = mock((_params: unknown) => null as MockDbRow);
-// Generic all mock — used by analytics and similar multi-row queries
-const mockDbQueryAll = mock((_params: unknown) => [] as unknown[]);
-// Generic run mock — used by UPDATE/INSERT statements
-const mockDbRun = mock((_sql: string, _params?: unknown[]) => {});
+const mockDbQueryOne = mock((_sql: string, ..._params: unknown[]) => null as MockDbRow);
+// Generic queryAll mock — used by analytics and similar multi-row queries
+const mockDbQueryAll = mock((_sql: string, ..._params: unknown[]) => [] as unknown[]);
+// Generic exec mock — used by UPDATE/INSERT statements
+const mockDbExec = mock((_sql: string, ..._params: unknown[]) => {});
 const mockCategoriesFindByGroupId = mock((_groupId: number) => [] as { name: string }[]);
 const mockGroupsFindById = mock(
   (_id: number) =>
@@ -110,13 +110,9 @@ mock.module('../database/index.ts', () => ({
     groups: {
       findById: mockGroupsFindById,
     },
-    db: {
-      query: (_sql: string) => ({
-        get: mockDbQueryGet,
-        all: mockDbQueryAll,
-      }),
-      run: mockDbRun,
-    },
+    queryOne: mockDbQueryOne,
+    queryAll: mockDbQueryAll,
+    exec: mockDbExec,
   },
 }));
 
@@ -247,7 +243,7 @@ describe('handleMiniAppRequest — unknown /api/* route', () => {
 describe('validateAndResolveContext — HMAC validation', () => {
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
+    mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
@@ -306,7 +302,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
 
   test('valid initData + known user but not group member → 403 FORBIDDEN_GROUP', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => null);
+    mockDbQueryOne.mockImplementation(() => null);
     const initData = buildInitData(42);
     const req = makeRequest('/api/test', 'GET', initData);
     const result = await validateAndResolveContext(req, CORS_ORIGIN, -1001234567);
@@ -320,7 +316,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
 
   test('valid initData + group member → ok with resolved IDs', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     const initData = buildInitData(42);
     const req = makeRequest('/api/test', 'GET', initData);
     const result = await validateAndResolveContext(req, CORS_ORIGIN, -1001234567);
@@ -341,7 +337,7 @@ describe('POST /api/receipt/scan', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
+    mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
@@ -397,7 +393,7 @@ describe('POST /api/receipt/scan', () => {
 
   test('fetchReceiptData failure → 500 SCAN_FAILED', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.reject(new Error('Network error')));
 
@@ -413,7 +409,7 @@ describe('POST /api/receipt/scan', () => {
 
   test('extractExpensesFromReceipt failure → 500 SCAN_FAILED', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockExtractExpensesFromReceipt.mockImplementation(() =>
@@ -431,7 +427,7 @@ describe('POST /api/receipt/scan', () => {
 
   test('successful scan → 200 with mapped items and currency', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [
       { name: 'Продукты' },
       { name: 'Разное' },
@@ -481,7 +477,7 @@ describe('POST /api/receipt/scan', () => {
 
   test('successful scan without currency → 200 without currency field', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockExtractExpensesFromReceipt.mockImplementation(() =>
@@ -511,7 +507,7 @@ describe('POST /api/receipt/scan', () => {
 
   test('categories are loaded from DB and passed to extractor', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [{ name: 'Еда' }, { name: 'Транспорт' }]);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockExtractExpensesFromReceipt.mockImplementation(() =>
@@ -565,7 +561,7 @@ describe('POST /api/receipt/ocr', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
+    mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
     mockExtractTextFromImageBuffer.mockReset();
@@ -636,7 +632,7 @@ describe('POST /api/receipt/ocr', () => {
 
   test('OCR failure → 500 OCR_FAILED', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockExtractTextFromImageBuffer.mockImplementation(() =>
       Promise.reject(new Error('Qwen API down')),
@@ -654,7 +650,7 @@ describe('POST /api/receipt/ocr', () => {
 
   test('success → 200 with items and file_id', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [{ name: 'Продукты' }]);
     mockExtractTextFromImageBuffer.mockImplementation(() =>
       Promise.resolve('Store: TestMart\nMilk 2x85.50'),
@@ -709,7 +705,7 @@ describe('POST /api/receipt/ocr', () => {
 
   test('success with Telegram upload failure → 200 with file_id: null', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockExtractTextFromImageBuffer.mockImplementation(() => Promise.resolve('some receipt text'));
     mockExtractExpensesFromReceipt.mockImplementation(() =>
@@ -747,8 +743,8 @@ describe('POST /api/receipt/confirm', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
-    mockDbRun.mockReset();
+    mockDbQueryOne.mockReset();
+    mockDbExec.mockReset();
     mockGroupsFindById.mockReset();
     mockExpenseRecorderRecord.mockReset();
     mockEmitForGroup.mockReset();
@@ -790,7 +786,7 @@ describe('POST /api/receipt/confirm', () => {
 
   test('success → 200 { created: N }', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockExpenseRecorderRecord.mockImplementation(() =>
       Promise.resolve({ expense: { id: 55 }, eurAmount: 8.5 }),
     );
@@ -820,7 +816,7 @@ describe('POST /api/receipt/confirm', () => {
   test('recorder receives internal DB user id, not telegram id', async () => {
     // MOCK_USER.id = 1 (internal), telegram_id = 42
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockExpenseRecorderRecord.mockImplementation(() =>
       Promise.resolve({ expense: { id: 88 }, eurAmount: 5 }),
     );
@@ -843,7 +839,7 @@ describe('POST /api/receipt/confirm', () => {
 
   test('success with fileId → updates receipt_file_id in DB', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockExpenseRecorderRecord.mockImplementation(() =>
       Promise.resolve({ expense: { id: 77 }, eurAmount: 5 }),
     );
@@ -862,7 +858,7 @@ describe('POST /api/receipt/confirm', () => {
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(200);
     // run() should have been called to set receipt_file_id
-    expect(mockDbRun.mock.calls.length).toBeGreaterThan(0);
+    expect(mockDbExec.mock.calls.length).toBeGreaterThan(0);
   });
 });
 
@@ -873,7 +869,7 @@ describe('GET /api/analytics', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
+    mockDbQueryOne.mockReset();
     mockDbQueryAll.mockReset();
     mockGroupsFindById.mockReset();
   });
@@ -887,7 +883,7 @@ describe('GET /api/analytics', () => {
 
   test('success → 200 with correct shape', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockGroupsFindById.mockImplementation(() => ({
       id: 7,
       telegram_group_id: GROUP_ID,
@@ -937,7 +933,7 @@ describe('GET /api/dashboard', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
+    mockDbQueryOne.mockReset();
   });
 
   test('auth failure → 401', async () => {
@@ -949,11 +945,11 @@ describe('GET /api/dashboard', () => {
 
   test('no saved config → 200 { widgets: [], updatedAt: null }', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
 
     // Second query call (dashboard) returns null — no existing row
     let callCount = 0;
-    mockDbQueryGet.mockImplementation(() => {
+    mockDbQueryOne.mockImplementation(() => {
       callCount++;
       // First call = membership check, second = dashboard query
       if (callCount === 1) return { id: 7 };
@@ -974,7 +970,7 @@ describe('GET /api/dashboard', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
 
     let callCount = 0;
-    mockDbQueryGet.mockImplementation(() => {
+    mockDbQueryOne.mockImplementation(() => {
       callCount++;
       if (callCount === 1) return { id: 7 }; // membership
       return { config: '[{"id":"w1"}]', updated_at: '2025-03-01T00:00:00.000Z' };
@@ -998,8 +994,8 @@ describe('PUT /api/dashboard', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
-    mockDbRun.mockReset();
+    mockDbQueryOne.mockReset();
+    mockDbExec.mockReset();
   });
 
   test('auth failure → 401', async () => {
@@ -1017,7 +1013,7 @@ describe('PUT /api/dashboard', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
 
     let callCount = 0;
-    mockDbQueryGet.mockImplementation(() => {
+    mockDbQueryOne.mockImplementation(() => {
       callCount++;
       if (callCount === 1) return { id: 7 }; // membership
       return null; // no existing dashboard row
@@ -1035,9 +1031,9 @@ describe('PUT /api/dashboard', () => {
     const body = (await res.json()) as { ok: boolean; updatedAt: string };
     expect(body.ok).toBe(true);
     expect(typeof body.updatedAt).toBe('string');
-    expect(mockDbRun.mock.calls.length).toBe(1);
+    expect(mockDbExec.mock.calls.length).toBe(1);
     // INSERT must use internal DB user id (1), not telegram id (42)
-    const insertArgs = mockDbRun.mock.calls[0]?.[1] as unknown[];
+    const insertArgs = mockDbExec.mock.calls[0] as unknown[];
     expect(insertArgs).toContain(MOCK_USER.id);
     expect(insertArgs).not.toContain(42);
   });
@@ -1046,7 +1042,7 @@ describe('PUT /api/dashboard', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
 
     let callCount = 0;
-    mockDbQueryGet.mockImplementation(() => {
+    mockDbQueryOne.mockImplementation(() => {
       callCount++;
       if (callCount === 1) return { id: 7 }; // membership
       return { updated_at: '2025-01-01T00:00:00.000Z' }; // existing row with different timestamp
@@ -1074,7 +1070,7 @@ describe('PUT /api/dashboard', () => {
 
     const storedUpdatedAt = '2025-01-01T00:00:00.000Z';
     let callCount = 0;
-    mockDbQueryGet.mockImplementation(() => {
+    mockDbQueryOne.mockImplementation(() => {
       callCount++;
       if (callCount === 1) return { id: 7 }; // membership
       return { updated_at: storedUpdatedAt };
@@ -1093,7 +1089,7 @@ describe('PUT /api/dashboard', () => {
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(200);
-    expect(mockDbRun.mock.calls.length).toBe(1);
+    expect(mockDbExec.mock.calls.length).toBe(1);
   });
 });
 
@@ -1104,7 +1100,7 @@ describe('GET /api/dashboard/events', () => {
 
   beforeEach(() => {
     mockFindByTelegramId.mockReset();
-    mockDbQueryGet.mockReset();
+    mockDbQueryOne.mockReset();
     mockSubscribeGroup.mockReset();
     mockSubscribeGroup.mockImplementation(() => () => {});
   });
@@ -1118,7 +1114,7 @@ describe('GET /api/dashboard/events', () => {
 
   test('valid auth → 200 with text/event-stream Content-Type', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
 
     const initData = buildInitData(42);
     const req = makeRequest(

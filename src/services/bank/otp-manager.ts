@@ -23,14 +23,15 @@ type OtpRow = {
 /** Register a pending OTP request. Returns a Promise that resolves when the user sends a code. */
 export function registerOtpRequest(connectionId: number, telegramGroupId: number): Promise<string> {
   // Remove any stale request for this connection first
-  database.db.query('DELETE FROM bank_otp_requests WHERE connection_id = ?').run(connectionId);
+  database.exec('DELETE FROM bank_otp_requests WHERE connection_id = ?', connectionId);
 
   const expiresAt = new Date(Date.now() + OTP_TIMEOUT_MS).toISOString();
-  database.db
-    .query(
-      "INSERT INTO bank_otp_requests (connection_id, group_telegram_id, status, expires_at) VALUES (?, ?, 'pending', ?)",
-    )
-    .run(connectionId, telegramGroupId, expiresAt);
+  database.exec(
+    "INSERT INTO bank_otp_requests (connection_id, group_telegram_id, status, expires_at) VALUES (?, ?, 'pending', ?)",
+    connectionId,
+    telegramGroupId,
+    expiresAt,
+  );
 
   logger.info({ connectionId, telegramGroupId }, 'OTP request registered');
 
@@ -38,9 +39,10 @@ export function registerOtpRequest(connectionId: number, telegramGroupId: number
     const deadline = Date.now() + OTP_TIMEOUT_MS;
 
     const pollId = setInterval(() => {
-      const row = database.db
-        .query<OtpRow, [number]>('SELECT * FROM bank_otp_requests WHERE connection_id = ? LIMIT 1')
-        .get(connectionId);
+      const row = database.queryOne<OtpRow>(
+        'SELECT * FROM bank_otp_requests WHERE connection_id = ? LIMIT 1',
+        connectionId,
+      );
 
       if (!row) {
         clearInterval(pollId);
@@ -50,9 +52,7 @@ export function registerOtpRequest(connectionId: number, telegramGroupId: number
 
       if (row.status === 'resolved' && row.code) {
         clearInterval(pollId);
-        database.db
-          .query('DELETE FROM bank_otp_requests WHERE connection_id = ?')
-          .run(connectionId);
+        database.exec('DELETE FROM bank_otp_requests WHERE connection_id = ?', connectionId);
         logger.info({ connectionId }, 'OTP resolved');
         resolve(row.code);
         return;
@@ -60,18 +60,14 @@ export function registerOtpRequest(connectionId: number, telegramGroupId: number
 
       if (row.status === 'cancelled') {
         clearInterval(pollId);
-        database.db
-          .query('DELETE FROM bank_otp_requests WHERE connection_id = ?')
-          .run(connectionId);
+        database.exec('DELETE FROM bank_otp_requests WHERE connection_id = ?', connectionId);
         reject(new Error('OTP запрос отменён'));
         return;
       }
 
       if (Date.now() >= deadline) {
         clearInterval(pollId);
-        database.db
-          .query('DELETE FROM bank_otp_requests WHERE connection_id = ?')
-          .run(connectionId);
+        database.exec('DELETE FROM bank_otp_requests WHERE connection_id = ?', connectionId);
         reject(new Error('Время ожидания кода истекло (5 мин)'));
       }
     }, POLL_INTERVAL_MS);
@@ -83,17 +79,18 @@ export function registerOtpRequest(connectionId: number, telegramGroupId: number
  * Returns true if the message was consumed as an OTP code.
  */
 export function resolveOtpForGroup(telegramGroupId: number, code: string): boolean {
-  const row = database.db
-    .query<OtpRow, [number]>(
-      "SELECT * FROM bank_otp_requests WHERE group_telegram_id = ? AND status = 'pending' AND expires_at > datetime('now') LIMIT 1",
-    )
-    .get(telegramGroupId);
+  const row = database.queryOne<OtpRow>(
+    "SELECT * FROM bank_otp_requests WHERE group_telegram_id = ? AND status = 'pending' AND expires_at > datetime('now') LIMIT 1",
+    telegramGroupId,
+  );
 
   if (!row) return false;
 
-  database.db
-    .query("UPDATE bank_otp_requests SET code = ?, status = 'resolved' WHERE connection_id = ?")
-    .run(code, row.connection_id);
+  database.exec(
+    "UPDATE bank_otp_requests SET code = ?, status = 'resolved' WHERE connection_id = ?",
+    code,
+    row.connection_id,
+  );
 
   logger.info({ connectionId: row.connection_id, code: code.replace(/./g, '*') }, 'OTP resolved');
   return true;
@@ -101,16 +98,16 @@ export function resolveOtpForGroup(telegramGroupId: number, code: string): boole
 
 /** Cancel the pending OTP request for a connection (on sync error/cleanup). */
 export function cancelOtpRequest(connectionId: number): void {
-  const row = database.db
-    .query<OtpRow, [number]>(
-      "SELECT * FROM bank_otp_requests WHERE connection_id = ? AND status = 'pending' LIMIT 1",
-    )
-    .get(connectionId);
+  const row = database.queryOne<OtpRow>(
+    "SELECT * FROM bank_otp_requests WHERE connection_id = ? AND status = 'pending' LIMIT 1",
+    connectionId,
+  );
 
   if (row) {
-    database.db
-      .query("UPDATE bank_otp_requests SET status = 'cancelled' WHERE connection_id = ?")
-      .run(connectionId);
+    database.exec(
+      "UPDATE bank_otp_requests SET status = 'cancelled' WHERE connection_id = ?",
+      connectionId,
+    );
     logger.info({ connectionId }, 'OTP request cancelled');
   }
 }

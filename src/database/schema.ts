@@ -1,7 +1,9 @@
+/** Database schema migrations — runs on startup, applies pending migrations to the SQLite database */
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { env } from '../config/env';
+import { encryptToken, isEncryptedToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
 
 const logger = createLogger('schema');
@@ -16,7 +18,12 @@ export function initDatabase(): Database {
   // Enable WAL mode for better concurrency
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
+  // Retry for up to 5 seconds instead of failing immediately on SQLITE_BUSY
   db.exec('PRAGMA busy_timeout = 5000;');
+  // Performance PRAGMAs
+  db.exec('PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA cache_size = -8000;'); // 8MB
+  db.exec('PRAGMA temp_store = MEMORY;');
 
   return db;
 }
@@ -1020,7 +1027,103 @@ export function runMigrations(db: Database): void {
       },
     },
     {
-      name: '037_create_dashboard_widgets',
+      name: '037_encrypt_existing_refresh_tokens',
+      up: () => {
+        if (!env.ENCRYPTION_KEY) {
+          logger.warn(
+            'ENCRYPTION_KEY not set — skipping migration 037, refresh tokens remain unencrypted',
+          );
+          return;
+        }
+
+        const rows = db
+          .query<{ id: number; google_refresh_token: string | null }, []>(
+            'SELECT id, google_refresh_token FROM groups WHERE google_refresh_token IS NOT NULL',
+          )
+          .all();
+
+        let encrypted = 0;
+        for (const row of rows) {
+          if (!row.google_refresh_token) continue;
+          // Skip already-encrypted tokens
+          if (isEncryptedToken(row.google_refresh_token)) continue;
+
+          const encryptedValue = encryptToken(row.google_refresh_token, env.ENCRYPTION_KEY);
+          db.query('UPDATE groups SET google_refresh_token = ? WHERE id = ?').run(
+            encryptedValue,
+            row.id,
+          );
+          encrypted++;
+        }
+
+        logger.info(`Encrypted ${encrypted} plaintext refresh tokens`);
+      },
+    },
+    {
+      name: '038_create_sync_snapshots',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS expense_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            expense_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            eur_amount REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expense_snapshots_snapshot
+          ON expense_snapshots(snapshot_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_expense_snapshots_group
+          ON expense_snapshots(group_id);
+        `);
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS budget_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            budget_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            month TEXT NOT NULL,
+            limit_amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budget_snapshots_snapshot
+          ON budget_snapshots(snapshot_id);
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budget_snapshots_group
+          ON budget_snapshots(group_id);
+        `);
+
+        logger.info('✓ Created expense_snapshots and budget_snapshots tables');
+      },
+    },
+    {
+      name: '039_add_composite_indexes',
+      up: () => {
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_expenses_group_category ON expenses(group_id, category);',
+        );
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_group_date ON expenses(group_id, date);');
+        logger.info('✓ Added composite indexes on expenses');
+      },
+    },
+    {
+      name: '040_create_dashboard_widgets',
       up: () => {
         db.exec(`
           CREATE TABLE IF NOT EXISTS dashboard_widgets (
@@ -1039,7 +1142,7 @@ export function runMigrations(db: Database): void {
       },
     },
     {
-      name: '038_add_receipt_file_id_to_expenses',
+      name: '041_add_receipt_file_id_to_expenses',
       up: () => {
         const cols = db.query<{ count: number }, []>(`
           SELECT COUNT(*) as count FROM pragma_table_info('expenses')

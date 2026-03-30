@@ -157,6 +157,7 @@ export function fileExists(worktreePath: string, filePath: string): boolean {
     const absolutePath = validateFilePath(worktreePath, filePath);
     return existsSync(absolutePath);
   } catch {
+    // Expected: invalid path (traversal attempt) means file doesn't exist
     return false;
   }
 }

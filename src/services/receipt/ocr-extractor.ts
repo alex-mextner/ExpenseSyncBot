@@ -1,3 +1,6 @@
+/** OCR extractor — sends receipt images to Hugging Face vision model and extracts text */
+import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
+import path from 'node:path';
 import { InferenceClient } from '@huggingface/inference';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger.ts';
@@ -16,30 +19,26 @@ export function startTempImageCleanup(): void {
 
   setInterval(async () => {
     try {
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
       const tempDir = path.join(process.cwd(), 'temp-images');
 
-      // Check if directory exists
+      let files: string[];
       try {
-        await fs.access(tempDir);
+        files = await readdir(tempDir);
       } catch {
         // Directory doesn't exist, skip cleanup
         return;
       }
-
-      const files = await fs.readdir(tempDir);
       const now = Date.now();
       let deletedCount = 0;
 
       for (const file of files) {
         const filepath = path.join(tempDir, file);
-        const stats = await fs.stat(filepath);
+        const stats = await stat(filepath);
         const age = now - stats.mtimeMs;
 
         if (age > MAX_AGE) {
           try {
-            await fs.unlink(filepath);
+            await unlink(filepath);
             deletedCount++;
           } catch (error) {
             logger.error({ err: error }, `[OCR_CLEANUP] Failed to delete old file ${file}`);
@@ -121,12 +120,9 @@ Return the text exactly as it appears on the receipt, preserving the structure a
 export async function extractTextFromImage(imageBuffer: Buffer): Promise<string> {
   logger.info(`[OCR] Attempting to extract text from image using Qwen Vision model`);
 
-  const fs = await import('node:fs/promises');
-  const path = await import('node:path');
-
   // Create temp-images directory if doesn't exist
   const tempDir = path.join(process.cwd(), 'temp-images');
-  await fs.mkdir(tempDir, { recursive: true });
+  await mkdir(tempDir, { recursive: true });
 
   // Save image to temp directory with unique filename
   const timestamp = Date.now();
@@ -134,7 +130,7 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<string>
   const filepath = path.join(tempDir, filename);
 
   try {
-    await fs.writeFile(filepath, imageBuffer);
+    await Bun.write(filepath, imageBuffer);
     logger.info(`[OCR] Saved temp image: ${filepath}`);
 
     // Get base URL from environment or use localhost
@@ -187,35 +183,14 @@ Return the text exactly as it appears on the receipt, preserving the structure a
       `[OCR] Successfully extracted text (${extractedText.length} chars): ${extractedText.substring(0, 200)}...`,
     );
 
-    // TEMP: Cleanup disabled for debugging
-    // Delay cleanup to allow Hugging Face API to download the image
-    // (API returns before actually downloading the file)
-    // setTimeout(async () => {
-    //   try {
-    //     await fs.unlink(filepath);
-    //     logger.info(`[OCR] Cleaned up temp image: ${filepath}`);
-    //   } catch (cleanupError) {
-    //     logger.error({ err: cleanupError }, '[OCR] Failed to cleanup temp image');
-    //   }
-    // }, 30000); // 30 seconds delay
-
-    logger.info(`[OCR] Temp image kept for debugging: ${filepath}`);
+    // Temp images are cleaned up by startTempImageCleanup() periodic task
 
     return extractedText;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error({ err: errorMessage }, '[OCR] Failed to extract text from image');
 
-    // TEMP: Cleanup disabled for debugging
-    // Cleanup on error (no delay needed)
-    // try {
-    //   await fs.unlink(filepath);
-    //   logger.info(`[OCR] Cleaned up temp image after error: ${filepath}`);
-    // } catch (cleanupError) {
-    //   logger.error({ err: cleanupError }, '[OCR] Failed to cleanup temp image');
-    // }
-
-    logger.info(`[OCR] Temp image kept after error for debugging: ${filepath}`);
+    // Temp images are cleaned up by startTempImageCleanup() periodic task
 
     throw new Error(`OCR extraction failed: ${errorMessage}`);
   }

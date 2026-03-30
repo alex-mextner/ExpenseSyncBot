@@ -1,6 +1,8 @@
+/** QR code scanner — decodes QR codes from image buffers to extract payment URLs from receipts */
 import type { Image } from 'qr';
 import decodeQR, { type DecodeOpts, type FinderPoints } from 'qr/decode.js';
 import sharp from 'sharp';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('qr-scanner');
@@ -130,7 +132,7 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
         logger.info(`[QR_SCANNER] ⚠️ QR image extracted but data decoding failed (${variant.name})`);
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = getErrorMessage(error);
       logger.info(`[QR_SCANNER] Variant ${variant.name} failed: ${errorMsg}`);
       // Continue to next variant
     }
@@ -151,7 +153,7 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
       return apiResult;
     }
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = getErrorMessage(error);
     logger.info(`[QR_SCANNER] External API failed: ${errorMsg}`);
   }
 

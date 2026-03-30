@@ -1,3 +1,4 @@
+/** Smart advice trigger logic — decides when to send proactive financial insights to groups */
 import { format, startOfMonth } from 'date-fns';
 import { database } from '../../database';
 import { computeOverallSeverity } from './formatters';

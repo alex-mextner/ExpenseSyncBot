@@ -1,6 +1,8 @@
+/** Receipt fetcher — uses Playwright (headless Chromium) to fetch and extract text from receipt URLs */
 import { type Browser, chromium } from 'playwright';
 import { NetworkError } from '../../errors';
 import { isURL } from './qr-scanner';
+import { isUrlSafe } from './url-validator';
 
 /**
  * Minimal browser interface required by fetchReceiptData.
@@ -56,6 +58,10 @@ export async function fetchReceiptData(
 ): Promise<string> {
   // If QR data is a URL, fetch it with Playwright
   if (isURL(qrData)) {
+    if (!(await isUrlSafe(qrData))) {
+      throw new NetworkError(`URL blocked by SSRF protection: ${qrData}`, 'SSRF_BLOCKED');
+    }
+
     try {
       const browserInstance = await getBrowserFn();
       const context = await browserInstance.newContext({

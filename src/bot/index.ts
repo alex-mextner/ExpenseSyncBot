@@ -1,3 +1,4 @@
+/** Bot entry point — creates the GramIO Bot instance, registers all commands and middleware */
 import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { database } from '../database';
@@ -5,6 +6,7 @@ import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
+import { setBotInstance } from '../web/oauth-callback';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
@@ -12,12 +14,14 @@ import { handleCategoriesCommand } from './commands/categories';
 import { handleConnectCommand } from './commands/connect';
 import { handleDevCommand, initDevPipeline } from './commands/dev';
 import { handleDisconnectCommand } from './commands/disconnect';
+import { handleFeedbackCommand } from './commands/feedback';
 import { handleHelpCommand } from './commands/help';
 import { handlePingCommand } from './commands/ping';
 import { handlePromptCommand } from './commands/prompt';
 import { handlePushCommand } from './commands/push';
+import { handleReconnectCommand } from './commands/reconnect';
 import { handleScanCommand } from './commands/scan';
-import { handleReconnectCommand, handleSettingsCommand } from './commands/settings';
+import { handleSettingsCommand } from './commands/settings';
 import { handleSpreadsheetCommand } from './commands/spreadsheet';
 import { handleStartCommand } from './commands/start';
 import { handleStatsCommand } from './commands/stats';
@@ -94,6 +98,7 @@ export function createBot(): Bot {
   bot.command('spreadsheet', requireGroup(handleSpreadsheetCommand));
   bot.command('settings', requireGroup(handleSettingsCommand));
   bot.command('disconnect', requireGroup(handleDisconnectCommand));
+  bot.command('feedback', requireGroup(handleFeedbackCommand));
   bot.command('prompt', requireGroup(handlePromptCommand));
   bot.command('topic', requireGroup(handleTopicCommand));
   bot.command('dev', requireGroup(handleDevCommand));
@@ -183,6 +188,11 @@ export function createBot(): Bot {
     }
   });
 
+  // Global error handler — catches unhandled errors in bot middleware/handlers
+  bot.onError(({ kind, error }) => {
+    logger.error({ err: error, kind }, '[BOT] Unhandled error');
+  });
+
   // Register monthly budget tab cron
   registerMonthlyCron(bot);
 
@@ -198,6 +208,9 @@ export async function startBot(): Promise<Bot> {
   logger.info('🤖 Starting bot...');
   await bot.start();
   logger.info('✓ Bot started successfully');
+
+  // Register bot instance for OAuth callback to send Telegram messages
+  setBotInstance(bot);
 
   // Register commands in Telegram menu (from single source of truth)
   const { BOT_COMMANDS } = await import('./command-descriptions');

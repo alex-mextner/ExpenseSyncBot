@@ -4,8 +4,13 @@
 // sync-service imports database, env, cron — mock them all to prevent startup side-effects.
 import { describe, expect, mock, test } from 'bun:test';
 import type { ZenTransaction } from './registry';
-import type { Transaction as ZenPluginsTransaction } from './ZenPlugins/src/types/zenmoney';
-import { AccountType } from './ZenPlugins/src/types/zenmoney';
+import type {
+  AccountType,
+  Transaction as ZenPluginsTransaction,
+} from './ZenPlugins/src/types/zenmoney';
+
+// String enum value from ZenPlugins, inlined to avoid value-import of the submodule (absent in CI).
+const ACCOUNT_TYPE_CASH = 'cash' as AccountType;
 
 mock.module('../../database', () => ({ database: {} }));
 mock.module('../../config/env', () => ({
@@ -75,7 +80,7 @@ describe('normalizePluginsTransaction', () => {
         {
           id: 'mov-002',
           account: {
-            type: AccountType.cash,
+            type: ACCOUNT_TYPE_CASH,
             instrument: 'EUR',
             company: null,
             syncIds: null,

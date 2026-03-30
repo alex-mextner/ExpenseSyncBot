@@ -1,3 +1,4 @@
+/** /ping command handler — responds with pong and current timestamp */
 import type { Ctx } from '../types';
 
 /**

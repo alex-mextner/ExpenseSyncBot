@@ -6,11 +6,10 @@ import type Big from 'big.js';
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
-import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankTransaction, BankTransactionFilters } from '../../database/types';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
-import { sendMessage } from '../bank/telegram-sender';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { renderTableToPng } from '../render/table-renderer.ts';
@@ -90,7 +89,7 @@ export async function executeTool(
     logger.error({ err: error }, `[TOOL] Error executing ${name}`);
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: getErrorMessage(error),
     };
   }
 }
@@ -905,11 +904,17 @@ async function executeSendFeedback(
 ): Promise<ToolResult> {
   const message = input['message'] as string;
   if (!message) return { success: false, error: 'message is required' };
-  if (!env.BOT_ADMIN_CHAT_ID) return { success: false, error: 'Admin feedback not configured' };
 
-  const group = database.groups.findById(ctx.groupId);
-  const groupLabel = group ? `<b>${group.telegram_group_id}</b>` : String(ctx.chatId);
-  const text = `💬 Фидбек из группы ${groupLabel}:\n\n${message}`;
-  await sendMessage(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text);
-  return { success: true, output: 'Фидбек отправлен администратору.' };
+  const { sendFeedback } = await import('../feedback');
+  const result = await sendFeedback({
+    message,
+    groupId: ctx.groupId,
+    chatId: ctx.chatId,
+    userName: ctx.userFullName ?? ctx.userName,
+  });
+
+  if (result.success) {
+    return { success: true, output: 'Фидбек отправлен администратору.' };
+  }
+  return { success: false, error: result.error ?? 'Unknown error' };
 }

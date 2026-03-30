@@ -10,11 +10,12 @@ interface EnvConfig {
   GOOGLE_REDIRECT_URI: string;
   OAUTH_SERVER_PORT: number;
   DATABASE_PATH: string;
-  ENCRYPTION_KEY: string;
+  ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
   HF_TOKEN: string;
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
+  AI_VALIDATION_MODEL: string;
   GITHUB_TOKEN: string;
   BOT_ADMIN_CHAT_ID: number | null;
   LARGE_TX_THRESHOLD_EUR: number;
@@ -42,11 +43,12 @@ function validateEnv(): EnvConfig {
     GOOGLE_REDIRECT_URI: getEnvVariable('GOOGLE_REDIRECT_URI'),
     OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000', 10),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
-    ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY'),
+    ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY', false),
     HF_TOKEN: getEnvVariable('HF_TOKEN', false),
     ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
     AI_BASE_URL: getEnvVariable('AI_BASE_URL', false) || 'https://api.z.ai/api/anthropic',
     AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-5',
+    AI_VALIDATION_MODEL: getEnvVariable('AI_VALIDATION_MODEL', false) || 'glm-4.7-flash',
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']
       ? parseInt(process.env['BOT_ADMIN_CHAT_ID'], 10)

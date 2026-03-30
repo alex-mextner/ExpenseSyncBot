@@ -1,3 +1,4 @@
+/** Currency converter — converts amounts between currencies using hardcoded EUR-based exchange rates */
 import Big from 'big.js';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
@@ -91,7 +92,7 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
     });
 
     if (!response.ok) {
-      logger.error(`[CURRENCY] API returned status ${response.status}`);
+      logger.error({ status: response.status }, '[CURRENCY] API returned error status');
       return null;
     }
 

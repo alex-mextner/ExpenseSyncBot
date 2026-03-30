@@ -1,17 +1,19 @@
-import { format } from 'date-fns';
+/** Text message handler — parses expense messages, handles receipt links, and routes AI mentions */
 import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
-import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { convertCurrency } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
+import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
-import { silentSyncBudgets } from '../commands/budget';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
+import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
+import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
@@ -113,6 +115,16 @@ export async function handleExpenseMessage(
     return true;
   }
 
+  // Custom currency input during onboarding — must be checked before setup completion
+  if (text && !text.startsWith('/')) {
+    const { isAwaitingCustomCurrency, handleCustomCurrencyInput } = await import(
+      '../commands/connect'
+    );
+    if (isAwaitingCustomCurrency(telegramGroupId)) {
+      return await handleCustomCurrencyInput(ctx, telegramGroupId);
+    }
+  }
+
   // Bank setup wizard — consume credential input before other checks
   if (text && !text.startsWith('/')) {
     const { handleWizardInput } = await import('../commands/bank');
@@ -179,9 +191,16 @@ export async function handleExpenseMessage(
           await pl.editDesign(pendingTaskId, text);
         }
       } catch (error) {
-        await ctx.send(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+        await ctx.send(getErrorMessage(error));
       }
     }
+    return true;
+  }
+
+  // Check if we're waiting for feedback text input
+  const feedbackPromptId = consumePendingFeedback(telegramGroupId, telegramId);
+  if (feedbackPromptId !== null) {
+    await submitFeedback(ctx, group, text, { promptMessageId: feedbackPromptId, bot });
     return true;
   }
 
@@ -345,145 +364,6 @@ export async function handleExpenseMessage(
 }
 
 /**
- * Save expense to Google Sheet and local DB via ExpenseRecorder
- */
-export async function saveExpenseToSheet(
-  userId: number,
-  groupId: number,
-  pendingExpenseId: number,
-  telegramGroupId?: number,
-  bot?: BotInstance,
-): Promise<void> {
-  logger.info(`[SAVE] Starting save to sheet...`);
-
-  const group = database.groups.findById(groupId);
-  const pendingExpense = database.pendingExpenses.findById(pendingExpenseId);
-
-  if (!group || !pendingExpense) {
-    logger.error(
-      {
-        data: {
-          group: !!group,
-          pendingExpense: !!pendingExpense,
-        },
-      },
-      `[SAVE] ❌ Validation failed`,
-    );
-    throw new Error('Invalid group or pending expense');
-  }
-
-  // Silent sync budgets from Google Sheets (only if connected)
-  if (group.google_refresh_token) {
-    await silentSyncBudgets(group.google_refresh_token, group.id);
-  }
-
-  const { getExpenseRecorder } = await import('../../services/expense-recorder');
-  const recorder = getExpenseRecorder();
-
-  const currentDate = format(new Date(), 'yyyy-MM-dd');
-  const category = pendingExpense.detected_category || 'Без категории';
-
-  const { eurAmount } = await recorder.record(groupId, userId, {
-    date: currentDate,
-    category,
-    comment: pendingExpense.comment,
-    amount: pendingExpense.parsed_amount,
-    currency: pendingExpense.parsed_currency,
-  });
-
-  resetSheetWriteFailures(groupId);
-
-  logger.info(
-    `[SAVE] ✅ Recorded ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
-  );
-
-  // Check recurring pattern match (fire-and-forget)
-  try {
-    const { checkRecurringMatch } = await import('../../services/analytics/recurring-matcher');
-    checkRecurringMatch(
-      groupId,
-      category,
-      pendingExpense.parsed_amount,
-      pendingExpense.parsed_currency,
-      currentDate,
-    );
-  } catch (err) {
-    logger.error({ err }, '[SAVE] Recurring pattern check failed');
-  }
-
-  // Delete pending expense
-  database.pendingExpenses.delete(pendingExpenseId);
-  logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
-
-  // Check budget limits
-  if (telegramGroupId && bot) {
-    await checkBudgetLimit(groupId, category, currentDate, telegramGroupId, bot);
-  }
-}
-
-/**
- * Check if budget limit is exceeded or approaching for a category
- */
-async function checkBudgetLimit(
-  groupId: number,
-  category: string,
-  currentDate: string,
-  telegramGroupId: number,
-  bot: BotInstance,
-): Promise<void> {
-  const { startOfMonth, endOfMonth, format } = await import('date-fns');
-  const { getCategoryEmoji } = await import('../../config/category-emojis');
-
-  const now = new Date(currentDate);
-  const currentMonth = format(now, 'yyyy-MM');
-  const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-  const monthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-
-  // Get budget for category
-  const budget = database.budgets.getBudgetForMonth(groupId, category, currentMonth);
-
-  if (!budget) {
-    // No budget set for this category
-    return;
-  }
-
-  // Calculate total spending in category for current month
-  const expenses = database.expenses.findByDateRange(groupId, monthStart, monthEnd);
-  const categorySpending = expenses
-    .filter((exp) => exp.category === category)
-    .reduce((sum, exp) => sum + exp.eur_amount, 0);
-
-  const { spentInCurrency, percentage, isExceeded, isWarning } = buildBudgetAlertStatus(
-    categorySpending,
-    budget,
-  );
-
-  if (isExceeded || isWarning) {
-    const emoji = getCategoryEmoji(category);
-    const budgetCurrency = budget.currency as CurrencyCode;
-    let message = '';
-
-    if (isExceeded) {
-      message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: ${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${percentage}%)`;
-    } else if (isWarning) {
-      message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: ${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${percentage}%)`;
-    }
-
-    try {
-      await bot.api.sendMessage({
-        chat_id: telegramGroupId,
-        text: message,
-      });
-      logger.info(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
-    } catch (error) {
-      logger.error({ err: error }, '[BUDGET] Failed to send warning');
-    }
-  }
-}
-
-/**
  * Handle category text input from user
  */
 async function handleCategoryTextInput(
@@ -529,7 +409,7 @@ async function handleCategoryTextInput(
 
       if (allConfirmed) {
         // Save all items
-        const { saveReceiptExpenses } = await import('./callback.handler');
+
         const user = database.users.findByTelegramId(ctx.from.id);
         if (user) {
           const group = database.groups.findById(groupId);
@@ -605,7 +485,6 @@ async function handleCategoryTextInput(
 
     if (allConfirmed) {
       // Save all items
-      const { saveReceiptExpenses } = await import('./callback.handler');
       const user = database.users.findByTelegramId(ctx.from.id);
       if (user) {
         const group = database.groups.findById(groupId);
@@ -679,7 +558,9 @@ async function handleBulkCorrectionInput(
   if (queueItem.correction_history) {
     try {
       correctionHistory = JSON.parse(queueItem.correction_history);
-    } catch {}
+    } catch {
+      // Expected: invalid JSON means no prior corrections
+    }
   }
 
   try {

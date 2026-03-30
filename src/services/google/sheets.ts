@@ -1,10 +1,12 @@
+/** Google Sheets service — creates spreadsheets, appends expense rows, and syncs budget data */
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
-import { CURRENCY_SYMBOLS, SPREADSHEET_CONFIG } from '../../config/constants';
+import { getCurrencySymbol, SPREADSHEET_CONFIG } from '../../config/constants';
+import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
 import type { MonthAbbr } from './month-abbr';
-import { getAuthenticatedClient } from './oauth';
+import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
 
 const logger = createLogger('sheets');
 
@@ -44,7 +46,7 @@ export async function createExpenseSpreadsheet(
   // Build headers: Date | Currencies | EUR(calc) | Category | Comment | Rate
   const headers = [
     SPREADSHEET_CONFIG.headers[0], // Дата
-    ...enabledCurrencies.map((code) => `${code} (${CURRENCY_SYMBOLS[code]})`),
+    ...enabledCurrencies.map((code) => `${code} (${getCurrencySymbol(code)})`),
     SPREADSHEET_CONFIG.eurColumnHeader, // EUR (calc)
     SPREADSHEET_CONFIG.headers[1], // Категория
     SPREADSHEET_CONFIG.headers[2], // Комментарий
@@ -221,7 +223,7 @@ export async function appendExpenseRow(
     }
   }
 
-  // Find last row with data in column A
+  // Find last row to compute the target row number for the EUR formula placeholder
   const dataResponse = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
@@ -240,25 +242,27 @@ export async function appendExpenseRow(
 
   logger.info({ data: row }, `[SHEETS] Final row`);
 
-  const lastCol = colLetter(row.length - 1);
-
-  const response = await sheets.spreadsheets.values.update({
+  // Append atomically — the API finds the next empty row and writes in one call,
+  // eliminating the race condition between reading last row and writing.
+  const response = await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A${nextRow}:${lastCol}${nextRow}`,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
     valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
     requestBody: {
       values: [row],
     },
   });
 
-  const updatedRows = response.data.updatedRows;
+  // Log API response for debugging
+  const updatedRows = response.data.updates?.updatedRows;
   logger.info(
-    `[SHEETS] API response: range=${response.data.updatedRange}, rows=${updatedRows}, cells=${response.data.updatedCells}`,
+    `[SHEETS] API response: range=${response.data.updates?.updatedRange}, rows=${updatedRows}, cells=${response.data.updates?.updatedCells}`,
   );
 
   if (!updatedRows || updatedRows === 0) {
     logger.error(
-      `[SHEETS] No rows were updated! Full response: ${JSON.stringify(response.data, null, 2)}`,
+      `[SHEETS] No rows were appended! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
   }
 }
@@ -273,7 +277,7 @@ async function insertCurrencyColumn(
   currentHeaders: string[],
   currency: CurrencyCode,
 ): Promise<string[]> {
-  const symbol = CURRENCY_SYMBOLS[currency] || currency;
+  const symbol = getCurrencySymbol(currency);
   const newHeader = `${currency} (${symbol})`;
 
   // Insert before EUR (calc)
@@ -446,7 +450,14 @@ export async function verifySpreadsheetAccess(
     await sheets.spreadsheets.get({ spreadsheetId });
     return true;
   } catch (err) {
-    logger.error({ err: err }, 'Failed to verify spreadsheet access');
+    if (isTokenExpiredError(err)) {
+      throw new OAuthError(
+        'Токен доступа истёк или был отозван. Используй /reconnect',
+        'TOKEN_EXPIRED',
+        err,
+      );
+    }
+    logger.error({ err }, 'Failed to verify spreadsheet access');
     return false;
   }
 }

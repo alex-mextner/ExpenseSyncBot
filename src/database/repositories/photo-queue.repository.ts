@@ -1,3 +1,4 @@
+/** Photo queue repository — tracks receipt photos pending OCR processing with their status */
 import type { Database } from 'bun:sqlite';
 import type { CreatePhotoQueueData, PhotoQueueItem, UpdatePhotoQueueData } from '../types';
 

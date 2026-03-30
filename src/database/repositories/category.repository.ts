@@ -1,3 +1,4 @@
+/** Category repository — stores and retrieves expense category names per group */
 import type { Database } from 'bun:sqlite';
 import type { Category, CreateCategoryData } from '../types';
 

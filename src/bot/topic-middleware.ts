@@ -12,6 +12,12 @@ interface ThreadContext {
   threadId: number | undefined;
 }
 
+/** Common params shared by all thread-aware Telegram API methods */
+interface ThreadAwareParams {
+  chat_id: number | string;
+  message_thread_id?: number;
+}
+
 export const threadStorage = new AsyncLocalStorage<ThreadContext>();
 
 /** Telegram API methods that support message_thread_id */
@@ -60,9 +66,9 @@ export function registerTopicMiddleware(bot: Bot): void {
   // preRequest: inject message_thread_id into outgoing API calls
   bot.preRequest(THREAD_AWARE_METHODS, (context) => {
     const stored = threadStorage.getStore();
-    const params = context.params as Record<string, unknown>;
-    if (stored?.threadId && !params['message_thread_id'] && params['chat_id'] === stored.chatId) {
-      params['message_thread_id'] = stored.threadId;
+    const params = context.params as ThreadAwareParams;
+    if (stored?.threadId && !params.message_thread_id && params.chat_id === stored.chatId) {
+      params.message_thread_id = stored.threadId;
     }
     return context;
   });
