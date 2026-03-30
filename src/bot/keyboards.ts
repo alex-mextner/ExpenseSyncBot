@@ -1,5 +1,10 @@
 import { InlineKeyboard } from 'gramio';
-import { BASE_CURRENCY, KEYBOARD_TEXTS, SUPPORTED_CURRENCIES } from '../config/constants';
+import {
+  BASE_CURRENCY,
+  getCurrencySymbol,
+  KEYBOARD_TEXTS,
+  SUPPORTED_CURRENCIES,
+} from '../config/constants';
 
 /**
  * Create currency set selection keyboard (Step 1)
@@ -115,14 +120,7 @@ export function createBudgetPromptKeyboard(
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol =
-    defaultCurrency === 'EUR'
-      ? '€'
-      : defaultCurrency === 'USD'
-        ? '$'
-        : defaultCurrency === 'RUB'
-          ? '₽'
-          : defaultCurrency;
+  const currencySymbol = getCurrencySymbol(defaultCurrency);
 
   keyboard
     .text(
@@ -145,8 +143,7 @@ export function createAddCategoryWithBudgetKeyboard(
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol =
-    currency === 'EUR' ? '€' : currency === 'USD' ? '$' : currency === 'RUB' ? '₽' : currency;
+  const currencySymbol = getCurrencySymbol(currency);
 
   keyboard
     .text(

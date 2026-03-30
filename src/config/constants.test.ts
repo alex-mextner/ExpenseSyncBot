@@ -4,6 +4,7 @@ import {
   buildCurrencyHints,
   CURRENCY_INFO,
   getCurrencyLabel,
+  getCurrencySymbol,
   isValidCurrencyCode,
 } from './constants';
 
@@ -126,5 +127,42 @@ describe('buildCurrencyHints', () => {
     const hints = buildCurrencyHints(['EUR', 'XYZ'], 'EUR');
     expect(hints).toContain('XYZ');
     expect(hints).toContain('100 xyz');
+  });
+});
+
+describe('getCurrencySymbol', () => {
+  test('returns symbol for known currencies', () => {
+    expect(getCurrencySymbol('USD')).toBe('$');
+    expect(getCurrencySymbol('EUR')).toBe('€');
+    expect(getCurrencySymbol('RUB')).toBe('₽');
+    expect(getCurrencySymbol('GBP')).toBe('£');
+    expect(getCurrencySymbol('JPY')).toBe('¥');
+    expect(getCurrencySymbol('INR')).toBe('₹');
+    expect(getCurrencySymbol('BYN')).toBe('Br');
+  });
+
+  test('returns symbol for currencies beyond the old CURRENCY_SYMBOLS set', () => {
+    expect(getCurrencySymbol('TRY')).toBe('₺');
+    expect(getCurrencySymbol('UAH')).toBe('₴');
+    expect(getCurrencySymbol('GEL')).toBe('₾');
+    expect(getCurrencySymbol('KZT')).toBe('₸');
+    expect(getCurrencySymbol('PLN')).toBe('zł');
+  });
+
+  test('returns code itself for currencies where symbol equals code', () => {
+    expect(getCurrencySymbol('RSD')).toBe('RSD');
+    expect(getCurrencySymbol('CHF')).toBe('CHF');
+    expect(getCurrencySymbol('LKR')).toBe('LKR');
+    expect(getCurrencySymbol('AED')).toBe('AED');
+  });
+
+  test('falls back to code for completely unknown currencies', () => {
+    expect(getCurrencySymbol('XYZ')).toBe('XYZ');
+    expect(getCurrencySymbol('ABC')).toBe('ABC');
+  });
+
+  test('handles lowercase input', () => {
+    expect(getCurrencySymbol('usd')).toBe('$');
+    expect(getCurrencySymbol('eur')).toBe('€');
   });
 });

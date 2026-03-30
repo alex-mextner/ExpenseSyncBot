@@ -1,6 +1,11 @@
 import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { getCategoryEmoji } from '../../config/category-emojis';
-import { BASE_CURRENCY, CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import {
+  BASE_CURRENCY,
+  CURRENCY_ALIASES,
+  type CurrencyCode,
+  getCurrencySymbol,
+} from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
@@ -338,28 +343,6 @@ function parseBudgetAmount(
 export function normalizeCurrency(currencyStr: string): CurrencyCode | null {
   const normalized = currencyStr.toLowerCase().trim();
   return (CURRENCY_ALIASES[normalized] as CurrencyCode) || null;
-}
-
-/**
- * Get currency symbol for display
- */
-export function getCurrencySymbol(currency: CurrencyCode): string {
-  switch (currency) {
-    case 'EUR':
-      return '€';
-    case 'USD':
-      return '$';
-    case 'RUB':
-      return '₽';
-    case 'GBP':
-      return '£';
-    case 'JPY':
-      return '¥';
-    case 'CNY':
-      return '¥';
-    default:
-      return currency;
-  }
 }
 
 /**

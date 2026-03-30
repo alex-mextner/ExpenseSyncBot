@@ -1,8 +1,7 @@
 import { format } from 'date-fns';
-import { MESSAGES } from '../../config/constants';
+import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
-
 import { createLogger } from '../../utils/logger.ts';
 import {
   handleBankAccountsCallback,
@@ -24,7 +23,7 @@ import {
   handleBankWizardCancelCallback,
   handleBankWizardStartCallback,
 } from '../commands/bank';
-import { getCurrencySymbol, normalizeCurrency } from '../commands/budget';
+import { normalizeCurrency } from '../commands/budget';
 import {
   handleCurrencyCallback,
   handleDefaultCurrencyCallback,

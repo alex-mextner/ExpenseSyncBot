@@ -445,6 +445,14 @@ export function buildCurrencyHints(enabledCurrencies: string[], defaultCurrency:
 }
 
 /**
+ * Get currency symbol for display. Uses CURRENCY_INFO, falls back to the code itself.
+ */
+export function getCurrencySymbol(code: string): string {
+  const info = CURRENCY_INFO[code.toUpperCase()];
+  return info ? info.symbol : code;
+}
+
+/**
  * Currency codes and their aliases
  */
 export const CURRENCY_ALIASES: Record<string, string> = {
@@ -561,24 +569,6 @@ export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
 
 /** Internal calculation base: all expenses are stored as eur_amount, conversions go through EUR */
 export const BASE_CURRENCY = 'EUR' as const satisfies CurrencyCode;
-
-/**
- * Currency symbols for display
- */
-export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
-  USD: '$',
-  EUR: '€',
-  RUB: '₽',
-  RSD: 'RSD',
-  GBP: '£',
-  BYN: 'Br',
-  CHF: 'CHF',
-  JPY: '¥',
-  CNY: '¥',
-  INR: '₹',
-  LKR: 'LKR',
-  AED: 'AED',
-};
 
 /**
  * Google API Scopes
