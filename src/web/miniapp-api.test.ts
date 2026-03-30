@@ -18,10 +18,35 @@ const mockFindByTelegramId = mock(
       updated_at: string;
     } | null,
 );
-const mockDbQueryGet = mock(
-  (_params: { groupId: number; userId: number }) => null as { id: number } | null,
-);
+// Generic get mock — used by membership checks, dashboard queries, analytics, etc.
+// Union covers all row shapes returned across the different query calls in tests.
+type MockDbRow =
+  | { id: number }
+  | { config: string; updated_at: string }
+  | { updated_at: string }
+  | null;
+const mockDbQueryGet = mock((_params: unknown) => null as MockDbRow);
+// Generic all mock — used by analytics and similar multi-row queries
+const mockDbQueryAll = mock((_params: unknown) => [] as unknown[]);
+// Generic run mock — used by UPDATE/INSERT statements
+const mockDbRun = mock((_sql: string, _params?: unknown[]) => {});
 const mockCategoriesFindByGroupId = mock((_groupId: number) => [] as { name: string }[]);
+const mockGroupsFindById = mock(
+  (_id: number) =>
+    null as {
+      id: number;
+      telegram_group_id: number;
+      default_currency: string;
+      enabled_currencies: string[];
+      google_refresh_token: string | null;
+      spreadsheet_id: string | null;
+      custom_prompt: string | null;
+      active_topic_id: number | null;
+      panel_message_thread_id: number | null;
+      created_at: string;
+      updated_at: string;
+    } | null,
+);
 const mockFetchReceiptData = mock((_qrData: string) => Promise.resolve('') as Promise<string>);
 const mockExtractExpensesFromReceipt = mock(
   (_data: string, _categories: string[]): Promise<AIExtractionResult> =>
@@ -29,6 +54,20 @@ const mockExtractExpensesFromReceipt = mock(
 );
 const mockExtractTextFromImageBuffer = mock(
   (_buf: Buffer): Promise<string> => Promise.resolve('OCR text'),
+);
+const mockExpenseRecorderRecord = mock(
+  (
+    _groupId: number,
+    _userId: number,
+    _data: unknown,
+  ): Promise<{ expense: { id: number }; eurAmount: number }> =>
+    Promise.resolve({ expense: { id: 99 }, eurAmount: 10 }),
+);
+const mockGetExpenseRecorder = mock(() => ({ record: mockExpenseRecorderRecord }));
+const mockEmitForGroup = mock((_groupId: number, _eventType: string) => {});
+const mockSubscribeGroup = mock(
+  (_groupId: number, _send: (event: string) => void): (() => void) =>
+    () => {},
 );
 
 // sharp mock: returns an object with chainable .resize().jpeg().toBuffer()
@@ -68,10 +107,15 @@ mock.module('../database/index.ts', () => ({
     categories: {
       findByGroupId: mockCategoriesFindByGroupId,
     },
+    groups: {
+      findById: mockGroupsFindById,
+    },
     db: {
       query: (_sql: string) => ({
         get: mockDbQueryGet,
+        all: mockDbQueryAll,
       }),
+      run: mockDbRun,
     },
   },
 }));
@@ -82,6 +126,19 @@ mock.module('../services/receipt/receipt-fetcher.ts', () => ({
 
 mock.module('../services/receipt/ai-extractor.ts', () => ({
   extractExpensesFromReceipt: mockExtractExpensesFromReceipt,
+}));
+
+mock.module('../services/expense-recorder.ts', () => ({
+  getExpenseRecorder: mockGetExpenseRecorder,
+}));
+
+mock.module('../services/currency/converter.ts', () => ({
+  convertCurrency: (_amount: number, _from: string, _to: string) => _amount,
+}));
+
+mock.module('./sse-emitter.ts', () => ({
+  emitForGroup: mockEmitForGroup,
+  subscribeGroup: mockSubscribeGroup,
 }));
 
 mock.module('../utils/logger.ts', () => ({
@@ -641,5 +698,370 @@ describe('POST /api/receipt/ocr', () => {
     const body = (await res.json()) as { file_id: string | null; items: unknown[] };
     expect(body.file_id).toBeNull();
     expect(body.items).toHaveLength(1);
+  });
+});
+
+// ── POST /api/receipt/confirm ─────────────────────────────────────────────────
+
+describe('POST /api/receipt/confirm', () => {
+  const GROUP_ID = -1001234567;
+  const CONFIRM_PATH = '/api/receipt/confirm';
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryGet.mockReset();
+    mockDbRun.mockReset();
+    mockGroupsFindById.mockReset();
+    mockExpenseRecorderRecord.mockReset();
+    mockEmitForGroup.mockReset();
+  });
+
+  test('missing expenses array → 400 BAD_REQUEST', async () => {
+    const initData = buildInitData(42);
+    const req = makePostRequest(CONFIRM_PATH, { groupId: GROUP_ID }, initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('BAD_REQUEST');
+  });
+
+  test('expense missing required field → 400 BAD_REQUEST', async () => {
+    const initData = buildInitData(42);
+    const req = makePostRequest(
+      CONFIRM_PATH,
+      { groupId: GROUP_ID, expenses: [{ name: 'Milk', total: 100 }] }, // missing category and currency
+      initData,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('BAD_REQUEST');
+  });
+
+  test('auth failure → 401', async () => {
+    const req = makePostRequest(CONFIRM_PATH, {
+      groupId: GROUP_ID,
+      expenses: [{ name: 'Milk', total: 100, category: 'Food', currency: 'RSD' }],
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('success → 200 { created: N }', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockExpenseRecorderRecord.mockImplementation(() =>
+      Promise.resolve({ expense: { id: 55 }, eurAmount: 8.5 }),
+    );
+
+    const initData = buildInitData(42);
+    const req = makePostRequest(
+      CONFIRM_PATH,
+      {
+        groupId: GROUP_ID,
+        fileId: null,
+        expenses: [
+          { name: 'Milk', total: 171, category: 'Food', currency: 'RSD', date: '2025-03-15' },
+          { name: 'Bread', total: 85, category: 'Food', currency: 'RSD' },
+        ],
+      },
+      initData,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { created: number };
+    expect(body.created).toBe(2);
+    expect(mockEmitForGroup.mock.calls.length).toBe(1);
+    expect(mockEmitForGroup.mock.calls[0]?.[1]).toBe('expense_added');
+  });
+
+  test('success with fileId → updates receipt_file_id in DB', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockExpenseRecorderRecord.mockImplementation(() =>
+      Promise.resolve({ expense: { id: 77 }, eurAmount: 5 }),
+    );
+
+    const initData = buildInitData(42);
+    const req = makePostRequest(
+      CONFIRM_PATH,
+      {
+        groupId: GROUP_ID,
+        fileId: 'tg_file_abc',
+        expenses: [{ name: 'Apples', total: 50, category: 'Food', currency: 'RSD' }],
+      },
+      initData,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    // run() should have been called to set receipt_file_id
+    expect(mockDbRun.mock.calls.length).toBeGreaterThan(0);
+  });
+});
+
+// ── GET /api/analytics ────────────────────────────────────────────────────────
+
+describe('GET /api/analytics', () => {
+  const GROUP_ID = -1001234567;
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryGet.mockReset();
+    mockDbQueryAll.mockReset();
+    mockGroupsFindById.mockReset();
+  });
+
+  test('auth failure → 401', async () => {
+    const req = makeRequest(`/api/analytics?groupId=${GROUP_ID}`);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('success → 200 with correct shape', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockGroupsFindById.mockImplementation(() => ({
+      id: 7,
+      telegram_group_id: GROUP_ID,
+      default_currency: 'RSD',
+      enabled_currencies: ['RSD'],
+      google_refresh_token: null,
+      spreadsheet_id: null,
+      custom_prompt: null,
+      active_topic_id: null,
+      panel_message_thread_id: null,
+      created_at: '2024-01-01',
+      updated_at: '2024-01-01',
+    }));
+    mockDbQueryAll.mockImplementation(() => [
+      { category: 'Food', total: 100 },
+      { category: 'Transport', total: 50 },
+    ]);
+
+    const initData = buildInitData(42);
+    const req = makeRequest(`/api/analytics?groupId=${GROUP_ID}&period=2025-03`, 'GET', initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      period: string;
+      defaultCurrency: string;
+      income: number;
+      expenses: number;
+      balance: number;
+      savings: number;
+      byCategory: Record<string, number>;
+    };
+    expect(body.period).toBe('2025-03');
+    expect(body.defaultCurrency).toBe('RSD');
+    expect(body.income).toBe(0);
+    expect(body.savings).toBe(0);
+    expect(body.expenses).toBeGreaterThanOrEqual(0);
+    expect(typeof body.byCategory).toBe('object');
+    expect(body.byCategory['Food']).toBeDefined();
+  });
+});
+
+// ── GET /api/dashboard ────────────────────────────────────────────────────────
+
+describe('GET /api/dashboard', () => {
+  const GROUP_ID = -1001234567;
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryGet.mockReset();
+  });
+
+  test('auth failure → 401', async () => {
+    const req = makeRequest(`/api/dashboard?groupId=${GROUP_ID}`);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('no saved config → 200 { widgets: [], updatedAt: null }', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+
+    // Second query call (dashboard) returns null — no existing row
+    let callCount = 0;
+    mockDbQueryGet.mockImplementation(() => {
+      callCount++;
+      // First call = membership check, second = dashboard query
+      if (callCount === 1) return { id: 7 };
+      return null;
+    });
+
+    const initData = buildInitData(42);
+    const req = makeRequest(`/api/dashboard?groupId=${GROUP_ID}`, 'GET', initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { widgets: unknown[]; updatedAt: unknown };
+    expect(body.widgets).toEqual([]);
+    expect(body.updatedAt).toBeNull();
+  });
+
+  test('existing config → 200 with widgets and updatedAt', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+
+    let callCount = 0;
+    mockDbQueryGet.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { id: 7 }; // membership
+      return { config: '[{"id":"w1"}]', updated_at: '2025-03-01T00:00:00.000Z' };
+    });
+
+    const initData = buildInitData(42);
+    const req = makeRequest(`/api/dashboard?groupId=${GROUP_ID}`, 'GET', initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { widgets: unknown[]; updatedAt: string };
+    expect(body.widgets).toHaveLength(1);
+    expect(body.updatedAt).toBe('2025-03-01T00:00:00.000Z');
+  });
+});
+
+// ── PUT /api/dashboard ────────────────────────────────────────────────────────
+
+describe('PUT /api/dashboard', () => {
+  const GROUP_ID = -1001234567;
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryGet.mockReset();
+    mockDbRun.mockReset();
+  });
+
+  test('auth failure → 401', async () => {
+    const req = new Request('https://server/api/dashboard', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: GROUP_ID, widgets: [], updatedAt: null }),
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('success insert (no existing row) → 200 { ok: true, updatedAt }', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+
+    let callCount = 0;
+    mockDbQueryGet.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { id: 7 }; // membership
+      return null; // no existing dashboard row
+    });
+
+    const initData = buildInitData(42);
+    const req = new Request('https://server/api/dashboard', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData },
+      body: JSON.stringify({ groupId: GROUP_ID, widgets: [{ id: 'w1' }], updatedAt: null }),
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; updatedAt: string };
+    expect(body.ok).toBe(true);
+    expect(typeof body.updatedAt).toBe('string');
+    expect(mockDbRun.mock.calls.length).toBe(1);
+  });
+
+  test('conflict when updatedAt mismatch → 409 CONFLICT', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+
+    let callCount = 0;
+    mockDbQueryGet.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { id: 7 }; // membership
+      return { updated_at: '2025-01-01T00:00:00.000Z' }; // existing row with different timestamp
+    });
+
+    const initData = buildInitData(42);
+    const req = new Request('https://server/api/dashboard', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData },
+      body: JSON.stringify({
+        groupId: GROUP_ID,
+        widgets: [],
+        updatedAt: '2025-02-01T00:00:00.000Z', // different from stored
+      }),
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('CONFLICT');
+  });
+
+  test('update success when updatedAt matches → 200', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+
+    const storedUpdatedAt = '2025-01-01T00:00:00.000Z';
+    let callCount = 0;
+    mockDbQueryGet.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { id: 7 }; // membership
+      return { updated_at: storedUpdatedAt };
+    });
+
+    const initData = buildInitData(42);
+    const req = new Request('https://server/api/dashboard', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData },
+      body: JSON.stringify({
+        groupId: GROUP_ID,
+        widgets: [{ id: 'w2' }],
+        updatedAt: storedUpdatedAt,
+      }),
+    });
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    expect(mockDbRun.mock.calls.length).toBe(1);
+  });
+});
+
+// ── GET /api/dashboard/events (SSE) ───────────────────────────────────────────
+
+describe('GET /api/dashboard/events', () => {
+  const GROUP_ID = -1001234567;
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryGet.mockReset();
+    mockSubscribeGroup.mockReset();
+    mockSubscribeGroup.mockImplementation(() => () => {});
+  });
+
+  test('missing initData → 401', async () => {
+    const req = makeRequest(`/api/dashboard/events?groupId=${GROUP_ID}`);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('valid auth → 200 with text/event-stream Content-Type', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/dashboard/events?groupId=${GROUP_ID}&initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/event-stream');
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(CORS_ORIGIN);
   });
 });

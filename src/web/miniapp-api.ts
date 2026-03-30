@@ -1,12 +1,16 @@
 // Mini App API handler: HMAC initData validation and routing for /api/* endpoints
 import { createHmac } from 'node:crypto';
 import sharp from 'sharp';
+import type { CurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
+import { convertCurrency } from '../services/currency/converter.ts';
+import { getExpenseRecorder } from '../services/expense-recorder.ts';
 import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
 import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
 import { createLogger } from '../utils/logger.ts';
+import { emitForGroup, subscribeGroup } from './sse-emitter.ts';
 
 const logger = createLogger('miniapp-api');
 
@@ -82,7 +86,7 @@ function resolveGroupMembership(telegramGroupId: number, userId: number): number
 function buildCorsHeaders(corsOrigin: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': corsOrigin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Telegram-Init-Data',
   };
 }
@@ -349,6 +353,350 @@ export async function handleMiniAppRequest(
       logger.error({ err }, 'OCR processing failed');
       return errorResponse(500, 'OCR processing failed', 'OCR_FAILED', corsHeaders);
     }
+  }
+
+  // ── POST /api/receipt/confirm ──────────────────────────────────────────────
+
+  if (url.pathname === '/api/receipt/confirm' && req.method === 'POST') {
+    let body: {
+      groupId?: unknown;
+      fileId?: unknown;
+      expenses?: unknown;
+    };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch (parseError) {
+      logger.warn({ err: parseError }, 'Failed to parse confirm request body');
+      return errorResponse(400, 'Invalid JSON body', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const telegramGroupId = typeof body.groupId === 'number' ? body.groupId : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(400, 'Missing or invalid groupId', 'BAD_REQUEST', corsHeaders);
+    }
+
+    if (!Array.isArray(body.expenses) || body.expenses.length === 0) {
+      return errorResponse(400, 'Missing or empty expenses array', 'BAD_REQUEST', corsHeaders);
+    }
+
+    /** Expected shape of each expense item from client */
+    interface ConfirmExpenseInput {
+      name?: unknown;
+      total?: unknown;
+      category?: unknown;
+      currency?: unknown;
+      date?: unknown;
+      qty?: unknown;
+      price?: unknown;
+    }
+
+    const expenseInputs = body.expenses as ConfirmExpenseInput[];
+    for (const item of expenseInputs) {
+      if (
+        typeof item.name !== 'string' ||
+        typeof item.total !== 'number' ||
+        typeof item.category !== 'string' ||
+        typeof item.currency !== 'string'
+      ) {
+        return errorResponse(
+          400,
+          'Each expense must have name (string), total (number), category (string), currency (string)',
+          'BAD_REQUEST',
+          corsHeaders,
+        );
+      }
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    const fileId = typeof body.fileId === 'string' ? body.fileId : null;
+
+    try {
+      const recorder = getExpenseRecorder();
+      let created = 0;
+
+      for (const item of expenseInputs) {
+        const date =
+          typeof item.date === 'string' && item.date.length > 0
+            ? item.date
+            : new Date().toISOString().slice(0, 10);
+
+        const result = await recorder.record(ctx.internalGroupId, ctx.userId, {
+          date,
+          category: item.category as string,
+          comment: item.name as string,
+          amount: item.total as number,
+          currency: item.currency as CurrencyCode,
+        });
+
+        if (fileId) {
+          database.db.run('UPDATE expenses SET receipt_file_id = ? WHERE id = ?', [
+            fileId,
+            result.expense.id,
+          ]);
+        }
+
+        created++;
+      }
+
+      emitForGroup(ctx.internalGroupId, 'expense_added');
+
+      return new Response(JSON.stringify({ created }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+      });
+    } catch (err) {
+      logger.error({ err }, 'Receipt confirm failed');
+      return errorResponse(500, 'Failed to save expenses', 'CONFIRM_FAILED', corsHeaders);
+    }
+  }
+
+  // ── GET /api/analytics ────────────────────────────────────────────────────
+
+  if (url.pathname === '/api/analytics' && req.method === 'GET') {
+    const groupIdParam = url.searchParams.get('groupId');
+    const telegramGroupId = groupIdParam ? parseInt(groupIdParam, 10) : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(
+        400,
+        'Missing or invalid groupId query param',
+        'BAD_REQUEST',
+        corsHeaders,
+      );
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    const periodParam = url.searchParams.get('period');
+    const period =
+      periodParam && /^\d{4}-\d{2}$/.test(periodParam)
+        ? periodParam
+        : new Date().toISOString().slice(0, 7);
+
+    const group = database.groups.findById(ctx.internalGroupId);
+    if (!group) {
+      return errorResponse(500, 'Group not found', 'INTERNAL_ERROR', corsHeaders);
+    }
+
+    /** Row returned by the per-category aggregation query */
+    interface CategoryRow {
+      category: string;
+      total: number;
+    }
+
+    const rows = database.db
+      .query<CategoryRow, [number, string]>(
+        `SELECT category, SUM(eur_amount) as total
+         FROM expenses
+         WHERE group_id = ? AND date LIKE ?
+         GROUP BY category`,
+      )
+      .all(ctx.internalGroupId, `${period}-%`);
+
+    const defaultCurrency = group.default_currency as CurrencyCode;
+
+    let totalEur = 0;
+    const byCategory: Record<string, number> = {};
+
+    for (const row of rows) {
+      totalEur += row.total;
+      byCategory[row.category] =
+        Math.round(convertCurrency(row.total, 'EUR', defaultCurrency) * 100) / 100;
+    }
+
+    const totalInDefault =
+      Math.round(convertCurrency(totalEur, 'EUR', defaultCurrency) * 100) / 100;
+
+    return new Response(
+      JSON.stringify({
+        period,
+        defaultCurrency,
+        income: 0,
+        expenses: totalInDefault,
+        balance: -totalInDefault,
+        savings: 0,
+        byCategory,
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+      },
+    );
+  }
+
+  // ── GET /api/dashboard ────────────────────────────────────────────────────
+
+  if (url.pathname === '/api/dashboard' && req.method === 'GET') {
+    const groupIdParam = url.searchParams.get('groupId');
+    const telegramGroupId = groupIdParam ? parseInt(groupIdParam, 10) : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(
+        400,
+        'Missing or invalid groupId query param',
+        'BAD_REQUEST',
+        corsHeaders,
+      );
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    /** Row shape from dashboard_widgets table */
+    interface DashboardRow {
+      config: string;
+      updated_at: string;
+    }
+
+    const row = database.db
+      .query<DashboardRow, [number, number]>(
+        'SELECT config, updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
+      )
+      .get(ctx.internalGroupId, ctx.userId);
+
+    if (!row) {
+      return new Response(JSON.stringify({ widgets: [], updatedAt: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+      });
+    }
+
+    let widgets: unknown[] = [];
+    try {
+      widgets = JSON.parse(row.config) as unknown[];
+    } catch {
+      widgets = [];
+    }
+
+    return new Response(JSON.stringify({ widgets, updatedAt: row.updated_at }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+    });
+  }
+
+  // ── PUT /api/dashboard ────────────────────────────────────────────────────
+
+  if (url.pathname === '/api/dashboard' && req.method === 'PUT') {
+    let body: { groupId?: unknown; widgets?: unknown; updatedAt?: unknown };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch (parseError) {
+      logger.warn({ err: parseError }, 'Failed to parse dashboard PUT body');
+      return errorResponse(400, 'Invalid JSON body', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const telegramGroupId = typeof body.groupId === 'number' ? body.groupId : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(400, 'Missing or invalid groupId', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    /** Row shape for conflict check */
+    interface DashboardUpdatedAtRow {
+      updated_at: string;
+    }
+
+    const existing = database.db
+      .query<DashboardUpdatedAtRow, [number, number]>(
+        'SELECT updated_at FROM dashboard_widgets WHERE group_id = ? AND user_id = ?',
+      )
+      .get(ctx.internalGroupId, ctx.userId);
+
+    const clientUpdatedAt = typeof body.updatedAt === 'string' ? body.updatedAt : null;
+
+    if (existing && clientUpdatedAt !== null && existing.updated_at !== clientUpdatedAt) {
+      return errorResponse(
+        409,
+        'Dashboard was modified by another client',
+        'CONFLICT',
+        corsHeaders,
+      );
+    }
+
+    const newUpdatedAt = new Date().toISOString();
+    const configJson = JSON.stringify(Array.isArray(body.widgets) ? body.widgets : []);
+
+    if (existing) {
+      database.db.run(
+        'UPDATE dashboard_widgets SET config = ?, updated_at = ? WHERE group_id = ? AND user_id = ?',
+        [configJson, newUpdatedAt, ctx.internalGroupId, ctx.userId],
+      );
+    } else {
+      database.db.run(
+        'INSERT INTO dashboard_widgets (group_id, user_id, config, updated_at) VALUES (?, ?, ?, ?)',
+        [ctx.internalGroupId, ctx.userId, configJson, newUpdatedAt],
+      );
+    }
+
+    return new Response(JSON.stringify({ ok: true, updatedAt: newUpdatedAt }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+    });
+  }
+
+  // ── GET /api/dashboard/events (SSE) ───────────────────────────────────────
+
+  if (url.pathname === '/api/dashboard/events' && req.method === 'GET') {
+    const groupIdParam = url.searchParams.get('groupId');
+    const telegramGroupId = groupIdParam ? parseInt(groupIdParam, 10) : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(
+        400,
+        'Missing or invalid groupId query param',
+        'BAD_REQUEST',
+        corsHeaders,
+      );
+    }
+
+    // EventSource doesn't support custom headers — initData comes as query param
+    const initData = url.searchParams.get('initData') ?? '';
+    const syntheticReq = new Request(req.url, {
+      headers: { ...Object.fromEntries(req.headers), 'X-Telegram-Init-Data': initData },
+    });
+
+    const ctx = await validateAndResolveContext(syntheticReq, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    const sseHeaders = {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      ...ctx.corsHeaders,
+    };
+
+    let unsub: (() => void) | null = null;
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const send = (msg: string) => {
+          try {
+            controller.enqueue(encoder.encode(msg));
+          } catch {
+            // controller may be closed already — ignore
+          }
+        };
+
+        unsub = subscribeGroup(ctx.internalGroupId, send);
+
+        // Send an initial ping so client knows the connection is alive
+        send('event: ping\ndata: {}\n\n');
+
+        pingInterval = setInterval(() => {
+          send('event: ping\ndata: {}\n\n');
+        }, 30_000);
+      },
+      cancel() {
+        if (unsub) unsub();
+        if (pingInterval) clearInterval(pingInterval);
+      },
+    });
+
+    return new Response(stream, { status: 200, headers: sseHeaders });
   }
 
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
