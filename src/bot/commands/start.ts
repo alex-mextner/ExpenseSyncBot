@@ -3,6 +3,8 @@ import { database } from '../../database';
 import type { Ctx } from '../types';
 
 const EXPENSE_EXAMPLES =
+  `<code>сумма [валюта] категория [комментарий]</code>\n` +
+  `Например:\n` +
   `<code>100 еда круассаны и кофе</code> — валюта по умолчанию\n` +
   `<code>100д подписки клод</code> — доллары\n` +
   `<code>1000 благ</code> — сокращённо «благотворительность»\n` +
