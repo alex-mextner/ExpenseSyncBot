@@ -28,7 +28,7 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
           `\n\n🔄 /reconnect — если таблица перестала обновляться или сменился Google-аккаунт.`;
       } else {
         message +=
-          `\n\n💡 /connect — подключить Google Sheets, расходы будут дублироваться в таблицу.`;
+          `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
       }
 
       await ctx.send(message, { parse_mode: 'HTML' });
