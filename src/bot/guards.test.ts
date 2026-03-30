@@ -1,7 +1,7 @@
-// Tests for command guards — requireGroup wrapper
+// Tests for command guards — requireGroup and requireGoogle wrappers
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Group } from '../database/types';
-import { requireGroup } from './guards';
+import { requireGoogle, requireGroup } from './guards';
 
 // Mock database
 const mockFindByTelegramGroupId = mock((): Group | null => null);
@@ -110,6 +110,49 @@ describe('requireGroup', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(ctx, fakeGroup);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('requireGoogle', () => {
+  test('rejects group without Google token', async () => {
+    const group = makeGroup(1, 123);
+    const handler = mock(() => Promise.resolve());
+    const guarded = requireGoogle(handler);
+    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+
+    await guarded(ctx as never, group);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual(['❌ Google таблица не подключена. Используй /connect']);
+  });
+
+  test('rejects group with token but no spreadsheet', async () => {
+    const group = { ...makeGroup(1, 123), google_refresh_token: 'tok' };
+    const handler = mock(() => Promise.resolve());
+    const guarded = requireGoogle(handler);
+    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+
+    await guarded(ctx as never, group);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual(['❌ Google таблица не подключена. Используй /connect']);
+  });
+
+  test('calls handler when Google is fully connected', async () => {
+    const group = {
+      ...makeGroup(1, 123),
+      google_refresh_token: 'tok',
+      spreadsheet_id: 'sheet123',
+    };
+    const handler = mock(() => Promise.resolve());
+    const guarded = requireGoogle(handler);
+    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+
+    await guarded(ctx as never, group);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(ctx, group);
     expect(sent).toEqual([]);
   });
 });

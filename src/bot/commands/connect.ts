@@ -1,7 +1,4 @@
-/**
- * /connect command handler — group setup with optional Google Sheets.
- * Also shows a /topic recommendation for forum-based groups after onboarding.
- */
+/** /connect command handler — group setup with optional Google Sheets */
 import { InlineKeyboard } from 'gramio';
 import { type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
@@ -310,11 +307,9 @@ export async function handleDefaultCurrencyCallback(
   // Set as default currency
   database.groups.update(chatId, { default_currency: currency });
 
-  const isForum = ctx.message?.chat?.isForum === true;
-
   // If Google is connected, create spreadsheet
   if (group.google_refresh_token) {
-    await createSpreadsheetForGroup(ctx, chatId, isForum);
+    await createSpreadsheetForGroup(ctx, chatId);
   } else {
     // No Google — setup complete without spreadsheet
     await ctx.editText(
@@ -326,10 +321,9 @@ export async function handleDefaultCurrencyCallback(
       { parse_mode: 'HTML' },
     );
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
   }
-
-  await sendTopicRecommendation(ctx, chatId, isForum);
 }
 
 /**
@@ -338,7 +332,6 @@ export async function handleDefaultCurrencyCallback(
 async function createSpreadsheetForGroup(
   ctx: Ctx['CallbackQuery'] | Ctx['Command'],
   chatId: number,
-  isForum = false,
 ): Promise<void> {
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group || !group.google_refresh_token || !group.default_currency) {
@@ -359,8 +352,7 @@ async function createSpreadsheetForGroup(
     database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
     await ctx.send(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
-    await sendTopicRecommendation(ctx, chatId, isForum);
-
+    await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
     logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
@@ -369,18 +361,18 @@ async function createSpreadsheetForGroup(
 }
 
 /**
- * If the group has topics (forum), recommend running /topic in the finance topic.
+ * If the group is a forum, recommend running /topic in the finance topic.
  * Sent as a separate message so the main completion message stays clean.
  */
 async function sendTopicRecommendation(
   ctx: Ctx['CallbackQuery'] | Ctx['Command'],
   chatId: number,
-  isForum: boolean,
 ): Promise<void> {
-  if (!isForum) return;
-
   const group = database.groups.findByTelegramGroupId(chatId);
   if (group?.active_topic_id) return; // already configured
+
+  const isForum = 'chat' in ctx && ctx.chat && 'isForum' in ctx.chat && ctx.chat.isForum === true;
+  if (!isForum) return;
 
   await ctx.send(
     `💡 <b>У тебя группа с топиками</b>\n\n` +

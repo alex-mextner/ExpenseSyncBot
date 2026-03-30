@@ -130,6 +130,7 @@ async function handleAskWithAnthropic(
       });
     },
     isMention,
+    isForumWithoutTopic: ctx.chat?.isForum === true && group.active_topic_id == null,
   };
 
   // Get recent chat history (last 10 messages / 5 pairs)

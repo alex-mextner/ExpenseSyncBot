@@ -446,6 +446,11 @@ Respond only when:
 
 Respond in Russian if the user writes in Russian, otherwise in English.`;
 
+    if (this.ctx.isForumWithoutTopic) {
+      prompt += `\n\nЭта группа использует топики (форум), но команда /topic ещё не настроена — бот слушает все топики.
+Если пользователь жалуется, что бот отвечает не там или реагирует когда не нужно — посоветуй перейти в топик для финансов и написать /topic, чтобы бот работал только в этом топике.`;
+    }
+
     if (this.ctx.customPrompt) {
       prompt += `\n\n=== CUSTOM GROUP INSTRUCTIONS ===\n${this.ctx.customPrompt}`;
     }

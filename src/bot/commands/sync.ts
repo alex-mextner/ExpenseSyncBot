@@ -2,13 +2,14 @@
 
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
-import type { Expense, Group } from '../../database/types';
+import type { Expense } from '../../database/types';
 import {
   type MultiCurrencyRowError,
   readExpensesFromSheet,
   type SheetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import type { GoogleConnectedGroup } from '../guards';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('sync');
@@ -463,12 +464,10 @@ export async function ensureFreshExpenses(
 /**
  * /sync command handler
  */
-export async function handleSyncCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
-  if (!group.spreadsheet_id || !group.google_refresh_token) {
-    await ctx.send('❌ Google таблица не подключена. Используй /connect');
-    return;
-  }
-
+export async function handleSyncCommand(
+  ctx: Ctx['Command'],
+  group: GoogleConnectedGroup,
+): Promise<void> {
   await ctx.send('🔄 Синхронизирую...');
 
   try {
