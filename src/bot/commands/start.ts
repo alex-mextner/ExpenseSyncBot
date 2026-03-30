@@ -1,7 +1,7 @@
 /** /start command handler */
 import { database } from '../../database';
 import type { Ctx } from '../types';
-import { EXPENSE_EXAMPLES, buildHelpText } from './help';
+import { buildHelpText, EXPENSE_EXAMPLES } from './help';
 
 export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
   const telegramId = ctx.from?.id;
@@ -24,11 +24,9 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
       let message = `👋 Бот настроен и готов к работе.\n\n${buildHelpText()}`;
 
       if (hasGoogle) {
-        message +=
-          `\n\n🔄 /reconnect — если таблица перестала обновляться или сменился Google-аккаунт.`;
+        message += `\n\n🔄 /reconnect — если таблица перестала обновляться или сменился Google-аккаунт.`;
       } else {
-        message +=
-          `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
+        message += `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
       }
 
       await ctx.send(message, { parse_mode: 'HTML' });
