@@ -1,4 +1,7 @@
-/** /connect command handler — group setup with optional Google Sheets */
+/**
+ * /connect command handler — group setup with optional Google Sheets.
+ * Also shows a /topic recommendation for forum-based groups after onboarding.
+ */
 import { InlineKeyboard } from 'gramio';
 import { type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
@@ -307,9 +310,11 @@ export async function handleDefaultCurrencyCallback(
   // Set as default currency
   database.groups.update(chatId, { default_currency: currency });
 
+  const isForum = ctx.message?.chat?.isForum === true;
+
   // If Google is connected, create spreadsheet
   if (group.google_refresh_token) {
-    await createSpreadsheetForGroup(ctx, chatId);
+    await createSpreadsheetForGroup(ctx, chatId, isForum);
   } else {
     // No Google — setup complete without spreadsheet
     await ctx.editText(
@@ -323,6 +328,8 @@ export async function handleDefaultCurrencyCallback(
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
     logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
   }
+
+  await sendTopicRecommendation(ctx, chatId, isForum);
 }
 
 /**
@@ -331,6 +338,7 @@ export async function handleDefaultCurrencyCallback(
 async function createSpreadsheetForGroup(
   ctx: Ctx['CallbackQuery'] | Ctx['Command'],
   chatId: number,
+  isForum = false,
 ): Promise<void> {
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group || !group.google_refresh_token || !group.default_currency) {
@@ -351,10 +359,37 @@ async function createSpreadsheetForGroup(
     database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
     await ctx.send(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
+    await sendTopicRecommendation(ctx, chatId, isForum);
 
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
     logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
     await ctx.send('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
+}
+
+/**
+ * If the group has topics (forum), recommend running /topic in the finance topic.
+ * Sent as a separate message so the main completion message stays clean.
+ */
+async function sendTopicRecommendation(
+  ctx: Ctx['CallbackQuery'] | Ctx['Command'],
+  chatId: number,
+  isForum: boolean,
+): Promise<void> {
+  if (!isForum) return;
+
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (group?.active_topic_id) return; // already configured
+
+  await ctx.send(
+    `💡 <b>У тебя группа с топиками</b>\n\n` +
+      `Бот сейчас слушает все топики. Чтобы расходы и команды работали только в одном топике ` +
+      `(например, «Финансы»):\n\n` +
+      `1. Перейди в нужный топик\n` +
+      `2. Напиши там /topic\n\n` +
+      `Зачем: сообщения из других топиков не будут восприниматься как расходы, ` +
+      `а ответы бота не будут засорять нерелевантные обсуждения.`,
+    { parse_mode: 'HTML' },
+  );
 }
