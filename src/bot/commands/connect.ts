@@ -1,6 +1,12 @@
 /** /connect command handler — group setup with optional Google Sheets */
 import { InlineKeyboard } from 'gramio';
-import { type CurrencyCode, MESSAGES } from '../../config/constants';
+import {
+  buildCurrencyHints,
+  type CurrencyCode,
+  getCurrencyLabel,
+  isValidCurrencyCode,
+  MESSAGES,
+} from '../../config/constants';
 import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
@@ -10,6 +16,17 @@ import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboa
 import type { Ctx } from '../types';
 
 const logger = createLogger('connect');
+
+/** Groups currently awaiting custom currency text input (groupId → true) */
+const awaitingCustomCurrency = new Map<number, boolean>();
+
+export function isAwaitingCustomCurrency(telegramGroupId: number): boolean {
+  return awaitingCustomCurrency.get(telegramGroupId) === true;
+}
+
+export function clearAwaitingCustomCurrency(telegramGroupId: number): void {
+  awaitingCustomCurrency.delete(telegramGroupId);
+}
 
 /**
  * /connect command handler - only works in groups
@@ -224,6 +241,18 @@ export async function handleCurrencyCallback(
     return;
   }
 
+  // Step 1: User wants to type a custom currency code
+  if (action === 'custom') {
+    awaitingCustomCurrency.set(chatId, true);
+    await ctx.answerCallbackQuery({ text: 'Напиши код валюты в чат' });
+    await ctx.send(
+      '✏️ Напиши код валюты (3 буквы, например <code>TRY</code>, <code>PLN</code>, <code>GEL</code>):\n\n' +
+        'Поддерживаются все валюты мира по стандарту ISO 4217.',
+      { parse_mode: 'HTML' },
+    );
+    return;
+  }
+
   // Step 1: Currency set selection - user clicked "Далее"
   if (action === 'next') {
     if (group.enabled_currencies.length === 0) {
@@ -321,9 +350,68 @@ export async function handleDefaultCurrencyCallback(
       { parse_mode: 'HTML' },
     );
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    await sendCurrencyHints(ctx, group.enabled_currencies, currency);
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
   }
+}
+
+/**
+ * Handle custom currency text input during onboarding Step 1
+ */
+export async function handleCustomCurrencyInput(
+  ctx: Ctx['Message'],
+  chatId: number,
+): Promise<boolean> {
+  if (!awaitingCustomCurrency.get(chatId)) return false;
+
+  const text = ctx.text?.trim().toUpperCase();
+  if (!text) return false;
+
+  awaitingCustomCurrency.delete(chatId);
+
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) return true;
+
+  if (!isValidCurrencyCode(text)) {
+    const keyboard = createCurrencyKeyboard(group.enabled_currencies);
+    await ctx.send(
+      `❌ <code>${text}</code> — не похоже на код валюты.\n\n` +
+        'Код валюты — 3 латинские буквы (например USD, EUR, TRY, PLN).\n' +
+        'Попробуй ещё раз, нажав «✏️ Ввести код валюты».\n\n' +
+        `📊 Выбрано: ${group.enabled_currencies.join(', ') || 'нет'}`,
+      { parse_mode: 'HTML', reply_markup: keyboard },
+    );
+    return true;
+  }
+
+  const code = text as CurrencyCode; // runtime-valid ISO code, may be outside SUPPORTED_CURRENCIES
+  const enabledCurrencies = [...group.enabled_currencies];
+
+  if (enabledCurrencies.includes(code)) {
+    await ctx.send(`✅ ${code} уже в наборе.`);
+  } else {
+    enabledCurrencies.push(code);
+    database.groups.update(chatId, { enabled_currencies: enabledCurrencies });
+
+    const label = getCurrencyLabel(code);
+    await ctx.send(`✅ ${label} — добавлена в набор.`);
+  }
+
+  // Show updated keyboard
+  const updatedGroup = database.groups.findByTelegramGroupId(chatId);
+  if (!updatedGroup) return true;
+
+  const keyboard = createCurrencyKeyboard(updatedGroup.enabled_currencies);
+  await ctx.send(
+    '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
+      '• Можно выбрать несколько\n' +
+      '• Нажми ✅ Далее когда закончишь\n\n' +
+      `📊 Выбрано: ${updatedGroup.enabled_currencies.join(', ')}`,
+    { reply_markup: keyboard },
+  );
+
+  return true;
 }
 
 /**
@@ -352,12 +440,27 @@ async function createSpreadsheetForGroup(
     database.groups.update(chatId, { spreadsheet_id: spreadsheetId });
 
     await ctx.send(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl));
+    await sendCurrencyHints(ctx, group.enabled_currencies, group.default_currency);
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
   } catch (err) {
     logger.error({ err: err }, '[CMD] ❌ Error creating spreadsheet');
     await ctx.send('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
+}
+
+/**
+ * Send currency usage hints after setup — explains shortcuts and default currency behavior
+ */
+async function sendCurrencyHints(
+  ctx: Ctx['CallbackQuery'] | Ctx['Command'],
+  enabledCurrencies: string[],
+  defaultCurrency: string,
+): Promise<void> {
+  if (enabledCurrencies.length <= 1) return; // no hints needed for single currency
+
+  const hints = buildCurrencyHints(enabledCurrencies, defaultCurrency);
+  await ctx.send(`💡 <b>Подсказка по валютам</b>\n\n${hints}`, { parse_mode: 'HTML' });
 }
 
 /**
