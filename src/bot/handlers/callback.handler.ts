@@ -32,6 +32,7 @@ import {
 } from '../commands/connect';
 import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
+import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import type { BotInstance, Ctx } from '../types';
 import { getSheetWriteErrorMessage, saveExpenseToSheet } from './message.handler';
@@ -82,6 +83,16 @@ export async function handleCallbackQuery(
 
   try {
     switch (action) {
+      case 'feedback_cancel': {
+        if (chatId) cancelPendingFeedback(chatId);
+        await ctx.answerCallbackQuery({ text: '❌ Отменено' });
+        const msgId = ctx.message?.id;
+        if (msgId && chatId) {
+          await bot.api.deleteMessage({ chat_id: chatId, message_id: msgId });
+        }
+        break;
+      }
+
       case 'setup': {
         const setupAction = params.join(':');
         await handleSetupChoiceCallback(ctx, setupAction);

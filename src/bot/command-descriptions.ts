@@ -16,6 +16,7 @@ export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'budget', description: 'Управление бюджетами (подкоманда: /budget sync)' },
   { command: 'categories', description: 'Список категорий' },
   { command: 'settings', description: 'Настройки группы' },
+  { command: 'feedback', description: 'Отправить отзыв или баг-репорт' },
   { command: 'reconnect', description: 'Переподключить Google аккаунт' },
   { command: 'advice', description: 'AI-анализ расходов с советами' },
   { command: 'prompt', description: 'Настроить AI-промпт группы' },
