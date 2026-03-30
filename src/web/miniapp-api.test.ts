@@ -27,12 +27,37 @@ const mockExtractExpensesFromReceipt = mock(
   (_data: string, _categories: string[]): Promise<AIExtractionResult> =>
     Promise.resolve({ items: [] }),
 );
+const mockExtractTextFromImageBuffer = mock(
+  (_buf: Buffer): Promise<string> => Promise.resolve('OCR text'),
+);
+
+// sharp mock: returns an object with chainable .resize().jpeg().toBuffer()
+const mockSharpToBuffer = mock(() => Promise.resolve(Buffer.from('compressed')));
+const mockSharpJpeg = mock(() => ({ toBuffer: mockSharpToBuffer }));
+const mockSharpResize = mock(() => ({ jpeg: mockSharpJpeg }));
+const mockSharp = mock((_input: Buffer) => ({ resize: mockSharpResize }));
+
+// global fetch mock for Telegram sendDocument
+const mockFetch = mock(
+  (_url: string, _init?: RequestInit): Promise<Response> =>
+    Promise.resolve(
+      new Response(JSON.stringify({ ok: true, result: { document: { file_id: 'tg_file_123' } } })),
+    ),
+);
+// Bun's typeof fetch includes namespace.preconnect which a plain mock can't satisfy structurally
+global.fetch = mockFetch as unknown as typeof fetch;
 
 mock.module('../config/env.ts', () => ({
   env: {
     BOT_TOKEN: TEST_BOT_TOKEN,
     MINIAPP_URL: CORS_ORIGIN,
   },
+}));
+
+mock.module('sharp', () => ({ default: mockSharp }));
+
+mock.module('../services/receipt/ocr-extractor.ts', () => ({
+  extractTextFromImageBuffer: mockExtractTextFromImageBuffer,
 }));
 
 mock.module('../database/index.ts', () => ({
@@ -169,6 +194,8 @@ describe('validateAndResolveContext — HMAC validation', () => {
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
+    mockExtractTextFromImageBuffer.mockReset();
+    mockFetch.mockReset();
   });
 
   test('missing header → 401 INVALID_INIT_DATA', async () => {
@@ -260,6 +287,8 @@ describe('POST /api/receipt/scan', () => {
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
+    mockExtractTextFromImageBuffer.mockReset();
+    mockFetch.mockReset();
   });
 
   test('missing qrData → 400 BAD_REQUEST', async () => {
@@ -450,5 +479,167 @@ describe('POST /api/receipt/scan', () => {
     expect(mockCategoriesFindByGroupId.mock.calls.length).toBe(1);
     expect(mockCategoriesFindByGroupId.mock.calls[0]?.[0]).toBe(7); // internalGroupId
     expect(mockExtractExpensesFromReceipt.mock.calls[0]?.[1]).toEqual(['Еда', 'Транспорт']);
+  });
+});
+
+// ── Helpers for OCR tests ─────────────────────────────────────────────────────
+
+/** Build a multipart request with an image field */
+function makeOcrRequest(path: string, hasImage: boolean, initData?: string): Request {
+  const formData = new FormData();
+  if (hasImage) {
+    formData.append(
+      'image',
+      new Blob([Buffer.from('fake-jpeg')], { type: 'image/jpeg' }),
+      'receipt.jpg',
+    );
+  }
+  return new Request(`https://server${path}`, {
+    method: 'POST',
+    headers: initData ? { 'X-Telegram-Init-Data': initData } : {},
+    body: formData,
+  });
+}
+
+describe('POST /api/receipt/ocr', () => {
+  const GROUP_ID = -1001234567;
+  const OCR_PATH = `/api/receipt/ocr?groupId=${GROUP_ID}`;
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryGet.mockReset();
+    mockCategoriesFindByGroupId.mockReset();
+    mockExtractExpensesFromReceipt.mockReset();
+    mockExtractTextFromImageBuffer.mockReset();
+    mockSharpToBuffer.mockReset();
+    mockFetch.mockReset();
+
+    // Default sharp chain returns compressed buffer
+    mockSharpToBuffer.mockImplementation(() => Promise.resolve(Buffer.from('compressed')));
+    mockSharpJpeg.mockImplementation(() => ({ toBuffer: mockSharpToBuffer }));
+    mockSharpResize.mockImplementation(() => ({ jpeg: mockSharpJpeg }));
+    mockSharp.mockImplementation((_input: Buffer) => ({ resize: mockSharpResize }));
+  });
+
+  test('missing image field → 400 BAD_REQUEST', async () => {
+    const initData = buildInitData(42);
+    const req = makeOcrRequest(OCR_PATH, false, initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('BAD_REQUEST');
+  });
+
+  test('auth failure → 401', async () => {
+    // No initData header
+    const req = makeOcrRequest(OCR_PATH, true);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('OCR failure → 500 OCR_FAILED', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockCategoriesFindByGroupId.mockImplementation(() => []);
+    mockExtractTextFromImageBuffer.mockImplementation(() =>
+      Promise.reject(new Error('Qwen API down')),
+    );
+
+    const initData = buildInitData(42);
+    const req = makeOcrRequest(OCR_PATH, true, initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe('OCR_FAILED');
+    expect(body.error).toBe('OCR processing failed');
+  });
+
+  test('success → 200 with items and file_id', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockCategoriesFindByGroupId.mockImplementation(() => [{ name: 'Продукты' }]);
+    mockExtractTextFromImageBuffer.mockImplementation(() =>
+      Promise.resolve('Store: TestMart\nMilk 2x85.50'),
+    );
+    mockExtractExpensesFromReceipt.mockImplementation(() =>
+      Promise.resolve({
+        items: [
+          {
+            name_ru: 'Молоко',
+            quantity: 2,
+            price: 85.5,
+            total: 171.0,
+            category: 'Продукты',
+            possible_categories: [],
+          },
+        ],
+        currency: 'RSD',
+      }),
+    );
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ ok: true, result: { document: { file_id: 'tg_file_abc' } } }),
+        ),
+      ),
+    );
+
+    const initData = buildInitData(42);
+    const req = makeOcrRequest(OCR_PATH, true, initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(CORS_ORIGIN);
+
+    const body = (await res.json()) as {
+      items: { name: string; qty: number; price: number; total: number; category: string }[];
+      currency?: string;
+      file_id: string | null;
+    };
+    expect(body.file_id).toBe('tg_file_abc');
+    expect(body.currency).toBe('RSD');
+    expect(body.items).toHaveLength(1);
+    const item = body.items[0];
+    if (item) {
+      expect(item.name).toBe('Молоко');
+      expect(item.qty).toBe(2);
+      expect(item.price).toBe(85.5);
+      expect(item.total).toBe(171.0);
+      expect(item.category).toBe('Продукты');
+    }
+  });
+
+  test('success with Telegram upload failure → 200 with file_id: null', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryGet.mockImplementation(() => ({ id: 7 }));
+    mockCategoriesFindByGroupId.mockImplementation(() => []);
+    mockExtractTextFromImageBuffer.mockImplementation(() => Promise.resolve('some receipt text'));
+    mockExtractExpensesFromReceipt.mockImplementation(() =>
+      Promise.resolve({
+        items: [
+          {
+            name_ru: 'Товар',
+            quantity: 1,
+            price: 10,
+            total: 10,
+            category: 'Разное',
+            possible_categories: [],
+          },
+        ],
+      }),
+    );
+    mockFetch.mockImplementation(() => Promise.reject(new Error('network error')));
+
+    const initData = buildInitData(42);
+    const req = makeOcrRequest(OCR_PATH, true, initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { file_id: string | null; items: unknown[] };
+    expect(body.file_id).toBeNull();
+    expect(body.items).toHaveLength(1);
   });
 });

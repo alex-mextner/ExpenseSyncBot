@@ -1,8 +1,10 @@
 // Mini App API handler: HMAC initData validation and routing for /api/* endpoints
 import { createHmac } from 'node:crypto';
+import sharp from 'sharp';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
 import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
+import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
 import { createLogger } from '../utils/logger.ts';
 
@@ -253,6 +255,99 @@ export async function handleMiniAppRequest(
     } catch (err) {
       logger.error({ err }, 'Receipt scan failed');
       return errorResponse(500, 'Receipt scan failed', 'SCAN_FAILED', corsHeaders);
+    }
+  }
+
+  if (url.pathname === '/api/receipt/ocr' && req.method === 'POST') {
+    const groupIdParam = url.searchParams.get('groupId');
+    const telegramGroupId = groupIdParam ? parseInt(groupIdParam, 10) : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(
+        400,
+        'Missing or invalid groupId query param',
+        'BAD_REQUEST',
+        corsHeaders,
+      );
+    }
+
+    let imageBlob: Blob | null = null;
+    try {
+      const formData = await req.formData();
+      const field = formData.get('image');
+      if (!field || !(field instanceof Blob)) {
+        return errorResponse(400, 'Missing required field: image', 'BAD_REQUEST', corsHeaders);
+      }
+      imageBlob = field;
+    } catch (parseError) {
+      logger.warn({ err: parseError }, 'Failed to parse multipart form data');
+      return errorResponse(400, 'Invalid multipart form data', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    try {
+      const rawBuffer = Buffer.from(await imageBlob.arrayBuffer());
+      const compressedBuffer = await sharp(rawBuffer)
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+
+      const ocrText = await extractTextFromImageBuffer(compressedBuffer);
+
+      const categoryNames = database.categories
+        .findByGroupId(ctx.internalGroupId)
+        .map((c) => c.name);
+      const result = await extractExpensesFromReceipt(ocrText, categoryNames);
+
+      // Upload image to Telegram to get a file_id for later use in the confirm step
+      const tgFormData = new FormData();
+      tgFormData.append(
+        'document',
+        new File([compressedBuffer], 'receipt.jpg', { type: 'image/jpeg' }),
+      );
+      tgFormData.append('chat_id', String(ctx.groupId));
+
+      let fileId: string | null = null;
+      try {
+        const telegramResp = await fetch(
+          `https://api.telegram.org/bot${env.BOT_TOKEN}/sendDocument`,
+          { method: 'POST', body: tgFormData },
+        );
+        const tgResult = (await telegramResp.json()) as {
+          ok: boolean;
+          result?: { document?: { file_id: string } };
+        };
+        fileId = tgResult.result?.document?.file_id ?? null;
+      } catch (tgError) {
+        logger.warn(
+          { err: tgError },
+          '[OCR] Failed to upload receipt to Telegram, continuing without file_id',
+        );
+      }
+
+      const items = result.items.map((item) => ({
+        name: item.name_ru,
+        qty: item.quantity,
+        price: item.price,
+        total: item.total,
+        category: item.category,
+      }));
+
+      return new Response(
+        JSON.stringify({
+          items,
+          ...(result.currency !== undefined ? { currency: result.currency } : {}),
+          file_id: fileId,
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+        },
+      );
+    } catch (err) {
+      logger.error({ err }, 'OCR processing failed');
+      return errorResponse(500, 'OCR processing failed', 'OCR_FAILED', corsHeaders);
     }
   }
 
