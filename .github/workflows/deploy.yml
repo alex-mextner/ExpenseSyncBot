@@ -47,7 +47,7 @@ jobs:
             cd ..
 
             echo "🔄 Reloading Caddy..."
-            caddy reload
+            caddy reload --config /etc/caddy/Caddyfile
 
             echo "🔄 Reloading PM2 process..."
             /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env
