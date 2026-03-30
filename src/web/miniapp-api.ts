@@ -212,7 +212,8 @@ export async function handleMiniAppRequest(
     let body: { qrData?: unknown };
     try {
       body = (await req.json()) as { qrData?: unknown };
-    } catch {
+    } catch (parseError) {
+      logger.warn({ err: parseError }, 'Failed to parse request body');
       return errorResponse(400, 'Invalid JSON body', 'BAD_REQUEST', corsHeaders);
     }
 
@@ -251,12 +252,7 @@ export async function handleMiniAppRequest(
       );
     } catch (err) {
       logger.error({ err }, 'Receipt scan failed');
-      return errorResponse(
-        500,
-        err instanceof Error ? err.message : 'Receipt scan failed',
-        'SCAN_FAILED',
-        corsHeaders,
-      );
+      return errorResponse(500, 'Receipt scan failed', 'SCAN_FAILED', corsHeaders);
     }
   }
 

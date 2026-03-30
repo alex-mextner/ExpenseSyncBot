@@ -321,7 +321,7 @@ describe('POST /api/receipt/scan', () => {
     expect(res.status).toBe(500);
     const body = (await res.json()) as { code: string; error: string };
     expect(body.code).toBe('SCAN_FAILED');
-    expect(body.error).toBe('Network error');
+    expect(body.error).toBe('Receipt scan failed');
   });
 
   test('extractExpensesFromReceipt failure → 500 SCAN_FAILED', async () => {
