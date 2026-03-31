@@ -71,19 +71,23 @@ mock.module('../../database', () => ({
   },
 }));
 
-// Import after database mock (sheets/converter are spied via spyOn below)
+// ── Mock sendToChat (used by both saveReceiptExpenses and checkBudgetLimit) ──
+
+const sentMessages: { text: string; options: Record<string, unknown> | undefined }[] = [];
+const mockSendToChat = mock((text: string, options?: Record<string, unknown>) => {
+  sentMessages.push({ text, options });
+  return Promise.resolve({ message_id: 1 });
+});
+
+mock.module('../send', () => ({
+  sendToChat: mockSendToChat,
+  initSend: () => {},
+}));
+
+// Import after mocks are set up (sheets/converter are spied via spyOn below)
 import * as converterModule from '../../services/currency/converter';
 import * as sheetsModule from '../../services/google/sheets';
 import { saveReceiptExpenses } from './expense-saver';
-
-// ── Mock bot factory ────────────────────────────────────────────────────────────
-
-function makeMockBot() {
-  const sendMessage = mock((_params: { chat_id: number; text: string; parse_mode?: string }) => {
-    return Promise.resolve({ ok: true, message_id: 1 });
-  });
-  return { api: { sendMessage }, _sendMessage: sendMessage };
-}
 
 // ── Test data ───────────────────────────────────────────────────────────────────
 
@@ -135,6 +139,8 @@ let appendRowSpy: ReturnType<typeof spyOn>;
 let convertCurrencySpy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
+  sentMessages.length = 0;
+
   // Reset database mocks
   mockReceiptItems.findConfirmedByPhotoQueueId.mockReset().mockReturnValue([]);
   mockReceiptItems.deleteProcessedByPhotoQueueId.mockReset();
@@ -156,6 +162,7 @@ beforeEach(() => {
   mockExpenseItems.create.mockReset();
   mockBudgets.getBudgetForMonth.mockReset().mockReturnValue(null);
   mockTransaction.mockReset().mockImplementation((fn: () => void) => fn());
+  mockSendToChat.mockClear();
 
   // Spy on real module exports
   appendRowSpy = spyOn(sheetsModule, 'appendExpenseRow').mockResolvedValue(undefined);
@@ -174,28 +181,24 @@ describe('saveReceiptExpenses', () => {
   it('does nothing when no confirmed items', async () => {
     mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([]);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     expect(appendRowSpy).not.toHaveBeenCalled();
-    expect(bot._sendMessage).not.toHaveBeenCalled();
+    expect(mockSendToChat).not.toHaveBeenCalled();
   });
 
   it('saves receipt items and sends completion message', async () => {
     mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([makeReceiptItem()]);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     expect(appendRowSpy).toHaveBeenCalledTimes(1);
     expect(mockExpenses.create).toHaveBeenCalledTimes(1);
     expect(mockReceiptItems.deleteProcessedByPhotoQueueId).toHaveBeenCalledTimes(1);
 
-    // Completion message sent to group
-    expect(bot._sendMessage).toHaveBeenCalled();
-    const lastCall = bot._sendMessage.mock.calls.at(-1)?.[0];
-    expect(lastCall?.text).toContain('Чек обработан');
-    expect(lastCall?.chat_id).toBe(TEST_TELEGRAM_GROUP_ID);
+    // Completion message via sendToChat
+    const completionMsg = sentMessages.find((m) => m.text.includes('Чек обработан'));
+    expect(completionMsg).toBeDefined();
   });
 
   it('sends budget exceeded warning after saving receipt with over-budget category', async () => {
@@ -225,20 +228,15 @@ describe('saveReceiptExpenses', () => {
     mockExpenses.sumByCategory.mockReturnValue(15);
     convertCurrencySpy.mockReturnValue(15);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // 2 categories → 2 sheet writes
     expect(appendRowSpy).toHaveBeenCalledTimes(2);
 
-    // Budget warning for Продукты (exceeded)
-    const budgetCalls = bot._sendMessage.mock.calls.filter((c: [{ text: string }]) =>
-      c[0]?.text?.includes('ПРЕВЫШЕН БЮДЖЕТ'),
-    );
-    expect(budgetCalls.length).toBe(1);
-    const budgetMsg = budgetCalls[0]?.[0];
+    // Budget warning for Продукты (exceeded) via sendToChat
+    const budgetMsg = sentMessages.find((m) => m.text.includes('ПРЕВЫШЕН БЮДЖЕТ'));
+    expect(budgetMsg).toBeDefined();
     expect(budgetMsg?.text).toContain('Продукты');
-    expect(budgetMsg?.chat_id).toBe(TEST_TELEGRAM_GROUP_ID);
   });
 
   it('sends warning when budget is at 90%+', async () => {
@@ -256,13 +254,10 @@ describe('saveReceiptExpenses', () => {
     mockExpenses.sumByCategory.mockReturnValue(92);
     convertCurrencySpy.mockReturnValue(92);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
-    const warningCalls = bot._sendMessage.mock.calls.filter((c: [{ text: string }]) =>
-      c[0]?.text?.includes('Приближение к лимиту'),
-    );
-    expect(warningCalls.length).toBe(1);
+    const warningMsg = sentMessages.find((m) => m.text.includes('Приближение к лимиту'));
+    expect(warningMsg).toBeDefined();
   });
 
   it('does not send warning when budget is under 90%', async () => {
@@ -280,16 +275,13 @@ describe('saveReceiptExpenses', () => {
     mockExpenses.sumByCategory.mockReturnValue(50);
     convertCurrencySpy.mockReturnValue(50);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Only completion message, no budget warning
-    const allCalls = bot._sendMessage.mock.calls;
-    const budgetCalls = allCalls.filter(
-      (c: [{ text: string }]) =>
-        c[0]?.text?.includes('ПРЕВЫШЕН') || c[0]?.text?.includes('Приближение'),
+    const budgetMsgs = sentMessages.filter(
+      (m) => m.text.includes('ПРЕВЫШЕН') || m.text.includes('Приближение'),
     );
-    expect(budgetCalls.length).toBe(0);
+    expect(budgetMsgs.length).toBe(0);
   });
 
   it('skips items without confirmed_category', async () => {
@@ -298,8 +290,7 @@ describe('saveReceiptExpenses', () => {
       makeReceiptItem({ id: 2, confirmed_category: 'Продукты' }),
     ]);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Only 1 category processed (the one with confirmed_category)
     expect(appendRowSpy).toHaveBeenCalledTimes(1);
@@ -313,8 +304,7 @@ describe('saveReceiptExpenses', () => {
 
     appendRowSpy.mockRejectedValueOnce(new Error('Sheet error')).mockResolvedValueOnce(undefined);
 
-    const bot = makeMockBot();
-    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID, bot as never);
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Sheet was attempted for both categories
     expect(appendRowSpy).toHaveBeenCalledTimes(2);

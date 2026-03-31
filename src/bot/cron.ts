@@ -1,4 +1,4 @@
-// Scheduled tasks: exchange rate rotation (every 6h) + monthly budget tab auto-clone
+// Scheduled tasks: daily exchange rate update + monthly budget tab auto-clone
 
 import cron from 'node-cron';
 import { database } from '../database';
@@ -19,19 +19,19 @@ import type { BotInstance } from './types';
 const logger = createLogger('cron');
 
 /**
- * Fetch exchange rates on startup and refresh every 6 hours.
- * Keeps convertToEUR / convertCurrency working with live rates instead of hardcoded fallbacks.
+ * Fetch exchange rates on startup and daily at 01:00 UTC.
+ * open.er-api.com updates around 00:00 UTC — fetching at 01:00 ensures fresh data.
  */
 export function registerExchangeRateCron(): void {
   updateExchangeRates().catch((err) =>
     logger.error({ err }, '[CRON] Initial exchange rate fetch failed'),
   );
-  cron.schedule('0 */6 * * *', () => {
+  cron.schedule('0 1 * * *', () => {
     updateExchangeRates().catch((err) =>
       logger.error({ err }, '[CRON] Exchange rate refresh failed'),
     );
   });
-  logger.info('[CRON] Exchange rate rotation registered (every 6h, fetch on startup)');
+  logger.info('[CRON] Exchange rate cron registered (daily 01:00 UTC, fetch on startup)');
 }
 
 export function registerMonthlyCron(bot: BotInstance): void {

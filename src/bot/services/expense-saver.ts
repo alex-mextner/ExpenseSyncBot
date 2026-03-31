@@ -280,7 +280,7 @@ export async function saveReceiptExpenses(
       }
     });
 
-    await checkBudgetLimit(groupId, category, currentDate, group.telegram_group_id, bot);
+    await checkBudgetLimit(groupId, category, currentDate);
   }
 
   // Delete all processed receipt items (confirmed + skipped)

@@ -26,10 +26,10 @@ describe('registerExchangeRateCron', () => {
     expect(updateSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('registers cron job at "0 */6 * * *"', () => {
+  it('registers daily cron job at "0 1 * * *" (01:00 UTC)', () => {
     registerExchangeRateCron();
     expect(cronSpy).toHaveBeenCalledTimes(1);
-    expect(cronSpy.mock.calls[0]?.[0]).toBe('0 */6 * * *');
+    expect(cronSpy.mock.calls[0]?.[0]).toBe('0 1 * * *');
   });
 
   it('cron callback calls updateExchangeRates', () => {
