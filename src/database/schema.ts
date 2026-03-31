@@ -1171,8 +1171,12 @@ export function runMigrations(db: Database): void {
     {
       name: '043_fix_default_enabled_currencies',
       up: () => {
-        db.exec(`UPDATE groups SET enabled_currencies = '[]' WHERE enabled_currencies = '["USD"]' AND default_currency = 'USD' AND id NOT IN (SELECT DISTINCT group_id FROM expenses WHERE group_id IS NOT NULL)`);
-        logger.info('✓ Reset default enabled_currencies from ["USD"] to [] for unconfigured groups');
+        db.exec(
+          `UPDATE groups SET enabled_currencies = '[]' WHERE enabled_currencies = '["USD"]' AND default_currency = 'USD' AND id NOT IN (SELECT DISTINCT group_id FROM expenses WHERE group_id IS NOT NULL)`,
+        );
+        logger.info(
+          '✓ Reset default enabled_currencies from ["USD"] to [] for unconfigured groups',
+        );
       },
     },
   ];

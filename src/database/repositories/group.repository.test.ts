@@ -29,10 +29,10 @@ describe('GroupRepository', () => {
       expect(typeof group.id).toBe('number');
     });
 
-    test('defaults: default_currency USD, enabled_currencies ["USD"]', () => {
+    test('defaults: default_currency USD, enabled_currencies []', () => {
       const group = repo.create({ telegram_group_id: 101 });
       expect(group.default_currency).toBe('USD');
-      expect(group.enabled_currencies).toEqual(['USD']);
+      expect(group.enabled_currencies).toEqual([]);
     });
 
     test('custom default_currency is stored', () => {
@@ -260,9 +260,9 @@ describe('GroupRepository', () => {
 
   describe('hasCompletedSetup', () => {
     // hasCompletedSetup checks default_currency + enabled_currencies (not OAuth)
-    test('returns true for new group with default currency (USD default)', () => {
+    test('returns false for new group with empty enabled_currencies', () => {
       repo.create({ telegram_group_id: 700 });
-      expect(repo.hasCompletedSetup(700)).toBe(true);
+      expect(repo.hasCompletedSetup(700)).toBe(false);
     });
 
     test('returns false when enabled_currencies is empty', () => {
