@@ -1,20 +1,31 @@
 // Tests for /scan command handler.
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { Group } from '../../database/types';
-import * as senderModule from '../../services/bank/telegram-sender';
-import * as miniappUrlModule from '../../utils/miniapp-url';
+
+const buildMiniAppUrlMock = mock((_tab?: string, _groupId?: number): string | null => null);
+const sendMessageMock = mock(
+  (_text: string, _options?: unknown): Promise<null> => Promise.resolve(null),
+);
+
+mock.module('../../utils/miniapp-url', () => ({
+  buildMiniAppUrl: buildMiniAppUrlMock,
+}));
+
+mock.module('../../services/bank/telegram-sender', () => ({
+  sendMessage: sendMessageMock,
+}));
+
 import type { Ctx } from '../types';
 import { handleScanCommand } from './scan';
-
-let buildMiniAppUrlSpy: ReturnType<typeof mock>;
-let sendMessageSpy: ReturnType<typeof mock>;
 
 const fakeCtx = {} as Ctx['Command'];
 const fakeGroup = { telegram_group_id: -1001234567 } as Group;
 
 beforeEach(() => {
-  buildMiniAppUrlSpy = spyOn(miniappUrlModule, 'buildMiniAppUrl').mockReturnValue(null);
-  sendMessageSpy = spyOn(senderModule, 'sendMessage').mockResolvedValue(null);
+  buildMiniAppUrlMock.mockReset();
+  buildMiniAppUrlMock.mockReturnValue(null);
+  sendMessageMock.mockReset();
+  sendMessageMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -23,12 +34,12 @@ afterEach(() => {
 
 describe('handleScanCommand', () => {
   it('sends inline keyboard with URL when MINIAPP_SHORTNAME is configured', async () => {
-    buildMiniAppUrlSpy.mockReturnValue('https://t.me/TestBot/scanner');
+    buildMiniAppUrlMock.mockReturnValue('https://t.me/TestBot/scanner');
 
     await handleScanCommand(fakeCtx, fakeGroup);
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    const [text, options] = sendMessageSpy.mock.calls[0] ?? [];
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const [text, options] = sendMessageMock.mock.calls[0] ?? [];
     expect(text).toBe('Открой сканер чеков в Mini App:');
     expect(options).toEqual({
       reply_markup: {
@@ -38,20 +49,20 @@ describe('handleScanCommand', () => {
   });
 
   it('passes telegram_group_id to buildMiniAppUrl', async () => {
-    buildMiniAppUrlSpy.mockReturnValue('https://t.me/TestBot/scanner');
+    buildMiniAppUrlMock.mockReturnValue('https://t.me/TestBot/scanner');
 
     await handleScanCommand(fakeCtx, fakeGroup);
 
-    expect(buildMiniAppUrlSpy).toHaveBeenCalledWith('scanner', -1001234567);
+    expect(buildMiniAppUrlMock).toHaveBeenCalledWith('scanner', -1001234567);
   });
 
   it('sends plain text when MINIAPP_SHORTNAME is not configured', async () => {
-    buildMiniAppUrlSpy.mockReturnValue(null);
+    buildMiniAppUrlMock.mockReturnValue(null);
 
     await handleScanCommand(fakeCtx, fakeGroup);
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    const [text, options] = sendMessageSpy.mock.calls[0] ?? [];
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const [text, options] = sendMessageMock.mock.calls[0] ?? [];
     expect(text).toContain('MINIAPP_SHORTNAME');
     expect(options).toBeUndefined();
   });

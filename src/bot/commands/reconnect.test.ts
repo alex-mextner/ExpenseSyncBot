@@ -1,8 +1,19 @@
 // Tests for /reconnect — verifies guard conditions, year spreadsheet logic, and budget grouping
 
 import type { Database as SqliteDb } from 'bun:sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import type { CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
 import { BudgetRepository } from '../../database/repositories/budget.repository';
 import { CategoryRepository } from '../../database/repositories/category.repository';
 import { ExpenseRepository } from '../../database/repositories/expense.repository';
@@ -11,6 +22,9 @@ import { GroupSpreadsheetRepository } from '../../database/repositories/group-sp
 import { UserRepository } from '../../database/repositories/user.repository';
 import { MONTH_ABBREVS } from '../../services/google/month-abbr';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
+import * as sendModule from '../send';
+import type { Ctx } from '../types';
+import { handleReconnectCommand } from './reconnect';
 
 let db: SqliteDb;
 let groups: GroupRepository;
@@ -38,46 +52,62 @@ beforeEach(() => {
   clearTestDb(db);
 });
 
-/** Minimal mock for ctx that captures sent messages */
-function createMockCtx(overrides: { chatId?: number; chatType?: string }) {
-  const sent: string[] = [];
-  return {
-    ctx: {
-      chat: overrides.chatId
-        ? { id: overrides.chatId, type: overrides.chatType ?? 'supergroup' }
-        : undefined,
-      from: { id: 111 },
-      send: mock(async (text: string) => {
-        sent.push(text);
-      }),
-    },
-    sent,
-  };
+/** Build a minimal fake command context with the given chat shape */
+function fakeCtx(chat: { id: number; type: string } | undefined): Ctx['Command'] {
+  return { chat, from: { id: 111 } } as unknown as Ctx['Command'];
 }
 
 describe('/reconnect guard conditions', () => {
-  test('rejects private chats', () => {
-    const { ctx } = createMockCtx({ chatId: 123, chatType: 'private' });
-    const chatType = ctx.chat?.type;
-    const isGroup = chatType === 'group' || chatType === 'supergroup';
-    expect(isGroup).toBe(false);
+  let sendToChat: ReturnType<typeof mock>;
+  let findByTelegramGroupId: ReturnType<typeof mock>;
+
+  beforeEach(() => {
+    sendToChat = spyOn(sendModule, 'sendToChat').mockResolvedValue(
+      undefined as unknown as Awaited<ReturnType<typeof sendModule.sendToChat>>,
+    );
+    // Prevent the handler from hitting real DB when the guard passes
+    findByTelegramGroupId = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
-  test('rejects when chat has no type', () => {
-    const { ctx } = createMockCtx({});
-    expect(ctx.chat).toBeUndefined();
+  afterEach(() => {
+    mock.restore();
   });
 
-  test('accepts group chats', () => {
-    const { ctx } = createMockCtx({ chatId: -1001234, chatType: 'group' });
-    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-    expect(isGroup).toBe(true);
+  test('rejects private chats with "только в группах" message', async () => {
+    await handleReconnectCommand(fakeCtx({ id: 123, type: 'private' }));
+
+    expect(sendToChat).toHaveBeenCalledTimes(1);
+    expect(sendToChat.mock.calls[0]?.[0]).toContain('только в группах');
+    expect(findByTelegramGroupId).not.toHaveBeenCalled();
   });
 
-  test('accepts supergroup chats', () => {
-    const { ctx } = createMockCtx({ chatId: -1001234, chatType: 'supergroup' });
-    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-    expect(isGroup).toBe(true);
+  test('rejects when ctx.chat is undefined', async () => {
+    await handleReconnectCommand(fakeCtx(undefined));
+
+    expect(sendToChat).toHaveBeenCalledTimes(1);
+    expect(sendToChat.mock.calls[0]?.[0]).toContain('только в группах');
+    expect(findByTelegramGroupId).not.toHaveBeenCalled();
+  });
+
+  test('passes guard for group chats and proceeds to DB lookup', async () => {
+    await handleReconnectCommand(fakeCtx({ id: -1001234, type: 'group' }));
+
+    expect(findByTelegramGroupId).toHaveBeenCalledWith(-1001234);
+    // Guard passed — rejection message must NOT have been sent
+    const rejectionCall = sendToChat.mock.calls.find((args) =>
+      String(args[0]).includes('только в группах'),
+    );
+    expect(rejectionCall).toBeUndefined();
+  });
+
+  test('passes guard for supergroup chats and proceeds to DB lookup', async () => {
+    await handleReconnectCommand(fakeCtx({ id: -1001234, type: 'supergroup' }));
+
+    expect(findByTelegramGroupId).toHaveBeenCalledWith(-1001234);
+    const rejectionCall = sendToChat.mock.calls.find((args) =>
+      String(args[0]).includes('только в группах'),
+    );
+    expect(rejectionCall).toBeUndefined();
   });
 });
 
