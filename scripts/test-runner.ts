@@ -1,7 +1,7 @@
 // Parallel test runner — each file in its own bun process for mock isolation
 
 import { cpus } from 'node:os';
-const CONCURRENCY = Number(process.env.TEST_CONCURRENCY) || cpus().length;
+const CONCURRENCY = Number(process.env['TEST_CONCURRENCY']) || cpus().length;
 const FILTER = process.argv[2] ?? '';
 
 interface FileResult {
