@@ -35,6 +35,7 @@ import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
+import { initSend } from './send';
 import { registerTopicMiddleware } from './topic-middleware';
 import type { BotInstance, Ctx } from './types';
 
@@ -55,6 +56,9 @@ export function createBot(): Bot {
 
   // Global topic-aware middleware — must be registered before handlers
   registerTopicMiddleware(bot);
+
+  // Initialize sendToChat with bot instance — must be after middleware registration
+  initSend(bot);
 
   // Cache bot username
   let botUsername: string | undefined;

@@ -9,6 +9,7 @@ import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 
 import { createLogger } from '../../utils/logger.ts';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 import { silentSyncBudgets } from './budget';
@@ -19,11 +20,12 @@ const logger = createLogger('sum');
  * /sum and /total command handler - show current month expenses summary
  */
 export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
+  void ctx;
   // Silent sync budgets from Google Sheets
   if (group.google_refresh_token) {
     const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
     if (syncedCount > 0) {
-      await ctx.send(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
+      await sendToChat(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
   }
 
@@ -39,7 +41,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   logger.info(`[SUM] Date range: ${currentMonthStart} to ${currentMonthEnd}`);
 
   if (allExpenses.length === 0) {
-    await ctx.send('📊 Пока нет расходов');
+    await sendToChat('📊 Пока нет расходов');
     return;
   }
 
@@ -57,7 +59,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   });
 
   if (currentMonthExpenses.length === 0) {
-    await ctx.send(`📊 В ${format(now, 'LLLL yyyy')} пока нет расходов`);
+    await sendToChat(`📊 В ${format(now, 'LLLL yyyy')} пока нет расходов`);
     return;
   }
 
@@ -202,10 +204,10 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   }
 
   // Add budget information
-  await addBudgetInfo(message, group, currentMonthExpenses, ctx);
+  await addBudgetInfo(message, group, currentMonthExpenses);
 
   // Maybe send daily advice (20% probability)
-  await maybeSmartAdvice(ctx, group.id);
+  await maybeSmartAdvice(group.id);
 }
 
 /**
@@ -221,7 +223,6 @@ async function addBudgetInfo(
     default_currency: import('../../config/constants').CurrencyCode;
   },
   currentMonthExpenses: Array<{ category: string; eur_amount: number }>,
-  ctx: Ctx['Command'],
 ): Promise<void> {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
@@ -238,7 +239,7 @@ async function addBudgetInfo(
 
   if (budgets.length === 0) {
     // No budgets set - just send base message
-    await ctx.send(baseMessage, keyboard ? { reply_markup: keyboard } : {});
+    await sendToChat(baseMessage, keyboard ? { reply_markup: keyboard } : {});
     return;
   }
 
@@ -284,7 +285,7 @@ async function addBudgetInfo(
     budgetMessage += `\nℹ️ Используй /budget для полного отчета`;
   }
 
-  await ctx.send(baseMessage + budgetMessage, keyboard ? { reply_markup: keyboard } : {});
+  await sendToChat(baseMessage + budgetMessage, keyboard ? { reply_markup: keyboard } : {});
 }
 
 /**

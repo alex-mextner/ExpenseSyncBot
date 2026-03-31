@@ -7,6 +7,7 @@ import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
@@ -16,6 +17,7 @@ const logger = createLogger('cmd-stats');
  * /stats command handler
  */
 export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
+  void ctx;
   try {
     // Get expenses stats
     const recentExpenses = database.expenses.findByGroupId(group.id, 10);
@@ -46,15 +48,15 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
         )
       : undefined;
 
-    await ctx.send(message, {
+    await sendToChat(message, {
       parse_mode: 'HTML',
       ...(keyboard ? { reply_markup: keyboard } : {}),
     });
 
     // Maybe send daily advice (20% probability)
-    await maybeSmartAdvice(ctx, group.id);
+    await maybeSmartAdvice(group.id);
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /stats');
-    await ctx.send(formatErrorForUser(error));
+    await sendToChat(formatErrorForUser(error));
   }
 }

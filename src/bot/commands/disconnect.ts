@@ -2,6 +2,7 @@
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { createConfirmKeyboard } from '../keyboards';
+import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('disconnect');
@@ -10,8 +11,19 @@ const logger = createLogger('disconnect');
  * /disconnect command handler — shows confirmation before deleting all group data
  */
 export async function handleDisconnectCommand(ctx: Ctx['Command']): Promise<void> {
+  const chatId = ctx.chat?.id;
+  const chatTitle = chatId
+    ? database.groups.findByTelegramGroupId(chatId)
+      ? ctx.chat && 'title' in ctx.chat
+        ? ctx.chat.title
+        : null
+      : null
+    : null;
+
+  const groupLabel = chatTitle ? ` из группы «<b>${chatTitle}</b>»` : '';
+
   const message =
-    '⚠️ <b>Отключение бота</b>\n\n' +
+    `⚠️ <b>Отключение бота${groupLabel}</b>\n\n` +
     'Будут удалены:\n' +
     '• Все расходы и категории\n' +
     '• Все бюджеты\n' +
@@ -21,7 +33,7 @@ export async function handleDisconnectCommand(ctx: Ctx['Command']): Promise<void
     '❗ Google-таблица <b>не будет удалена</b> — она останется в твоём Google Drive.\n\n' +
     'Ты уверен?';
 
-  await ctx.send(message, {
+  await sendToChat(message, {
     parse_mode: 'HTML',
     reply_markup: createConfirmKeyboard('disconnect'),
   });

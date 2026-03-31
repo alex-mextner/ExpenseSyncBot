@@ -57,6 +57,17 @@ const mockDb = {
   query: mock(() => ({ get: mock(() => ({ n: 0 })) })),
 };
 
+const bankSent: string[] = [];
+const mockBankSendToChat = mock((text: string) => {
+  bankSent.push(text);
+  return Promise.resolve({});
+});
+
+mock.module('../send', () => ({
+  sendToChat: mockBankSendToChat,
+  initSend: () => {},
+}));
+
 mock.module('../../database', () => ({
   database: {
     groups: mockGroups,
@@ -104,6 +115,8 @@ const allMocks = [
 
 afterEach(() => {
   for (const m of allMocks) m.mockReset();
+  bankSent.length = 0;
+  mockBankSendToChat.mockClear();
 });
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -531,8 +544,8 @@ describe('handleBankEditReply with awaiting_comment=1', () => {
     const ctx = makeMsgCtx();
     await handleBankEditReply(ctx as never, 100, 'Coffee', promptMsgId);
 
-    expect(ctx.send).toHaveBeenCalledTimes(1);
-    const msg = ((ctx.send as ReturnType<typeof mock>).mock.calls[0]?.[0] ?? '') as string;
+    expect(mockBankSendToChat).toHaveBeenCalledTimes(1);
+    const msg = (mockBankSendToChat.mock.calls[0]?.[0] ?? '') as string;
     expect(msg).toContain('Кафе');
     expect(msg).toContain('Coffee');
   });

@@ -104,9 +104,9 @@ export function findBestCategoryMatch(input: string, categories: string[]): stri
   const exactMatch = categories.find((cat) => cat.toLowerCase() === normalizedInput);
   if (exactMatch) return exactMatch;
 
-  // 2. Category contains input
-  const containsMatch = categories.find((cat) => cat.toLowerCase().includes(normalizedInput));
-  if (containsMatch) return containsMatch;
+  // 2. Category starts with input
+  const startsWithMatch = categories.find((cat) => cat.toLowerCase().startsWith(normalizedInput));
+  if (startsWithMatch) return startsWithMatch;
 
   // 3. Input contains category
   const containedInMatch = categories.find((cat) => normalizedInput.includes(cat.toLowerCase()));

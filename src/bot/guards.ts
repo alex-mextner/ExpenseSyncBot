@@ -2,6 +2,7 @@
 
 import { database } from '../database';
 import type { Group } from '../database/types';
+import { sendToChat } from './send';
 import type { Ctx } from './types';
 
 /** Handler that receives a resolved group — no need for manual group lookup. */
@@ -29,13 +30,13 @@ export function requireGroup(handler: GroupCommandHandler): (ctx: Ctx['Command']
     const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
 
     if (!chatId || !isGroup) {
-      await ctx.send('❌ Эта команда работает только в группах.');
+      await sendToChat('❌ Эта команда работает только в группах.');
       return;
     }
 
     const group = database.groups.findByTelegramGroupId(chatId);
     if (!group) {
-      await ctx.send('❌ Группа не настроена. Используй /connect');
+      await sendToChat('❌ Группа не настроена. Используй /connect');
       return;
     }
 
@@ -51,7 +52,7 @@ export function requireGroup(handler: GroupCommandHandler): (ctx: Ctx['Command']
 export function requireGoogle(handler: GoogleCommandHandler): GroupCommandHandler {
   return async (ctx, group) => {
     if (!group.spreadsheet_id || !group.google_refresh_token) {
-      await ctx.send('❌ Google таблица не подключена. Используй /connect');
+      await sendToChat('❌ Google таблица не подключена. Используй /connect');
       return;
     }
 

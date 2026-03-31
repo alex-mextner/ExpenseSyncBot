@@ -5,6 +5,7 @@ import { getExpenseRecorder } from '../../services/expense-recorder';
 import { readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import type { GoogleConnectedGroup } from '../guards';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('push');
@@ -41,7 +42,8 @@ export async function handlePushCommand(
   ctx: Ctx['Command'],
   group: GoogleConnectedGroup,
 ): Promise<void> {
-  await ctx.send('🔄 Читаю данные из БД и Google Sheets...');
+  void ctx;
+  await sendToChat('🔄 Читаю данные из БД и Google Sheets...');
 
   try {
     logger.info(`[PUSH] Reading expenses from database for group ${group.id}`);
@@ -85,7 +87,7 @@ export async function handlePushCommand(
     );
 
     if (expensesToAdd.length === 0) {
-      await ctx.send(
+      await sendToChat(
         `✅ Все данные уже синхронизированы!\n\n` +
           `📊 В БД: ${dbExpenses.length}\n` +
           `📋 В таблице: ${sheetExpenses.expenses.length}\n` +
@@ -94,7 +96,7 @@ export async function handlePushCommand(
       return;
     }
 
-    await ctx.send(`📤 Добавляю ${expensesToAdd.length} записей в таблицу...`);
+    await sendToChat(`📤 Добавляю ${expensesToAdd.length} записей в таблицу...`);
 
     // Push expenses to sheet via ExpenseRecorder
     const recorder = getExpenseRecorder();
@@ -128,9 +130,9 @@ export async function handlePushCommand(
       message += `\n⚠️ Ошибок: ${errorCount}`;
     }
 
-    await ctx.send(message);
+    await sendToChat(message);
   } catch (error) {
     logger.error({ err: error }, '[PUSH] ❌ Push failed');
-    await ctx.send(`❌ Ошибка push: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    await sendToChat(`❌ Ошибка push: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }

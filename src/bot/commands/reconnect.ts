@@ -18,6 +18,7 @@ import {
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { importExpensesFromSheet } from './sync';
 
@@ -33,18 +34,18 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
   const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!chatId || !isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
+    await sendToChat('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
+    await sendToChat('❌ Группа не настроена. Используй /connect');
     return;
   }
 
   if (!group.spreadsheet_id) {
-    await ctx.send('❌ Таблица не создана. Используй /connect для первоначальной настройки.');
+    await sendToChat('❌ Таблица не создана. Используй /connect для первоначальной настройки.');
     return;
   }
 
@@ -53,7 +54,7 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
   const authUrl = generateAuthUrl(group.id);
   const authKeyboard = new InlineKeyboard().url('🔐 Переподключить Google', authUrl);
 
-  await ctx.send(
+  await sendToChat(
     '🔄 <b>Переподключение Google аккаунта</b>\n\n' +
       'Таблица и данные сохранятся — обновится только авторизация.\n\n' +
       '1. Нажми на кнопку ниже\n' +
@@ -92,6 +93,7 @@ interface FullSyncReport {
  * 5. DB → Sheet budgets (ensure tabs + write rows)
  */
 export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Promise<void> {
+  void ctx;
   const report: FullSyncReport = {
     snapshotId: null,
     snapshotExpenses: 0,
@@ -106,11 +108,11 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
   };
 
   try {
-    await ctx.send('🔄 Полная синхронизация...');
+    await sendToChat('🔄 Полная синхронизация...');
 
     const freshGroup = database.groups.findById(groupId);
     if (!freshGroup?.google_refresh_token || !freshGroup.spreadsheet_id) {
-      await ctx.send('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
+      await sendToChat('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
       return;
     }
 
@@ -146,10 +148,10 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
     report.budgetTabsCreated = budgetResult.tabsCreated;
     report.budgetRowsWritten = budgetResult.rowsWritten;
 
-    await ctx.send(formatFullSyncReport(report));
+    await sendToChat(formatFullSyncReport(report));
   } catch (err) {
     logger.error({ err }, '[RECONNECT] Full sync failed');
-    await ctx.send(
+    await sendToChat(
       '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' + 'Попробуй /sync вручную позже.',
     );
   }

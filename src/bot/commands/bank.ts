@@ -12,6 +12,7 @@ import { activateNewConnection, triggerManualSync } from '../../services/bank/sy
 import { convertAnyToEUR } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
+import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('bank-command');
@@ -42,14 +43,14 @@ export async function handleBankCommand(
   const arg = ctx.text?.split(' ')[1]?.trim().toLowerCase();
 
   if (arg === 'отмена') {
-    await handleWizardCancel(ctx, group.id);
+    await handleWizardCancel(group.id);
     return;
   }
 
   if (arg) {
     const found = lookupBank(arg);
     if (!found) {
-      await ctx.send(`Банк «${arg}» не найден. Используй /bank для выбора из списка.`);
+      await sendToChat(`Банк «${arg}» не найден. Используй /bank для выбора из списка.`);
       return;
     }
     const [bankKey] = found;
@@ -65,7 +66,7 @@ export async function handleBankCommand(
   const connections = database.bankConnections.findAllByGroupId(group.id);
 
   if (connections.length === 0) {
-    await showNoBanksPanel(ctx);
+    await showNoBanksPanel();
     return;
   }
 
@@ -85,9 +86,9 @@ function buildLetterNavKeyboard(
   return rows;
 }
 
-async function showNoBanksPanel(ctx: Ctx['Message']): Promise<void> {
+async function showNoBanksPanel(): Promise<void> {
   const banks = getBankList();
-  await ctx.send('Ни одного банка не подключено.\n\nВыбери букву:', {
+  await sendToChat('Ни одного банка не подключено.\n\nВыбери букву:', {
     reply_markup: { inline_keyboard: buildLetterNavKeyboard(banks) },
   });
 }
@@ -117,15 +118,15 @@ async function startWizard(ctx: Ctx['Message'], bankKey: string, bot: BotInstanc
   });
 }
 
-async function handleWizardCancel(ctx: Ctx['Message'], groupId: number): Promise<void> {
+async function handleWizardCancel(groupId: number): Promise<void> {
   const setupConn = database.bankConnections.findSetupByGroupId(groupId);
 
   if (setupConn) {
     wizardPromptMessages.delete(setupConn.id);
     database.bankConnections.deleteById(setupConn.id);
-    await ctx.send('Подключение банка отменено.');
+    await sendToChat('Подключение банка отменено.');
   } else {
-    await ctx.send('Нет активного подключения для отмены.');
+    await sendToChat('Нет активного подключения для отмены.');
   }
 }
 
@@ -681,7 +682,7 @@ export async function handleBankEditReply(
   database.bankTransactions.setEditInProgress(editTx.id, false);
   database.bankTransactions.setAwaitingComment(editTx.id, false);
 
-  await ctx.send(
+  await sendToChat(
     `✅ Расход записан: ${category}${comment ? ` — ${comment}` : ''} (${editTx.amount} ${editTx.currency})`,
   );
   return true;
@@ -803,7 +804,7 @@ export async function handleBankAccountsCallback(
       // message too old — fall through to send new
     }
   }
-  await ctx.send(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  await sendToChat(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
 
 /**
@@ -976,7 +977,7 @@ export async function handleBankSetupCallback(
       // fall through
     }
   }
-  await ctx.send(infoText, { reply_markup: keyboard });
+  await sendToChat(infoText, { reply_markup: keyboard });
 }
 
 /**
@@ -1171,7 +1172,7 @@ export async function handleBankSettingsCallback(
       // message too old — fall through to send new
     }
   }
-  await ctx.send(settingsText, { reply_markup: settingsKeyboard });
+  await sendToChat(settingsText, { reply_markup: settingsKeyboard });
 }
 
 export async function handleBankSyncCallback(
@@ -1245,7 +1246,7 @@ export async function handleBankDisconnectCallback(
       });
     } catch {
       // Edit failed (message too old or permissions) — send a new confirmation message
-      await ctx.send(`⚠️ Отключить ${conn.display_name}?\n\nВсе данные будут удалены.`, {
+      await sendToChat(`⚠️ Отключить ${conn.display_name}?\n\nВсе данные будут удалены.`, {
         reply_markup: {
           inline_keyboard: [
             [
@@ -1506,7 +1507,7 @@ export async function handleBankAddCallback(
       // fall through
     }
   }
-  await ctx.send('Выбери букву:', {
+  await sendToChat('Выбери букву:', {
     reply_markup: { inline_keyboard: keyboard },
   });
 }
@@ -1544,7 +1545,7 @@ export async function handleBankLetterCallback(
       // fall through
     }
   }
-  await ctx.send(`Банки на букву ${letter}:`, {
+  await sendToChat(`Банки на букву ${letter}:`, {
     reply_markup: { inline_keyboard: bankButtons },
   });
 }
@@ -1571,7 +1572,7 @@ export async function handleBankLetterNavCallback(
       // fall through
     }
   }
-  await ctx.send('Выбери букву:', {
+  await sendToChat('Выбери букву:', {
     reply_markup: { inline_keyboard: keyboard },
   });
 }
