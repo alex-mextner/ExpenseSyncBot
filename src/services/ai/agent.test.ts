@@ -441,10 +441,17 @@ describe('ExpenseBotAgent', () => {
     });
   });
 
-  // ── run() — error handling (existing behavior) ────────────────────
+  // ── run() — error handling (throws AgentError after retries) ──────
 
-  describe('run() — error handling (Anthropic.APIError)', () => {
-    it('handles Anthropic 429 rate limit — sends user message and returns string', async () => {
+  describe('run() — error handling (throws AgentError)', () => {
+    beforeEach(() => {
+      // Make retry delays instant for tests
+      spyOn(agent as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(
+        undefined,
+      );
+    });
+
+    it('throws AgentError on Anthropic 429 rate limit after retries', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const apiError = new Anthropic.RateLimitError(
         429,
@@ -456,12 +463,19 @@ describe('ExpenseBotAgent', () => {
         throw apiError;
       });
 
-      const result = await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
-      expect(typeof result).toBe('string');
-      expect(result).toContain('Слишком много запросов');
+      const { AgentError } = await import('../../errors');
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentError);
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain(
+          'Слишком много запросов',
+        );
+      }
     });
 
-    it('handles Anthropic 529 overloaded — sends user message and returns string', async () => {
+    it('throws AgentError on Anthropic 529 overloaded after retries', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const overloadedError = Object.assign(
         new Anthropic.APIError(
@@ -476,12 +490,17 @@ describe('ExpenseBotAgent', () => {
         throw overloadedError;
       });
 
-      const result = await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
-      expect(typeof result).toBe('string');
-      expect(result).toContain('перегружен');
+      const { AgentError } = await import('../../errors');
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentError);
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('перегружен');
+      }
     });
 
-    it('handles other Anthropic APIError — logs and returns error string', async () => {
+    it('throws AgentError on other Anthropic APIError after retries', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const apiError = new Anthropic.InternalServerError(
         500,
@@ -493,12 +512,17 @@ describe('ExpenseBotAgent', () => {
         throw apiError;
       });
 
-      const result = await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
-      expect(typeof result).toBe('string');
-      expect(result).toContain('Ошибка AI');
+      const { AgentError } = await import('../../errors');
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentError);
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('Ошибка AI');
+      }
     });
 
-    it('handles AbortError (timeout) — sends timeout message', async () => {
+    it('throws AgentError on AbortError (timeout) after retries', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const abortError = new Error('The operation was aborted');
       abortError.name = 'AbortError';
@@ -506,9 +530,102 @@ describe('ExpenseBotAgent', () => {
         throw abortError;
       });
 
+      const { AgentError } = await import('../../errors');
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentError);
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('ожидания');
+      }
+    });
+
+    it('retries 3 times on retryable API error before throwing', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      const apiError = new Anthropic.InternalServerError(
+        500,
+        { error: { type: 'api_error', message: 'Server error' } },
+        'Server error',
+        new Headers(),
+      );
+      const streamSpy = spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+        throw apiError;
+      });
+
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      // 1 initial + 2 retries = 3 total attempts
+      expect(streamSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('succeeds on second attempt after transient error', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      let callCount = 0;
+      spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Anthropic.InternalServerError(
+            500,
+            { error: { type: 'api_error', message: 'Server error' } },
+            'Server error',
+            new Headers(),
+          );
+        }
+        return makeFakeStream(['Recovered!']) as unknown as ReturnType<
+          typeof anthropic.messages.stream
+        >;
+      });
+
       const result = await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
-      expect(typeof result).toBe('string');
-      expect(result).toContain('ожидания');
+      expect(result).toContain('Recovered!');
+      expect(callCount).toBe(2);
+    });
+
+    it('sends error message to user via bot.api.sendMessage on failure', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+        throw new Anthropic.InternalServerError(
+          500,
+          { error: { type: 'api_error', message: 'err' } },
+          'err',
+          new Headers(),
+        );
+      });
+
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      // Should have sent error message (beyond just the placeholder)
+      const sendCalls = mockBot.api.sendMessage.mock.calls;
+      const errorCall = sendCalls.find(
+        (c: unknown[]) => typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка AI'),
+      );
+      expect(errorCall).toBeTruthy();
+    });
+
+    it('cleans up placeholder message on error', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+        throw new Anthropic.InternalServerError(
+          500,
+          { error: { type: 'api_error', message: 'err' } },
+          'err',
+          new Headers(),
+        );
+      });
+
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      // Should have called deleteMessage to clean up placeholder
+      expect(mockBot.api.deleteMessage).toHaveBeenCalled();
     });
   });
 
@@ -516,6 +633,13 @@ describe('ExpenseBotAgent', () => {
   // These tests drive changes to agent.ts to wrap unknown errors in typed classes
 
   describe('run() — TDD typed error wrapping', () => {
+    beforeEach(() => {
+      // Make retry delays instant for retryable errors that reach this section
+      spyOn(agent as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(
+        undefined,
+      );
+    });
+
     it('[TDD] wraps error with status:429 as AnthropicError when not Anthropic.APIError instance', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       // Simulate a status:429 error that is NOT an Anthropic.APIError instance

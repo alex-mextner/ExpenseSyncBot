@@ -18,3 +18,10 @@ export class HuggingFaceError extends AppError {}
 export class AnthropicError extends AppError {}
 export class NetworkError extends AppError {}
 export class OAuthError extends AppError {}
+
+/** AI agent error — user-facing message already sent to Telegram, no further action needed */
+export class AgentError extends AppError {
+  constructor(public readonly userMessage: string) {
+    super(userMessage, 'AGENT_ERROR');
+  }
+}
