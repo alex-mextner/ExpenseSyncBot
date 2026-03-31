@@ -1,6 +1,7 @@
 // Error type exports
 
 export {
+  AgentError,
   AnthropicError,
   AppError,
   GoogleSheetsError,
