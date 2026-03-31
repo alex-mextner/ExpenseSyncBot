@@ -5,7 +5,7 @@
 // Usage: bun run scripts/recover-expenses-migration.ts [--group-id N] [--dry-run] [--no-delete]
 
 import { Database } from 'bun:sqlite';
-import { appendExpenseRowsRaw, deleteExpenseRowsByIndex, readExpenseRowsRaw } from '../src/services/google/sheets';
+import { type GoogleConn, appendExpenseRowsRaw, deleteExpenseRowsByIndex, readExpenseRowsRaw } from '../src/services/google/sheets';
 import { yearFromDateCell } from '../src/services/google/budget-migration';
 
 const args = process.argv.slice(2);
@@ -24,15 +24,20 @@ const db = new Database('./data/expenses.db', { readonly: true });
 
 const group = db
   .query<
-    { id: number; google_refresh_token: string },
+    { id: number; google_refresh_token: string; oauth_client: string },
     [number]
-  >('SELECT id, google_refresh_token FROM groups WHERE id = ?')
+  >('SELECT id, google_refresh_token, oauth_client FROM groups WHERE id = ?')
   .get(GROUP_ID);
 
 if (!group?.google_refresh_token) {
   console.error(`Group ${GROUP_ID} not found or has no refresh token.`);
   process.exit(1);
 }
+
+const conn: GoogleConn = {
+  refreshToken: group.google_refresh_token,
+  oauthClient: group.oauth_client as GoogleConn['oauthClient'],
+};
 
 // Find both spreadsheets
 type SpreadsheetRow = { year: number; spreadsheet_id: string };
@@ -59,7 +64,7 @@ console.log(`Target (${newSheet.year}): ${newSheet.spreadsheet_id}`);
 
 // Read all rows from the old spreadsheet
 console.log('\nReading expense rows from source spreadsheet...');
-const allRows = await readExpenseRowsRaw(group.google_refresh_token, oldSheet.spreadsheet_id);
+const allRows = await readExpenseRowsRaw(conn, oldSheet.spreadsheet_id);
 console.log(`Total rows in source: ${allRows.length}`);
 
 // Filter rows matching the split year
@@ -84,7 +89,7 @@ if (splitYearRows.length > 5) {
 }
 
 // Also check how many rows are already in the target
-const existingRows = await readExpenseRowsRaw(group.google_refresh_token, newSheet.spreadsheet_id);
+const existingRows = await readExpenseRowsRaw(conn, newSheet.spreadsheet_id);
 console.log(`\nTarget spreadsheet currently has ${existingRows.length} expense rows.`);
 
 if (existingRows.length > 0) {
@@ -95,7 +100,7 @@ if (existingRows.length > 0) {
 if (!DRY_RUN) {
   console.log('\nCopying rows to target...');
   await appendExpenseRowsRaw(
-    group.google_refresh_token,
+    conn,
     newSheet.spreadsheet_id,
     splitYearRows.map(({ row }) => row),
   );
@@ -104,7 +109,7 @@ if (!DRY_RUN) {
   if (!NO_DELETE) {
     console.log('Deleting copied rows from source...');
     await deleteExpenseRowsByIndex(
-      group.google_refresh_token,
+      conn,
       oldSheet.spreadsheet_id,
       splitYearRows.map(({ sheetRowIdx }) => sheetRowIdx),
     );

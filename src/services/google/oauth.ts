@@ -1,13 +1,14 @@
-// Google OAuth2 client, URL generation, and secure state management
+// Google OAuth2 client with dual credentials (current + legacy), URL generation, and secure state management
 
 import { google } from 'googleapis';
 import { GOOGLE_SCOPES } from '../../config/constants';
 import { env } from '../../config/env';
+import type { OAuthClientType } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { decryptToken, isEncryptedToken } from './token-encryption';
 
-/** Ten-minute TTL for OAuth state tokens */
-const STATE_TTL_MS = 10 * 60 * 1000;
+/** One-hour TTL — OAuth URL is pre-generated in /connect, user may not click immediately */
+const STATE_TTL_MS = 60 * 60 * 1000;
 
 /** In-memory map of UUID state → { groupId, expiresAt } */
 const pendingStates = new Map<string, { groupId: number; expiresAt: number }>();
@@ -89,12 +90,40 @@ export async function getTokensFromCode(code: string): Promise<{
 
 const logger = createLogger('oauth');
 
+const hasLegacyCredentials = Boolean(
+  env.GOOGLE_LEGACY_CLIENT_ID && env.GOOGLE_LEGACY_CLIENT_SECRET,
+);
+
+/** Create a bare OAuth2 client for the given credential set */
+function createOAuth2Client(clientType: OAuthClientType) {
+  if (clientType === 'legacy') {
+    if (!hasLegacyCredentials) {
+      throw new Error(
+        'Legacy OAuth credentials not configured (GOOGLE_LEGACY_CLIENT_ID / GOOGLE_LEGACY_CLIENT_SECRET)',
+      );
+    }
+    return new google.auth.OAuth2(
+      env.GOOGLE_LEGACY_CLIENT_ID,
+      env.GOOGLE_LEGACY_CLIENT_SECRET,
+      env.GOOGLE_REDIRECT_URI,
+    );
+  }
+  return new google.auth.OAuth2(
+    env.GOOGLE_CLIENT_ID,
+    env.GOOGLE_CLIENT_SECRET,
+    env.GOOGLE_REDIRECT_URI,
+  );
+}
+
 /**
- * Get OAuth2 client with refresh token.
+ * Get OAuth2 client with refresh token, using credentials matching the group's oauth_client type.
  * Automatically decrypts the token if it's in encrypted format (iv:authTag:ciphertext).
  * Supports plaintext tokens for backward compatibility during migration.
  */
-export function getAuthenticatedClient(refreshToken: string) {
+export function getAuthenticatedClient(
+  refreshToken: string,
+  clientType: OAuthClientType = 'current',
+) {
   let plainToken = refreshToken;
 
   if (isEncryptedToken(refreshToken)) {
@@ -106,11 +135,7 @@ export function getAuthenticatedClient(refreshToken: string) {
     }
   }
 
-  const client = new google.auth.OAuth2(
-    env.GOOGLE_CLIENT_ID,
-    env.GOOGLE_CLIENT_SECRET,
-    env.GOOGLE_REDIRECT_URI,
-  );
+  const client = createOAuth2Client(clientType);
 
   client.setCredentials({
     refresh_token: plainToken,
@@ -136,10 +161,13 @@ export function isTokenExpiredError(error: unknown): boolean {
 }
 
 /**
- * Refresh access token
+ * Refresh access token using the correct OAuth credentials
  */
-export async function refreshAccessToken(refreshToken: string): Promise<string> {
-  const client = getAuthenticatedClient(refreshToken);
+export async function refreshAccessToken(
+  refreshToken: string,
+  clientType: OAuthClientType = 'current',
+): Promise<string> {
+  const client = getAuthenticatedClient(refreshToken, clientType);
 
   const { credentials } = await client.refreshAccessToken();
 
@@ -153,7 +181,14 @@ export async function refreshAccessToken(refreshToken: string): Promise<string> 
 /**
  * Revoke access token
  */
-export async function revokeToken(refreshToken: string): Promise<void> {
-  const client = getAuthenticatedClient(refreshToken);
+export async function revokeToken(
+  refreshToken: string,
+  clientType: OAuthClientType = 'current',
+): Promise<void> {
+  const client = getAuthenticatedClient(refreshToken, clientType);
   await client.revokeCredentials();
+}
+
+if (hasLegacyCredentials) {
+  logger.info('Legacy Google OAuth credentials configured');
 }

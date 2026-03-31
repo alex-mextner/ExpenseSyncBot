@@ -491,7 +491,7 @@ async function handleCategoryAction(
       if (pending) {
         database.pendingExpenses.update(pending.id, { status: 'confirmed' });
         try {
-          await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+          await saveExpenseToSheet(user.id, group.id, pending.id);
           expenseSaved = true;
         } catch (error) {
           logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
@@ -581,7 +581,7 @@ async function handleCategoryAction(
 
       // Save expense
       try {
-        await saveExpenseToSheet(user.id, group.id, pending.id, chatId || undefined, bot);
+        await saveExpenseToSheet(user.id, group.id, pending.id);
       } catch (error) {
         logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
         database.pendingExpenses.delete(pending.id);
@@ -872,7 +872,7 @@ async function handleReceiptItemConfirm(
 
   if (allConfirmed) {
     // Save all items to expenses
-    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id);
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
@@ -1006,7 +1006,7 @@ async function handleUseFoundCategory(
 
   if (allConfirmed) {
     // Save all items
-    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id);
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
@@ -1074,7 +1074,7 @@ async function handleSkipReceiptItem(
 
   if (allPending.length === 0) {
     // No more pending items - save all confirmed items
-    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id);
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
@@ -1158,7 +1158,7 @@ async function handleCreateNewCategory(
 
   if (allConfirmed) {
     // Save all items
-    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id, bot);
+    await saveReceiptExpenses(item.photo_queue_id, group.id, user.id);
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
@@ -1285,7 +1285,7 @@ async function handleReceiptAcceptAll(
   }
 
   // Save to Google Sheets
-  await saveReceiptExpenses(queueItem.id, group.id, user.id, bot);
+  await saveReceiptExpenses(queueItem.id, group.id, user.id);
 }
 
 /**
@@ -1456,7 +1456,7 @@ async function handleReceiptAcceptBulk(
   }
 
   // Save to Google Sheets
-  await saveReceiptExpenses(queueItem.id, group.id, user.id, bot);
+  await saveReceiptExpenses(queueItem.id, group.id, user.id);
 }
 
 /**

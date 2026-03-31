@@ -32,22 +32,47 @@ const RATE_HEADER = 'Rate (→EUR)';
 const EUR_CALC_HEADER = 'EUR (calc)';
 
 const db = new Database('./data/expenses.db', { readonly: true });
-const group = db.query('SELECT spreadsheet_id, google_refresh_token FROM groups WHERE id = ?').get(GROUP_ID) as {
-  spreadsheet_id: string;
+const group = db.query('SELECT id, google_refresh_token FROM groups WHERE id = ?').get(GROUP_ID) as {
+  id: number;
   google_refresh_token: string;
 } | null;
 
-if (!group?.spreadsheet_id || !group?.google_refresh_token) {
-  console.error(`Group ${GROUP_ID} not found or not configured.`);
+if (!group?.google_refresh_token) {
+  console.error(`Group ${GROUP_ID} not found or has no Google refresh token.`);
   process.exit(1);
 }
 
-const auth = getAuthenticatedClient(group.google_refresh_token);
+// Try to read oauth_client_type if column exists (added in later migration)
+let oauthClientType = 'legacy';
+try {
+  const row = db.query('SELECT oauth_client_type FROM groups WHERE id = ?').get(group.id) as { oauth_client_type: string | null } | null;
+  if (row?.oauth_client_type) oauthClientType = row.oauth_client_type;
+} catch { /* column doesn't exist yet */ }
+
+// Get all spreadsheets for this group (one per year)
+const spreadsheetRows = db
+  .query('SELECT year, spreadsheet_id FROM group_spreadsheets WHERE group_id = ? ORDER BY year')
+  .all(group.id) as { year: number; spreadsheet_id: string }[];
+
+if (spreadsheetRows.length === 0) {
+  console.error(`Group ${GROUP_ID} has no spreadsheets.`);
+  process.exit(1);
+}
+
+console.log(`Found ${spreadsheetRows.length} spreadsheet(s): ${spreadsheetRows.map((r) => `${r.year}`).join(', ')}\n`);
+
+const auth = getAuthenticatedClient(group.google_refresh_token, oauthClientType as 'current' | 'legacy');
 const sheets = google.sheets({ version: 'v4', auth });
+
+// Process each spreadsheet
+for (const { year, spreadsheet_id } of spreadsheetRows) {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`Processing spreadsheet for year ${year}: ${spreadsheet_id}`);
+  console.log('='.repeat(60));
 
 // Read all data
 const response = await sheets.spreadsheets.values.get({
-  spreadsheetId: group.spreadsheet_id,
+  spreadsheetId: spreadsheet_id,
   range: `${SHEET_NAME}!A:Z`,
 });
 
@@ -87,13 +112,13 @@ console.log(`Data rows: ${rows.length - 1}\n`);
 // If Rate column doesn't exist, create it
 if (rateIdx === -1 && !DRY_RUN) {
   rateIdx = headers.length;
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: group.spreadsheet_id });
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: spreadsheet_id });
   const sheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === SHEET_NAME);
   const sheetId = sheet?.properties?.sheetId;
 
   if (sheetId !== undefined) {
     await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: group.spreadsheet_id,
+      spreadsheetId: spreadsheet_id,
       requestBody: {
         requests: [{
           updateCells: {
@@ -232,13 +257,13 @@ if (updates.length > 10) {
 console.log('');
 
 if (updates.length === 0) {
-  console.log('Nothing to migrate.');
-  process.exit(0);
+  console.log('Nothing to migrate for this spreadsheet.');
+  continue;
 }
 
 if (DRY_RUN) {
-  console.log('Dry run complete. Re-run without --dry-run to apply.');
-  process.exit(0);
+  console.log('Dry run — skipping writes for this spreadsheet.');
+  continue;
 }
 
 // Apply updates in batches (Google API allows batch value updates)
@@ -255,7 +280,7 @@ for (let batch = 0; batch < updates.length; batch += BATCH_SIZE) {
   }));
 
   await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: group.spreadsheet_id,
+    spreadsheetId: spreadsheet_id,
     requestBody: {
       valueInputOption: 'RAW',
       data: rateData,
@@ -269,7 +294,7 @@ for (let batch = 0; batch < updates.length; batch += BATCH_SIZE) {
   }));
 
   await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: group.spreadsheet_id,
+    spreadsheetId: spreadsheet_id,
     requestBody: {
       valueInputOption: 'USER_ENTERED', // formulas need USER_ENTERED
       data: formulaData,
@@ -279,7 +304,10 @@ for (let batch = 0; batch < updates.length; batch += BATCH_SIZE) {
   console.log(`  Batch ${Math.floor(batch / BATCH_SIZE) + 1}: updated rows ${chunk[0]?.row}–${chunk[chunk.length - 1]?.row}`);
 }
 
-console.log(`\n✅ Migration complete. ${updates.length} rows updated with Rate + EUR formula.`);
+console.log(`\n✅ Year ${year}: ${updates.length} rows updated with Rate + EUR formula.`);
+} // end for (spreadsheetRows)
+
+console.log('\n✅ All spreadsheets processed.');
 db.close();
 
 function colLetter(index: number): string {

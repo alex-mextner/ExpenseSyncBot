@@ -1154,6 +1154,20 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '042_add_oauth_client_to_groups',
+      up: () => {
+        const exists = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('groups') WHERE name = 'oauth_client'`,
+          )
+          .get();
+        if (exists?.count === 0) {
+          db.exec(`ALTER TABLE groups ADD COLUMN oauth_client TEXT NOT NULL DEFAULT 'legacy'`);
+        }
+        logger.info('✓ Added oauth_client column to groups (default: legacy)');
+      },
+    },
   ];
 
   // Check and run migrations

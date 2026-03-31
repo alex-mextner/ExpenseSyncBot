@@ -3,6 +3,8 @@ import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
 import {
+  type GoogleConn,
+  googleConn,
   type MultiCurrencyRowError,
   readExpensesFromSheet,
   type SheetRow,
@@ -88,7 +90,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
   }
 
   const { expenses: sheetExpenses, errors } = await readExpensesFromSheet(
-    group.google_refresh_token,
+    googleConn(group),
     group.spreadsheet_id,
   );
 
@@ -306,10 +308,10 @@ function formatSyncResult(result: SyncResult): string {
  */
 export async function importExpensesFromSheet(
   groupId: number,
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
 ): Promise<number> {
-  const { expenses: sheetExpenses } = await readExpensesFromSheet(refreshToken, spreadsheetId);
+  const { expenses: sheetExpenses } = await readExpensesFromSheet(conn, spreadsheetId);
   if (sheetExpenses.length === 0) return 0;
 
   const dbExpenses = database.expenses.findByGroupId(groupId, 100000);

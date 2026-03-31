@@ -10,7 +10,7 @@ import {
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
-import { createExpenseSpreadsheet } from '../../services/google/sheets';
+import { createExpenseSpreadsheet, googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import { sendToChat } from '../send';
@@ -86,7 +86,14 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 
     // If group has completed setup without Google, offer to connect Google
     if (database.groups.hasCompletedSetup(chatId) && !group.google_refresh_token) {
-      await startGoogleOAuth(ctx, group.id);
+      const authUrl = generateAuthUrl(group.id);
+      const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
+      await sendToChat(
+        '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
+          'После авторизации вернись сюда — я продолжу настройку.',
+        { reply_markup: authKeyboard },
+      );
+      logger.info(`[CMD] OAuth URL sent for group ${group.id}`);
       return;
     }
   }
@@ -113,14 +120,14 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 }
 
 /**
- * Handle setup choice callback (Google or Skip)
+ * Handle setup:skip_google callback
  */
 export async function handleSetupChoiceCallback(
   ctx: Ctx['CallbackQuery'],
   action: string,
 ): Promise<void> {
   const parts = action.split(':');
-  const choice = parts[0]; // 'google' or 'skip_google'
+  const choice = parts[0];
   const groupId = Number.parseInt(parts[1] || '', 10);
 
   if (!groupId) {
@@ -134,41 +141,11 @@ export async function handleSetupChoiceCallback(
     return;
   }
 
-  if (choice === 'google') {
-    await ctx.answerCallbackQuery({ text: 'Подключаем Google...' });
-    await startGoogleOAuth(ctx, groupId);
-  } else if (choice === 'skip_google') {
+  if (choice === 'skip_google') {
     await ctx.answerCallbackQuery({ text: 'Google пропущен' });
     await ctx.editText('⏩ Google Sheets пропущен. Можно подключить позже через /connect.');
     await startCurrencySelection(group.telegram_group_id);
   }
-}
-
-/**
- * Start Google OAuth flow
- */
-async function startGoogleOAuth(
-  ctx: Ctx['Command'] | Ctx['CallbackQuery'],
-  groupId: number,
-): Promise<void> {
-  // Generate OAuth URL — state is a UUID mapped to group ID server-side
-  logger.info(`[CMD] Generating OAuth URL for group ${groupId}`);
-  const authUrl = generateAuthUrl(groupId);
-
-  const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
-  const text =
-    '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
-    'После авторизации вернись сюда — я продолжу настройку.';
-
-  if ('answerCallbackQuery' in ctx) {
-    await ctx.editText(text, { reply_markup: authKeyboard });
-  } else {
-    await sendToChat(text, { reply_markup: authKeyboard });
-  }
-
-  // OAuth flow continues asynchronously: the callback server saves the token to DB,
-  // then notifies the group via notifyTelegramSuccess (sends authSuccess + currency keyboard).
-  logger.info(`[CMD] OAuth URL sent to group ${groupId}, waiting for user to authorize`);
 }
 
 /**
@@ -403,7 +380,7 @@ async function createSpreadsheetForGroup(ctx: Ctx['CallbackQuery'], chatId: numb
   logger.info(`[CMD] Creating spreadsheet for group ${chatId}...`);
   try {
     const { spreadsheetId, spreadsheetUrl } = await createExpenseSpreadsheet(
-      group.google_refresh_token,
+      googleConn(group),
       group.default_currency as CurrencyCode,
       group.enabled_currencies,
     );

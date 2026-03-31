@@ -2,11 +2,40 @@
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
 import { getCurrencySymbol, SPREADSHEET_CONFIG } from '../../config/constants';
+import type { OAuthClientType } from '../../database/types';
 import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
 import type { MonthAbbr } from './month-abbr';
+import { monthAbbrFromDate } from './month-abbr';
 import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
+
+/**
+ * Google connection credentials: refresh token + which OAuth client to use.
+ * All sheets functions accept this to route through the correct credentials.
+ */
+export interface GoogleConn {
+  refreshToken: string;
+  oauthClient: OAuthClientType;
+}
+
+function authClient(conn: GoogleConn) {
+  return getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
+}
+
+/** Build GoogleConn from a group-like object with refresh token and oauth_client */
+export function googleConn(group: {
+  google_refresh_token: string | null;
+  oauth_client: OAuthClientType;
+}): GoogleConn {
+  if (!group.google_refresh_token) {
+    throw new Error('Group has no Google refresh token');
+  }
+  return {
+    refreshToken: group.google_refresh_token,
+    oauthClient: group.oauth_client,
+  };
+}
 
 const logger = createLogger('sheets');
 
@@ -36,11 +65,11 @@ export interface MultiCurrencyRowError {
  * Create a new expense tracking spreadsheet
  */
 export async function createExpenseSpreadsheet(
-  refreshToken: string,
+  conn: GoogleConn,
   _defaultCurrency: CurrencyCode,
   enabledCurrencies: CurrencyCode[],
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Build headers: Date | Currencies | EUR(calc) | Category | Comment | Rate
@@ -117,6 +146,14 @@ export async function createExpenseSpreadsheet(
     });
   }
 
+  // Create current month's budget tab alongside the expenses tab
+  try {
+    const currentMonthAbbr = monthAbbrFromDate(new Date());
+    await createEmptyMonthTab(conn, spreadsheetId, currentMonthAbbr);
+  } catch (err) {
+    logger.error({ err }, '[SHEETS] Failed to create month budget tab during spreadsheet creation');
+  }
+
   return { spreadsheetId, spreadsheetUrl };
 }
 
@@ -142,7 +179,7 @@ function colLetter(index: number): string {
 const RATE_COLUMN_HEADER = 'Rate (→EUR)';
 
 export async function appendExpenseRow(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   data: {
     date: string;
@@ -153,7 +190,7 @@ export async function appendExpenseRow(
     rate?: number; // Exchange rate used (1 CURRENCY = rate EUR)
   },
 ): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Get headers to determine column order
@@ -401,11 +438,11 @@ async function ensureRateColumn(
  * Call at bot startup for each configured group.
  */
 export async function ensureSheetColumns(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   enabledCurrencies: CurrencyCode[],
 ): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const headersResponse = await sheets.spreadsheets.values.get({
@@ -440,11 +477,11 @@ export function getSpreadsheetUrl(spreadsheetId: string): string {
  * Verify spreadsheet access
  */
 export async function verifySpreadsheetAccess(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
 ): Promise<boolean> {
   try {
-    const auth = getAuthenticatedClient(refreshToken);
+    const auth = authClient(conn);
     const sheets = google.sheets({ version: 'v4', auth });
 
     await sheets.spreadsheets.get({ spreadsheetId });
@@ -476,12 +513,12 @@ const MONTH_TAB_HEADERS = ['Category', 'Limit', 'Currency'];
  * Check if a monthly budget tab (e.g. "Mar") exists in the spreadsheet
  */
 export async function monthTabExists(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   month: MonthAbbr,
 ): Promise<boolean> {
   try {
-    const auth = getAuthenticatedClient(refreshToken);
+    const auth = authClient(conn);
     const sheets = google.sheets({ version: 'v4', auth });
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
     return !!spreadsheet.data.sheets?.find((s) => s.properties?.title === month);
@@ -495,11 +532,11 @@ export async function monthTabExists(
  * Create an empty monthly budget tab with header row (Category | Limit | Currency)
  */
 export async function createEmptyMonthTab(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   month: MonthAbbr,
 ): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const addResponse = await sheets.spreadsheets.batchUpdate({
@@ -567,11 +604,11 @@ export async function createEmptyMonthTab(
  * Read all budget rows from a monthly tab
  */
 export async function readMonthBudget(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   month: MonthAbbr,
 ): Promise<BudgetRow[]> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   try {
@@ -596,15 +633,22 @@ export async function readMonthBudget(
 }
 
 /**
- * Write or update a single budget row in a monthly tab (upsert by category)
+ * Write or update a single budget row in a monthly tab (upsert by category).
+ * Defensively ensures the month tab exists before writing.
  */
 export async function writeMonthBudgetRow(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   month: MonthAbbr,
   row: BudgetRow,
 ): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+  // Ensure the month tab exists before writing
+  const tabExists = await monthTabExists(conn, spreadsheetId, month);
+  if (!tabExists) {
+    await createEmptyMonthTab(conn, spreadsheetId, month);
+  }
+
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const response = await sheets.spreadsheets.values.get({
@@ -647,13 +691,13 @@ export async function writeMonthBudgetRow(
  * Uses the Google Sheets copyTo API, then renames the resulting sheet.
  */
 export async function cloneMonthTab(
-  refreshToken: string,
+  conn: GoogleConn,
   sourceSpreadsheetId: string,
   sourceMonth: MonthAbbr,
   targetSpreadsheetId: string,
   targetMonth: MonthAbbr,
 ): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Find source sheet ID
@@ -707,10 +751,10 @@ const EXPENSES_TAB = 'Expenses';
  * Row-relative formula references would break in the destination sheet anyway, so this is intentional.
  */
 export async function readExpenseRowsRaw(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
 ): Promise<string[][]> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -742,8 +786,8 @@ export async function readExpenseRowsRaw(
 /**
  * Sort the Expenses tab by column A (date) ascending, preserving the header row.
  */
-export async function sortExpensesTab(refreshToken: string, spreadsheetId: string): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+export async function sortExpensesTab(conn: GoogleConn, spreadsheetId: string): Promise<void> {
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
@@ -772,11 +816,11 @@ export async function sortExpensesTab(refreshToken: string, spreadsheetId: strin
 
 /** Rename a spreadsheet's title. */
 export async function renameSpreadsheet(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   title: string,
 ): Promise<void> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
@@ -797,11 +841,8 @@ export async function renameSpreadsheet(
  * Scan the Expenses tab for date cells stored as serial numbers (migration artifact)
  * and rewrite them as ISO yyyy-MM-dd strings. Returns the number of cells fixed.
  */
-export async function repairDateSerials(
-  refreshToken: string,
-  spreadsheetId: string,
-): Promise<number> {
-  const auth = getAuthenticatedClient(refreshToken);
+export async function repairDateSerials(conn: GoogleConn, spreadsheetId: string): Promise<number> {
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const response = await sheets.spreadsheets.values.get({
@@ -846,11 +887,8 @@ export async function repairDateSerials(
  * and rewrite them as =AMOUNT*RATE formulas. Skips EUR-denominated rows and rows without a rate.
  * Returns the number of cells fixed.
  */
-export async function repairEurFormulas(
-  refreshToken: string,
-  spreadsheetId: string,
-): Promise<number> {
-  const auth = getAuthenticatedClient(refreshToken);
+export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string): Promise<number> {
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const headerResponse = await sheets.spreadsheets.values.get({
@@ -883,7 +921,8 @@ export async function repairEurFormulas(
   });
   const rows = dataResponse.data.values ?? [];
 
-  const updates: { row: number; formula: string }[] = [];
+  const eurFormulaUpdates: { row: number; formula: string }[] = [];
+  const rateUpdates: { row: number; rate: number }[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i] as (string | number | null | undefined)[];
@@ -906,43 +945,69 @@ export async function repairEurFormulas(
     }
     if (amountColIdx === -1) continue;
 
-    // Rate column must have a value
-    const rateVal = row[rateColIdx];
-    if (rateVal === '' || rateVal === undefined || rateVal === null) continue;
-
     const sheetRow = i + 2; // 1-based row + skip header
-    updates.push({
+
+    // If Rate is missing, derive it from EUR_value / amount (preserves the rate from that day)
+    const rateVal = row[rateColIdx];
+    const rateEmpty = rateVal === '' || rateVal === undefined || rateVal === null;
+    if (rateEmpty) {
+      const eurNum = Number(eurVal);
+      const amountNum = Number(row[amountColIdx]);
+      if (amountNum > 0 && eurNum > 0) {
+        const derivedRate = Math.round((eurNum / amountNum) * 1_000_000) / 1_000_000;
+        rateUpdates.push({ row: sheetRow, rate: derivedRate });
+      } else {
+        continue; // Can't derive rate — skip
+      }
+    }
+
+    eurFormulaUpdates.push({
       row: sheetRow,
       formula: `=${colLetter(amountColIdx)}${sheetRow}*${colLetter(rateColIdx)}${sheetRow}`,
     });
   }
 
-  if (updates.length === 0) return 0;
+  if (eurFormulaUpdates.length === 0 && rateUpdates.length === 0) return 0;
 
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: updates.map(({ row, formula }) => ({
-        range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
-        values: [[formula]],
-      })),
-    },
-  });
+  // Write derived rates first, then replace EUR values with formulas
+  const batchData = [
+    ...rateUpdates.map(({ row, rate }) => ({
+      range: `${EXPENSES_TAB}!${colLetter(rateColIdx)}${row}`,
+      values: [[rate]],
+    })),
+    ...eurFormulaUpdates.map(({ row, formula }) => ({
+      range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
+      values: [[formula]],
+    })),
+  ];
 
-  return updates.length;
+  if (batchData.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: batchData,
+      },
+    });
+  }
+
+  logger.info(
+    `[SHEETS] repairEurFormulas: ${eurFormulaUpdates.length} formulas, ${rateUpdates.length} rates derived`,
+  );
+
+  return eurFormulaUpdates.length;
 }
 
 /**
  * Append raw rows to the Expenses tab.
  */
 export async function appendExpenseRowsRaw(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   rows: string[][],
 ): Promise<void> {
   if (rows.length === 0) return;
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
   await sheets.spreadsheets.values.append({
     spreadsheetId,
@@ -961,12 +1026,12 @@ export async function appendExpenseRowsRaw(
  * Uses the Expenses tab's sheetId (resolved from spreadsheet metadata).
  */
 export async function deleteExpenseRowsByIndex(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
   rowIndices: number[],
 ): Promise<void> {
   if (rowIndices.length === 0) return;
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
@@ -999,10 +1064,10 @@ export async function deleteExpenseRowsByIndex(
  * Returns expenses and any rows with amounts in multiple currency columns (data errors).
  */
 export async function readExpensesFromSheet(
-  refreshToken: string,
+  conn: GoogleConn,
   spreadsheetId: string,
 ): Promise<{ expenses: SheetRow[]; errors: MultiCurrencyRowError[] }> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
   const response = await sheets.spreadsheets.values.get({

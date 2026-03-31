@@ -194,6 +194,7 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
     const encryptedToken = encryptToken(tokens.refresh_token, env.ENCRYPTION_KEY);
     database.groups.update(group.telegram_group_id, {
       google_refresh_token: encryptedToken,
+      oauth_client: 'current',
     });
 
     logger.info(`✓ OAuth successful for group ${groupId}`);

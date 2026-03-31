@@ -3,7 +3,7 @@ import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { database } from '../database';
 import { runYearSplitMigration } from '../services/google/budget-migration';
-import { createExpenseSpreadsheet } from '../services/google/sheets';
+import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
 import { setBotInstance } from '../web/oauth-callback';
@@ -228,15 +228,11 @@ export async function startBot(): Promise<Bot> {
 
   // Ensure spreadsheet columns are up to date for all configured groups
   try {
-    const { ensureSheetColumns } = await import('../services/google/sheets');
+    const { ensureSheetColumns, googleConn: makeConn } = await import('../services/google/sheets');
     const allGroups = database.groups.findAll();
     for (const group of allGroups) {
       if (group.spreadsheet_id && group.google_refresh_token) {
-        await ensureSheetColumns(
-          group.google_refresh_token,
-          group.spreadsheet_id,
-          group.enabled_currencies,
-        );
+        await ensureSheetColumns(makeConn(group), group.spreadsheet_id, group.enabled_currencies);
       }
     }
     logger.info('✓ Spreadsheet columns verified');
@@ -284,8 +280,9 @@ export function createStartupMigration(bot: BotInstance) {
 
       try {
         // 1. Create new current-year spreadsheet
+        const conn = googleConn(group);
         const { spreadsheetId: newId, spreadsheetUrl: newUrl } = await createExpenseSpreadsheet(
-          group.google_refresh_token,
+          conn,
           group.default_currency,
           group.enabled_currencies,
         );
@@ -294,7 +291,7 @@ export function createStartupMigration(bot: BotInstance) {
 
         // 2. Run year-split: move currentYear rows from old spreadsheet to new one
         const backupUrl = await runYearSplitMigration(
-          group.google_refresh_token,
+          conn,
           priorSpreadsheet.spreadsheetId,
           newId,
           currentYear,

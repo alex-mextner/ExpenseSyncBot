@@ -8,6 +8,8 @@ interface EnvConfig {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_REDIRECT_URI: string;
+  GOOGLE_LEGACY_CLIENT_ID: string;
+  GOOGLE_LEGACY_CLIENT_SECRET: string;
   OAUTH_SERVER_PORT: number;
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
@@ -22,6 +24,7 @@ interface EnvConfig {
   AI_DEBUG_LOGS: boolean;
   NODE_ENV: 'development' | 'production';
   MINIAPP_URL: string | undefined;
+  MINIAPP_SHORTNAME: string | undefined;
 }
 
 function getEnvVariable(name: string, required = true): string {
@@ -41,6 +44,8 @@ function validateEnv(): EnvConfig {
     GOOGLE_CLIENT_ID: getEnvVariable('GOOGLE_CLIENT_ID'),
     GOOGLE_CLIENT_SECRET: getEnvVariable('GOOGLE_CLIENT_SECRET'),
     GOOGLE_REDIRECT_URI: getEnvVariable('GOOGLE_REDIRECT_URI'),
+    GOOGLE_LEGACY_CLIENT_ID: getEnvVariable('GOOGLE_LEGACY_CLIENT_ID', false),
+    GOOGLE_LEGACY_CLIENT_SECRET: getEnvVariable('GOOGLE_LEGACY_CLIENT_SECRET', false),
     OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000', 10),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY', false),
@@ -57,6 +62,7 @@ function validateEnv(): EnvConfig {
     AI_DEBUG_LOGS: process.env['AI_DEBUG_LOGS'] === 'true',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
     MINIAPP_URL: getEnvVariable('MINIAPP_URL', false) || undefined,
+    MINIAPP_SHORTNAME: getEnvVariable('MINIAPP_SHORTNAME', false) || undefined,
   };
 }
 

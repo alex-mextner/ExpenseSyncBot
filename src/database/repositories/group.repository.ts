@@ -13,7 +13,8 @@ const GROUP_JOIN_SELECT = `
   SELECT
     g.id, g.telegram_group_id, g.google_refresh_token,
     g.default_currency, g.enabled_currencies, g.custom_prompt,
-    g.active_topic_id, g.created_at, g.updated_at,
+    g.active_topic_id, g.bank_panel_summary_message_id,
+    g.oauth_client, g.created_at, g.updated_at,
     gs.spreadsheet_id
   FROM groups g
   LEFT JOIN group_spreadsheets gs
@@ -102,6 +103,10 @@ export class GroupRepository {
     if (data.bank_panel_summary_message_id !== undefined) {
       updates.push('bank_panel_summary_message_id = ?');
       values.push(data.bank_panel_summary_message_id);
+    }
+    if (data.oauth_client !== undefined) {
+      updates.push('oauth_client = ?');
+      values.push(data.oauth_client);
     }
 
     if (updates.length > 0) {
