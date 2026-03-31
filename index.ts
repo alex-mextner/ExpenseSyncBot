@@ -1,6 +1,7 @@
 // Application entry point — initializes database, OAuth server, exchange rates, and starts the Telegram bot
 import { createStartupMigration, startBot } from './src/bot';
 import { database } from './src/database';
+import { startSyncService } from './src/services/bank/sync-service';
 import { scheduleNewsBroadcast } from './src/services/broadcast';
 import { updateExchangeRates } from './src/services/currency/converter';
 import { startTempImageCleanup } from './src/services/receipt/ocr-extractor';
@@ -37,6 +38,8 @@ async function main() {
     await createStartupMigration(bot)();
 
     scheduleNewsBroadcast(bot);
+
+    startSyncService();
 
     logger.info('ExpenseSyncBot is running');
   } catch (error) {
