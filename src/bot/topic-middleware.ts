@@ -55,7 +55,8 @@ export function registerTopicMiddleware(bot: Bot): void {
     const cbMsg =
       cbMessage !== undefined && 'message_thread_id' in cbMessage ? cbMessage : undefined;
     const threadId = update?.message?.message_thread_id ?? cbMsg?.message_thread_id;
-    const chatId = update?.message?.chat?.id ?? cbMsg?.chat?.id;
+    // Both TelegramMessage and TelegramInaccessibleMessage have chat.id
+    const chatId = update?.message?.chat?.id ?? cbMessage?.chat?.id;
 
     if (chatId !== undefined) {
       return threadStorage.run({ chatId, threadId }, () => next());
