@@ -48,8 +48,8 @@ jobs:
             /var/www/.bun/bin/bun install --cwd src/services/bank/ZenPlugins
 
             echo "🏗️ Building Mini App..."
-            /var/www/.bun/bin/bun install --frozen-lockfile --cwd miniapp
-            /var/www/.bun/bin/bun run build --cwd miniapp
+            /var/www/.bun/bin/bun --cwd miniapp install --frozen-lockfile
+            /var/www/.bun/bin/bun --cwd miniapp run build
 
             echo "🔧 Making start script executable..."
             chmod +x start.sh
