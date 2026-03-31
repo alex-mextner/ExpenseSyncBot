@@ -43,7 +43,7 @@ if (!group?.google_refresh_token) {
 }
 
 // Try to read oauth_client_type if column exists (added in later migration)
-let oauthClientType = 'current';
+let oauthClientType = 'legacy';
 try {
   const row = db.query('SELECT oauth_client_type FROM groups WHERE id = ?').get(group.id) as { oauth_client_type: string | null } | null;
   if (row?.oauth_client_type) oauthClientType = row.oauth_client_type;
