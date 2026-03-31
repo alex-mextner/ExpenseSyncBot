@@ -1,7 +1,8 @@
-// Monthly budget tab auto-clone — runs at 00:00 on the 1st of every month
+// Scheduled tasks: exchange rate rotation (every 6h) + monthly budget tab auto-clone
 
 import cron from 'node-cron';
 import { database } from '../database';
+import { updateExchangeRates } from '../services/currency/converter';
 import { monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
 import {
   cloneMonthTab,
@@ -15,6 +16,22 @@ import { importExpensesFromSheet } from './commands/sync';
 import type { BotInstance } from './types';
 
 const logger = createLogger('cron');
+
+/**
+ * Fetch exchange rates on startup and refresh every 6 hours.
+ * Keeps convertToEUR / convertCurrency working with live rates instead of hardcoded fallbacks.
+ */
+export function registerExchangeRateCron(): void {
+  updateExchangeRates().catch((err) =>
+    logger.error({ err }, '[CRON] Initial exchange rate fetch failed'),
+  );
+  cron.schedule('0 */6 * * *', () => {
+    updateExchangeRates().catch((err) =>
+      logger.error({ err }, '[CRON] Exchange rate refresh failed'),
+    );
+  });
+  logger.info('[CRON] Exchange rate rotation registered (every 6h, fetch on startup)');
+}
 
 export function registerMonthlyCron(bot: BotInstance): void {
   cron.schedule('0 0 1 * *', async () => {
