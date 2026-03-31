@@ -221,7 +221,10 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     // Show connecting progress now that we have the mutex and are about to scrape.
     if (conn.panel_message_id) {
       await withChatContext(group.telegram_group_id, null, () =>
-        editMessageText(conn.panel_message_id!, `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`),
+        editMessageText(
+          conn.panel_message_id!,
+          `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`,
+        ),
       ).catch(() => {});
     }
 
