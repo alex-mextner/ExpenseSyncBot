@@ -1,6 +1,7 @@
 /** Photo message handler — queues incoming photos for receipt OCR processing */
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('photo.handler');
@@ -31,7 +32,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
 
   if (!isGroup) {
     logger.info('[PHOTO] Ignoring photo from private chat');
-    await ctx.send('❌ Отправка чеков работает только в группах.');
+    await sendToChat('❌ Отправка чеков работает только в группах.');
     return;
   }
 
@@ -42,7 +43,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
 
   if (!group) {
     logger.info(`[PHOTO] Group not found: ${chatId}`);
-    await ctx.send('❌ Группа не настроена. Используй /connect');
+    await sendToChat('❌ Группа не настроена. Используй /connect');
     return;
   }
 
@@ -87,7 +88,7 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
   );
 
   // Send confirmation
-  await ctx.send(`📸 Фото добавлено в очередь обработки`);
+  await sendToChat(`📸 Фото добавлено в очередь обработки`);
 
   // Start background processing
   // This will be triggered by the background processor

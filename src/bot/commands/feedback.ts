@@ -3,6 +3,7 @@
 import { InlineKeyboard } from 'gramio';
 import type { Group } from '../../database/types';
 import { sendFeedback } from '../../services/feedback';
+import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 interface PendingFeedbackState {
@@ -47,11 +48,11 @@ export async function handleFeedbackCommand(ctx: Ctx['Command'], group: Group): 
 
   if (!message) {
     const keyboard = new InlineKeyboard().text('❌ Отмена', 'feedback_cancel');
-    const sent = await ctx.send(
+    const sent = await sendToChat(
       '💬 Напиши сообщение с отзывом или описанием бага следующим сообщением:',
       { reply_markup: keyboard },
     );
-    pendingFeedback.set(ctx.chat.id, { userId: ctx.from.id, promptMessageId: sent.id });
+    pendingFeedback.set(ctx.chat.id, { userId: ctx.from.id, promptMessageId: sent.message_id });
     return;
   }
 
@@ -73,7 +74,7 @@ export async function submitFeedback(
   });
 
   if (result.success) {
-    await ctx.send('✅ Фидбек отправлен, спасибо!');
+    await sendToChat('✅ Фидбек отправлен, спасибо!');
     // Delete the prompt message with Cancel button
     if (opts?.promptMessageId && opts.bot) {
       await opts.bot.api
@@ -81,6 +82,6 @@ export async function submitFeedback(
         .catch(() => {});
     }
   } else {
-    await ctx.send(`❌ Не удалось отправить фидбек: ${result.error}`);
+    await sendToChat(`❌ Не удалось отправить фидбек: ${result.error}`);
   }
 }

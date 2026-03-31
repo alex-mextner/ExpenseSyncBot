@@ -4,6 +4,7 @@ import type { Group } from '../../database/types';
 import { getSpreadsheetUrl } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-spreadsheet');
@@ -12,13 +13,14 @@ const logger = createLogger('cmd-spreadsheet');
  * /spreadsheet command handler - get link to the Google Sheet
  */
 export async function handleSpreadsheetCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
+  void ctx;
   try {
     const currentYear = new Date().getFullYear();
     const currentSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, currentYear);
     const all = database.groupSpreadsheets.listAll(group.id);
 
     if (!currentSpreadsheetId && all.length === 0) {
-      await ctx.send('Таблица не создана. Завершите настройку: /connect');
+      await sendToChat('Таблица не создана. Завершите настройку: /connect');
       return;
     }
 
@@ -43,9 +45,9 @@ export async function handleSpreadsheetCommand(ctx: Ctx['Command'], group: Group
       `• /sync — подхватить изменения расходов\n` +
       `• /budget sync — подхватить изменения бюджетов`;
 
-    await ctx.send(message.trim());
+    await sendToChat(message.trim());
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /spreadsheet');
-    await ctx.send(formatErrorForUser(error));
+    await sendToChat(formatErrorForUser(error));
   }
 }

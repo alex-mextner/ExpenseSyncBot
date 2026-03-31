@@ -10,6 +10,7 @@ import {
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { GoogleConnectedGroup } from '../guards';
+import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('sync');
@@ -479,11 +480,11 @@ export async function handleSyncCommand(
   const args = commandText.split(/\s+/).slice(1).join(' ').trim();
 
   if (args.toLowerCase() === 'rollback') {
-    await handleSyncRollback(ctx, group.id);
+    await handleSyncRollback(group.id);
     return;
   }
 
-  await ctx.send('🔄 Синхронизирую...');
+  await sendToChat('🔄 Синхронизирую...');
 
   try {
     // Save snapshot of current expenses + budgets BEFORE sync (enables rollback)
@@ -504,7 +505,7 @@ export async function handleSyncCommand(
       const errorLines = result.errors.map(
         (e) => `• Строка ${e.row}: ${e.date} ${e.category} — валюты: ${e.currencies.join(', ')}`,
       );
-      await ctx.send(
+      await sendToChat(
         `⚠️ Строки с суммами в нескольких валютах (пропущены):\n${errorLines.join('\n')}`,
       );
     }
@@ -512,21 +513,21 @@ export async function handleSyncCommand(
     const msg = formatSyncResult(result);
     const suffix =
       currentExpenses.length > 0 ? '\n\n<i>Если что-то пошло не так — /sync rollback</i>' : '';
-    await ctx.send(msg + suffix, { parse_mode: 'HTML' });
+    await sendToChat(msg + suffix, { parse_mode: 'HTML' });
   } catch (error) {
     logger.error({ err: error }, '[SYNC] Sync failed');
-    await ctx.send(formatErrorForUser(error));
+    await sendToChat(formatErrorForUser(error));
   }
 }
 
 /**
  * Handle /sync rollback — restore expenses from the latest snapshot
  */
-async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise<void> {
+async function handleSyncRollback(groupId: number): Promise<void> {
   const snapshots = database.syncSnapshots.listSnapshots(groupId);
 
   if (snapshots.length === 0) {
-    await ctx.send('❌ Нет сохранённых снимков для отката. Откат доступен после /sync.');
+    await sendToChat('❌ Нет сохранённых снимков для отката. Откат доступен после /sync.');
     return;
   }
 
@@ -535,7 +536,7 @@ async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise
   if (!latest) return;
   const snapshotDate = new Date(latest.createdAt).toLocaleString('ru-RU');
 
-  await ctx.send(
+  await sendToChat(
     `🔄 Восстанавливаю ${latest.expenseCount} расходов и ${latest.budgetCount} бюджетов из снимка от ${snapshotDate}...`,
   );
 
@@ -570,7 +571,7 @@ async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise
       }
     });
 
-    await ctx.send(
+    await sendToChat(
       `✅ Откат завершён! Восстановлено ${expenses.length} расходов и ${budgets.length} бюджетов.`,
     );
 
@@ -579,6 +580,6 @@ async function handleSyncRollback(ctx: Ctx['Command'], groupId: number): Promise
     );
   } catch (error) {
     logger.error({ err: error }, '[SYNC] Rollback failed');
-    await ctx.send('❌ Ошибка при откате. Попробуй ещё раз.');
+    await sendToChat('❌ Ошибка при откате. Попробуй ещё раз.');
   }
 }

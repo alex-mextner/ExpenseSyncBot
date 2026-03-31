@@ -82,9 +82,11 @@ describe('findBestCategoryMatch', () => {
   it('exact match uppercase input', () =>
     expect(findBestCategoryMatch('ПРОДУКТЫ', cats)).toBe('Продукты'));
 
-  // Contains / contained-in
-  it('contains match: input inside category', () =>
-    expect(findBestCategoryMatch('влечени', cats)).toBe('Развлечения'));
+  // Starts-with / contained-in
+  it('starts-with match: category starts with input', () =>
+    expect(findBestCategoryMatch('разв', cats)).toBe('Развлечения'));
+  it('starts-with does not match substring in the middle', () =>
+    expect(findBestCategoryMatch('влечени', cats)).toBe(null));
   it('contained-in match: category inside input', () =>
     expect(findBestCategoryMatch('мой транспорт сегодня', cats)).toBe('Транспорт'));
 

@@ -2,6 +2,19 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { database } from '../database';
 import type { Group } from '../database/types';
+
+// Mock sendToChat before importing guards (which use it)
+const sent: string[] = [];
+const mockSendToChat = mock((text: string) => {
+  sent.push(text);
+  return Promise.resolve({});
+});
+
+mock.module('./send', () => ({
+  sendToChat: mockSendToChat,
+  initSend: () => {},
+}));
+
 import { requireGoogle, requireGroup } from './guards';
 
 let findSpy: ReturnType<typeof spyOn<typeof database.groups, 'findByTelegramGroupId'>>;
@@ -24,24 +37,20 @@ function makeGroup(id: number, telegramGroupId: number): Group {
 }
 
 function createMockCtx(overrides: { chatId?: number; chatType?: string } = {}) {
-  const sent: string[] = [];
   return {
     ctx: {
       chat:
         overrides.chatId !== undefined
           ? { id: overrides.chatId, type: overrides.chatType ?? 'group' }
           : undefined,
-      send: mock((msg: string) => {
-        sent.push(msg);
-        return Promise.resolve();
-      }),
     },
-    sent,
   };
 }
 
 describe('requireGroup', () => {
   beforeEach(() => {
+    sent.length = 0;
+    mockSendToChat.mockClear();
     findSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
@@ -52,7 +61,7 @@ describe('requireGroup', () => {
   test('rejects private chats', async () => {
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
-    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'private' });
+    const { ctx } = createMockCtx({ chatId: 123, chatType: 'private' });
 
     await wrapped(ctx as never);
 
@@ -63,7 +72,7 @@ describe('requireGroup', () => {
   test('rejects when chat is undefined', async () => {
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
-    const { ctx, sent } = createMockCtx({});
+    const { ctx } = createMockCtx({});
 
     await wrapped(ctx as never);
 
@@ -74,7 +83,7 @@ describe('requireGroup', () => {
   test('rejects unconfigured group', async () => {
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
-    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+    const { ctx } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await wrapped(ctx as never);
 
@@ -87,7 +96,7 @@ describe('requireGroup', () => {
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
     findSpy.mockReturnValue(fakeGroup);
-    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+    const { ctx } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await wrapped(ctx as never);
 
@@ -101,7 +110,7 @@ describe('requireGroup', () => {
     const handler = mock(() => Promise.resolve());
     const wrapped = requireGroup(handler);
     findSpy.mockReturnValue(fakeGroup);
-    const { ctx, sent } = createMockCtx({ chatId: 456, chatType: 'supergroup' });
+    const { ctx } = createMockCtx({ chatId: 456, chatType: 'supergroup' });
 
     await wrapped(ctx as never);
 
@@ -112,6 +121,11 @@ describe('requireGroup', () => {
 });
 
 describe('requireGoogle', () => {
+  beforeEach(() => {
+    sent.length = 0;
+    mockSendToChat.mockClear();
+  });
+
   afterEach(() => {
     mock.restore();
   });
@@ -120,7 +134,7 @@ describe('requireGoogle', () => {
     const group = makeGroup(1, 123);
     const handler = mock(() => Promise.resolve());
     const guarded = requireGoogle(handler);
-    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+    const { ctx } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await guarded(ctx as never, group);
 
@@ -132,7 +146,7 @@ describe('requireGoogle', () => {
     const group = { ...makeGroup(1, 123), google_refresh_token: 'tok' };
     const handler = mock(() => Promise.resolve());
     const guarded = requireGoogle(handler);
-    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+    const { ctx } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await guarded(ctx as never, group);
 
@@ -148,7 +162,7 @@ describe('requireGoogle', () => {
     };
     const handler = mock(() => Promise.resolve());
     const guarded = requireGoogle(handler);
-    const { ctx, sent } = createMockCtx({ chatId: 123, chatType: 'group' });
+    const { ctx } = createMockCtx({ chatId: 123, chatType: 'group' });
 
     await guarded(ctx as never, group);
 

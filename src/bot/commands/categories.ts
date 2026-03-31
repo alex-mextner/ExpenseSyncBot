@@ -3,6 +3,7 @@ import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-categories');
@@ -11,11 +12,12 @@ const logger = createLogger('cmd-categories');
  * /categories command handler
  */
 export async function handleCategoriesCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
+  void ctx;
   try {
     const categories = database.categories.findByGroupId(group.id);
 
     if (categories.length === 0) {
-      await ctx.send(
+      await sendToChat(
         '📋 Категории пока не созданы.\n\nОни будут создаваться автоматически из ваших расходов.',
       );
       return;
@@ -26,9 +28,9 @@ export async function handleCategoriesCommand(ctx: Ctx['Command'], group: Group)
       message += `• ${category.name}\n`;
     }
 
-    await ctx.send(message);
+    await sendToChat(message);
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /categories');
-    await ctx.send(formatErrorForUser(error));
+    await sendToChat(formatErrorForUser(error));
   }
 }

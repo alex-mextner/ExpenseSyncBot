@@ -1,6 +1,6 @@
 /** /help command handler — comprehensive feature guide */
 import { env } from '../../config/env';
-import type { Ctx } from '../types';
+import { sendToChat } from '../send';
 
 export const EXPENSE_EXAMPLES =
   `<code>сумма [валюта] категория [комментарий]</code>\n` +
@@ -54,6 +54,6 @@ ChatGPT, Claude и другие нейронки регулярно считаю
 Подробности и другие возможности всегда можно уточнить через <code>@${bot}</code> — просто спроси.`;
 }
 
-export async function handleHelpCommand(ctx: Ctx['Command']): Promise<void> {
-  await ctx.send(buildHelpText(), { parse_mode: 'HTML' });
+export async function handleHelpCommand(): Promise<void> {
+  await sendToChat(buildHelpText(), { parse_mode: 'HTML' });
 }

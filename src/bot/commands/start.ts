@@ -2,6 +2,7 @@
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { buildHelpText, EXPENSE_EXAMPLES } from './help';
 
@@ -14,7 +15,7 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     const chatType = ctx.chat?.type;
 
     if (!telegramId || !chatId) {
-      await ctx.send('❌ Не удалось определить пользователя или чат');
+      await sendToChat('❌ Не удалось определить пользователя или чат');
       return;
     }
 
@@ -34,9 +35,9 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
           message += `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
         }
 
-        await ctx.send(message, { parse_mode: 'HTML' });
+        await sendToChat(message, { parse_mode: 'HTML' });
       } else {
-        await ctx.send(
+        await sendToChat(
           `👋 Привет! Я помогу вести учёт расходов группы и синхронизировать их с Google Sheets.\n\n` +
             `<b>Что умеет бот:</b>\n` +
             `• Учёт расходов в нескольких валютах с автоконвертацией\n` +
@@ -53,13 +54,13 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
         );
       }
     } else {
-      await ctx.send(
+      await sendToChat(
         `👋 Я работаю только в группах.\n\n` +
           `Добавь меня в группу и набери /connect для настройки.`,
       );
     }
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /start');
-    await ctx.send(formatErrorForUser(error));
+    await sendToChat(formatErrorForUser(error));
   }
 }

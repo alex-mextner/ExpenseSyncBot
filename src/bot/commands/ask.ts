@@ -19,6 +19,7 @@ import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
 import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
+import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('ask');
@@ -36,7 +37,7 @@ export async function handleAskQuestion(
   const chatType = ctx.chat?.type;
 
   if (!chatId) {
-    await ctx.send('❌ Не удалось определить чат');
+    await sendToChat('❌ Не удалось определить чат');
     return;
   }
 
@@ -44,14 +45,14 @@ export async function handleAskQuestion(
   const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!isGroup) {
-    await ctx.send('❌ Эта команда работает только в группах.');
+    await sendToChat('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
 
   if (!group) {
-    await ctx.send('❌ Группа не настроена. Используй /connect');
+    await sendToChat('❌ Группа не настроена. Используй /connect');
     return;
   }
 
@@ -89,7 +90,7 @@ export async function handleAskQuestion(
   });
 
   if (!env.ANTHROPIC_API_KEY) {
-    await ctx.send('❌ AI не настроен. Нужен ANTHROPIC_API_KEY.');
+    await sendToChat('❌ AI не настроен. Нужен ANTHROPIC_API_KEY.');
     return;
   }
 
@@ -164,10 +165,10 @@ async function handleAskWithAnthropic(
     database.chatMessages.pruneOldMessages(group.id, 50);
 
     // Maybe send daily advice (20% probability)
-    await maybeSmartAdvice(ctx, group.id);
+    await maybeSmartAdvice(group.id);
   } catch (error) {
     logger.error({ err: error }, '[ASK] Anthropic agent error');
-    await ctx.send('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
+    await sendToChat('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
   }
 }
 
@@ -175,6 +176,7 @@ async function handleAskWithAnthropic(
  * /advice command handler - request deep financial analysis (Tier 3)
  */
 export async function handleAdviceCommand(ctx: Ctx['Command'], group: Group): Promise<void> {
+  void ctx;
   // Deep analysis: Tier 3, manual trigger
   const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
   const trigger: TriggerResult = {
@@ -184,13 +186,13 @@ export async function handleAdviceCommand(ctx: Ctx['Command'], group: Group): Pr
     data: {},
   };
 
-  await sendSmartAdvice(ctx, group.id, trigger, snapshot);
+  await sendSmartAdvice(group.id, trigger, snapshot);
 }
 
 /**
  * Check smart triggers and maybe send advice
  */
-export async function maybeSmartAdvice(ctx: Ctx['Message'], groupId: number): Promise<void> {
+export async function maybeSmartAdvice(groupId: number): Promise<void> {
   try {
     const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
     const trigger = checkSmartTriggers(groupId, snapshot);
@@ -200,7 +202,7 @@ export async function maybeSmartAdvice(ctx: Ctx['Message'], groupId: number): Pr
     logger.info(
       `[ADVICE] Smart trigger fired: ${trigger.type} (tier: ${trigger.tier}) for group ${groupId}`,
     );
-    await sendSmartAdvice(ctx, groupId, trigger, snapshot);
+    await sendSmartAdvice(groupId, trigger, snapshot);
   } catch (error) {
     logger.error({ err: error }, '[ADVICE] Error in smart advice check');
   }
@@ -224,7 +226,6 @@ function processThinkTagsForAdvice(text: string): string {
  *   Tier 3 (deep):  3000 max_tokens, temp 0.6, comprehensive analysis
  */
 async function sendSmartAdvice(
-  ctx: Ctx['Message'],
   groupId: number,
   trigger: TriggerResult,
   snapshot: FinancialSnapshot,
@@ -289,11 +290,11 @@ async function sendSmartAdvice(
     const message = `\n\n${header}\n\n${sanitizedAdvice}`;
 
     try {
-      await ctx.send(message, { parse_mode: 'HTML' });
+      await sendToChat(message, { parse_mode: 'HTML' });
     } catch (sendErr: unknown) {
       if (sendErr instanceof Error && sendErr.message.includes("can't parse entities")) {
         logger.error('[ADVICE] HTML parse error, falling back to plain text');
-        await ctx.send(
+        await sendToChat(
           `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
         );
       } else {

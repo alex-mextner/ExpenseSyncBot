@@ -19,6 +19,7 @@ import {
 import { createLogger } from '../../utils/logger.ts';
 import type { GoogleConnectedGroup } from '../guards';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
+import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
@@ -372,7 +373,7 @@ export async function handleBudgetCommand(
   if (group.google_refresh_token) {
     const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
     if (syncedCount > 0) {
-      await ctx.send(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
+      await sendToChat(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
   }
 
@@ -392,7 +393,7 @@ export async function handleBudgetCommand(
     const parsed = parseBudgetAmount(amountStr, group.default_currency);
 
     if (!parsed) {
-      await ctx.send(
+      await sendToChat(
         '❌ Неверная сумма. Используй: /budget set Категория 500 или /budget set Категория $500',
       );
       return;
@@ -409,7 +410,7 @@ export async function handleBudgetCommand(
   }
 
   // Invalid usage
-  await ctx.send(
+  await sendToChat(
     '❌ Неверный формат команды.\n\n' +
       'Использование:\n' +
       '• /budget - показать бюджеты\n' +
@@ -422,6 +423,7 @@ export async function handleBudgetCommand(
  * Show budget progress for current month
  */
 async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
+  void ctx;
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
@@ -439,14 +441,14 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
   if (budgets.length === 0) {
-    await ctx.send(
+    await sendToChat(
       `Бюджет на ${currentMonthName}\n\n` +
         `Бюджеты не установлены.\n\n` +
         `Используй:\n` +
         `• /budget set <Категория> <Сумма>\n` +
         `• /budget sync — синхронизировать с Google Sheets`,
     );
-    await maybeSmartAdvice(ctx, group.id);
+    await maybeSmartAdvice(group.id);
     return;
   }
 
@@ -494,8 +496,8 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  await ctx.send(message.trim());
-  await maybeSmartAdvice(ctx, group.id);
+  await sendToChat(message.trim());
+  await maybeSmartAdvice(group.id);
 }
 
 /**
@@ -508,6 +510,7 @@ async function setBudget(
   amount: number,
   currency: CurrencyCode,
 ): Promise<void> {
+  void ctx;
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthAbbr = monthAbbrFromDate(now);
@@ -522,7 +525,7 @@ async function setBudget(
     const keyboard = createAddCategoryWithBudgetKeyboard(normalizedCategory, amount, currency);
     const currencySymbol = getCurrencySymbol(currency);
 
-    await ctx.send(
+    await sendToChat(
       `Категория "${normalizedCategory}" не существует.\n\n` +
         `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом ${currencySymbol}${amount}?\n\n` +
         `Или выбери из существующих:\n${existingCategories.join(', ')}`,
@@ -541,7 +544,7 @@ async function setBudget(
 
   if (!group.google_refresh_token || !group.spreadsheet_id) {
     const emoji = getCategoryEmoji(normalizedCategory);
-    await ctx.send(
+    await sendToChat(
       `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
         'Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
     );
@@ -565,18 +568,18 @@ async function setBudget(
     });
 
     const emoji = getCategoryEmoji(normalizedCategory);
-    await ctx.send(
+    await sendToChat(
       `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
     );
   } catch (err) {
     logger.error({ err }, '[BUDGET] Failed to write to Google Sheets');
-    await ctx.send(
+    await sendToChat(
       `Бюджет сохранен в базу данных, но не удалось записать в Google Sheets.\n` +
         `Проверь доступ к таблице или используй /budget sync позже.`,
     );
   }
 
-  await maybeSmartAdvice(ctx, group.id);
+  await maybeSmartAdvice(group.id);
 }
 
 /**
@@ -649,6 +652,7 @@ export async function silentSyncBudgets(
  * Sync budgets from Google Sheets monthly tab to database
  */
 async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
+  void ctx;
   try {
     const now = new Date();
     const currentMonthAbbr = monthAbbrFromDate(now);
@@ -662,7 +666,7 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
 
     if (!tabExists) {
       await createEmptyMonthTab(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr);
-      await ctx.send(
+      await sendToChat(
         `Вкладка ${currentMonthAbbr} создана в таблице.\n\n` +
           `Добавь бюджеты через:\n/budget set <Категория> <Сумма>`,
       );
@@ -676,7 +680,7 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
     );
 
     if (budgetsFromSheet.length === 0) {
-      await ctx.send(`В вкладке ${currentMonthAbbr} нет бюджетов для синхронизации.`);
+      await sendToChat(`В вкладке ${currentMonthAbbr} нет бюджетов для синхронизации.`);
       return;
     }
 
@@ -702,10 +706,10 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
     if (createdCategoriesCount > 0) {
       message += `\nСоздано новых категорий: ${createdCategoriesCount}`;
     }
-    await ctx.send(message);
-    await maybeSmartAdvice(ctx, group.id);
+    await sendToChat(message);
+    await maybeSmartAdvice(group.id);
   } catch (err) {
     logger.error({ err }, '[BUDGET] Failed to sync budgets');
-    await ctx.send('Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');
+    await sendToChat('Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');
   }
 }

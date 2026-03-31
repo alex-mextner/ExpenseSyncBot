@@ -272,6 +272,26 @@ const percentage = budget.limit_amount > 0
 `${formatAmount(spentInCurrency, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%)`
 ```
 
+### Sending Messages — `sendToChat` only
+
+**NEVER use `ctx.send()`** — in `CallbackQueryContext` it sends to the user's private chat, not to the group. This is a GramIO behavior that causes silent bugs.
+
+**Always use `sendToChat(text, options?)` from [src/bot/send.ts](src/bot/send.ts).** It reads `chatId` from `AsyncLocalStorage` (populated by topic-middleware) and uses `bot.api.sendMessage`, which correctly targets the group chat and works with topic injection.
+
+```ts
+import { sendToChat } from '../send';
+
+// In any command, message, or callback handler:
+await sendToChat('Hello');
+await sendToChat('Formatted', { parse_mode: 'HTML' });
+const msg = await sendToChat('Get ID', { reply_markup: keyboard });
+// msg.message_id — NOT .id (this is TelegramMessage, not GramIO context)
+```
+
+**Exceptions (background workers only):** Code running outside handler context (photo-processor, cron, sync-service) has no `AsyncLocalStorage` — use `bot.api.sendMessage` with explicit `chat_id` there.
+
+- `ctx.editText` and `ctx.answerCallbackQuery` are fine — they operate on the callback message, not on a new send.
+
 ### Topic-Aware Messaging
 
 Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/topic-middleware.ts)) to automatically inject `message_thread_id` into all outgoing Telegram API calls within request handler context.
@@ -366,6 +386,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
+12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendToChat()` from `src/bot/send.ts`. See "Sending Messages" section above.
 
 ## When Modifying Code
 

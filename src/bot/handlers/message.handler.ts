@@ -8,11 +8,13 @@ import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
 import { getErrorMessage } from '../../utils/error';
+import { findBestCategoryMatch } from '../../utils/fuzzy-search';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
+import { sendToChat } from '../send';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
@@ -82,17 +84,17 @@ export async function handleExpenseMessage(
           ],
         };
 
-        await ctx.send(
+        await sendToChat(
           '💬 Бот работает только в группах.\n\nДля учета расходов используй команды в группе:',
           { reply_markup: keyboard },
         );
       } else {
-        await ctx.send(
+        await sendToChat(
           '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
         );
       }
     } else {
-      await ctx.send(
+      await sendToChat(
         '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
       );
     }
@@ -111,7 +113,7 @@ export async function handleExpenseMessage(
   if (!group) {
     // Group not set up yet
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} not found in database`);
-    await ctx.send(`Группа не настроена. Для настройки используй команду /connect`);
+    await sendToChat(`Группа не настроена. Для настройки используй команду /connect`);
     return true;
   }
 
@@ -135,7 +137,7 @@ export async function handleExpenseMessage(
   // Check if group has completed setup
   if (!database.groups.hasCompletedSetup(telegramGroupId)) {
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
-    await ctx.send('Завершите настройку группы: /connect');
+    await sendToChat('Завершите настройку группы: /connect');
     return true;
   }
 
@@ -191,7 +193,7 @@ export async function handleExpenseMessage(
           await pl.editDesign(pendingTaskId, text);
         }
       } catch (error) {
-        await ctx.send(getErrorMessage(error));
+        await sendToChat(getErrorMessage(error));
       }
     }
     return true;
@@ -250,6 +252,7 @@ export async function handleExpenseMessage(
 
   let successCount = 0;
   const newCategories: string[] = [];
+  const categoryNames = database.categories.getCategoryNames(group.id);
 
   for (const [index, line] of lines.entries()) {
     logger.info(`[MSG] Processing line ${index + 1}/${lines.length}: "${line}"`);
@@ -279,10 +282,21 @@ export async function handleExpenseMessage(
       continue;
     }
 
-    // Check if category exists
-    const categoryExists = parsed.category
+    // Check if category exists: exact match first, then fuzzy
+    let categoryExists = parsed.category
       ? database.categories.exists(group.id, parsed.category)
       : false;
+
+    if (!categoryExists && parsed.category) {
+      const fuzzyMatch = findBestCategoryMatch(parsed.category, categoryNames);
+      if (fuzzyMatch) {
+        logger.info(
+          `[MSG] Line ${index + 1}: fuzzy matched "${parsed.category}" → "${fuzzyMatch}"`,
+        );
+        parsed.category = fuzzyMatch;
+        categoryExists = true;
+      }
+    }
 
     logger.info(`[MSG] Line ${index + 1}: category "${parsed.category}" exists: ${categoryExists}`);
 
@@ -357,7 +371,7 @@ export async function handleExpenseMessage(
 
   // Maybe send daily advice (20% probability)
   if (hasProcessedExpenses) {
-    await maybeSmartAdvice(ctx, group.id);
+    await maybeSmartAdvice(group.id);
   }
 
   return hasProcessedExpenses;
@@ -401,7 +415,7 @@ async function handleCategoryTextInput(
         waiting_for_category_input: 0,
       });
 
-      await ctx.send(`✅ Используется категория: <b>${bestMatch}</b>`, { parse_mode: 'HTML' });
+      await sendToChat(`✅ Используется категория: <b>${bestMatch}</b>`, { parse_mode: 'HTML' });
 
       // Check if all items are confirmed
       const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
@@ -475,7 +489,7 @@ async function handleCategoryTextInput(
       });
     }
 
-    await ctx.send(`✅ Создана новая категория: <b>${normalizedCategory}</b>`, {
+    await sendToChat(`✅ Создана новая категория: <b>${normalizedCategory}</b>`, {
       parse_mode: 'HTML',
     });
 
@@ -523,13 +537,13 @@ async function handleBulkCorrectionInput(
   logger.info(`[BULK_CORRECTION] User correction: "${correctionText}" for queue ${queueItem.id}`);
 
   // Immediately respond that we're processing
-  await ctx.send('⏳ Корректирую...');
+  await sendToChat('⏳ Корректирую...');
 
   // Get receipt items
   const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
 
   if (items.length === 0) {
-    await ctx.send('❌ Товары не найдены');
+    await sendToChat('❌ Товары не найдены');
     return;
   }
 
@@ -575,7 +589,7 @@ async function handleBulkCorrectionInput(
     // Validate totals match (±1%)
     const originalTotal = items.reduce((sum, i) => sum + i.total, 0);
     if (!validateSummaryTotals(newSummary, originalTotal)) {
-      await ctx.send(
+      await sendToChat(
         '❌ Суммы не сходятся. AI изменил суммы товаров, что недопустимо.\n\n' +
           'Попробуйте переформулировать корректировку. Например:\n' +
           '<code>перенеси салфетки в Хозтовары</code>',
@@ -616,7 +630,7 @@ async function handleBulkCorrectionInput(
     logger.info(`[BULK_CORRECTION] Correction applied successfully`);
   } catch (error) {
     logger.error({ err: error }, '[BULK_CORRECTION] AI correction failed');
-    await ctx.send(
+    await sendToChat(
       '❌ Не удалось применить корректировку.\n\n' +
         'Попробуйте переформулировать. Например:\n' +
         '<code>перенеси салфетки в Хозтовары</code>\n' +
