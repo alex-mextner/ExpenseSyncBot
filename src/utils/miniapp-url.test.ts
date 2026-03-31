@@ -42,4 +42,20 @@ describe('buildMiniAppUrl', () => {
     envW.MINIAPP_SHORTNAME = 'extra';
     expect(buildMiniAppUrl('dashboard')).toBe('https://t.me/StagingBot/extra?startapp=dashboard');
   });
+
+  it('encodes telegramGroupId in startapp when both tab and groupId are given', () => {
+    envW.BOT_USERNAME = 'ExpenseSyncBot';
+    envW.MINIAPP_SHORTNAME = 'extra';
+    expect(buildMiniAppUrl('scanner', -1001234567)).toBe(
+      'https://t.me/ExpenseSyncBot/extra?startapp=scanner_-1001234567',
+    );
+  });
+
+  it('encodes telegramGroupId even when tab is omitted', () => {
+    envW.BOT_USERNAME = 'ExpenseSyncBot';
+    envW.MINIAPP_SHORTNAME = 'extra';
+    expect(buildMiniAppUrl(undefined, -1001234567)).toBe(
+      'https://t.me/ExpenseSyncBot/extra?startapp=_-1001234567',
+    );
+  });
 });

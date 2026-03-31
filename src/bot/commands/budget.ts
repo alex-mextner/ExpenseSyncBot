@@ -438,7 +438,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
 
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
-  const miniAppUrl = buildMiniAppUrl('dashboard');
+  const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
   const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
   if (budgets.length === 0) {

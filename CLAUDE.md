@@ -487,6 +487,12 @@ Follow this framework for ANY technical issue:
   ```
   `spyOn` + `mock.restore()` is scoped and doesn't leak. `mock.module` is only acceptable for npm packages with no project tests (e.g., `sharp`).
 - NEVER write tests that "test" mocked behavior instead of real logic
+- **No real network/DNS/external calls in tests.** Tests must run offline, in CI, in sandboxes — anywhere. Mock ALL external dependencies:
+  - **DNS**: `spyOn(dns.promises, 'resolve4').mockResolvedValue([...])` — never call real DNS
+  - **HTTP/fetch**: mock via `spyOn` or inject a fake, never hit real endpoints
+  - **External APIs** (Telegram, Google, HuggingFace, Anthropic): always mock, never depend on API availability
+  - **Browser/Playwright**: use dependency injection (`getBrowserFn` pattern), pass fake browser in tests
+  - If a test hangs or times out, the root cause is almost always a missing mock — fix the mock, not the timeout
 - **NEVER ignore test/system output** — logs and messages often contain CRITICAL information.
   Read test output, don't just check pass/fail. Warnings in logs point to real bugs.
 - Test output MUST BE PRISTINE TO PASS
