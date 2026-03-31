@@ -13,6 +13,7 @@ import {
   deleteExpenseRowsByIndex,
   type GoogleConn,
   monthTabExists,
+  readExpenseHeaders,
   readExpenseRowsRaw,
   repairEurFormulas,
   sortExpensesTab,
@@ -137,6 +138,7 @@ export async function runYearSplitMigration(
   const budgetSheet = oldSpreadsheet.data.sheets?.find((s) => s.properties?.title === 'Budget');
   const budgetSheetId = budgetSheet?.properties?.sheetId;
 
+  const sourceHeaders = await readExpenseHeaders(conn, oldSpreadsheetId);
   const allExpenseRows = await readExpenseRowsRaw(conn, oldSpreadsheetId);
   const splitYearRows = allExpenseRows
     .map((row, idx) => ({ row, sheetRowIdx: idx + 2 })) // +2: 1-based + skip header
@@ -159,12 +161,15 @@ export async function runYearSplitMigration(
   const backupUrl = `https://docs.google.com/spreadsheets/d/${backupId}`;
   logger.info(`[MIGRATION] Backup created: ${backupUrl}`);
 
-  // 2. Copy splitYear expense rows to new spreadsheet
+  // 2. Copy splitYear expense rows to new spreadsheet (column-name-aware)
   if (splitYearRows.length > 0) {
+    const targetHeaders = await readExpenseHeaders(conn, newSpreadsheetId);
     await appendExpenseRowsRaw(
       conn,
       newSpreadsheetId,
       splitYearRows.map(({ row }) => row),
+      sourceHeaders,
+      targetHeaders,
     );
     logger.info(`[MIGRATION] Copied ${splitYearRows.length} expense rows to new spreadsheet`);
 

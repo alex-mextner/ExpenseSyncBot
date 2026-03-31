@@ -999,14 +999,52 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
 }
 
 /**
+ * Read the header row from the Expenses tab.
+ */
+export async function readExpenseHeaders(
+  conn: GoogleConn,
+  spreadsheetId: string,
+): Promise<string[]> {
+  const auth = authClient(conn);
+  const sheets = google.sheets({ version: 'v4', auth });
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!1:1`,
+  });
+  return (response.data.values?.[0] ?? []) as string[];
+}
+
+/**
  * Append raw rows to the Expenses tab.
+ * When sourceHeaders and targetHeaders are provided, remaps columns by header name
+ * so data from a differently-ordered source sheet lands in the correct columns.
  */
 export async function appendExpenseRowsRaw(
   conn: GoogleConn,
   spreadsheetId: string,
   rows: string[][],
+  sourceHeaders?: string[],
+  targetHeaders?: string[],
 ): Promise<void> {
   if (rows.length === 0) return;
+
+  let outputRows = rows;
+
+  // Remap columns if headers are provided and differ
+  if (sourceHeaders && targetHeaders && JSON.stringify(sourceHeaders) !== JSON.stringify(targetHeaders)) {
+    logger.info(
+      `[SHEETS] Remapping columns: source=${JSON.stringify(sourceHeaders)} → target=${JSON.stringify(targetHeaders)}`,
+    );
+    outputRows = rows.map((row) => {
+      const newRow: string[] = [];
+      for (const th of targetHeaders) {
+        const srcIdx = sourceHeaders.indexOf(th);
+        newRow.push(srcIdx >= 0 ? (row[srcIdx] ?? '') : '');
+      }
+      return newRow;
+    });
+  }
+
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
   await sheets.spreadsheets.values.append({
@@ -1016,7 +1054,7 @@ export async function appendExpenseRowsRaw(
     // Formulas are not preserved (see readExpenseRowsRaw doc for rationale).
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: rows },
+    requestBody: { values: outputRows },
   });
 }
 
