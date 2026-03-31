@@ -23,7 +23,7 @@ const GROUP_ID = Number(getArg('--group-id', '1'));
 
 if (DRY_RUN) console.log('*** DRY RUN — no changes will be made ***\n');
 
-const db = new Database('./data/expenses.db', { readonly: !DRY_RUN ? false : true });
+const db = new Database('./data/expenses.db', { readonly: true });
 const group = db.query('SELECT id, google_refresh_token FROM groups WHERE id = ?').get(GROUP_ID) as {
   id: number;
   google_refresh_token: string;
