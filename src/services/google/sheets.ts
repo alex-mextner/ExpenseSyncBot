@@ -1031,7 +1031,11 @@ export async function appendExpenseRowsRaw(
   let outputRows = rows;
 
   // Remap columns if headers are provided and differ
-  if (sourceHeaders && targetHeaders && JSON.stringify(sourceHeaders) !== JSON.stringify(targetHeaders)) {
+  if (
+    sourceHeaders &&
+    targetHeaders &&
+    JSON.stringify(sourceHeaders) !== JSON.stringify(targetHeaders)
+  ) {
     logger.info(
       `[SHEETS] Remapping columns: source=${JSON.stringify(sourceHeaders)} → target=${JSON.stringify(targetHeaders)}`,
     );
