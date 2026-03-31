@@ -505,7 +505,7 @@ Follow this framework for ANY technical issue:
 - **Tests must exercise production code**: never reimplement logic in tests.
 - NEVER delete a failing test. Investigate and fix the root cause.
 - **Changing tests to match code is a red flag**: always analyze WHY.
-- **Every commit must have tests**: no committing code without corresponding test coverage.
+- **Every commit must have tests**: no committing code without corresponding test coverage. Tests are NOT a "separate task" — they are part of the same unit of work as the code they cover. Never defer tests to a follow-up.
 - **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
