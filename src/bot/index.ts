@@ -2,11 +2,11 @@
 import { Bot } from 'gramio';
 import { env } from '../config/env';
 import { database } from '../database';
+import { initSender } from '../services/bank/telegram-sender';
 import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { createLogger } from '../utils/logger.ts';
-import { setBotInstance } from '../web/oauth-callback';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
@@ -35,7 +35,6 @@ import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
-import { initSend } from './send';
 import { registerTopicMiddleware } from './topic-middleware';
 import type { BotInstance, Ctx } from './types';
 
@@ -57,8 +56,8 @@ export function createBot(): Bot {
   // Global topic-aware middleware — must be registered before handlers
   registerTopicMiddleware(bot);
 
-  // Initialize sendToChat with bot instance — must be after middleware registration
-  initSend(bot);
+  // Initialize telegram-sender with bot instance — must be after middleware registration
+  initSender(bot);
 
   // Cache bot username
   let botUsername: string | undefined;
@@ -79,11 +78,11 @@ export function createBot(): Bot {
         if (grp?.spreadsheet_id && grp?.google_refresh_token) {
           if (opts.expenses) {
             const { ensureFreshExpenses } = await import('./commands/sync');
-            await ensureFreshExpenses(grp.id, chatId, bot);
+            await ensureFreshExpenses(grp.id, chatId);
           }
           if (opts.budgets) {
             const { ensureFreshBudgets } = await import('./commands/budget');
-            await ensureFreshBudgets(grp.id, chatId, bot);
+            await ensureFreshBudgets(grp.id, chatId);
           }
         }
       }
@@ -201,7 +200,7 @@ export function createBot(): Bot {
   registerExchangeRateCron();
 
   // Register monthly budget tab cron
-  registerMonthlyCron(bot);
+  registerMonthlyCron();
 
   return bot;
 }
@@ -215,9 +214,6 @@ export async function startBot(): Promise<Bot> {
   logger.info('🤖 Starting bot...');
   await bot.start();
   logger.info('✓ Bot started successfully');
-
-  // Register bot instance for OAuth callback to send Telegram messages
-  setBotInstance(bot);
 
   // Register commands in Telegram menu (from single source of truth)
   const { BOT_COMMANDS } = await import('./command-descriptions');
@@ -247,7 +243,7 @@ export async function startBot(): Promise<Bot> {
 
   // Initialize dev pipeline and resume incomplete tasks
   logger.info('🔧 Starting dev pipeline...');
-  const devPipeline = initDevPipeline(bot);
+  const devPipeline = initDevPipeline();
   await devPipeline.resumeIncompleteTasksOnStartup();
   logger.info('✓ Dev pipeline started');
 

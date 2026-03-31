@@ -37,7 +37,7 @@ async function main() {
     // Run one-time year-split migration (idempotent)
     await createStartupMigration(bot)();
 
-    scheduleNewsBroadcast(bot);
+    scheduleNewsBroadcast();
 
     startSyncService();
 

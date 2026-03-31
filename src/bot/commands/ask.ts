@@ -18,9 +18,9 @@ import {
 } from '../../services/analytics/formatters';
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('ask');
@@ -38,7 +38,7 @@ export async function handleAskQuestion(
   const chatType = ctx.chat?.type;
 
   if (!chatId) {
-    await sendToChat('❌ Не удалось определить чат');
+    await sendMessage('❌ Не удалось определить чат');
     return;
   }
 
@@ -46,14 +46,14 @@ export async function handleAskQuestion(
   const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!isGroup) {
-    await sendToChat('❌ Эта команда работает только в группах.');
+    await sendMessage('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
 
   if (!group) {
-    await sendToChat('❌ Группа не настроена. Используй /connect');
+    await sendMessage('❌ Группа не настроена. Используй /connect');
     return;
   }
 
@@ -91,7 +91,7 @@ export async function handleAskQuestion(
   });
 
   if (!env.ANTHROPIC_API_KEY) {
-    await sendToChat('❌ AI не настроен. Нужен ANTHROPIC_API_KEY.');
+    await sendMessage('❌ AI не настроен. Нужен ANTHROPIC_API_KEY.');
     return;
   }
 
@@ -175,7 +175,7 @@ async function handleAskWithAnthropic(
       return;
     }
     logger.error({ err: error }, '[ASK] Anthropic agent error');
-    await sendToChat('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
+    await sendMessage('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
   }
 }
 
@@ -297,11 +297,11 @@ async function sendSmartAdvice(
     const message = `\n\n${header}\n\n${sanitizedAdvice}`;
 
     try {
-      await sendToChat(message, { parse_mode: 'HTML' });
+      await sendMessage(message);
     } catch (sendErr: unknown) {
       if (sendErr instanceof Error && sendErr.message.includes("can't parse entities")) {
         logger.error('[ADVICE] HTML parse error, falling back to plain text');
-        await sendToChat(
+        await sendMessage(
           `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
         );
       } else {

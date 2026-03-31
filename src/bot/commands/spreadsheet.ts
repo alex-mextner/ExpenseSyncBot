@@ -1,10 +1,10 @@
 /** /spreadsheet command handler — shows current year's spreadsheet and list of previous years */
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { getSpreadsheetUrl } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-spreadsheet');
@@ -20,7 +20,7 @@ export async function handleSpreadsheetCommand(ctx: Ctx['Command'], group: Group
     const all = database.groupSpreadsheets.listAll(group.id);
 
     if (!currentSpreadsheetId && all.length === 0) {
-      await sendToChat('Таблица не создана. Завершите настройку: /connect');
+      await sendMessage('Таблица не создана. Завершите настройку: /connect');
       return;
     }
 
@@ -45,9 +45,9 @@ export async function handleSpreadsheetCommand(ctx: Ctx['Command'], group: Group
       `• /sync — подхватить изменения расходов\n` +
       `• /budget sync — подхватить изменения бюджетов`;
 
-    await sendToChat(message.trim());
+    await sendMessage(message.trim());
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /spreadsheet');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

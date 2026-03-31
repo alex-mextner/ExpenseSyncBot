@@ -1,6 +1,6 @@
 /** /help command handler — comprehensive feature guide */
 import { env } from '../../config/env';
-import { sendToChat } from '../send';
+import { sendMessage } from '../../services/bank/telegram-sender';
 
 export const EXPENSE_EXAMPLES =
   `<code>сумма [валюта] категория [комментарий]</code>\n` +
@@ -55,5 +55,5 @@ ChatGPT, Claude и другие нейронки регулярно считаю
 }
 
 export async function handleHelpCommand(): Promise<void> {
-  await sendToChat(buildHelpText(), { parse_mode: 'HTML' });
+  await sendMessage(buildHelpText());
 }

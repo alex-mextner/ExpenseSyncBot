@@ -1,100 +1,85 @@
-// Send-only Telegram Bot API client for background workers (sync-service, cron, etc.).
-// sendMessage/editMessageText/deleteMessage read chatId + threadId from chatStorage automatically.
-// Use withChatContext() to set context before calling them.
-import { env } from '../../config/env';
+// Unified Telegram message sender — works in both handler context and background workers.
+// Reads chatId from chatStorage; message_thread_id is injected by GramIO preRequest hook.
+// Handlers: middleware sets context automatically. Workers: use withChatContext() first.
+import type { TelegramMessage, TelegramParams } from '@gramio/types';
+import type { BotInstance } from '../../bot/types';
 import { chatStorage, withChatContext } from '../../utils/chat-context';
 import { createLogger } from '../../utils/logger.ts';
 
-export { withChatContext } from '../../utils/chat-context';
+export { withChatContext };
 
 const logger = createLogger('telegram-sender');
 
-export interface InlineKeyboardButton {
-  text: string;
-  callback_data?: string;
-  url?: string;
+let _bot: BotInstance | undefined;
+
+/** Initialize with bot instance — call once at startup before any handler runs. */
+export function initSender(bot: BotInstance): void {
+  _bot = bot;
 }
 
-export interface SendMessageResult {
-  message_id: number;
-}
-
-interface TelegramResponse<T> {
-  ok: boolean;
-  result?: T;
-  description?: string;
+function getBot(): BotInstance {
+  if (!_bot) throw new Error('telegram-sender: bot not initialized — call initSender() first');
+  return _bot;
 }
 
 function getContext() {
   const ctx = chatStorage.getStore();
-  if (!ctx) throw new Error('Telegram sender called outside withChatContext');
+  if (!ctx) throw new Error('Telegram sender called outside chat context');
   return ctx;
 }
 
-async function telegramRequest<T>(
-  method: string,
-  body: Record<string, unknown>,
-): Promise<T | null> {
+type SendOptions = Omit<TelegramParams.SendMessageParams, 'chat_id' | 'text'>;
+
+/** Send a message to the current chat. Reads chatId from context; threadId injected by preRequest hook. */
+export async function sendMessage(
+  text: string,
+  options?: SendOptions,
+): Promise<TelegramMessage | null> {
+  const { chatId } = getContext();
   try {
-    const resp = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    return await getBot().api.sendMessage({
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+      ...options,
     });
-    const data = (await resp.json()) as TelegramResponse<T>;
-    if (!data.ok) {
-      logger.warn({ method, description: data.description }, 'Telegram API call failed');
-      return null;
-    }
-    return data.result ?? null;
   } catch (error) {
-    logger.error({ err: error, method }, 'Telegram API request error');
+    logger.warn({ err: error }, 'sendMessage failed');
     return null;
   }
 }
 
-/** Send a message. Reads chatId + threadId from withChatContext automatically. */
-export async function sendMessage(
-  text: string,
-  options?: {
-    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
-  },
-): Promise<SendMessageResult | null> {
-  const { chatId, threadId } = getContext();
-  return telegramRequest<SendMessageResult>('sendMessage', {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML',
-    ...(threadId !== null ? { message_thread_id: threadId } : {}),
-    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
-  });
-}
-
-/** Edit a message. Reads chatId from withChatContext automatically. */
+/** Edit a message. Reads chatId from context. */
 export async function editMessageText(
   messageId: number,
   text: string,
-  options?: {
-    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
-  },
+  options?: Omit<TelegramParams.EditMessageTextParams, 'chat_id' | 'message_id' | 'text'>,
 ): Promise<void> {
   const { chatId } = getContext();
-  await telegramRequest('editMessageText', {
-    chat_id: chatId,
-    message_id: messageId,
-    text,
-    parse_mode: 'HTML',
-    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
-  });
+  try {
+    await getBot().api.editMessageText({
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: 'HTML',
+      ...options,
+    });
+  } catch (error) {
+    logger.warn({ err: error, messageId }, 'editMessageText failed');
+  }
 }
 
-/** Delete a message. Reads chatId from withChatContext automatically. */
+/** Delete a message. Reads chatId from context. */
 export async function deleteMessage(messageId: number): Promise<void> {
   const { chatId } = getContext();
-  await telegramRequest('deleteMessage', {
-    chat_id: chatId,
-    message_id: messageId,
-  });
+  try {
+    await getBot().api.deleteMessage({
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch (error) {
+    logger.warn({ err: error, messageId }, 'deleteMessage failed');
+  }
 }
 
 /** Direct send to a specific chatId — no context needed.
@@ -102,9 +87,7 @@ export async function deleteMessage(messageId: number): Promise<void> {
 export async function sendDirect(
   chatId: number,
   text: string,
-  options?: {
-    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
-  },
-): Promise<SendMessageResult | null> {
+  options?: SendOptions,
+): Promise<TelegramMessage | null> {
   return withChatContext(chatId, null, () => sendMessage(text, options));
 }

@@ -5,6 +5,7 @@ import { google } from 'googleapis';
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
 import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
@@ -20,7 +21,7 @@ import {
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
-import { sendToChat } from '../send';
+import { pluralize } from '../../utils/pluralize';
 import type { Ctx } from '../types';
 import { importExpensesFromSheet } from './sync';
 
@@ -36,18 +37,18 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
   const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!chatId || !isGroup) {
-    await sendToChat('❌ Эта команда работает только в группах.');
+    await sendMessage('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group) {
-    await sendToChat('❌ Группа не настроена. Используй /connect');
+    await sendMessage('❌ Группа не настроена. Используй /connect');
     return;
   }
 
   if (!group.spreadsheet_id) {
-    await sendToChat('❌ Таблица не создана. Используй /connect для первоначальной настройки.');
+    await sendMessage('❌ Таблица не создана. Используй /connect для первоначальной настройки.');
     return;
   }
 
@@ -56,13 +57,13 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
   const authUrl = generateAuthUrl(group.id);
   const authKeyboard = new InlineKeyboard().url('🔐 Переподключить Google', authUrl);
 
-  await sendToChat(
+  await sendMessage(
     '🔄 <b>Переподключение Google аккаунта</b>\n\n' +
       'Таблица и данные сохранятся — обновится только авторизация.\n\n' +
       '1. Нажми на кнопку ниже\n' +
       '2. Разреши доступ к Google Sheets\n' +
       '3. Вернись сюда — бот синхронизирует данные',
-    { parse_mode: 'HTML', reply_markup: authKeyboard },
+    { reply_markup: authKeyboard },
   );
 
   // OAuth flow continues asynchronously: the callback server saves the token to DB,
@@ -110,11 +111,11 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
   };
 
   try {
-    await sendToChat('🔄 Полная синхронизация...');
+    await sendMessage('🔄 Полная синхронизация...');
 
     const freshGroup = database.groups.findById(groupId);
     if (!freshGroup?.google_refresh_token || !freshGroup.spreadsheet_id) {
-      await sendToChat('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
+      await sendMessage('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
       return;
     }
 
@@ -149,10 +150,10 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
     report.budgetTabsCreated = budgetResult.tabsCreated;
     report.budgetRowsWritten = budgetResult.rowsWritten;
 
-    await sendToChat(formatFullSyncReport(report));
+    await sendMessage(formatFullSyncReport(report));
   } catch (err) {
     logger.error({ err }, '[RECONNECT] Full sync failed');
-    await sendToChat(
+    await sendMessage(
       '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' + 'Попробуй /sync вручную позже.',
     );
   }
@@ -408,7 +409,9 @@ function formatFullSyncReport(report: FullSyncReport): string {
   if (report.snapshotId || report.sheetBackupUrl) {
     lines.push('💾 Бекапы:');
     if (report.snapshotId) {
-      lines.push(`  БД: ${report.snapshotExpenses} расходов + ${report.snapshotBudgets} бюджетов`);
+      lines.push(
+        `  БД: ${report.snapshotExpenses} ${pluralize(report.snapshotExpenses, 'расход', 'расхода', 'расходов')} + ${report.snapshotBudgets} ${pluralize(report.snapshotBudgets, 'бюджет', 'бюджета', 'бюджетов')}`,
+      );
     }
     if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
     lines.push('');
@@ -420,14 +423,18 @@ function formatFullSyncReport(report: FullSyncReport): string {
 
   // Sheet → DB expenses
   if (report.sheetToDbExpenses > 0) {
-    lines.push(`\n📥 Таблица → БД: +${report.sheetToDbExpenses} расходов добавлено`);
+    lines.push(
+      `\n📥 Таблица → БД: +${report.sheetToDbExpenses} ${pluralize(report.sheetToDbExpenses, 'расход добавлен', 'расхода добавлено', 'расходов добавлено')}`,
+    );
   } else {
     lines.push('\n📥 Таблица → БД: расходы синхронизированы');
   }
 
   // DB → Sheet expenses
   if (report.dbToSheetExpenses > 0) {
-    lines.push(`📤 БД → Таблица: +${report.dbToSheetExpenses} расходов добавлено`);
+    lines.push(
+      `📤 БД → Таблица: +${report.dbToSheetExpenses} ${pluralize(report.dbToSheetExpenses, 'расход добавлен', 'расхода добавлено', 'расходов добавлено')}`,
+    );
   } else {
     lines.push('📤 БД → Таблица: всё синхронизировано');
   }

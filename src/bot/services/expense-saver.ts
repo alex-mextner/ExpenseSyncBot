@@ -3,12 +3,12 @@ import { format } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount, getExchangeRate } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from '../commands/budget';
-import { sendToChat } from '../send';
 
 const logger = createLogger('expense-saver');
 
@@ -108,7 +108,7 @@ export async function saveExpenseToSheet(
   });
   logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
 
-  // Check budget limits (sendToChat reads chat from AsyncLocalStorage)
+  // Check budget limits (sendMessage reads chat from AsyncLocalStorage)
   await checkBudgetLimit(groupId, category, currentDate);
 }
 
@@ -161,7 +161,7 @@ async function checkBudgetLimit(
     }
 
     try {
-      await sendToChat(message);
+      await sendMessage(message);
       logger.info(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
     } catch (error) {
       logger.error({ err: error }, '[BUDGET] Failed to send warning');
@@ -295,12 +295,9 @@ export async function saveReceiptExpenses(
     ? new InlineKeyboard().url('📷 Сканировать чек', miniAppUrl)
     : undefined;
 
-  await sendToChat(
+  await sendMessage(
     `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
-    {
-      parse_mode: 'HTML',
-      ...(scanButton ? { reply_markup: scanButton } : {}),
-    },
+    scanButton ? { reply_markup: scanButton } : undefined,
   );
 
   logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);

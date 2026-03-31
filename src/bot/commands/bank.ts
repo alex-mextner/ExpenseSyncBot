@@ -9,10 +9,10 @@ import {
 import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertAnyToEUR } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
-import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('bank-command');
@@ -50,7 +50,7 @@ export async function handleBankCommand(
   if (arg) {
     const found = lookupBank(arg);
     if (!found) {
-      await sendToChat(`Банк «${arg}» не найден. Используй /bank для выбора из списка.`);
+      await sendMessage(`Банк «${arg}» не найден. Используй /bank для выбора из списка.`);
       return;
     }
     const [bankKey] = found;
@@ -58,7 +58,7 @@ export async function handleBankCommand(
     if (existing && existing.status !== 'setup') {
       await showBankStatus(ctx, bot, existing, group, true);
     } else {
-      await startWizard(ctx, bankKey, bot);
+      await startWizard(bankKey);
     }
     return;
   }
@@ -88,22 +88,17 @@ function buildLetterNavKeyboard(
 
 async function showNoBanksPanel(): Promise<void> {
   const banks = getBankList();
-  await sendToChat('Ни одного банка не подключено.\n\nВыбери букву:', {
+  await sendMessage('Ни одного банка не подключено.\n\nВыбери букву:', {
     reply_markup: { inline_keyboard: buildLetterNavKeyboard(banks) },
   });
 }
 
-async function startWizard(ctx: Ctx['Message'], bankKey: string, bot: BotInstance): Promise<void> {
+async function startWizard(bankKey: string): Promise<void> {
   const plugin = BANK_REGISTRY[bankKey];
   if (!plugin) return;
 
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
   // Show info screen first — the user clicks "🔓 Подключить" to proceed.
-  await bot.api.sendMessage({
-    chat_id: chatId,
-    text: buildWizardInfoText(plugin.name),
+  await sendMessage(buildWizardInfoText(plugin.name), {
     reply_markup: {
       inline_keyboard: [
         [
@@ -124,9 +119,9 @@ async function handleWizardCancel(groupId: number): Promise<void> {
   if (setupConn) {
     wizardPromptMessages.delete(setupConn.id);
     database.bankConnections.deleteById(setupConn.id);
-    await sendToChat('Подключение банка отменено.');
+    await sendMessage('Подключение банка отменено.');
   } else {
-    await sendToChat('Нет активного подключения для отмены.');
+    await sendMessage('Нет активного подключения для отмены.');
   }
 }
 
@@ -196,19 +191,19 @@ export async function handleWizardInput(
   if (nextFields.length > 0) {
     const nextField = nextFields[0];
     if (chatId) {
-      const sent = await bot.api.sendMessage({
-        chat_id: chatId,
-        text: buildFieldPromptText(nextField),
+      const sent = await sendMessage(buildFieldPromptText(nextField), {
         reply_markup: {
           inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
         },
         link_preview_options: { is_disabled: true },
       });
-      wizardPromptMessages.set(setupConn.id, {
-        messageId: sent.message_id,
-        sensitive: isPasswordField(nextField),
-        fieldPrompt: resolveFieldPrompt(nextField),
-      });
+      if (sent) {
+        wizardPromptMessages.set(setupConn.id, {
+          messageId: sent.message_id,
+          sensitive: isPasswordField(nextField),
+          fieldPrompt: resolveFieldPrompt(nextField),
+        });
+      }
     }
     return true;
   }
@@ -236,15 +231,13 @@ export async function handleWizardInput(
         .catch(() => {});
     } else {
       // Fresh connection: send a new panel message.
-      const panelMsg = await bot.api.sendMessage({
-        chat_id: chatId,
-        text: buildConnectingText(plugin.name),
-        ...(panelThreadId !== null ? { message_thread_id: panelThreadId } : {}),
-      });
-      database.bankConnections.update(setupConn.id, {
-        panel_message_id: panelMsg.message_id,
-        panel_message_thread_id: panelThreadId,
-      });
+      const panelMsg = await sendMessage(buildConnectingText(plugin.name));
+      if (panelMsg) {
+        database.bankConnections.update(setupConn.id, {
+          panel_message_id: panelMsg.message_id,
+          panel_message_thread_id: panelThreadId,
+        });
+      }
     }
   }
 
@@ -297,16 +290,16 @@ async function showBanksPanel(
   // Send one message per bank
   for (const conn of connections) {
     const text = buildBankStatusText(conn);
-    const sent = await bot.api.sendMessage({
-      chat_id: group.telegram_group_id,
-      text,
+    const sent = await sendMessage(text, {
       reply_markup: {
         inline_keyboard: buildBankManageKeyboard(conn),
       },
     });
-    database.bankConnections.update(conn.id, {
-      panel_message_id: sent.message_id,
-    });
+    if (sent) {
+      database.bankConnections.update(conn.id, {
+        panel_message_id: sent.message_id,
+      });
+    }
   }
 
   // Summary message
@@ -314,17 +307,17 @@ async function showBanksPanel(
   const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
 
   const summary = `Итого: ~${totalEur.toFixed(0)} EUR`;
-  const summarySent = await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text: summary,
+  const summarySent = await sendMessage(summary, {
     reply_markup: {
       inline_keyboard: [[{ text: '➕ Добавить банк', callback_data: 'bank_add' }]],
     },
   });
 
-  database.groups.update(group.telegram_group_id, {
-    bank_panel_summary_message_id: summarySent.message_id,
-  });
+  if (summarySent) {
+    database.groups.update(group.telegram_group_id, {
+      bank_panel_summary_message_id: summarySent.message_id,
+    });
+  }
 }
 
 async function showBankStatus(
@@ -345,16 +338,16 @@ async function showBankStatus(
     }
   }
   const text = buildBankStatusText(conn);
-  const sent = await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text,
+  const sent = await sendMessage(text, {
     reply_markup: {
       inline_keyboard: buildBankManageKeyboard(conn, explicit),
     },
   });
-  database.bankConnections.update(conn.id, {
-    panel_message_id: sent.message_id,
-  });
+  if (sent) {
+    database.bankConnections.update(conn.id, {
+      panel_message_id: sent.message_id,
+    });
+  }
 }
 
 // ─── Confirmation flow callbacks ──────────────────────────────────────────────
@@ -444,19 +437,20 @@ export async function handleBankConfirmCallback(
     await ctx.answerCallbackQuery();
 
     const replyToMsgId = claimed.telegram_message_id ?? undefined;
-    await bot.api.sendMessage({
-      chat_id: chatId,
-      text: `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nОбъединить или создать новый?`,
-      ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '🔗 Объединить', callback_data: `bank_merge:${txId}:${match.id}` },
-            { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
+    await sendMessage(
+      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nОбъединить или создать новый?`,
+      {
+        ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🔗 Объединить', callback_data: `bank_merge:${txId}:${match.id}` },
+              { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
+            ],
           ],
-        ],
+        },
       },
-    });
+    );
     return;
   }
 
@@ -465,14 +459,15 @@ export async function handleBankConfirmCallback(
   await ctx.answerCallbackQuery();
 
   const replyToMsgId = claimed.telegram_message_id ?? undefined;
-  const promptMsg = await bot.api.sendMessage({
-    chat_id: chatId,
-    text: `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
-    ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
-    reply_markup: {
-      inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
+  const promptMsg = await sendMessage(
+    `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
+    {
+      ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
+      reply_markup: {
+        inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
+      },
     },
-  });
+  );
 
   if (promptMsg?.message_id) {
     // Store prompt message id so handleBankEditReply can match the reply
@@ -550,7 +545,6 @@ export async function handleBankMergeCallback(
  */
 export async function handleBankNewCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   chatId: number,
 ): Promise<void> {
@@ -570,14 +564,15 @@ export async function handleBankNewCallback(
   await ctx.answerCallbackQuery();
 
   const replyToMsgId = tx.telegram_message_id ?? undefined;
-  const promptMsg = await bot.api.sendMessage({
-    chat_id: chatId,
-    text: `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
-    ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
-    reply_markup: {
-      inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
+  const promptMsg = await sendMessage(
+    `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
+    {
+      ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
+      reply_markup: {
+        inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
+      },
     },
-  });
+  );
 
   if (promptMsg?.message_id) {
     database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
@@ -586,7 +581,6 @@ export async function handleBankNewCallback(
 
 export async function handleBankEditCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   chatId: number,
 ): Promise<void> {
@@ -621,11 +615,12 @@ export async function handleBankEditCallback(
   await ctx.answerCallbackQuery();
 
   const replyToMsgId = tx.telegram_message_id ?? undefined;
-  const promptMsg = await bot.api.sendMessage({
-    chat_id: chatId,
-    text: `✏️ Ответь на это сообщение и напиши что исправить.\n\nФормат: категория — комментарий\nИли только категория.`,
-    ...(replyToMsgId !== undefined ? { reply_to_message_id: replyToMsgId } : {}),
-  });
+  const promptMsg = await sendMessage(
+    `✏️ Ответь на это сообщение и напиши что исправить.\n\nФормат: категория — комментарий\nИли только категория.`,
+    {
+      ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
+    },
+  );
   // Store the prompt's message_id so handleBankEditReply can verify the reply is to this message
   if (promptMsg?.message_id) {
     database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
@@ -682,7 +677,7 @@ export async function handleBankEditReply(
   database.bankTransactions.setEditInProgress(editTx.id, false);
   database.bankTransactions.setAwaitingComment(editTx.id, false);
 
-  await sendToChat(
+  await sendMessage(
     `✅ Расход записан: ${category}${comment ? ` — ${comment}` : ''} (${editTx.amount} ${editTx.currency})`,
   );
   return true;
@@ -804,7 +799,7 @@ export async function handleBankAccountsCallback(
       // message too old — fall through to send new
     }
   }
-  await sendToChat(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  await sendMessage(text, { reply_markup: keyboard });
 }
 
 /**
@@ -977,7 +972,7 @@ export async function handleBankSetupCallback(
       // fall through
     }
   }
-  await sendToChat(infoText, { reply_markup: keyboard });
+  await sendMessage(infoText, { reply_markup: keyboard });
 }
 
 /**
@@ -1053,12 +1048,10 @@ export async function handleBankWizardStartCallback(
       }
     }
     if (panelMsgId === null) {
-      const sent = await bot.api.sendMessage({
-        chat_id: chatId,
-        text: buildConnectingText(plugin.name),
-        ...(threadId !== null ? { message_thread_id: threadId } : {}),
-      });
-      panelMsgId = sent.message_id;
+      const sent = await sendMessage(buildConnectingText(plugin.name));
+      if (sent) {
+        panelMsgId = sent.message_id;
+      }
     }
 
     database.bankConnections.update(newConn.id, {
@@ -1099,19 +1092,19 @@ export async function handleBankWizardStartCallback(
   }
 
   // Fallback: send new message
-  const sent = await bot.api.sendMessage({
-    chat_id: chatId,
-    text: firstFieldText,
+  const sent = await sendMessage(firstFieldText, {
     reply_markup: {
       inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
     },
     link_preview_options: { is_disabled: true },
   });
-  wizardPromptMessages.set(newConn.id, {
-    messageId: sent.message_id,
-    sensitive: isPasswordField(firstField),
-    fieldPrompt: resolveFieldPrompt(firstField),
-  });
+  if (sent) {
+    wizardPromptMessages.set(newConn.id, {
+      messageId: sent.message_id,
+      sensitive: isPasswordField(firstField),
+      fieldPrompt: resolveFieldPrompt(firstField),
+    });
+  }
 }
 
 // ─── New action handlers ──────────────────────────────────────────────────────
@@ -1172,7 +1165,7 @@ export async function handleBankSettingsCallback(
       // message too old — fall through to send new
     }
   }
-  await sendToChat(settingsText, { reply_markup: settingsKeyboard });
+  await sendMessage(settingsText, { reply_markup: settingsKeyboard });
 }
 
 export async function handleBankSyncCallback(
@@ -1246,7 +1239,7 @@ export async function handleBankDisconnectCallback(
       });
     } catch {
       // Edit failed (message too old or permissions) — send a new confirmation message
-      await sendToChat(`⚠️ Отключить ${conn.display_name}?\n\nВсе данные будут удалены.`, {
+      await sendMessage(`⚠️ Отключить ${conn.display_name}?\n\nВсе данные будут удалены.`, {
         reply_markup: {
           inline_keyboard: [
             [
@@ -1397,19 +1390,19 @@ export async function handleBankReconnectCallback(
   }
 
   const firstField = plugin.fields[0];
-  const sent = await bot.api.sendMessage({
-    chat_id: chatId,
-    text: buildWizardStartText(plugin.name, firstField),
+  const sent = await sendMessage(buildWizardStartText(plugin.name, firstField), {
     reply_markup: {
       inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
     },
     link_preview_options: { is_disabled: true },
   });
-  wizardPromptMessages.set(conn.id, {
-    messageId: sent.message_id,
-    sensitive: isPasswordField(firstField),
-    fieldPrompt: resolveFieldPrompt(firstField),
-  });
+  if (sent) {
+    wizardPromptMessages.set(conn.id, {
+      messageId: sent.message_id,
+      sensitive: isPasswordField(firstField),
+      fieldPrompt: resolveFieldPrompt(firstField),
+    });
+  }
 }
 
 /** Cancel the active wizard for this group. */
@@ -1507,7 +1500,7 @@ export async function handleBankAddCallback(
       // fall through
     }
   }
-  await sendToChat('Выбери букву:', {
+  await sendMessage('Выбери букву:', {
     reply_markup: { inline_keyboard: keyboard },
   });
 }
@@ -1545,7 +1538,7 @@ export async function handleBankLetterCallback(
       // fall through
     }
   }
-  await sendToChat(`Банки на букву ${letter}:`, {
+  await sendMessage(`Банки на букву ${letter}:`, {
     reply_markup: { inline_keyboard: bankButtons },
   });
 }
@@ -1572,7 +1565,7 @@ export async function handleBankLetterNavCallback(
       // fall through
     }
   }
-  await sendToChat('Выбери букву:', {
+  await sendMessage('Выбери букву:', {
     reply_markup: { inline_keyboard: keyboard },
   });
 }

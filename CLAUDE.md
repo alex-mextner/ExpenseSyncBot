@@ -233,6 +233,26 @@ Uses `date-fns` library. Spreadsheet dates are in `DD.MM.YYYY` format (European)
 Uses `formatAmount(amount, currency)` from `src/services/currency/converter.ts`.
 For amounts ≥ 1 million, it outputs suffix form: `1.5 млн RSD`, `2 млрд RUB`.
 
+**Never use `.toFixed()` for user-facing amounts.** Always use `formatAmount()` — it handles large numbers (млн/млрд) and consistent decimal formatting. Raw `.toFixed()` is only acceptable inside `formatAmount` itself or for non-currency values.
+
+### Russian Numeral Declension
+
+**Every user-facing `${count} <noun>` must use `pluralize()` from `src/utils/pluralize.ts`.**
+
+```ts
+import { pluralize } from '../../utils/pluralize';
+
+// pluralize(n, one, few, many)
+`${count} ${pluralize(count, 'расход', 'расхода', 'расходов')}`
+`${count} ${pluralize(count, 'транзакция', 'транзакции', 'транзакций')}`
+`${count} ${pluralize(count, 'карточка', 'карточки', 'карточек')}`
+`${count} ${pluralize(count, 'бюджет', 'бюджета', 'бюджетов')}`
+`${count} ${pluralize(count, 'категория', 'категории', 'категорий')}`
+`${count} ${pluralize(count, 'запись', 'записи', 'записей')}`
+```
+
+Hardcoding a single form like `${n} расходов` is wrong for n=1 ("1 расходов") and n=3 ("3 расходов"). No exceptions.
+
 ### EUR vs Default Currency — Critical Rules
 
 **EUR is the internal calculation currency only.** It is used for:
@@ -276,51 +296,61 @@ const percentage = budget.limit_amount > 0
 `${formatAmount(spentInCurrency, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%)`
 ```
 
-### Sending Messages — `sendToChat` only
+### Sending Messages — `sendMessage` only
 
-**NEVER use `ctx.send()`** — in `CallbackQueryContext` it sends to the user's private chat, not to the group. This is a GramIO behavior that causes silent bugs.
+**The ONLY way to send messages is `sendMessage` from [src/services/bank/telegram-sender.ts](src/services/bank/telegram-sender.ts).**
 
-**Always use `sendToChat(text, options?)` from [src/bot/send.ts](src/bot/send.ts).** It reads `chatId` from `AsyncLocalStorage` (populated by topic-middleware) and uses `bot.api.sendMessage`, which correctly targets the group chat and works with topic injection.
+Banned alternatives:
+- **`ctx.send()`** — in `CallbackQueryContext` it sends to private chat, not group. Silent bug.
+- **`bot.api.sendMessage()`** — bypasses `AsyncLocalStorage` context, loses `message_thread_id` injection. Messages go to General instead of the topic.
+- **`sendToChat`** — removed, was a redundant wrapper.
 
 ```ts
-import { sendToChat } from '../send';
+import { sendMessage } from '../../services/bank/telegram-sender';
 
-// In any command, message, or callback handler:
-await sendToChat('Hello');
-await sendToChat('Formatted', { parse_mode: 'HTML' });
-const msg = await sendToChat('Get ID', { reply_markup: keyboard });
-// msg.message_id — NOT .id (this is TelegramMessage, not GramIO context)
+// In any handler (command, message, callback):
+await sendMessage('Hello');
+await sendMessage('With keyboard', { reply_markup: keyboard });
+const msg = await sendMessage('Get ID');
+// msg?.message_id — returns TelegramMessage | null (null on error)
 ```
 
-**Exceptions (background workers only):** Code running outside handler context (photo-processor, cron, sync-service) has no `AsyncLocalStorage` — use `bot.api.sendMessage` with explicit `chat_id` there.
+`sendMessage` always sets `parse_mode: 'HTML'`. No need to pass it explicitly.
 
-- `ctx.editText` and `ctx.answerCallbackQuery` are fine — they operate on the callback message, not on a new send.
+**`ctx.editText` and `ctx.answerCallbackQuery` are fine** — they operate on the callback message, not a new send.
+
+### Sending to Admin — `sendDirect`
+
+For admin notifications (feedback, merchant rules) — use `sendDirect(chatId, text, options?)` from telegram-sender. No context needed, sends to a specific personal chat.
 
 ### Topic-Aware Messaging
 
-Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/topic-middleware.ts)) to automatically inject `message_thread_id` into all outgoing Telegram API calls within request handler context.
+Bot uses `AsyncLocalStorage` ([src/utils/chat-context.ts](src/utils/chat-context.ts)) + GramIO `preRequest` hook ([src/bot/topic-middleware.ts](src/bot/topic-middleware.ts)) to automatically inject `message_thread_id` into all outgoing API calls.
 
-**Rules:**
+**Two contexts, one mechanism:**
 
-- **Do NOT manually pass `message_thread_id`** in command handlers, message handlers, or callback handlers — the middleware handles it
-- **DO pass `message_thread_id` explicitly** in background operations (photo-processor, broadcast, dev pipeline notify) since they run outside handler context
-- The middleware is registered in [src/bot/index.ts](src/bot/index.ts) before all handlers
-- Topic restriction checks still require extracting `message_thread_id` from context manually
-
-**Background workers: topic fallback pattern**
-
-When sending a message from a background worker (sync-service, cron jobs, etc.), use the bank panel thread with a fallback to the group's active topic:
+| Context | Who sets it | How |
+|---------|------------|-----|
+| Handlers (commands, messages, callbacks) | `topic-middleware` | Automatically from incoming update |
+| Background workers (sync, cron, photo-processor, oauth) | Developer | `withChatContext(chatId, threadId, fn)` |
 
 ```ts
+import { sendMessage, editMessageText, withChatContext } from './telegram-sender';
+
+// Background worker — set context once, all calls inside use it:
 const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
-await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text,
-  threadId !== null ? { message_thread_id: threadId } : undefined,
-);
+await withChatContext(group.telegram_group_id, threadId, async () => {
+  await sendMessage(text);
+  await sendMessage(cardText, { reply_markup: keyboard });
+  await editMessageText(messageId, statusText);
+});
 ```
 
-Never send to the main chat (no thread) when the group has an `active_topic_id` — the user won't see messages from a topic-based group in the General channel.
-
-**Never send to personal (private) chats from background workers.** All messages from sync, cron, OTP prompts, and background jobs MUST go to `group.telegram_group_id` (always a group chat ID, never a user ID). If a message ends up in someone's personal chat, it means the wrong chat ID was used — check the DB.
+**Rules:**
+- **Never pass `message_thread_id` manually** — the preRequest hook handles it from context
+- **Never use `bot.api.sendMessage` directly** — use `sendMessage` which reads context automatically
+- **Never send to General** when the group has `active_topic_id` — user won't see it
+- **Never send to personal chats from workers** — all worker messages go to `group.telegram_group_id`
 
 ### Testing
 
@@ -476,7 +506,7 @@ Follow this framework for ANY technical issue:
 - **Tests must exercise production code**: never reimplement logic in tests.
 - NEVER delete a failing test. Investigate and fix the root cause.
 - **Changing tests to match code is a red flag**: always analyze WHY.
-- **Every commit must have tests**: no committing code without corresponding test coverage.
+- **Every commit must have tests**: no committing code without corresponding test coverage. Tests are NOT a "separate task" — they are part of the same unit of work as the code they cover. Never defer tests to a follow-up.
 - **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
@@ -634,6 +664,18 @@ When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
 - **No `import from 'bun:test'`** — use Jest/bun globals (`describe`, `it`, `expect`, etc.) directly
 - **Mock pattern**: `global.fetch = async (url, init?) => new Response(...)` — real `Response`, not a cast
 - **Install deps**: `npm install --ignore-scripts` (bun fails on some git-sourced deps like `pdf-extraction`)
+
+## UX Conventions
+
+### N+2 Truncation Rule
+
+When showing a truncated list with "и ещё N..." at the bottom, N must be ≥ 3. Showing "и ещё 1" or "и ещё 2" is pointless — just show those items instead. So either show all items, or truncate such that the hidden count is ≥ 3.
+
+Example with max 10 visible items:
+- ≤ 12 items → show all (because 1–2 more is wasteful)
+- 13+ items → show 10, then "и ещё 3..."
+
+Formula: `if (total - maxVisible < 3) showAll; else truncate;`
 
 ## Telegram Bot API Limits
 

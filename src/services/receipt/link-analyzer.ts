@@ -70,7 +70,7 @@ export async function processPaymentLinks(
 
     // Save and show (summary for >5 items, item-by-item otherwise)
     saveExtractedItems(queueItem.id, result.items, result.currency);
-    await showReceiptConfirmationOptions(bot, group.id, queueItem.id);
+    await showReceiptConfirmationOptions(group.id, queueItem.id);
   }
 
   // Remove reaction if nothing found

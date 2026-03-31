@@ -3,7 +3,7 @@
 import cron from 'node-cron';
 import { env } from '../config/env';
 import { database } from '../database';
-import { sendDirect } from '../services/bank/telegram-sender';
+import { sendDirect, sendMessage, withChatContext } from '../services/bank/telegram-sender';
 import { updateExchangeRates } from '../services/currency/converter';
 import { monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
 import {
@@ -16,7 +16,6 @@ import {
 } from '../services/google/sheets';
 import { createLogger } from '../utils/logger.ts';
 import { importExpensesFromSheet } from './commands/sync';
-import type { BotInstance } from './types';
 
 const logger = createLogger('cron');
 
@@ -68,7 +67,7 @@ export function registerExchangeRateCron(): void {
   logger.info('[CRON] Exchange rate cron registered (daily 01:00 UTC, fetch on startup)');
 }
 
-export function registerMonthlyCron(bot: BotInstance): void {
+export function registerMonthlyCron(): void {
   cron.schedule('0 0 1 * *', async () => {
     logger.info('[CRON] Monthly tab auto-clone started');
 
@@ -130,15 +129,11 @@ export function registerMonthlyCron(bot: BotInstance): void {
           notifyText += `\n\nНовая таблица ${year}: ${newYearUrl}`;
         }
 
-        await bot.api
-          .sendMessage({
-            chat_id: group.telegram_group_id,
-            text: notifyText,
-            ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
-          })
-          .catch((err: unknown) =>
-            logger.error({ err }, `[CRON] Failed to notify group ${group.id}`),
-          );
+        await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+          sendMessage(notifyText),
+        ).catch((err: unknown) =>
+          logger.error({ err }, `[CRON] Failed to notify group ${group.id}`),
+        );
       } catch (err) {
         logger.error({ err }, `[CRON] Failed for group ${group.id}`);
       }

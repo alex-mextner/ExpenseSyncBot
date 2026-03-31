@@ -58,19 +58,16 @@ describe('scheduleNewsBroadcast', () => {
   });
 
   it('does not throw when called', () => {
-    const bot = makeMockBot();
-    expect(() => scheduleNewsBroadcast(bot as never)).not.toThrow();
+    expect(() => scheduleNewsBroadcast()).not.toThrow();
   });
 
   it('schedules a cron job', () => {
-    const bot = makeMockBot();
-    scheduleNewsBroadcast(bot as never);
+    scheduleNewsBroadcast();
     expect(cronSpy).toHaveBeenCalledTimes(1);
   });
 
   it('cron expression targets March 29 at 12:00', () => {
-    const bot = makeMockBot();
-    scheduleNewsBroadcast(bot as never);
+    scheduleNewsBroadcast();
     const [cronExpr] = cronSpy.mock.calls[0] as [string, ...unknown[]];
     expect(cronExpr).toBe('0 12 29 3 *');
   });

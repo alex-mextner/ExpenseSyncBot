@@ -283,7 +283,7 @@ export function getExchangeRate(currency: CurrencyCode): number {
  * AI context (aiContext=true): includes exact decimal plus suffix in parens,
  * e.g. "1500000.00 (1.5 млн) RSD", so the model can use whichever form fits.
  */
-export function formatAmount(amount: number, currency: CurrencyCode, aiContext = false): string {
+export function formatAmount(amount: number, currency: string, aiContext = false): string {
   const abs = Math.abs(amount);
 
   if (aiContext) {

@@ -1,0 +1,134 @@
+// Tests for buildOldTxSummaryText — N+2 truncation rule, HTML escaping, formatAmount.
+
+import { describe, expect, test } from 'bun:test';
+import type { BankTransaction } from '../../database/types';
+import { buildOldTxSummaryText } from './transaction-summary';
+
+function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
+  return {
+    id: 1,
+    connection_id: 1,
+    external_id: 'ext-1',
+    account_id: null,
+    date: '2026-03-28',
+    time: null,
+    amount: 100,
+    sign_type: 'debit',
+    currency: 'RSD',
+    merchant: 'METRO',
+    merchant_normalized: null,
+    mcc: null,
+    raw_data: '{}',
+    matched_expense_id: null,
+    telegram_message_id: null,
+    edit_in_progress: 0,
+    awaiting_comment: 0,
+    prefill_category: null,
+    prefill_comment: null,
+    status: 'pending',
+    created_at: '2026-03-28T10:00:00Z',
+    ...overrides,
+  };
+}
+
+function makeTxList(count: number): { tx: BankTransaction; category: string }[] {
+  return Array.from({ length: count }, (_, i) => ({
+    tx: makeTx({
+      id: i + 1,
+      external_id: `ext-${i + 1}`,
+      date: `2026-03-${String(20 + (i % 10)).padStart(2, '0')}`,
+      amount: 100 + i * 50,
+      merchant: `Store ${i + 1}`,
+    }),
+    category: `cat-${i + 1}`,
+  }));
+}
+
+describe('buildOldTxSummaryText', () => {
+  test('shows all items when count <= 10', () => {
+    const items = makeTxList(5);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('5 необработанных транзакций');
+    expect(text).toContain('Store 1');
+    expect(text).toContain('Store 5');
+    expect(text).not.toContain('и ещё');
+  });
+
+  test('shows all items when count is 12 (N+2: 12-10=2 < 3)', () => {
+    const items = makeTxList(12);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('12 необработанных транзакций');
+    expect(text).toContain('Store 12');
+    expect(text).not.toContain('и ещё');
+  });
+
+  test('truncates when count is 13 (N+2: 13-10=3 >= 3)', () => {
+    const items = makeTxList(13);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('13 необработанных транзакций');
+    expect(text).toContain('Store 10');
+    expect(text).not.toContain('Store 11');
+    expect(text).toContain('и ещё 3');
+  });
+
+  test('truncates when count is 20', () => {
+    const items = makeTxList(20);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('и ещё 10');
+  });
+
+  test('escapes HTML in bank name and merchant', () => {
+    const items = [
+      {
+        tx: makeTx({ merchant: '<script>alert("xss")</script>' }),
+        category: 'food',
+      },
+    ];
+    const text = buildOldTxSummaryText(items, 'Bank & Trust');
+    expect(text).toContain('Bank &amp; Trust');
+    expect(text).toContain('&lt;script&gt;');
+    expect(text).not.toContain('<script>');
+  });
+
+  test('uses merchant_normalized over merchant', () => {
+    const items = [
+      {
+        tx: makeTx({ merchant: 'RAW MERCHANT', merchant_normalized: 'Clean Merchant' }),
+        category: 'food',
+      },
+    ];
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('Clean Merchant');
+    expect(text).not.toContain('RAW MERCHANT');
+  });
+
+  test('formats amount via formatAmount', () => {
+    const items = [{ tx: makeTx({ amount: 7285.5 }), category: 'food' }];
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('7285.50 RSD');
+  });
+
+  test('formats large amounts with млн suffix', () => {
+    const items = [{ tx: makeTx({ amount: 1_500_000 }), category: 'food' }];
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('1.5 млн RSD');
+  });
+
+  test('shows dash for missing merchant', () => {
+    const items = [{ tx: makeTx({ merchant: null, merchant_normalized: null }), category: 'food' }];
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('— —');
+  });
+
+  test('uses correct Russian declension for count=1', () => {
+    const items = makeTxList(1);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('1 необработанная транзакция');
+  });
+
+  test('uses correct Russian declension for count=3', () => {
+    const items = makeTxList(3);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('3 необработанные транзакции');
+  });
+});

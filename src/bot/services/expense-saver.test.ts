@@ -1,8 +1,11 @@
 // Tests for saveReceiptExpenses — budget check integration after receipt save
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
 import type { CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
 import type { ReceiptItem } from '../../database/types';
+import * as senderModule from '../../services/bank/telegram-sender';
 
 // ── Mock database (10+ other test files poison it via mock.module — we must do the same) ──
 
@@ -60,31 +63,15 @@ const mockBudgets = {
 
 const mockTransaction = mock((fn: () => void) => fn());
 
-mock.module('../../database', () => ({
-  database: {
-    receiptItems: mockReceiptItems,
-    groups: mockGroups,
-    expenses: mockExpenses,
-    expenseItems: mockExpenseItems,
-    budgets: mockBudgets,
-    transaction: mockTransaction,
-  },
-}));
-
-// ── Mock sendToChat (used by both saveReceiptExpenses and checkBudgetLimit) ──
+// ── Mock sendMessage (used by both saveReceiptExpenses and checkBudgetLimit) ──
 
 const sentMessages: { text: string; options: Record<string, unknown> | undefined }[] = [];
-const mockSendToChat = mock((text: string, options?: Record<string, unknown>) => {
+const mockSendMessage = mock((text: string, options?: Record<string, unknown>) => {
   sentMessages.push({ text, options });
-  return Promise.resolve({ message_id: 1 });
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
 });
 
-mock.module('../send', () => ({
-  sendToChat: mockSendToChat,
-  initSend: () => {},
-}));
-
-// Import after mocks are set up (sheets/converter are spied via spyOn below)
+// Spied via spyOn in beforeEach (not mock.module — avoids global cache pollution)
 import * as converterModule from '../../services/currency/converter';
 import * as sheetsModule from '../../services/google/sheets';
 import { saveReceiptExpenses } from './expense-saver';
@@ -162,14 +149,35 @@ beforeEach(() => {
   mockExpenseItems.create.mockReset();
   mockBudgets.getBudgetForMonth.mockReset().mockReturnValue(null);
   mockTransaction.mockReset().mockImplementation((fn: () => void) => fn());
-  mockSendToChat.mockClear();
+  mockSendMessage.mockClear();
+
+  // Route real module calls through mock objects via spyOn
+  spyOn(database.receiptItems, 'findConfirmedByPhotoQueueId').mockImplementation(mockReceiptItems.findConfirmedByPhotoQueueId);
+  // @ts-expect-error — mock returns void, real returns number
+  spyOn(database.receiptItems, 'deleteProcessedByPhotoQueueId').mockImplementation(mockReceiptItems.deleteProcessedByPhotoQueueId);
+  spyOn(database.groups, 'findById').mockImplementation(mockGroups.findById);
+  // @ts-expect-error — mock returns simplified expense objects
+  spyOn(database.expenses, 'create').mockImplementation(mockExpenses.create);
+  spyOn(database.expenses, 'sumByCategory').mockImplementation(mockExpenses.sumByCategory);
+  // @ts-expect-error — mock returns simplified expense item objects
+  spyOn(database.expenseItems, 'create').mockImplementation(mockExpenseItems.create);
+  // @ts-expect-error — mock returns simplified budget objects
+  spyOn(database.budgets, 'getBudgetForMonth').mockImplementation(mockBudgets.getBudgetForMonth);
+  // @ts-expect-error — mock has simplified types for the generic transaction method
+  spyOn(database, 'transaction').mockImplementation(mockTransaction);
+  spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+  spyOn(senderModule, 'sendDirect').mockResolvedValue(null);
+  spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined);
+  spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined);
+  // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+  spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
 
   // Spy on real module exports
   appendRowSpy = spyOn(sheetsModule, 'appendExpenseRow').mockResolvedValue(undefined);
   spyOn(converterModule, 'convertToEUR').mockReturnValue(1.72);
   convertCurrencySpy = spyOn(converterModule, 'convertCurrency').mockReturnValue(0);
   spyOn(converterModule, 'formatAmount').mockImplementation(
-    (amount: number, currency: CurrencyCode) => `${amount.toFixed(2)} ${currency}`,
+    (amount: number, currency: string) => `${amount.toFixed(2)} ${currency}`,
   );
 });
 
@@ -184,7 +192,7 @@ describe('saveReceiptExpenses', () => {
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     expect(appendRowSpy).not.toHaveBeenCalled();
-    expect(mockSendToChat).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it('saves receipt items and sends completion message', async () => {
@@ -196,7 +204,7 @@ describe('saveReceiptExpenses', () => {
     expect(mockExpenses.create).toHaveBeenCalledTimes(1);
     expect(mockReceiptItems.deleteProcessedByPhotoQueueId).toHaveBeenCalledTimes(1);
 
-    // Completion message via sendToChat
+    // Completion message via sendMessage
     const completionMsg = sentMessages.find((m) => m.text.includes('Чек обработан'));
     expect(completionMsg).toBeDefined();
   });
@@ -233,7 +241,7 @@ describe('saveReceiptExpenses', () => {
     // 2 categories → 2 sheet writes
     expect(appendRowSpy).toHaveBeenCalledTimes(2);
 
-    // Budget warning for Продукты (exceeded) via sendToChat
+    // Budget warning for Продукты (exceeded) via sendMessage
     const budgetMsg = sentMessages.find((m) => m.text.includes('ПРЕВЫШЕН БЮДЖЕТ'));
     expect(budgetMsg).toBeDefined();
     expect(budgetMsg?.text).toContain('Продукты');

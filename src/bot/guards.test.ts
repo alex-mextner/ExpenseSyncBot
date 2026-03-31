@@ -1,21 +1,16 @@
 // Tests for command guards — requireGroup and requireGoogle wrappers
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
 import { database } from '../database';
 import type { Group } from '../database/types';
-
-// Mock sendToChat before importing guards (which use it)
-const sent: string[] = [];
-const mockSendToChat = mock((text: string) => {
-  sent.push(text);
-  return Promise.resolve({});
-});
-
-mock.module('./send', () => ({
-  sendToChat: mockSendToChat,
-  initSend: () => {},
-}));
-
+import * as senderModule from '../services/bank/telegram-sender';
 import { requireGoogle, requireGroup } from './guards';
+
+const sent: string[] = [];
+const mockSendMessage = mock((text: string) => {
+  sent.push(text);
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
+});
 
 let findSpy: ReturnType<typeof spyOn<typeof database.groups, 'findByTelegramGroupId'>>;
 
@@ -50,7 +45,10 @@ function createMockCtx(overrides: { chatId?: number; chatType?: string } = {}) {
 describe('requireGroup', () => {
   beforeEach(() => {
     sent.length = 0;
-    mockSendToChat.mockClear();
+    mockSendMessage.mockClear();
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
     findSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
@@ -123,7 +121,10 @@ describe('requireGroup', () => {
 describe('requireGoogle', () => {
   beforeEach(() => {
     sent.length = 0;
-    mockSendToChat.mockClear();
+    mockSendMessage.mockClear();
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
   });
 
   afterEach(() => {
