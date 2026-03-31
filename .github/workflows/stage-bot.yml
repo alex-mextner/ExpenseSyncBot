@@ -5,6 +5,40 @@ on:
     types: [opened, reopened, synchronize, closed]
 
 jobs:
+  typecheck:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run type-check
+
+  lint:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run lint
+
+  test:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - name: Run tests
+        run: bun test
+
   stage-bot:
     runs-on: ubuntu-latest
 
