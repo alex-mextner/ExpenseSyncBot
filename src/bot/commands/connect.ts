@@ -91,9 +91,10 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     }
   }
 
-  // Show Google connection choice
+  // Show setup message with OAuth URL button directly (no extra click)
+  const authUrl = generateAuthUrl(group.id);
   const keyboard = new InlineKeyboard()
-    .text('🔐 Подключить Google Sheets', `setup:google:${group.id}`)
+    .url('🔐 Подключить Google Sheets', authUrl)
     .row()
     .text('⏩ Пропустить (подключить позже)', `setup:skip_google:${group.id}`);
 
@@ -105,9 +106,10 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
       `• Добавлять формулы, графики, сводные таблицы\n` +
       `• Делиться с семьёй или бухгалтером\n` +
       `• Скачать как CSV/Excel\n\n` +
-      `Можно подключить сейчас или позже через /connect.`,
+      `Нажми кнопку ниже, чтобы подключить. Или пропусти — можно подключить позже через /connect.`,
     { parse_mode: 'HTML', reply_markup: keyboard },
   );
+  logger.info(`[CMD] OAuth URL sent for group ${group.id}, waiting for user to authorize`);
 }
 
 /**
