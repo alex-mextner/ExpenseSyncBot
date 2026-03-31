@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:te
 import { database } from '../database';
 import { sendFeedback } from './feedback';
 
-let sendDirectSpy: ReturnType<typeof mock>;
+// Mock sendDirect from telegram-sender
+let sendMessageSpy: ReturnType<typeof mock>;
 
 beforeEach(async () => {
-  sendDirectSpy = mock(() => Promise.resolve());
+  sendMessageSpy = mock(() => Promise.resolve());
   const mod = await import('./bank/telegram-sender');
-  spyOn(mod, 'sendDirect').mockImplementation(sendDirectSpy);
+  spyOn(mod, 'sendDirect').mockImplementation(sendMessageSpy);
 });
 
 afterEach(() => {
@@ -70,13 +71,13 @@ describe('sendFeedback', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(sendDirectSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
 
-    const callArgs = sendDirectSpy.mock.calls[0];
+    const callArgs = sendMessageSpy.mock.calls[0];
     expect(callArgs).toBeDefined();
-    // sendDirect(botToken, chatId, text, options?)
-    expect(callArgs?.[2]).toContain('Отличный бот!');
-    expect(callArgs?.[2]).toContain('Алекс');
+    expect(callArgs?.[0]).toBe(999); // admin chat id
+    expect(callArgs?.[1]).toContain('Отличный бот!');
+    expect(callArgs?.[1]).toContain('Алекс');
 
     (env as { BOT_ADMIN_CHAT_ID: number | null }).BOT_ADMIN_CHAT_ID = origValue;
   });
@@ -108,7 +109,9 @@ describe('sendFeedback', () => {
       userName: '<b>hacker</b>',
     });
 
-    const text = sendDirectSpy.mock.calls[0]?.[2] as string;
+    const callArgs = sendMessageSpy.mock.calls[0];
+    const text = callArgs?.[1] as string;
+    // HTML entities must be escaped
     expect(text).toContain('&lt;script&gt;');
     expect(text).not.toContain('<script>');
     expect(text).toContain('&lt;b&gt;hacker&lt;/b&gt;');

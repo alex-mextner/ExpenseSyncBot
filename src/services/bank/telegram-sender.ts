@@ -1,13 +1,18 @@
 // Send-only Telegram Bot API client for background workers (sync-service, cron, etc.).
-// Uses AsyncLocalStorage for chat context — set once at the entry point, sendMessage reads automatically.
-import { AsyncLocalStorage } from 'node:async_hooks';
+// sendMessage/editMessageText/deleteMessage read chatId + threadId from chatStorage automatically.
+// Use withChatContext() to set context before calling them.
+import { env } from '../../config/env';
+import { chatStorage, withChatContext } from '../../utils/chat-context';
 import { createLogger } from '../../utils/logger.ts';
+
+export { withChatContext } from '../../utils/chat-context';
 
 const logger = createLogger('telegram-sender');
 
 export interface InlineKeyboardButton {
   text: string;
-  callback_data: string;
+  callback_data?: string;
+  url?: string;
 }
 
 export interface SendMessageResult {
@@ -20,37 +25,18 @@ interface TelegramResponse<T> {
   description?: string;
 }
 
-interface ChatContext {
-  botToken: string;
-  chatId: number;
-  threadId: number | null;
-}
-
-const chatContext = new AsyncLocalStorage<ChatContext>();
-
-/** Run a function with chat context — sendMessage/editMessageText read from it automatically. */
-export function withChatContext<T>(
-  botToken: string,
-  chatId: number,
-  threadId: number | null,
-  fn: () => Promise<T>,
-): Promise<T> {
-  return chatContext.run({ botToken, chatId, threadId }, fn);
-}
-
-function getContext(): ChatContext {
-  const ctx = chatContext.getStore();
+function getContext() {
+  const ctx = chatStorage.getStore();
   if (!ctx) throw new Error('Telegram sender called outside withChatContext');
   return ctx;
 }
 
 async function telegramRequest<T>(
-  botToken: string,
   method: string,
   body: Record<string, unknown>,
 ): Promise<T | null> {
   try {
-    const resp = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+    const resp = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -74,12 +60,12 @@ export async function sendMessage(
     reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
   },
 ): Promise<SendMessageResult | null> {
-  const ctx = getContext();
-  return telegramRequest<SendMessageResult>(ctx.botToken, 'sendMessage', {
-    chat_id: ctx.chatId,
+  const { chatId, threadId } = getContext();
+  return telegramRequest<SendMessageResult>('sendMessage', {
+    chat_id: chatId,
     text,
     parse_mode: 'HTML',
-    ...(ctx.threadId !== null ? { message_thread_id: ctx.threadId } : {}),
+    ...(threadId !== null ? { message_thread_id: threadId } : {}),
     ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
   });
 }
@@ -92,9 +78,9 @@ export async function editMessageText(
     reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
   },
 ): Promise<void> {
-  const ctx = getContext();
-  await telegramRequest(ctx.botToken, 'editMessageText', {
-    chat_id: ctx.chatId,
+  const { chatId } = getContext();
+  await telegramRequest('editMessageText', {
+    chat_id: chatId,
     message_id: messageId,
     text,
     parse_mode: 'HTML',
@@ -102,28 +88,23 @@ export async function editMessageText(
   });
 }
 
+/** Delete a message. Reads chatId from withChatContext automatically. */
 export async function deleteMessage(messageId: number): Promise<void> {
-  const ctx = getContext();
-  await telegramRequest(ctx.botToken, 'deleteMessage', {
-    chat_id: ctx.chatId,
+  const { chatId } = getContext();
+  await telegramRequest('deleteMessage', {
+    chat_id: chatId,
     message_id: messageId,
   });
 }
 
-/** Direct send to a specific chatId — no context, no topic handling.
+/** Direct send to a specific chatId — no context needed.
  * Use for admin notifications and other non-group messages. */
 export async function sendDirect(
-  botToken: string,
   chatId: number,
   text: string,
   options?: {
     reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
   },
 ): Promise<SendMessageResult | null> {
-  return telegramRequest<SendMessageResult>(botToken, 'sendMessage', {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML',
-    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
-  });
+  return withChatContext(chatId, null, () => sendMessage(text, options));
 }

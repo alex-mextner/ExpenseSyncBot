@@ -34,7 +34,7 @@ const mockSendMessage = mock<
   (text: string, options?: { reply_markup?: unknown }) => Promise<{ message_id: number } | null>
 >(() => Promise.resolve({ message_id: 42 }));
 const mockWithChatContext = mock(
-  (_token: string, _chatId: number, _threadId: number | null, fn: () => Promise<void>) => fn(),
+  (_chatId: number, _threadId: number | null, fn: () => Promise<void>) => fn(),
 );
 mock.module('./telegram-sender', () => ({
   sendMessage: mockSendMessage,
@@ -111,7 +111,7 @@ beforeEach(() => {
   mockSendMessage.mockReset();
   mockSendMessage.mockImplementation(() => Promise.resolve({ message_id: 42 }));
   mockWithChatContext.mockReset();
-  mockWithChatContext.mockImplementation((_t, _c, _th, fn) => fn());
+  mockWithChatContext.mockImplementation((_c, _th, fn) => fn());
 });
 
 afterEach(() => {
@@ -211,7 +211,6 @@ describe('sendOldTransactionCards', () => {
     await sendOldTransactionCards(10);
 
     expect(mockWithChatContext).toHaveBeenCalledWith(
-      'test-token',
       GROUP.telegram_group_id,
       CONN.panel_message_thread_id,
       expect.any(Function),
@@ -228,7 +227,6 @@ describe('sendOldTransactionCards', () => {
     await sendOldTransactionCards(10);
 
     expect(mockWithChatContext).toHaveBeenCalledWith(
-      'test-token',
       GROUP.telegram_group_id,
       GROUP.active_topic_id,
       expect.any(Function),

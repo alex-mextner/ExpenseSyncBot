@@ -1,59 +1,59 @@
-// Tests for topic-aware middleware — threadStorage and context injection behavior
+// Tests for topic-aware middleware — chatStorage and context injection behavior
 import { describe, expect, it } from 'bun:test';
-import { threadStorage } from './topic-middleware';
+import { chatStorage } from '../utils/chat-context';
 
-// ── threadStorage direct tests ─────────────────────────────────────────────────
+// ── chatStorage direct tests ────────────────────────────────────────────────────
 // We test the AsyncLocalStorage directly since registerTopicMiddleware requires
 // a real GramIO Bot instance with a live Telegram connection.
 // The storage is the core logic; the middleware just populates/reads it.
 
-describe('threadStorage', () => {
+describe('chatStorage', () => {
   it('is an AsyncLocalStorage instance', () => {
-    expect(threadStorage).toBeTruthy();
-    expect(typeof threadStorage.run).toBe('function');
-    expect(typeof threadStorage.getStore).toBe('function');
+    expect(chatStorage).toBeTruthy();
+    expect(typeof chatStorage.run).toBe('function');
+    expect(typeof chatStorage.getStore).toBe('function');
   });
 
   it('returns undefined when no context is set', () => {
     // Outside of any .run() call, store is undefined
-    const store = threadStorage.getStore();
+    const store = chatStorage.getStore();
     expect(store).toBeUndefined();
   });
 
   it('returns stored context within a run() call', () => {
     const context = { chatId: 100, threadId: 42 };
-    let captured: { chatId: number; threadId: number | undefined } | undefined;
+    let captured: { chatId: number; threadId: number | null } | undefined;
 
-    threadStorage.run(context, () => {
-      captured = threadStorage.getStore();
+    chatStorage.run(context, () => {
+      captured = chatStorage.getStore();
     });
 
     expect(captured).toEqual({ chatId: 100, threadId: 42 });
   });
 
-  it('returns undefined threadId when explicitly set to undefined', () => {
-    const context = { chatId: 200, threadId: undefined };
-    let captured: { chatId: number; threadId: number | undefined } | undefined;
+  it('returns null threadId when explicitly set to null', () => {
+    const context = { chatId: 200, threadId: null };
+    let captured: { chatId: number; threadId: number | null } | undefined;
 
-    threadStorage.run(context, () => {
-      captured = threadStorage.getStore();
+    chatStorage.run(context, () => {
+      captured = chatStorage.getStore();
     });
 
     expect(captured?.chatId).toBe(200);
-    expect(captured?.threadId).toBeUndefined();
+    expect(captured?.threadId).toBeNull();
   });
 
   it('nested run() calls use inner context', () => {
     const outer = { chatId: 1, threadId: 10 };
     const inner = { chatId: 2, threadId: 20 };
 
-    let outerCaptured: { chatId: number; threadId: number | undefined } | undefined;
-    let innerCaptured: { chatId: number; threadId: number | undefined } | undefined;
+    let outerCaptured: { chatId: number; threadId: number | null } | undefined;
+    let innerCaptured: { chatId: number; threadId: number | null } | undefined;
 
-    threadStorage.run(outer, () => {
-      outerCaptured = threadStorage.getStore();
-      threadStorage.run(inner, () => {
-        innerCaptured = threadStorage.getStore();
+    chatStorage.run(outer, () => {
+      outerCaptured = chatStorage.getStore();
+      chatStorage.run(inner, () => {
+        innerCaptured = chatStorage.getStore();
       });
     });
 
@@ -62,35 +62,35 @@ describe('threadStorage', () => {
   });
 
   it('context does not leak after run() completes', () => {
-    let insideCaptured: { chatId: number; threadId: number | undefined } | undefined;
+    let insideCaptured: { chatId: number; threadId: number | null } | undefined;
 
-    threadStorage.run({ chatId: 999, threadId: 5 }, () => {
-      insideCaptured = threadStorage.getStore();
+    chatStorage.run({ chatId: 999, threadId: 5 }, () => {
+      insideCaptured = chatStorage.getStore();
     });
 
-    const outsideCaptured = threadStorage.getStore();
+    const outsideCaptured = chatStorage.getStore();
 
     expect(insideCaptured?.chatId).toBe(999);
     expect(outsideCaptured).toBeUndefined();
   });
 
   it('parallel async contexts do not bleed into each other', async () => {
-    const results: Array<{ chatId: number; threadId: number | undefined } | undefined> = [];
+    const results: Array<{ chatId: number; threadId: number | null } | undefined> = [];
 
     // Run two async tasks with different contexts simultaneously
     await Promise.all([
       new Promise<void>((resolve) => {
-        threadStorage.run({ chatId: 111, threadId: 11 }, async () => {
+        chatStorage.run({ chatId: 111, threadId: 11 }, async () => {
           // Yield to allow other microtasks
           await Promise.resolve();
-          results[0] = threadStorage.getStore();
+          results[0] = chatStorage.getStore();
           resolve();
         });
       }),
       new Promise<void>((resolve) => {
-        threadStorage.run({ chatId: 222, threadId: 22 }, async () => {
+        chatStorage.run({ chatId: 222, threadId: 22 }, async () => {
           await Promise.resolve();
-          results[1] = threadStorage.getStore();
+          results[1] = chatStorage.getStore();
           resolve();
         });
       }),
@@ -104,12 +104,12 @@ describe('threadStorage', () => {
 
   it('context is accessible in nested async callbacks', async () => {
     const context = { chatId: 333, threadId: 7 };
-    let captured: { chatId: number; threadId: number | undefined } | undefined;
+    let captured: { chatId: number; threadId: number | null } | undefined;
 
     await new Promise<void>((resolve) => {
-      threadStorage.run(context, async () => {
+      chatStorage.run(context, async () => {
         await Promise.resolve(); // simulate async work
-        captured = threadStorage.getStore();
+        captured = chatStorage.getStore();
         resolve();
       });
     });
@@ -125,7 +125,7 @@ describe('threadStorage', () => {
 // We test this logic in isolation.
 
 function simulatePreRequestInjection(
-  stored: { chatId: number; threadId: number | undefined } | undefined,
+  stored: { chatId: number; threadId: number | null } | undefined,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   // Mirrors the preRequest hook logic from topic-middleware.ts
@@ -144,8 +144,8 @@ describe('preRequest injection logic', () => {
     expect(result['message_thread_id']).toBe(5);
   });
 
-  it('does NOT inject when threadId is undefined', () => {
-    const stored = { chatId: 100, threadId: undefined };
+  it('does NOT inject when threadId is null', () => {
+    const stored = { chatId: 100, threadId: null };
     const params = { chat_id: 100, text: 'hello' };
     const result = simulatePreRequestInjection(stored, params);
     expect(result['message_thread_id']).toBeUndefined();
@@ -181,7 +181,7 @@ describe('preRequest injection logic', () => {
   });
 
   it('threadId 0 is falsy — does NOT inject', () => {
-    const stored = { chatId: 100, threadId: 0 as unknown as undefined };
+    const stored = { chatId: 100, threadId: 0 as unknown as null };
     const params = { chat_id: 100, text: 'hello' };
     const result = simulatePreRequestInjection(stored, params);
     // threadId: 0 is falsy so injection is skipped
@@ -189,20 +189,17 @@ describe('preRequest injection logic', () => {
   });
 });
 
-// ── THREAD_AWARE_METHODS list verification ─────────────────────────────────────
-// The list of methods that support message_thread_id should include all core send methods
+// ── topic-middleware module verification ────────────────────────────────────────
 
-describe('THREAD_AWARE_METHODS coverage', () => {
-  // These are the methods imported from the module's implementation
-  // We verify the list exists and has the expected shape by importing the module
-  it('module exports threadStorage without error', async () => {
-    const mod = await import('./topic-middleware');
-    expect(mod.threadStorage).toBeTruthy();
-    expect(mod.registerTopicMiddleware).toBeTruthy();
-  });
-
-  it('registerTopicMiddleware is a function', async () => {
+describe('topic-middleware module', () => {
+  it('exports registerTopicMiddleware', async () => {
     const { registerTopicMiddleware } = await import('./topic-middleware');
     expect(typeof registerTopicMiddleware).toBe('function');
+  });
+
+  it('chat-context exports chatStorage and withChatContext', async () => {
+    const mod = await import('../utils/chat-context');
+    expect(mod.chatStorage).toBeTruthy();
+    expect(typeof mod.withChatContext).toBe('function');
   });
 });

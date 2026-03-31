@@ -133,7 +133,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     }
 
     const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
-    await withChatContext(env.BOT_TOKEN, group.telegram_group_id, threadId, async () => {
+    await withChatContext(group.telegram_group_id, threadId, async () => {
       // shimRef allows readLineImpl to reference the shim before it is created.
       const shimRef: { current: ReturnType<typeof createZenMoneyShim> | null } = { current: null };
 
@@ -443,25 +443,20 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
           ],
         };
         const notifyThreadId = freshConn.panel_message_thread_id ?? notifyGroup.active_topic_id;
-        await withChatContext(
-          env.BOT_TOKEN,
-          notifyGroup.telegram_group_id,
-          notifyThreadId,
-          async () => {
-            if (freshConn.panel_message_id) {
-              await editMessageText(
-                freshConn.panel_message_id,
-                `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
-                { reply_markup: keyboard },
-              ).catch(() => {});
-            } else {
-              await sendMessage(
-                `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
-                { reply_markup: keyboard },
-              ).catch(() => {});
-            }
-          },
-        );
+        await withChatContext(notifyGroup.telegram_group_id, notifyThreadId, async () => {
+          if (freshConn.panel_message_id) {
+            await editMessageText(
+              freshConn.panel_message_id,
+              `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
+              { reply_markup: keyboard },
+            ).catch(() => {});
+          } else {
+            await sendMessage(
+              `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
+              { reply_markup: keyboard },
+            ).catch(() => {});
+          }
+        });
       }
       return;
     }
@@ -525,7 +520,7 @@ async function handleSyncError(
   if (!group) return;
 
   const errorThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
-  await withChatContext(env.BOT_TOKEN, group.telegram_group_id, errorThreadId, async () => {
+  await withChatContext(group.telegram_group_id, errorThreadId, async () => {
     // Always update the panel message to reflect the new error state
     const freshConn = database.bankConnections.findById(connectionId);
     if (freshConn?.panel_message_id) {
@@ -714,7 +709,7 @@ export async function sendOldTransactionCards(connectionId: number): Promise<num
   const unsent = getUnsentPendingTxs(connectionId);
 
   const cardThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
-  await withChatContext(env.BOT_TOKEN, group.telegram_group_id, cardThreadId, async () => {
+  await withChatContext(group.telegram_group_id, cardThreadId, async () => {
     for (const tx of unsent) {
       const category = tx.prefill_category ?? '—';
       await sendConfirmationCard(tx, category, conn).catch((err) =>
@@ -743,7 +738,7 @@ export async function skipOldTransactions(connectionId: number): Promise<number>
 
   let skippedCount = 0;
   const skipThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
-  await withChatContext(env.BOT_TOKEN, group.telegram_group_id, skipThreadId, async () => {
+  await withChatContext(group.telegram_group_id, skipThreadId, async () => {
     for (const tx of unsent) {
       if (tx.date !== todayStr) {
         database.bankTransactions.updateStatus(tx.id, conn.group_id, 'skipped');

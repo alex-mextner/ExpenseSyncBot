@@ -181,7 +181,8 @@ async function sendAdminApprovalCard(
   suggestion: AiRuleSuggestion,
   examples: string[],
 ): Promise<void> {
-  if (!env.BOT_ADMIN_CHAT_ID) return;
+  const adminChatId = env.BOT_ADMIN_CHAT_ID;
+  if (!adminChatId) return;
 
   const exampleLines =
     examples.length > 0
@@ -190,7 +191,7 @@ async function sendAdminApprovalCard(
 
   const text = `🔧 Новое правило для мерчанта\n\nПаттерн: <code>${suggestion.pattern}</code>\n→ <b>${suggestion.replacement}</b>\n🗂 Категория: ${suggestion.category ?? '—'}\n📊 Уверенность: ${Math.round(suggestion.confidence * 100)}%${exampleLines}`;
 
-  await sendDirect(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text, {
+  await sendDirect(adminChatId, text, {
     reply_markup: {
       inline_keyboard: [
         [
