@@ -290,7 +290,7 @@ export async function saveReceiptExpenses(
   const totalItems = confirmedItems.length;
   const totalCategories = itemsByCategory.size;
 
-  const miniAppUrl = buildMiniAppUrl('scanner');
+  const miniAppUrl = buildMiniAppUrl('scanner', group.telegram_group_id);
   const scanButton = miniAppUrl
     ? new InlineKeyboard().url('📷 Сканировать чек', miniAppUrl)
     : undefined;

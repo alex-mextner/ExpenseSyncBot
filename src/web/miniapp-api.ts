@@ -748,5 +748,41 @@ export async function handleMiniAppRequest(
     return new Response(stream, { status: 200, headers: sseHeaders });
   }
 
+  // ── GET /api/user/groups ───────────────────────────────────────────────────
+  // Returns groups the authenticated user belongs to (no groupId required)
+
+  if (url.pathname === '/api/user/groups' && req.method === 'GET') {
+    const rawInitData = req.headers.get('X-Telegram-Init-Data') ?? undefined;
+    if (!rawInitData) {
+      return errorResponse(
+        401,
+        'Missing X-Telegram-Init-Data header',
+        'INVALID_INIT_DATA',
+        corsHeaders,
+      );
+    }
+
+    const userId = validateInitData(rawInitData);
+    if (userId === null) {
+      return errorResponse(401, 'Invalid initData', 'INVALID_INIT_DATA', corsHeaders);
+    }
+
+    const user = database.users.findByTelegramId(userId);
+    if (!user || !user.group_id) {
+      return new Response(JSON.stringify({ groups: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      });
+    }
+
+    const group = database.groups.findById(user.group_id);
+    const groups = group ? [{ telegramGroupId: group.telegram_group_id }] : [];
+
+    return new Response(JSON.stringify({ groups }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    });
+  }
+
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
 }
