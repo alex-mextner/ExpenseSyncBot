@@ -7,6 +7,7 @@ import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
 import type { MonthAbbr } from './month-abbr';
+import { monthAbbrFromDate } from './month-abbr';
 import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
 
 /**
@@ -143,6 +144,14 @@ export async function createExpenseSpreadsheet(
         ],
       },
     });
+  }
+
+  // Create current month's budget tab alongside the expenses tab
+  try {
+    const currentMonthAbbr = monthAbbrFromDate(new Date());
+    await createEmptyMonthTab(conn, spreadsheetId, currentMonthAbbr);
+  } catch (err) {
+    logger.error({ err }, '[SHEETS] Failed to create month budget tab during spreadsheet creation');
   }
 
   return { spreadsheetId, spreadsheetUrl };
@@ -624,7 +633,8 @@ export async function readMonthBudget(
 }
 
 /**
- * Write or update a single budget row in a monthly tab (upsert by category)
+ * Write or update a single budget row in a monthly tab (upsert by category).
+ * Defensively ensures the month tab exists before writing.
  */
 export async function writeMonthBudgetRow(
   conn: GoogleConn,
@@ -632,6 +642,12 @@ export async function writeMonthBudgetRow(
   month: MonthAbbr,
   row: BudgetRow,
 ): Promise<void> {
+  // Ensure the month tab exists before writing
+  const tabExists = await monthTabExists(conn, spreadsheetId, month);
+  if (!tabExists) {
+    await createEmptyMonthTab(conn, spreadsheetId, month);
+  }
+
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
@@ -905,7 +921,8 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
   });
   const rows = dataResponse.data.values ?? [];
 
-  const updates: { row: number; formula: string }[] = [];
+  const eurFormulaUpdates: { row: number; formula: string }[] = [];
+  const rateUpdates: { row: number; rate: number }[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i] as (string | number | null | undefined)[];
@@ -928,31 +945,57 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
     }
     if (amountColIdx === -1) continue;
 
-    // Rate column must have a value
-    const rateVal = row[rateColIdx];
-    if (rateVal === '' || rateVal === undefined || rateVal === null) continue;
-
     const sheetRow = i + 2; // 1-based row + skip header
-    updates.push({
+
+    // If Rate is missing, derive it from EUR_value / amount (preserves the rate from that day)
+    const rateVal = row[rateColIdx];
+    const rateEmpty = rateVal === '' || rateVal === undefined || rateVal === null;
+    if (rateEmpty) {
+      const eurNum = Number(eurVal);
+      const amountNum = Number(row[amountColIdx]);
+      if (amountNum > 0 && eurNum > 0) {
+        const derivedRate = Math.round((eurNum / amountNum) * 1_000_000) / 1_000_000;
+        rateUpdates.push({ row: sheetRow, rate: derivedRate });
+      } else {
+        continue; // Can't derive rate — skip
+      }
+    }
+
+    eurFormulaUpdates.push({
       row: sheetRow,
       formula: `=${colLetter(amountColIdx)}${sheetRow}*${colLetter(rateColIdx)}${sheetRow}`,
     });
   }
 
-  if (updates.length === 0) return 0;
+  if (eurFormulaUpdates.length === 0 && rateUpdates.length === 0) return 0;
 
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: updates.map(({ row, formula }) => ({
-        range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
-        values: [[formula]],
-      })),
-    },
-  });
+  // Write derived rates first, then replace EUR values with formulas
+  const batchData = [
+    ...rateUpdates.map(({ row, rate }) => ({
+      range: `${EXPENSES_TAB}!${colLetter(rateColIdx)}${row}`,
+      values: [[rate]],
+    })),
+    ...eurFormulaUpdates.map(({ row, formula }) => ({
+      range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
+      values: [[formula]],
+    })),
+  ];
 
-  return updates.length;
+  if (batchData.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: batchData,
+      },
+    });
+  }
+
+  logger.info(
+    `[SHEETS] repairEurFormulas: ${eurFormulaUpdates.length} formulas, ${rateUpdates.length} rates derived`,
+  );
+
+  return eurFormulaUpdates.length;
 }
 
 /**

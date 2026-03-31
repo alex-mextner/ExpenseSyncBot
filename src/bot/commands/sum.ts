@@ -3,13 +3,13 @@ import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
-import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
@@ -228,12 +228,8 @@ async function addBudgetInfo(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
-  const keyboard = env.MINIAPP_URL
-    ? new InlineKeyboard().webApp(
-        '📊 Дашборд',
-        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=dashboard`,
-      )
-    : undefined;
+  const miniAppUrl = buildMiniAppUrl('dashboard');
+  const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
   // Get budgets for current month
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);

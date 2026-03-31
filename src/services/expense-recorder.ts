@@ -15,7 +15,7 @@ let _instance: ExpenseRecorder | null = null;
  * Get the singleton ExpenseRecorder wired with real production deps.
  * Lazily created on first call to avoid import-order issues.
  */
-export function getExpenseRecorder(): ExpenseRecorder {
+export function getExpenseRecorder(): RecorderApi {
   if (!_instance) {
     // Lazy-import to break circular dependency chains
     const { database } = require('../database');
@@ -117,10 +117,23 @@ export function buildAmountsRecord(
 }
 
 /**
+ * Public API surface of ExpenseRecorder — use this interface for DI and testing
+ */
+export interface RecorderApi {
+  record(groupId: number, userId: number, data: RecordExpenseData): Promise<RecordExpenseResult>;
+  recordBatch(
+    groupId: number,
+    userId: number,
+    items: RecordReceiptItem[],
+  ): Promise<RecordExpenseResult[]>;
+  pushToSheet(groupId: number, expenseList: Expense[]): Promise<void>;
+}
+
+/**
  * Consolidates all expense writing: EUR conversion, sheet append, DB insert.
  * All callers (message handler, receipt handler, push) go through this service.
  */
-export class ExpenseRecorder {
+export class ExpenseRecorder implements RecorderApi {
   private groups: GroupRepository;
   private expenses: ExpenseRepository;
   private expenseItems: ExpenseItemsRepository;
@@ -281,15 +294,15 @@ export class ExpenseRecorder {
 
     for (const expense of expenseList) {
       const amounts = buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies);
+      const rate = this.eurConverter.getExchangeRate(expense.currency as CurrencyCode);
 
-      // Rate omitted: DB expenses store eur_amount but not the original rate.
-      // Re-deriving rate from eur_amount/amount would give a stale approximation.
       await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
         date: expense.date,
         category: expense.category,
         comment: expense.comment,
         amounts,
         eurAmount: expense.eur_amount,
+        rate,
       });
     }
 

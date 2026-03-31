@@ -27,7 +27,8 @@
       "Bash(./node_modules/.bin/biome lint:*)",
       "Bash(gh secret:*)",
       "Bash(./node_modules/.bin/jest)",
-      "Bash(/usr/bin/git diff:*)"
+      "Bash(/usr/bin/git diff:*)",
+      "Bash(./node_modules/.bin/biome check:*)"
     ],
     "deny": [],
     "ask": []
