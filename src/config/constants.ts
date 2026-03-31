@@ -598,7 +598,7 @@ export const MESSAGES = {
     '2. Выбрать валюты для учета\n\n' +
     'Нажми /connect чтобы начать.',
 
-  authSuccess: '✅ Google аккаунт подключен!\n\n' + 'Теперь выбери валюту по умолчанию:',
+  authSuccess: '✅ Google аккаунт подключен!',
 
   setupComplete:
     '🎉 Настройка завершена!\n\n' +
