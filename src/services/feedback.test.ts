@@ -1,15 +1,25 @@
 // Tests for shared feedback utility
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+
+import { mock } from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
+
+// ── Module mock (must be declared before importing the module under test) ──
+
+const sendDirectMock = mock(
+  async (_chatId: number, _text: string): Promise<TelegramMessage | null> => null,
+);
+
+mock.module('./bank/telegram-sender', () => ({
+  sendDirect: sendDirectMock,
+}));
+
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { database } from '../database';
 import { sendFeedback } from './feedback';
 
-// Mock sendDirect from telegram-sender
-let sendMessageSpy: ReturnType<typeof mock>;
-
-beforeEach(async () => {
-  sendMessageSpy = mock(() => Promise.resolve());
-  const mod = await import('./bank/telegram-sender');
-  spyOn(mod, 'sendDirect').mockImplementation(sendMessageSpy);
+beforeEach(() => {
+  sendDirectMock.mockReset();
+  sendDirectMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -71,9 +81,9 @@ describe('sendFeedback', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendDirectMock).toHaveBeenCalledTimes(1);
 
-    const callArgs = sendMessageSpy.mock.calls[0];
+    const callArgs = sendDirectMock.mock.calls[0];
     expect(callArgs).toBeDefined();
     expect(callArgs?.[0]).toBe(999); // admin chat id
     expect(callArgs?.[1]).toContain('Отличный бот!');
@@ -109,7 +119,7 @@ describe('sendFeedback', () => {
       userName: '<b>hacker</b>',
     });
 
-    const callArgs = sendMessageSpy.mock.calls[0];
+    const callArgs = sendDirectMock.mock.calls[0];
     const text = callArgs?.[1] as string;
     // HTML entities must be escaped
     expect(text).toContain('&lt;script&gt;');

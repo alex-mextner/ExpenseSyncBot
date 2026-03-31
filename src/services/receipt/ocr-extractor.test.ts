@@ -3,8 +3,14 @@
 // 1. startTempImageCleanup (observable timer behavior)
 // 2. extractTextFromImage error paths via mocked global fetch
 
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 import path from 'node:path';
+import {
+  mockFetchError,
+  mockFetchJson,
+  mockFetchText,
+  restoreFetch,
+} from '../../test-utils/mocks/fetch';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -41,14 +47,8 @@ describe('extractTextFromImage', () => {
   // These tests mock global fetch to avoid real HuggingFace API calls.
   // The HuggingFace SDK uses fetch internally.
 
-  let originalFetch: typeof globalThis.fetch;
-
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    restoreFetch();
     // Clean up any temp images created during tests
     const fs = require('node:fs/promises');
     const tempDir = path.join(process.cwd(), 'temp-images');
@@ -64,15 +64,7 @@ describe('extractTextFromImage', () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
     // Mock fetch to return a valid-looking but empty AI response
-    globalThis.fetch = mock(
-      async (): Promise<Response> =>
-        new Response(
-          JSON.stringify({
-            choices: [{ message: { content: null, role: 'assistant' } }],
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
-    ) as unknown as typeof globalThis.fetch;
+    mockFetchJson({ choices: [{ message: { content: null, role: 'assistant' } }] });
 
     const fakeBuffer = Buffer.from('fake-image-data');
     await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
@@ -81,13 +73,7 @@ describe('extractTextFromImage', () => {
   it('throws when HuggingFace API returns 429 rate limit', async () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
-    globalThis.fetch = mock(
-      async (): Promise<Response> =>
-        new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
-          status: 429,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-    ) as unknown as typeof globalThis.fetch;
+    mockFetchJson({ error: 'Rate limit exceeded' }, 429);
 
     const fakeBuffer = Buffer.from('fake-image-data');
     await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
@@ -96,13 +82,7 @@ describe('extractTextFromImage', () => {
   it('throws when HuggingFace API returns 503 service unavailable', async () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
-    globalThis.fetch = mock(
-      async (): Promise<Response> =>
-        new Response('Service Unavailable', {
-          status: 503,
-          headers: { 'Content-Type': 'text/plain' },
-        }),
-    ) as unknown as typeof globalThis.fetch;
+    mockFetchText('Service Unavailable', 503);
 
     const fakeBuffer = Buffer.from('fake-image-data');
     await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
@@ -111,9 +91,7 @@ describe('extractTextFromImage', () => {
   it('throws when network request fails entirely', async () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
-    globalThis.fetch = mock(async (): Promise<Response> => {
-      throw new Error('network failure');
-    }) as unknown as typeof globalThis.fetch;
+    mockFetchError('network failure');
 
     const fakeBuffer = Buffer.from('fake-image-data');
     await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
@@ -122,9 +100,7 @@ describe('extractTextFromImage', () => {
   it('throws Error with descriptive message on failure', async () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
-    globalThis.fetch = mock(async (): Promise<Response> => {
-      throw new Error('connection refused');
-    }) as unknown as typeof globalThis.fetch;
+    mockFetchError('connection refused');
 
     const fakeBuffer = Buffer.from('fake-image-data');
     try {
@@ -142,22 +118,16 @@ describe('extractTextFromImage', () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
     // Mock a successful-looking response (content is non-null)
-    globalThis.fetch = mock(
-      async (): Promise<Response> =>
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: 'Store: Mega Mart\nItem 1: Milk 1L - 100 RSD\nTotal: 100 RSD',
-                  role: 'assistant',
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
-    ) as unknown as typeof globalThis.fetch;
+    mockFetchJson({
+      choices: [
+        {
+          message: {
+            content: 'Store: Mega Mart\nItem 1: Milk 1L - 100 RSD\nTotal: 100 RSD',
+            role: 'assistant',
+          },
+        },
+      ],
+    });
 
     const fakeBuffer = Buffer.from('fake-image-data');
     // If it resolves, the result should be a string

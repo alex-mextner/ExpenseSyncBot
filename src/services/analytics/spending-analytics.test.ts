@@ -1,99 +1,11 @@
-import { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
+import { createTestDb } from '../../test-utils/db';
+import { seedGroupAndUser } from '../../test-utils/fixtures';
 
 // --- Setup in-memory database and mock the singleton ---
 
-const db = new Database(':memory:');
-db.exec('PRAGMA foreign_keys = ON;');
-
-// Create tables matching the production schema (post-migrations)
-db.exec(`
-  CREATE TABLE groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_group_id INTEGER NOT NULL UNIQUE,
-    google_refresh_token TEXT,
-    spreadsheet_id TEXT,
-    default_currency TEXT NOT NULL DEFAULT 'USD',
-    enabled_currencies TEXT NOT NULL DEFAULT '["USD"]',
-    custom_prompt TEXT,
-    active_topic_id INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-`);
-
-db.exec(`
-  CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id INTEGER NOT NULL UNIQUE,
-    group_id INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
-  );
-`);
-
-db.exec(`
-  CREATE TABLE categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
-    UNIQUE(group_id, name)
-  );
-`);
-
-db.exec(`
-  CREATE TABLE expenses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    category TEXT NOT NULL,
-    comment TEXT NOT NULL,
-    amount REAL NOT NULL,
-    currency TEXT NOT NULL,
-    eur_amount REAL NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-`);
-
-db.exec(`
-  CREATE INDEX idx_expenses_group_id ON expenses(group_id);
-`);
-
-db.exec(`
-  CREATE INDEX idx_expenses_date ON expenses(date);
-`);
-
-db.exec(`
-  CREATE INDEX idx_expenses_group_date ON expenses(group_id, date);
-`);
-
-db.exec(`
-  CREATE TABLE budgets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    category TEXT NOT NULL,
-    month TEXT NOT NULL,
-    limit_amount REAL NOT NULL,
-    currency TEXT NOT NULL DEFAULT 'EUR',
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
-    UNIQUE(group_id, category, month)
-  );
-`);
-
-db.exec(`
-  CREATE INDEX idx_budgets_group_id ON budgets(group_id);
-  CREATE INDEX idx_budgets_month ON budgets(month);
-  CREATE INDEX idx_budgets_group_month ON budgets(group_id, month);
-`);
+const db = createTestDb();
 
 import { BudgetRepository } from '../../database/repositories/budget.repository';
 // Instantiate real repositories backed by in-memory DB
@@ -187,18 +99,7 @@ function insertExpense(date: string, category: string, eurAmount: number) {
 let analytics: TestableSpendingAnalytics;
 
 beforeAll(() => {
-  // Insert group
-  db.run(
-    `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
-    [GROUP_ID, 12345, 'EUR', '["EUR"]'],
-  );
-
-  // Insert user
-  db.run(`INSERT INTO users (id, telegram_id, group_id) VALUES (?, ?, ?)`, [
-    USER_ID,
-    99999,
-    GROUP_ID,
-  ]);
+  seedGroupAndUser(db, { groupId: 12345, userId: 99999 });
 
   // -- Expenses --
 

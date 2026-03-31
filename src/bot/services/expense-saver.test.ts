@@ -1,85 +1,124 @@
 // Tests for saveReceiptExpenses — budget check integration after receipt save
 
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { TelegramMessage } from '@gramio/types';
 import type { CurrencyCode } from '../../config/constants';
-import { database } from '../../database';
 import type { ReceiptItem } from '../../database/types';
-import * as senderModule from '../../services/bank/telegram-sender';
+import { mockDatabase } from '../../test-utils/mocks/database';
 
-// ── Mock database (10+ other test files poison it via mock.module — we must do the same) ──
+// ── Mock functions ───────────────────────────────────────────────────────────
 
-const mockReceiptItems = {
-  findConfirmedByPhotoQueueId: mock(() => [] as ReceiptItem[]),
-  deleteProcessedByPhotoQueueId: mock(() => {}),
-};
+const appendExpenseRow = mock(() => Promise.resolve(undefined));
+const googleConn = mock(() => ({}));
 
-const mockGroups = {
-  findById: mock(() => makeGroup()),
-};
-
-const mockExpenses = {
-  create: mock(() => ({
-    id: 1,
-    group_id: 1,
-    user_id: 1,
-    date: '2024-01-15',
-    category: 'Продукты',
-    comment: 'test',
-    amount: 200,
-    currency: 'RSD',
-    eur_amount: 1.72,
-    created_at: '2024-01-01',
-    synced: 0,
-  })),
-  sumByCategory: mock(() => 0),
-};
-
-const mockExpenseItems = {
-  create: mock(() => ({
-    id: 1,
-    expense_id: 1,
-    name_ru: 'Молоко',
-    name_original: 'Mleko',
-    quantity: 1,
-    price: 200,
-    total: 200,
-  })),
-};
-
-const mockBudgets = {
-  getBudgetForMonth: mock(
-    (
-      ..._args: unknown[]
-    ): {
-      id: number;
-      category: string;
-      limit_amount: number;
-      currency: string;
-      month: string;
-    } | null => null,
-  ),
-};
-
-const mockTransaction = mock((fn: () => void) => fn());
-
-// ── Mock sendMessage (used by both saveReceiptExpenses and checkBudgetLimit) ──
+const convertToEUR = mock(() => 1.72);
+const convertCurrency = mock(() => 0);
+const formatAmount = mock((amount: number, currency: string) => `${amount} ${currency}`);
+const getExchangeRate = mock(() => 1);
 
 const sentMessages: {
   text: string;
   options: Record<string, unknown> | undefined;
 }[] = [];
-const mockSendMessage = mock((text: string, options?: Record<string, unknown>) => {
+const sendMessage = mock((text: string, options?: Record<string, unknown>) => {
   sentMessages.push({ text, options });
   return Promise.resolve({ message_id: 1 } as TelegramMessage);
 });
+const sendDirect = mock(() => Promise.resolve(null));
+const editMessageText = mock(() => Promise.resolve(undefined));
+const deleteMessage = mock(() => Promise.resolve(undefined));
+const withChatContext = mock((_c: number, _t: number | null, fn: () => unknown) => fn());
 
-// Spied via spyOn in beforeEach (not mock.module — avoids global cache pollution)
-import * as converterModule from '../../services/currency/converter';
-import * as sheetsModule from '../../services/google/sheets';
+// ── Database mocks ───────────────────────────────────────────────────────────
+
+const mockExpenseCreate = mock(() => ({
+  id: 1,
+  group_id: 1,
+  user_id: 1,
+  date: '2024-01-15',
+  category: 'Продукты',
+  comment: 'test',
+  amount: 200,
+  currency: 'RSD',
+  eur_amount: 1.72,
+  created_at: '2024-01-01',
+  synced: 0,
+}));
+const mockExpenseSumByCategory = mock(() => 0);
+const mockReceiptItemsFind = mock(() => [] as ReceiptItem[]);
+const mockReceiptItemsDelete = mock(() => {});
+const mockGroupsFindById = mock(() => makeGroup());
+const mockExpenseItemsCreate = mock(() => ({
+  id: 1,
+  expense_id: 1,
+  name_ru: 'Молоко',
+  name_original: 'Mleko',
+  quantity: 1,
+  price: 200,
+  total: 200,
+}));
+const mockBudgetsGetForMonth = mock(
+  (
+    ..._args: unknown[]
+  ): {
+    id: number;
+    category: string;
+    limit_amount: number;
+    currency: string;
+    month: string;
+  } | null => null,
+);
+const mockTransaction = mock((fn: () => void) => fn());
+
+const db = {
+  ...mockDatabase({
+    expenses: {
+      create: mockExpenseCreate,
+      sumByCategory: mockExpenseSumByCategory,
+    },
+    receiptItems: {
+      findConfirmedByPhotoQueueId: mockReceiptItemsFind,
+      deleteProcessedByPhotoQueueId: mockReceiptItemsDelete,
+    },
+    groups: {
+      findById: mockGroupsFindById,
+    },
+    expenseItems: {
+      create: mockExpenseItemsCreate,
+    },
+    budgets: {
+      getBudgetForMonth: mockBudgetsGetForMonth,
+    },
+  }),
+  transaction: mockTransaction,
+};
+
+// ── mock.module declarations (must precede module under test import) ─────────
+
+mock.module('../../services/google/sheets', () => ({ appendExpenseRow, googleConn }));
+mock.module('../../services/currency/converter', () => ({
+  convertToEUR,
+  convertCurrency,
+  formatAmount,
+  getExchangeRate,
+}));
+mock.module('../../services/bank/telegram-sender', () => ({
+  sendMessage,
+  sendDirect,
+  editMessageText,
+  deleteMessage,
+  withChatContext,
+}));
+mock.module('../../database', () => ({ database: db }));
+const sendToChat = mock((text: string, options?: Record<string, unknown>) => {
+  sentMessages.push({ text, options });
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
+});
+mock.module('../send', () => ({ sendToChat }));
+
 import { saveReceiptExpenses } from './expense-saver';
 
-// ── Test data ───────────────────────────────────────────────────────────────────
+// ── Test data ────────────────────────────────────────────────────────────────
 
 const TEST_GROUP_ID = 1;
 const TEST_USER_ID = 1;
@@ -123,19 +162,30 @@ function makeReceiptItem(overrides: Partial<ReceiptItem> = {}): ReceiptItem {
   };
 }
 
-// ── Spies on real modules ───────────────────────────────────────────────────────
-
-let appendRowSpy: ReturnType<typeof spyOn>;
-let convertCurrencySpy: ReturnType<typeof spyOn>;
+// ── Lifecycle ────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   sentMessages.length = 0;
 
-  // Reset database mocks
-  mockReceiptItems.findConfirmedByPhotoQueueId.mockReset().mockReturnValue([]);
-  mockReceiptItems.deleteProcessedByPhotoQueueId.mockReset();
-  mockGroups.findById.mockReset().mockReturnValue(makeGroup());
-  mockExpenses.create.mockReset().mockReturnValue({
+  appendExpenseRow.mockReset().mockResolvedValue(undefined);
+  convertToEUR.mockReset().mockReturnValue(1.72);
+  convertCurrency.mockReset().mockReturnValue(0);
+  formatAmount
+    .mockReset()
+    .mockImplementation((amount: number, currency: string) => `${amount.toFixed(2)} ${currency}`);
+  getExchangeRate.mockReset().mockReturnValue(1);
+  sendMessage.mockReset().mockImplementation((text: string, options?: Record<string, unknown>) => {
+    sentMessages.push({ text, options });
+    return Promise.resolve({ message_id: 1 } as TelegramMessage);
+  });
+  sendDirect.mockReset().mockResolvedValue(null);
+  editMessageText.mockReset().mockResolvedValue(undefined);
+  deleteMessage.mockReset().mockResolvedValue(undefined);
+  withChatContext
+    .mockReset()
+    .mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
+
+  mockExpenseCreate.mockReset().mockReturnValue({
     id: 1,
     group_id: TEST_GROUP_ID,
     user_id: TEST_USER_ID,
@@ -148,74 +198,39 @@ beforeEach(() => {
     created_at: '2024-01-01',
     synced: 0,
   });
-  mockExpenses.sumByCategory.mockReset().mockReturnValue(0);
-  mockExpenseItems.create.mockReset();
-  mockBudgets.getBudgetForMonth.mockReset().mockReturnValue(null);
+  mockExpenseSumByCategory.mockReset().mockReturnValue(0);
+  mockReceiptItemsFind.mockReset().mockReturnValue([]);
+  mockReceiptItemsDelete.mockReset();
+  mockGroupsFindById.mockReset().mockReturnValue(makeGroup());
+  mockExpenseItemsCreate.mockReset();
+  mockBudgetsGetForMonth.mockReset().mockReturnValue(null);
   mockTransaction.mockReset().mockImplementation((fn: () => void) => fn());
-  mockSendMessage.mockClear();
-
-  // Route real module calls through mock objects via spyOn
-  spyOn(database.receiptItems, 'findConfirmedByPhotoQueueId').mockImplementation(
-    mockReceiptItems.findConfirmedByPhotoQueueId,
-  );
-  spyOn(database.receiptItems, 'deleteProcessedByPhotoQueueId').mockImplementation(
-    // @ts-expect-error — mock returns void, real returns number
-    mockReceiptItems.deleteProcessedByPhotoQueueId,
-  );
-  spyOn(database.groups, 'findById').mockImplementation(mockGroups.findById);
-  // @ts-expect-error — mock returns simplified expense objects
-  spyOn(database.expenses, 'create').mockImplementation(mockExpenses.create);
-  spyOn(database.expenses, 'sumByCategory').mockImplementation(mockExpenses.sumByCategory);
-  spyOn(database.expenseItems, 'create').mockImplementation(
-    // @ts-expect-error — mock returns simplified expense item objects
-    mockExpenseItems.create,
-  );
-  spyOn(database.budgets, 'getBudgetForMonth').mockImplementation(
-    // @ts-expect-error — mock returns simplified budget objects
-    mockBudgets.getBudgetForMonth,
-  );
-  // @ts-expect-error — mock has simplified types for the generic transaction method
-  spyOn(database, 'transaction').mockImplementation(mockTransaction);
-  spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
-  spyOn(senderModule, 'sendDirect').mockResolvedValue(null);
-  spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined);
-  spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined);
-  spyOn(senderModule, 'withChatContext').mockImplementation(
-    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
-    (_c: number, _t: number | null, fn: () => unknown) => fn(),
-  );
-
-  // Spy on real module exports
-  appendRowSpy = spyOn(sheetsModule, 'appendExpenseRow').mockResolvedValue(undefined);
-  spyOn(converterModule, 'convertToEUR').mockReturnValue(1.72);
-  convertCurrencySpy = spyOn(converterModule, 'convertCurrency').mockReturnValue(0);
-  spyOn(converterModule, 'formatAmount').mockImplementation(
-    (amount: number, currency: string) => `${amount.toFixed(2)} ${currency}`,
-  );
 });
 
 afterEach(() => {
   mock.restore();
 });
 
+// ── Tests ────────────────────────────────────────────────────────────────────
+
 describe('saveReceiptExpenses', () => {
   it('does nothing when no confirmed items', async () => {
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([]);
+    mockReceiptItemsFind.mockReturnValue([]);
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
-    expect(appendRowSpy).not.toHaveBeenCalled();
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(appendExpenseRow).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('saves receipt items and sends completion message', async () => {
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([makeReceiptItem()]);
+    mockReceiptItemsFind.mockReturnValue([makeReceiptItem()]);
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
-    expect(appendRowSpy).toHaveBeenCalledTimes(1);
-    expect(mockExpenses.create).toHaveBeenCalledTimes(1);
-    expect(mockReceiptItems.deleteProcessedByPhotoQueueId).toHaveBeenCalledTimes(1);
+    expect(appendExpenseRow).toHaveBeenCalledTimes(1);
+    expect(mockExpenseCreate).toHaveBeenCalledTimes(1);
+    expect(mockReceiptItemsDelete).toHaveBeenCalledTimes(1);
 
     // Completion message via sendMessage
     const completionMsg = sentMessages.find((m) => m.text.includes('Чек обработан'));
@@ -228,10 +243,10 @@ describe('saveReceiptExpenses', () => {
       makeReceiptItem({ id: 2, confirmed_category: 'Продукты', total: 3000 }),
       makeReceiptItem({ id: 3, confirmed_category: 'Транспорт', total: 1000 }),
     ];
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue(items);
+    mockReceiptItemsFind.mockReturnValue(items);
 
     // Budget set for Продукты — will be exceeded
-    mockBudgets.getBudgetForMonth.mockImplementation((...args: unknown[]) => {
+    mockBudgetsGetForMonth.mockImplementation((...args: unknown[]) => {
       const category = args[1] as string;
       if (category === 'Продукты') {
         return {
@@ -246,13 +261,13 @@ describe('saveReceiptExpenses', () => {
     });
 
     // Spent EUR so far exceeds budget
-    mockExpenses.sumByCategory.mockReturnValue(15);
-    convertCurrencySpy.mockReturnValue(15);
+    mockExpenseSumByCategory.mockReturnValue(15);
+    convertCurrency.mockReturnValue(15);
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // 2 categories → 2 sheet writes
-    expect(appendRowSpy).toHaveBeenCalledTimes(2);
+    expect(appendExpenseRow).toHaveBeenCalledTimes(2);
 
     // Budget warning for Продукты (exceeded) via sendMessage
     const budgetMsg = sentMessages.find((m) => m.text.includes('ПРЕВЫШЕН БЮДЖЕТ'));
@@ -261,9 +276,9 @@ describe('saveReceiptExpenses', () => {
   });
 
   it('sends warning when budget is at 90%+', async () => {
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([makeReceiptItem({ total: 500 })]);
+    mockReceiptItemsFind.mockReturnValue([makeReceiptItem({ total: 500 })]);
 
-    mockBudgets.getBudgetForMonth.mockReturnValue({
+    mockBudgetsGetForMonth.mockReturnValue({
       id: 1,
       category: 'Продукты',
       limit_amount: 100,
@@ -272,8 +287,8 @@ describe('saveReceiptExpenses', () => {
     });
 
     // 92 EUR spent out of 100 limit → 92% → warning
-    mockExpenses.sumByCategory.mockReturnValue(92);
-    convertCurrencySpy.mockReturnValue(92);
+    mockExpenseSumByCategory.mockReturnValue(92);
+    convertCurrency.mockReturnValue(92);
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
@@ -282,9 +297,9 @@ describe('saveReceiptExpenses', () => {
   });
 
   it('does not send warning when budget is under 90%', async () => {
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([makeReceiptItem({ total: 500 })]);
+    mockReceiptItemsFind.mockReturnValue([makeReceiptItem({ total: 500 })]);
 
-    mockBudgets.getBudgetForMonth.mockReturnValue({
+    mockBudgetsGetForMonth.mockReturnValue({
       id: 1,
       category: 'Продукты',
       limit_amount: 100,
@@ -293,8 +308,8 @@ describe('saveReceiptExpenses', () => {
     });
 
     // 50 EUR spent out of 100 → 50% → no warning
-    mockExpenses.sumByCategory.mockReturnValue(50);
-    convertCurrencySpy.mockReturnValue(50);
+    mockExpenseSumByCategory.mockReturnValue(50);
+    convertCurrency.mockReturnValue(50);
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
@@ -306,7 +321,7 @@ describe('saveReceiptExpenses', () => {
   });
 
   it('skips items without confirmed_category', async () => {
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([
+    mockReceiptItemsFind.mockReturnValue([
       makeReceiptItem({ id: 1, confirmed_category: null }),
       makeReceiptItem({ id: 2, confirmed_category: 'Продукты' }),
     ]);
@@ -314,22 +329,24 @@ describe('saveReceiptExpenses', () => {
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Only 1 category processed (the one with confirmed_category)
-    expect(appendRowSpy).toHaveBeenCalledTimes(1);
+    expect(appendExpenseRow).toHaveBeenCalledTimes(1);
   });
 
   it('continues to next category when sheet write fails', async () => {
-    mockReceiptItems.findConfirmedByPhotoQueueId.mockReturnValue([
+    mockReceiptItemsFind.mockReturnValue([
       makeReceiptItem({ id: 1, confirmed_category: 'Продукты', total: 200 }),
       makeReceiptItem({ id: 2, confirmed_category: 'Транспорт', total: 100 }),
     ]);
 
-    appendRowSpy.mockRejectedValueOnce(new Error('Sheet error')).mockResolvedValueOnce(undefined);
+    appendExpenseRow
+      .mockRejectedValueOnce(new Error('Sheet error'))
+      .mockResolvedValueOnce(undefined);
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Sheet was attempted for both categories
-    expect(appendRowSpy).toHaveBeenCalledTimes(2);
+    expect(appendExpenseRow).toHaveBeenCalledTimes(2);
     // But only Транспорт expense was created (Продукты was skipped due to sheet error)
-    expect(mockExpenses.create).toHaveBeenCalledTimes(1);
+    expect(mockExpenseCreate).toHaveBeenCalledTimes(1);
   });
 });

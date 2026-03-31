@@ -27,15 +27,15 @@ export function seedGroupAndUser(
       `seedGroupAndUser: group insert failed for telegram_group_id=${telegramGroupId}`,
     );
 
-  db.run(
-    `INSERT OR IGNORE INTO users (telegram_user_id, group_id, display_name) VALUES (?, ?, 'Test User')`,
-    [telegramUserId, group.id],
-  );
+  db.run(`INSERT OR IGNORE INTO users (telegram_id, group_id) VALUES (?, ?)`, [
+    telegramUserId,
+    group.id,
+  ]);
   const user = db
-    .query<{ id: number }, [number]>('SELECT id FROM users WHERE telegram_user_id = ?')
+    .query<{ id: number }, [number]>('SELECT id FROM users WHERE telegram_id = ?')
     .get(telegramUserId);
   if (!user)
-    throw new Error(`seedGroupAndUser: user insert failed for telegram_user_id=${telegramUserId}`);
+    throw new Error(`seedGroupAndUser: user insert failed for telegram_id=${telegramUserId}`);
 
   return { groupId: group.id, userId: user.id };
 }
