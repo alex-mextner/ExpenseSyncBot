@@ -248,12 +248,14 @@ describe('formatAmount', () => {
     expect(formatAmount(100, 'USD').length).toBeGreaterThan(0);
   });
 
-  it('includes the currency code for USD', () => {
-    expect(formatAmount(100, 'USD')).toContain('USD');
+  it('uses symbol for USD', () => {
+    expect(formatAmount(100, 'USD')).toContain('$');
+    expect(formatAmount(100, 'USD')).not.toContain('USD');
   });
 
-  it('includes the currency code for EUR', () => {
-    expect(formatAmount(50, 'EUR')).toContain('EUR');
+  it('uses symbol for EUR', () => {
+    expect(formatAmount(50, 'EUR')).toContain('€');
+    expect(formatAmount(50, 'EUR')).not.toContain('EUR');
   });
 
   it('includes the numeric value', () => {
@@ -271,19 +273,23 @@ describe('formatAmount', () => {
   it('handles negative amounts', () => {
     const result = formatAmount(-50.5, 'GBP');
     expect(result).toContain('50');
-    expect(result).toContain('GBP');
+    expect(result).toContain('£');
   });
 
-  it('formats as "amount.xx CURRENCY"', () => {
-    expect(formatAmount(100, 'USD')).toBe('100.00 USD');
+  it('formats as "amount.xx symbol"', () => {
+    expect(formatAmount(100, 'USD')).toBe('100.00 $');
   });
 
   it('formats decimal correctly', () => {
-    expect(formatAmount(50.5, 'EUR')).toBe('50.50 EUR');
+    expect(formatAmount(50.5, 'EUR')).toBe('50.50 €');
   });
 
   it('formats small decimal', () => {
-    expect(formatAmount(0.01, 'RUB')).toBe('0.01 RUB');
+    expect(formatAmount(0.01, 'RUB')).toBe('0.01 ₽');
+  });
+
+  it('uses code when no distinct symbol exists (RSD)', () => {
+    expect(formatAmount(1_000, 'RSD')).toBe('1000.00 RSD');
   });
 
   it('formats 1M with млн suffix', () => {
@@ -295,19 +301,19 @@ describe('formatAmount', () => {
   });
 
   it('formats 1.23M with млн suffix (2 decimal places)', () => {
-    expect(formatAmount(1_234_567, 'EUR')).toBe('1.23 млн EUR');
+    expect(formatAmount(1_234_567, 'EUR')).toBe('1.23 млн €');
   });
 
   it('formats 2M exactly as "2 млн" (no trailing zeros)', () => {
-    expect(formatAmount(2_000_000, 'USD')).toBe('2 млн USD');
+    expect(formatAmount(2_000_000, 'USD')).toBe('2 млн $');
   });
 
   it('formats 1B with млрд suffix', () => {
-    expect(formatAmount(1_000_000_000, 'RUB')).toBe('1 млрд RUB');
+    expect(formatAmount(1_000_000_000, 'RUB')).toBe('1 млрд ₽');
   });
 
   it('formats 2.5B with млрд suffix', () => {
-    expect(formatAmount(2_500_000_000, 'EUR')).toBe('2.5 млрд EUR');
+    expect(formatAmount(2_500_000_000, 'EUR')).toBe('2.5 млрд €');
   });
 });
 

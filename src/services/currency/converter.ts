@@ -1,6 +1,11 @@
 /** Currency converter — converts amounts between currencies using hardcoded EUR-based exchange rates */
 import Big from 'big.js';
-import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
+import {
+  BASE_CURRENCY,
+  type CurrencyCode,
+  getCurrencySymbol,
+  SUPPORTED_CURRENCIES,
+} from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('converter');
@@ -277,11 +282,11 @@ export function getExchangeRate(currency: CurrencyCode): number {
 }
 
 /**
- * Format amount with currency code.
+ * Format amount with currency symbol (falls back to code for unknown currencies).
  *
- * User-facing (default): amounts >= 1M shown as "1.5 млн RSD".
- * AI context (aiContext=true): includes exact decimal plus suffix in parens,
- * e.g. "1500000.00 (1.5 млн) RSD", so the model can use whichever form fits.
+ * User-facing (default): amounts >= 1M shown as "1.5 млн RSD", "1.5 млн $".
+ * AI context (aiContext=true): always uses the raw code (not symbol) for unambiguous parsing,
+ * e.g. "1500000.00 (1.5 млн) USD".
  */
 export function formatAmount(amount: number, currency: string, aiContext = false): string {
   const abs = Math.abs(amount);
@@ -297,6 +302,7 @@ export function formatAmount(amount: number, currency: string, aiContext = false
     return `${exact} ${currency}`;
   }
 
+  const symbol = getCurrencySymbol(currency);
   let num: string;
   if (abs >= 1_000_000_000) {
     num = `${+(amount / 1_000_000_000).toFixed(2)} млрд`;
@@ -305,7 +311,7 @@ export function formatAmount(amount: number, currency: string, aiContext = false
   } else {
     num = amount.toFixed(2);
   }
-  return `${num} ${currency}`;
+  return `${num} ${symbol}`;
 }
 
 /**

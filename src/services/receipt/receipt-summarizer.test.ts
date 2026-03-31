@@ -164,7 +164,7 @@ describe('formatSummaryMessage', () => {
     it('includes total amount at end', () => {
       const msg = formatSummaryMessage(simpleSummary, 2);
       expect(msg).toContain('150.00');
-      expect(msg).toContain('EUR');
+      expect(msg).toContain('€');
     });
 
     it('includes category names', () => {
