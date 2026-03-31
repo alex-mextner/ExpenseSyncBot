@@ -1,25 +1,16 @@
 // Tests for command guards — requireGroup and requireGoogle wrappers
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
 import { database } from '../database';
 import type { Group } from '../database/types';
+import * as senderModule from '../services/bank/telegram-sender';
+import { requireGoogle, requireGroup } from './guards';
 
-// Mock sendMessage before importing guards (which use it)
 const sent: string[] = [];
 const mockSendMessage = mock((text: string) => {
   sent.push(text);
-  return Promise.resolve({ message_id: 1 });
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
 });
-
-mock.module('../services/bank/telegram-sender', () => ({
-  sendMessage: mockSendMessage,
-  sendDirect: mock(() => Promise.resolve(null)),
-  editMessageText: mock(() => Promise.resolve()),
-  deleteMessage: mock(() => Promise.resolve()),
-  withChatContext: mock((_c: number, _t: number | null, fn: () => unknown) => fn()),
-  initSender: () => {},
-}));
-
-import { requireGoogle, requireGroup } from './guards';
 
 let findSpy: ReturnType<typeof spyOn<typeof database.groups, 'findByTelegramGroupId'>>;
 
@@ -55,6 +46,9 @@ describe('requireGroup', () => {
   beforeEach(() => {
     sent.length = 0;
     mockSendMessage.mockClear();
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
     findSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
@@ -128,6 +122,9 @@ describe('requireGoogle', () => {
   beforeEach(() => {
     sent.length = 0;
     mockSendMessage.mockClear();
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
   });
 
   afterEach(() => {

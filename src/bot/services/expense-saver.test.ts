@@ -1,8 +1,11 @@
 // Tests for saveReceiptExpenses — budget check integration after receipt save
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
 import type { CurrencyCode } from '../../config/constants';
+import { database } from '../../database';
 import type { ReceiptItem } from '../../database/types';
+import * as senderModule from '../../services/bank/telegram-sender';
 
 // ── Mock database (10+ other test files poison it via mock.module — we must do the same) ──
 
@@ -60,35 +63,15 @@ const mockBudgets = {
 
 const mockTransaction = mock((fn: () => void) => fn());
 
-mock.module('../../database', () => ({
-  database: {
-    receiptItems: mockReceiptItems,
-    groups: mockGroups,
-    expenses: mockExpenses,
-    expenseItems: mockExpenseItems,
-    budgets: mockBudgets,
-    transaction: mockTransaction,
-  },
-}));
-
 // ── Mock sendMessage (used by both saveReceiptExpenses and checkBudgetLimit) ──
 
 const sentMessages: { text: string; options: Record<string, unknown> | undefined }[] = [];
 const mockSendMessage = mock((text: string, options?: Record<string, unknown>) => {
   sentMessages.push({ text, options });
-  return Promise.resolve({ message_id: 1 });
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
 });
 
-mock.module('../../services/bank/telegram-sender', () => ({
-  sendMessage: mockSendMessage,
-  sendDirect: mock(() => Promise.resolve(null)),
-  editMessageText: mock(() => Promise.resolve()),
-  deleteMessage: mock(() => Promise.resolve()),
-  withChatContext: mock((_c: number, _t: number | null, fn: () => unknown) => fn()),
-  initSender: () => {},
-}));
-
-// Import after mocks are set up (sheets/converter are spied via spyOn below)
+// Spied via spyOn in beforeEach (not mock.module — avoids global cache pollution)
 import * as converterModule from '../../services/currency/converter';
 import * as sheetsModule from '../../services/google/sheets';
 import { saveReceiptExpenses } from './expense-saver';
@@ -167,6 +150,27 @@ beforeEach(() => {
   mockBudgets.getBudgetForMonth.mockReset().mockReturnValue(null);
   mockTransaction.mockReset().mockImplementation((fn: () => void) => fn());
   mockSendMessage.mockClear();
+
+  // Route real module calls through mock objects via spyOn
+  spyOn(database.receiptItems, 'findConfirmedByPhotoQueueId').mockImplementation(mockReceiptItems.findConfirmedByPhotoQueueId);
+  // @ts-expect-error — mock returns void, real returns number
+  spyOn(database.receiptItems, 'deleteProcessedByPhotoQueueId').mockImplementation(mockReceiptItems.deleteProcessedByPhotoQueueId);
+  spyOn(database.groups, 'findById').mockImplementation(mockGroups.findById);
+  // @ts-expect-error — mock returns simplified expense objects
+  spyOn(database.expenses, 'create').mockImplementation(mockExpenses.create);
+  spyOn(database.expenses, 'sumByCategory').mockImplementation(mockExpenses.sumByCategory);
+  // @ts-expect-error — mock returns simplified expense item objects
+  spyOn(database.expenseItems, 'create').mockImplementation(mockExpenseItems.create);
+  // @ts-expect-error — mock returns simplified budget objects
+  spyOn(database.budgets, 'getBudgetForMonth').mockImplementation(mockBudgets.getBudgetForMonth);
+  // @ts-expect-error — mock has simplified types for the generic transaction method
+  spyOn(database, 'transaction').mockImplementation(mockTransaction);
+  spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+  spyOn(senderModule, 'sendDirect').mockResolvedValue(null);
+  spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined);
+  spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined);
+  // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+  spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
 
   // Spy on real module exports
   appendRowSpy = spyOn(sheetsModule, 'appendExpenseRow').mockResolvedValue(undefined);

@@ -1,8 +1,11 @@
 // Tests for the bank transaction confirm flow:
 // Принять → dedup check → (auto-merge | merge prompt | comment prompt)
 
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
+import { database } from '../../database';
 import type { BankTransaction, Expense, Group, User } from '../../database/types';
+import * as senderModule from '../../services/bank/telegram-sender';
 
 // ─── Mutable mock state ───────────────────────────────────────────────────────
 
@@ -60,33 +63,63 @@ const mockDb = {
 const bankSent: string[] = [];
 const mockBankSendMessage = mock((text: string, _options?: Record<string, unknown>) => {
   bankSent.push(text);
-  return Promise.resolve({ message_id: 1 });
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
 });
 
-mock.module('../../services/bank/telegram-sender', () => ({
-  sendMessage: mockBankSendMessage,
-  sendDirect: mock(() => Promise.resolve(null)),
-  editMessageText: mock(() => Promise.resolve()),
-  deleteMessage: mock(() => Promise.resolve()),
-  withChatContext: mock((_c: number, _t: number | null, fn: () => unknown) => fn()),
-  initSender: () => {},
-}));
+// Route real module calls through mock objects via spyOn (no mock.module pollution).
+const spies: { mockRestore: () => void }[] = [];
 
-mock.module('../../database', () => ({
-  database: {
-    groups: mockGroups,
-    users: mockUsers,
-    bankTransactions: mockBankTransactions,
-    bankConnections: mockBankConnections,
-    expenses: mockExpenses,
-    merchantRules: mockMerchantRules,
-    db: mockDb,
-    transaction: mockTransaction,
-    queryOne: mockQueryOne,
-  },
-}));
+beforeAll(() => {
+  spies.push(
+    spyOn(database.groups, 'findByTelegramGroupId').mockImplementation(mockGroups.findByTelegramGroupId),
+    spyOn(database.users, 'findByTelegramId').mockImplementation(mockUsers.findByTelegramId),
+    spyOn(database.bankTransactions, 'findById').mockImplementation(mockBankTransactions.findById),
+    spyOn(database.bankTransactions, 'findPendingByConnectionId').mockImplementation(
+      mockBankTransactions.findPendingByConnectionId,
+    ),
+    spyOn(database.bankTransactions, 'setEditInProgress').mockImplementation(
+      mockBankTransactions.setEditInProgress,
+    ),
+    spyOn(database.bankTransactions, 'setAwaitingComment').mockImplementation(
+      mockBankTransactions.setAwaitingComment,
+    ),
+    spyOn(database.bankTransactions, 'setTelegramMessageId').mockImplementation(
+      mockBankTransactions.setTelegramMessageId,
+    ),
+    spyOn(database.bankTransactions, 'updateStatus').mockImplementation(
+      mockBankTransactions.updateStatus,
+    ),
+    spyOn(database.bankTransactions, 'setMatchedExpense').mockImplementation(
+      mockBankTransactions.setMatchedExpense,
+    ),
+    // @ts-expect-error — mock returns simplified { id } objects, not full BankConnection
+    spyOn(database.bankConnections, 'findActiveByGroupId').mockImplementation(mockBankConnections.findActiveByGroupId),
+    // @ts-expect-error — mock returns simplified { id } objects, not full Expense
+    spyOn(database.expenses, 'create').mockImplementation(mockExpenses.create),
+    spyOn(database.expenses, 'findById').mockImplementation(mockExpenses.findById),
+    spyOn(database.expenses, 'findPotentialDuplicates').mockImplementation(
+      mockExpenses.findPotentialDuplicates,
+    ),
+    spyOn(database.merchantRules, 'insertRuleRequest').mockImplementation(
+      mockMerchantRules.insertRuleRequest,
+    ),
+    // @ts-expect-error — mock has simplified types for the generic transaction method
+    spyOn(database, 'transaction').mockImplementation(mockTransaction),
+    // @ts-expect-error — mock has simplified types for the generic queryOne method
+    spyOn(database, 'queryOne').mockImplementation(mockQueryOne),
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockBankSendMessage),
+    spyOn(senderModule, 'sendDirect').mockResolvedValue(null),
+    spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined),
+    spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined),
+    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn()),
+  );
+});
 
-import { afterEach } from 'bun:test';
+afterAll(() => {
+  for (const spy of spies) spy.mockRestore();
+});
+
 import {
   handleBankConfirmCallback,
   handleBankEditReply,
@@ -235,7 +268,7 @@ describe('handleBankConfirmCallback', () => {
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
     const bot = makeBot();
-    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 600 }));
+    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 600 } as TelegramMessage));
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
@@ -270,7 +303,7 @@ describe('handleBankConfirmCallback', () => {
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
     const bot = makeBot();
-    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 777 }));
+    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 777 } as TelegramMessage));
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
@@ -470,7 +503,7 @@ describe('handleBankNewCallback', () => {
     const tx = makeTx({ edit_in_progress: 1 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
-    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 700 }));
+    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 700 } as TelegramMessage));
 
     await handleBankNewCallback(ctx as never, tx.id, 100);
 
