@@ -1,53 +1,21 @@
-// Scanner tab: ZXing live QR scan, OCR fallback, confirmation card
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BrowserQRCodeReader } from '@zxing/browser';
+// Scanner tab: native Telegram QR scan, manual URL input, OCR fallback, confirmation card
+import React, { useCallback, useState } from 'react';
 import { confirmExpenses, scanQR, uploadOCR } from '../api/receipt';
 import type { ReceiptItem } from '../api/receipt';
 
-type Phase = 'scanning' | 'url-input' | 'ocr-input' | 'loading' | 'confirm' | 'done' | 'error';
+type Phase = 'idle' | 'url-input' | 'ocr-input' | 'loading' | 'confirm' | 'done' | 'error';
 
 interface Props {
 	groupId: number;
 }
 
 export function Scanner({ groupId }: Props) {
-	const [phase, setPhase] = useState<Phase>('scanning');
+	const [phase, setPhase] = useState<Phase>('idle');
 	const [items, setItems] = useState<ReceiptItem[]>([]);
 	const [fileId, setFileId] = useState<string | null>(null);
 	const [currency, setCurrency] = useState<string>('');
 	const [error, setError] = useState<string>('');
 	const [urlInput, setUrlInput] = useState('');
-	const videoRef = useRef<HTMLVideoElement>(null);
-	const readerRef = useRef<BrowserQRCodeReader | null>(null);
-	const controlsRef = useRef<{ stop: () => void } | null>(null);
-
-	// Start QR scanning
-	useEffect(() => {
-		if (phase !== 'scanning') return;
-
-		const reader = new BrowserQRCodeReader();
-		readerRef.current = reader;
-
-		reader
-			.decodeFromVideoDevice(undefined, videoRef.current!, (result, err, controls) => {
-				controlsRef.current = controls;
-				if (result) {
-					controls.stop();
-					handleQRDetected(result.getText());
-				}
-				// suppress scan errors (no QR found yet)
-				void err;
-			})
-			.catch((e: unknown) => {
-				setError(`Камера недоступна: ${e instanceof Error ? e.message : 'unknown'}`);
-				setPhase('error');
-			});
-
-		return () => {
-			controlsRef.current?.stop();
-		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [phase === 'scanning']);
 
 	const handleQRDetected = useCallback(
 		async (qrData: string) => {
@@ -63,13 +31,38 @@ export function Scanner({ groupId }: Props) {
 				setPhase('error');
 			}
 		},
-		[groupId]
+		[groupId],
 	);
+
+	const openNativeQRScanner = useCallback(() => {
+		const tg = window.Telegram?.WebApp;
+		if (!tg?.showScanQrPopup) {
+			setError('QR-сканер недоступен в этой версии Telegram');
+			setPhase('error');
+			return;
+		}
+
+		tg.showScanQrPopup({ text: 'Наведи на QR-код чека' }, (text: string) => {
+			tg.closeScanQrPopup();
+			handleQRDetected(text);
+			return true;
+		});
+	}, [handleQRDetected]);
 
 	const handleURLSubmit = useCallback(async () => {
 		if (!urlInput.trim()) return;
 		await handleQRDetected(urlInput.trim());
 	}, [urlInput, handleQRDetected]);
+
+	const handleURLKeyDown = useCallback(
+		(e: React.KeyboardEvent) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				handleURLSubmit();
+			}
+		},
+		[handleURLSubmit],
+	);
 
 	const handleFileUpload = useCallback(
 		async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,12 +75,12 @@ export function Scanner({ groupId }: Props) {
 				setFileId(result.file_id);
 				setCurrency(result.currency ?? '');
 				setPhase('confirm');
-			} catch (e) {
-				setError(e instanceof Error ? e.message : 'Ошибка OCR');
+			} catch (uploadErr) {
+				setError(uploadErr instanceof Error ? uploadErr.message : 'Ошибка OCR');
 				setPhase('error');
 			}
 		},
-		[groupId]
+		[groupId],
 	);
 
 	const handleConfirm = useCallback(async () => {
@@ -103,11 +96,11 @@ export function Scanner({ groupId }: Props) {
 					category: it.category,
 					currency: currency || 'RSD',
 				})),
-				fileId
+				fileId,
 			);
 			setPhase('done');
-		} catch (e) {
-			setError(e instanceof Error ? e.message : 'Ошибка сохранения');
+		} catch (confirmErr) {
+			setError(confirmErr instanceof Error ? confirmErr.message : 'Ошибка сохранения');
 			setPhase('error');
 		}
 	}, [groupId, items, fileId, currency]);
@@ -120,22 +113,23 @@ export function Scanner({ groupId }: Props) {
 		setItems((prev) => prev.filter((_, idx) => idx !== i));
 	};
 
+	const resetToIdle = () => {
+		setItems([]);
+		setFileId(null);
+		setCurrency('');
+		setError('');
+		setUrlInput('');
+		setPhase('idle');
+	};
+
 	// --- Render phases ---
 
 	if (phase === 'done') {
 		return (
-			<div style={{ padding: 24, textAlign: 'center' }}>
+			<div style={{ ...pageStyle, textAlign: 'center' }}>
 				<div style={{ fontSize: 48 }}>✅</div>
 				<div style={{ fontSize: 18, marginTop: 12 }}>Расходы записаны!</div>
-				<button
-					onClick={() => {
-						setItems([]);
-						setFileId(null);
-						setCurrency('');
-						setPhase('scanning');
-					}}
-					style={btnStyle}
-				>
+				<button type="button" onClick={resetToIdle} style={btnStyle}>
 					Сканировать ещё
 				</button>
 			</div>
@@ -144,15 +138,11 @@ export function Scanner({ groupId }: Props) {
 
 	if (phase === 'error') {
 		return (
-			<div style={{ padding: 24 }}>
-				<div style={{ color: '#F44336', marginBottom: 12 }}>{error}</div>
-				<button
-					onClick={() => {
-						setError('');
-						setPhase('scanning');
-					}}
-					style={btnStyle}
-				>
+			<div style={pageStyle}>
+				<div style={{ color: '#F44336', marginBottom: 12, fontSize: 15, lineHeight: 1.4 }}>
+					{error}
+				</div>
+				<button type="button" onClick={resetToIdle} style={btnStyle}>
 					Повторить
 				</button>
 			</div>
@@ -161,7 +151,7 @@ export function Scanner({ groupId }: Props) {
 
 	if (phase === 'loading') {
 		return (
-			<div style={{ padding: 24, textAlign: 'center', marginTop: 80 }}>
+			<div style={{ ...pageStyle, textAlign: 'center', paddingTop: 80 }}>
 				<div>Обрабатываем чек…</div>
 			</div>
 		);
@@ -169,25 +159,28 @@ export function Scanner({ groupId }: Props) {
 
 	if (phase === 'confirm') {
 		return (
-			<div style={{ padding: 16 }}>
+			<div style={pageStyle}>
 				<h3 style={{ margin: '0 0 12px' }}>Подтверди расходы</h3>
 				{items.map((item, i) => (
 					<div
 						key={i}
 						style={{
-							border: '1px solid rgba(128,128,128,0.2)',
+							border: '1px solid var(--tg-theme-hint-color, rgba(128,128,128,0.3))',
 							borderRadius: 8,
 							padding: 10,
 							marginBottom: 8,
 						}}
 					>
-						<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+						<div
+							style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+						>
 							<input
 								value={item.name}
 								onChange={(e) => handleItemChange(i, 'name', e.target.value)}
 								style={inputStyle}
 							/>
 							<button
+								type="button"
 								onClick={() => handleRemoveItem(i)}
 								style={{
 									background: 'none',
@@ -214,14 +207,11 @@ export function Scanner({ groupId }: Props) {
 					</div>
 				))}
 				{items.length > 0 && (
-					<button onClick={handleConfirm} style={{ ...btnStyle, marginTop: 8 }}>
+					<button type="button" onClick={handleConfirm} style={{ ...btnStyle, marginTop: 8 }}>
 						Записать {items.length} расход{items.length === 1 ? '' : 'а'}
 					</button>
 				)}
-				<button
-					onClick={() => setPhase('scanning')}
-					style={{ ...btnStyle, background: 'rgba(128,128,128,0.15)', color: 'inherit', marginTop: 8 }}
-				>
+				<button type="button" onClick={resetToIdle} style={{ ...secondaryBtnStyle, marginTop: 8 }}>
 					Отмена
 				</button>
 			</div>
@@ -230,21 +220,23 @@ export function Scanner({ groupId }: Props) {
 
 	if (phase === 'url-input') {
 		return (
-			<div style={{ padding: 16 }}>
+			<div style={pageStyle}>
 				<h3 style={{ margin: '0 0 12px' }}>Вставь ссылку из QR</h3>
 				<input
 					value={urlInput}
 					onChange={(e) => setUrlInput(e.target.value)}
+					onKeyDown={handleURLKeyDown}
 					placeholder="https://..."
-					style={{ ...inputStyle, width: '100%', marginBottom: 8 }}
+					style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
 					autoFocus
 				/>
-				<button onClick={handleURLSubmit} style={btnStyle}>
+				<button type="button" onClick={handleURLSubmit} style={btnStyle}>
 					Отправить
 				</button>
 				<button
-					onClick={() => setPhase('scanning')}
-					style={{ ...btnStyle, background: 'rgba(128,128,128,0.15)', color: 'inherit', marginTop: 8 }}
+					type="button"
+					onClick={() => setPhase('idle')}
+					style={{ ...secondaryBtnStyle, marginTop: 8 }}
 				>
 					Назад
 				</button>
@@ -254,7 +246,7 @@ export function Scanner({ groupId }: Props) {
 
 	if (phase === 'ocr-input') {
 		return (
-			<div style={{ padding: 16 }}>
+			<div style={pageStyle}>
 				<h3 style={{ margin: '0 0 12px' }}>Сфотографируй чек</h3>
 				<label style={{ ...btnStyle, display: 'block', textAlign: 'center', cursor: 'pointer' }}>
 					📷 Выбрать фото
@@ -267,8 +259,9 @@ export function Scanner({ groupId }: Props) {
 					/>
 				</label>
 				<button
-					onClick={() => setPhase('scanning')}
-					style={{ ...btnStyle, background: 'rgba(128,128,128,0.15)', color: 'inherit', marginTop: 8 }}
+					type="button"
+					onClick={() => setPhase('idle')}
+					style={{ ...secondaryBtnStyle, marginTop: 8 }}
 				>
 					Назад
 				</button>
@@ -276,133 +269,84 @@ export function Scanner({ groupId }: Props) {
 		);
 	}
 
-	// Default: scanning phase
+	// Default: idle phase — action buttons
 	return (
-		<div style={{ position: 'relative', height: '100dvh', overflow: 'hidden', background: '#000' }}>
-			{/* Live video */}
-			<video
-				ref={videoRef}
-				style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-				playsInline
-				muted
-				autoPlay
-			/>
-
-			{/* Viewfinder overlay */}
-			<div
+		<div style={pageStyle}>
+			<h2 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 600 }}>Сканер чеков</h2>
+			<p
 				style={{
-					position: 'absolute',
-					inset: 0,
-					display: 'flex',
-					flexDirection: 'column',
-					alignItems: 'center',
-					justifyContent: 'center',
-					pointerEvents: 'none',
+					margin: '0 0 24px',
+					fontSize: 14,
+					color: 'var(--tg-theme-hint-color, #999)',
+					lineHeight: 1.4,
 				}}
 			>
-				<div
-					style={{
-						width: 240,
-						height: 240,
-						border: '2px solid rgba(255,255,255,0.8)',
-						borderRadius: 16,
-						boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)',
-						position: 'relative',
-					}}
-				>
-					{/* Animated scan line */}
-					<ScanLine />
-				</div>
-				<div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 16 }}>
-					Наведи камеру на QR-код чека
-				</div>
-			</div>
+				Сканируй QR-код, вставь ссылку или сфотографируй чек
+			</p>
 
-			{/* Bottom buttons */}
-			<div
-				style={{
-					position: 'absolute',
-					bottom: 40,
-					left: 0,
-					right: 0,
-					display: 'flex',
-					gap: 12,
-					justifyContent: 'center',
-					padding: '0 16px',
-				}}
+			<button type="button" onClick={openNativeQRScanner} style={btnStyle}>
+				📷 Сканировать QR-код
+			</button>
+
+			<button
+				type="button"
+				onClick={() => setPhase('url-input')}
+				style={{ ...secondaryBtnStyle, marginTop: 10 }}
 			>
-				<button onClick={() => setPhase('url-input')} style={overlayBtnStyle}>
-					🔗 Ссылка
-				</button>
-				<button onClick={() => setPhase('ocr-input')} style={overlayBtnStyle}>
-					📷 Фото чека
-				</button>
-			</div>
+				🔗 Вставить ссылку
+			</button>
+
+			<button
+				type="button"
+				onClick={() => setPhase('ocr-input')}
+				style={{ ...secondaryBtnStyle, marginTop: 10 }}
+			>
+				📄 Фото чека (OCR)
+			</button>
 		</div>
 	);
 }
 
-function ScanLine() {
-	const [pos, setPos] = useState(0);
-	useEffect(() => {
-		let frame: number;
-		let start: number | null = null;
-		const animate = (ts: number) => {
-			if (!start) start = ts;
-			const t = ((ts - start) % 2000) / 2000; // 0-1 over 2s
-			setPos(t < 0.5 ? t * 2 : 2 - t * 2); // ping-pong 0→1→0
-			frame = requestAnimationFrame(animate);
-		};
-		frame = requestAnimationFrame(animate);
-		return () => cancelAnimationFrame(frame);
-	}, []);
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				left: 8,
-				right: 8,
-				top: `${pos * 90 + 5}%`,
-				height: 2,
-				background: 'rgba(33,150,243,0.9)',
-				boxShadow: '0 0 8px rgba(33,150,243,0.7)',
-				transition: 'top 0.05s linear',
-			}}
-		/>
-	);
-}
+const pageStyle: React.CSSProperties = {
+	padding: 24,
+	fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+	color: 'var(--tg-theme-text-color, #000)',
+	backgroundColor: 'var(--tg-theme-bg-color, #fff)',
+	minHeight: '100dvh',
+	boxSizing: 'border-box',
+};
 
 const btnStyle: React.CSSProperties = {
 	display: 'block',
 	width: '100%',
-	padding: '12px 16px',
-	background: '#2196F3',
-	color: '#fff',
+	padding: '14px 16px',
+	background: 'var(--tg-theme-button-color, #2196F3)',
+	color: 'var(--tg-theme-button-text-color, #fff)',
 	border: 'none',
-	borderRadius: 10,
-	fontSize: 15,
+	borderRadius: 12,
+	fontSize: 16,
 	fontWeight: 600,
 	cursor: 'pointer',
 };
 
-const overlayBtnStyle: React.CSSProperties = {
-	flex: 1,
-	padding: '10px 12px',
-	background: 'rgba(255,255,255,0.15)',
-	backdropFilter: 'blur(8px)',
-	color: '#fff',
-	border: '1px solid rgba(255,255,255,0.3)',
-	borderRadius: 10,
-	fontSize: 14,
+const secondaryBtnStyle: React.CSSProperties = {
+	display: 'block',
+	width: '100%',
+	padding: '14px 16px',
+	background: 'var(--tg-theme-secondary-bg-color, rgba(128,128,128,0.12))',
+	color: 'var(--tg-theme-text-color, inherit)',
+	border: 'none',
+	borderRadius: 12,
+	fontSize: 16,
 	fontWeight: 500,
 	cursor: 'pointer',
 };
 
 const inputStyle: React.CSSProperties = {
-	padding: '6px 10px',
-	border: '1px solid rgba(128,128,128,0.3)',
-	borderRadius: 6,
-	fontSize: 14,
-	background: 'transparent',
-	color: 'inherit',
+	padding: '12px 14px',
+	border: '1px solid var(--tg-theme-hint-color, rgba(128,128,128,0.3))',
+	borderRadius: 10,
+	fontSize: 16,
+	background: 'var(--tg-theme-secondary-bg-color, rgba(128,128,128,0.08))',
+	color: 'var(--tg-theme-text-color, #000)',
 };

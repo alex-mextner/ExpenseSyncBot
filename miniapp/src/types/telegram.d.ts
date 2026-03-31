@@ -22,16 +22,29 @@ interface TelegramWebAppInitDataUnsafe {
   hash?: string;
 }
 
+interface ScanQrPopupParams {
+  /** Text displayed under the 'Scan QR' heading, 0-64 characters */
+  text?: string;
+}
+
 interface TelegramWebApp {
   initData: string;
   initDataUnsafe: TelegramWebAppInitDataUnsafe;
+  version: string;
+  platform: string;
   HapticFeedback: {
     notificationOccurred(type: 'error' | 'success' | 'warning'): void;
     impactOccurred(style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft'): void;
   };
+  /** Open native QR scanner. Callback receives decoded text; return true to close popup. */
+  showScanQrPopup(params: ScanQrPopupParams, callback: (text: string) => boolean | void): void;
+  /** Programmatically close the native QR scanner popup */
+  closeScanQrPopup(): void;
   close(): void;
   expand(): void;
   ready(): void;
+  onEvent(eventType: string, callback: () => void): void;
+  offEvent(eventType: string, callback: () => void): void;
 }
 
 interface Window {
