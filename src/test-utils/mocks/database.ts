@@ -53,7 +53,8 @@ export function mockDatabase(
     // TypeScript cannot prove this because the target is Partial<MockRepo> —
     // cast is unavoidable here.
     db[name] = new Proxy(explicitOverrides, {
-      get(target, prop: string) {
+      get(target, prop) {
+        if (typeof prop === 'symbol') return undefined;
         if (prop in target) return target[prop];
         if (process.env['DEBUG_MOCKS']) {
           logger.warn(
