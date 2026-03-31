@@ -373,6 +373,8 @@ export interface BankTransaction {
   merchant_normalized: string | null;
   mcc: number | null;
   raw_data: string;
+  invoice_amount: number | null;
+  invoice_currency: string | null;
   matched_expense_id: number | null;
   telegram_message_id: number | null;
   edit_in_progress: number;
@@ -392,6 +394,8 @@ export interface CreateBankTransactionData {
   amount: number;
   sign_type: BankTransaction['sign_type'];
   currency: string;
+  invoice_amount?: number | null;
+  invoice_currency?: string | null;
   merchant?: string | null;
   merchant_normalized?: string | null;
   mcc?: number | null;

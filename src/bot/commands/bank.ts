@@ -4,6 +4,8 @@ import type { BankConnection, Group } from '../../database/types';
 import {
   buildBankManageKeyboard,
   buildBankStatusText,
+  buildCombinedBankKeyboard,
+  buildCombinedBankStatusText,
   timeSince,
 } from '../../services/bank/panel-builder';
 import type { CredentialField } from '../../services/bank/registry';
@@ -262,9 +264,11 @@ async function showBanksPanel(
     return;
   }
 
-  // Multiple banks — delete old panel messages, resend
+  // Delete old panel messages before resending
+  const seenMessageIds = new Set<number>();
   for (const conn of connections) {
-    if (conn.panel_message_id) {
+    if (conn.panel_message_id && !seenMessageIds.has(conn.panel_message_id)) {
+      seenMessageIds.add(conn.panel_message_id);
       try {
         await bot.api.deleteMessage({
           chat_id: group.telegram_group_id,
@@ -276,7 +280,10 @@ async function showBanksPanel(
     }
   }
 
-  if (group.bank_panel_summary_message_id) {
+  if (
+    group.bank_panel_summary_message_id &&
+    !seenMessageIds.has(group.bank_panel_summary_message_id)
+  ) {
     try {
       await bot.api.deleteMessage({
         chat_id: group.telegram_group_id,
@@ -287,35 +294,23 @@ async function showBanksPanel(
     }
   }
 
-  // Send one message per bank
-  for (const conn of connections) {
-    const text = buildBankStatusText(conn);
-    const sent = await sendMessage(text, {
-      reply_markup: {
-        inline_keyboard: buildBankManageKeyboard(conn),
-      },
-    });
-    if (sent) {
-      database.bankConnections.update(conn.id, {
-        panel_message_id: sent.message_id,
-      });
-    }
-  }
-
-  // Summary message
+  // Send one combined message for all banks
   const accounts = database.bankAccounts.findByGroupId(group.id);
   const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
+  const text = buildCombinedBankStatusText(connections, totalEur);
+  const keyboard = buildCombinedBankKeyboard(connections);
 
-  const summary = `Итого: ~${totalEur.toFixed(0)} EUR`;
-  const summarySent = await sendMessage(summary, {
-    reply_markup: {
-      inline_keyboard: [[{ text: '➕ Добавить банк', callback_data: 'bank_add' }]],
-    },
+  const sent = await sendMessage(text, {
+    reply_markup: { inline_keyboard: keyboard },
   });
 
-  if (summarySent) {
+  if (sent) {
+    // Store the combined message ID on every connection so sync-service can edit it
+    for (const conn of connections) {
+      database.bankConnections.update(conn.id, { panel_message_id: sent.message_id });
+    }
     database.groups.update(group.telegram_group_id, {
-      bank_panel_summary_message_id: summarySent.message_id,
+      bank_panel_summary_message_id: sent.message_id,
     });
   }
 }
@@ -1193,6 +1188,35 @@ export async function handleBankSyncCallback(
   await ctx.answerCallbackQuery({ text: '🔄 Синхронизация запущена' });
 
   triggerManualSync(connId).catch((err) => logger.error({ err, connId }, 'Manual sync failed'));
+}
+
+export async function handleBankSyncAllCallback(
+  ctx: Ctx['CallbackQuery'],
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const connections = database.bankConnections.findAllByGroupId(group.id);
+  const syncable = connections.filter(
+    (c) => c.status === 'active' && c.last_sync_at && c.consecutive_failures === 0,
+  );
+
+  if (syncable.length === 0) {
+    await ctx.answerCallbackQuery({ text: 'Нет активных банков' });
+    return;
+  }
+
+  await ctx.answerCallbackQuery({ text: `🔄 Синхронизация запущена (${syncable.length})` });
+
+  for (const conn of syncable) {
+    triggerManualSync(conn.id).catch((err) =>
+      logger.error({ err, connId: conn.id }, 'Manual sync failed'),
+    );
+  }
 }
 
 export async function handleBankDisconnectCallback(

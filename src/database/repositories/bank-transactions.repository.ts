@@ -22,6 +22,8 @@ export class BankTransactionsRepository {
           number,
           string,
           string,
+          number | null,
+          string | null,
           string | null,
           string | null,
           number | null,
@@ -31,8 +33,8 @@ export class BankTransactionsRepository {
       >(`
         INSERT INTO bank_transactions
           (connection_id, external_id, account_id, date, time, amount, sign_type, currency,
-           merchant, merchant_normalized, mcc, raw_data, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           invoice_amount, invoice_currency, merchant, merchant_normalized, mcc, raw_data, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(connection_id, external_id) DO NOTHING
         RETURNING id
       `)
@@ -45,6 +47,8 @@ export class BankTransactionsRepository {
         data.amount,
         data.sign_type,
         data.currency,
+        data.invoice_amount ?? null,
+        data.invoice_currency ?? null,
         data.merchant ?? null,
         data.merchant_normalized ?? null,
         data.mcc ?? null,

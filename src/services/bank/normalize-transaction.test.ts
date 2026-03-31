@@ -183,6 +183,51 @@ describe('normalizePluginsTransaction', () => {
     expect(result?.comment).toBe('transfer note');
   });
 
+  test('invoice null: no invoice fields on result', () => {
+    const result = normalizePluginsTransaction(makePluginsTx(), accountCurrencyMap);
+    expect(result?.invoice_sum).toBeUndefined();
+    expect(result?.invoice_currency).toBeUndefined();
+  });
+
+  test('invoice present: populates invoice_sum and invoice_currency', () => {
+    const tx = makePluginsTx({
+      movements: [
+        {
+          id: 'mov-usd',
+          account: { id: 'acc-usd' },
+          sum: -68.3,
+          fee: 0,
+          invoice: { sum: -6703.4, instrument: 'RSD' },
+        },
+      ],
+    });
+    const result = normalizePluginsTransaction(tx, accountCurrencyMap);
+    expect(result).not.toBeNull();
+    // account currency still reflects the card account
+    expect(result?.currency).toBe('USD');
+    expect(result?.sum).toBe(-68.3);
+    // invoice fields carry the operation currency
+    expect(result?.invoice_sum).toBe(6703.4);
+    expect(result?.invoice_currency).toBe('RSD');
+  });
+
+  test('invoice same currency as account: invoice fields omitted', () => {
+    const tx = makePluginsTx({
+      movements: [
+        {
+          id: 'mov-same',
+          account: { id: 'acc-gel' },
+          sum: -25.5,
+          fee: 0,
+          invoice: { sum: -25.5, instrument: 'GEL' },
+        },
+      ],
+    });
+    const result = normalizePluginsTransaction(tx, accountCurrencyMap);
+    expect(result?.invoice_sum).toBeUndefined();
+    expect(result?.invoice_currency).toBeUndefined();
+  });
+
   test('empty movements array: returns null', () => {
     const tx = {
       hold: false,

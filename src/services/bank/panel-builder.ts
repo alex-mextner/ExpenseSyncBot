@@ -78,3 +78,45 @@ export function timeSince(isoDate: string): string {
   if (mins < 60) return `${mins} мин`;
   return `${Math.floor(mins / 60)} ч`;
 }
+
+/**
+ * Combined status text for multiple bank connections in one message.
+ * Each bank is a separate section separated by a blank line.
+ */
+export function buildCombinedBankStatusText(
+  connections: BankConnection[],
+  totalEur: number,
+): string {
+  const sections = connections.map((conn) => buildBankStatusText(conn)).join('\n\n');
+  return `${sections}\n\nИтого: ~${totalEur.toFixed(0)} EUR`;
+}
+
+/**
+ * Combined keyboard for multi-bank panel.
+ * Per-bank row: sync button (if available) + settings button.
+ * Bottom row: global sync (if any bank is syncable) + add bank.
+ */
+export function buildCombinedBankKeyboard(connections: BankConnection[]): PanelButton[][] {
+  const rows: PanelButton[][] = [];
+
+  for (const conn of connections) {
+    const row: PanelButton[] = [];
+    if (conn.last_sync_at && conn.consecutive_failures === 0 && conn.status === 'active') {
+      row.push({ text: `🔄 ${conn.display_name}`, callback_data: `bank_sync:${conn.id}` });
+    }
+    row.push({ text: `⚙️ ${conn.display_name}`, callback_data: `bank_settings:${conn.id}` });
+    rows.push(row);
+  }
+
+  const canSyncAll = connections.some(
+    (c) => c.last_sync_at && c.consecutive_failures === 0 && c.status === 'active',
+  );
+  const bottomRow: PanelButton[] = [];
+  if (canSyncAll) {
+    bottomRow.push({ text: '🔄 Синхронизировать все', callback_data: 'bank_sync_all' });
+  }
+  bottomRow.push({ text: '➕ Добавить банк', callback_data: 'bank_add' });
+  rows.push(bottomRow);
+
+  return rows;
+}

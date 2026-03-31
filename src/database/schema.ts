@@ -1179,6 +1179,21 @@ export function runMigrations(db: Database): void {
         );
       },
     },
+    {
+      name: '044_add_invoice_to_bank_transactions',
+      up: () => {
+        const hasInvoiceAmount = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions') WHERE name = 'invoice_amount'`,
+          )
+          .get();
+        if (hasInvoiceAmount?.count === 0) {
+          db.exec(`ALTER TABLE bank_transactions ADD COLUMN invoice_amount REAL`);
+          db.exec(`ALTER TABLE bank_transactions ADD COLUMN invoice_currency TEXT`);
+          logger.info('✓ Added invoice_amount/invoice_currency to bank_transactions');
+        }
+      },
+    },
   ];
 
   // Check and run migrations

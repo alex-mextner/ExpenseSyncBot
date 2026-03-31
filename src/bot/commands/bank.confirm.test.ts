@@ -218,6 +218,8 @@ function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
     awaiting_comment: 0,
     prefill_category: 'Кафе',
     prefill_comment: null,
+    invoice_amount: null,
+    invoice_currency: null,
     status: 'pending',
     created_at: '2026-03-29T10:00:00Z',
     ...overrides,

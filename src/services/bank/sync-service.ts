@@ -12,7 +12,12 @@ import { createLogger } from '../../utils/logger.ts';
 import { convertAnyToEUR, formatAmount } from '../currency/converter';
 import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
-import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
+import {
+  buildBankManageKeyboard,
+  buildBankStatusText,
+  buildCombinedBankKeyboard,
+  buildCombinedBankStatusText,
+} from './panel-builder';
 import { preFillTransactions } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
@@ -336,6 +341,8 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
           amount,
           sign_type: signType,
           currency: tx.currency,
+          invoice_amount: tx.invoice_sum ?? null,
+          invoice_currency: tx.invoice_currency ?? null,
           merchant: tx.merchant ?? null,
           merchant_normalized: merchantNormalized,
           mcc: tx.mcc ?? null,
@@ -419,8 +426,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       // Update panel message with fresh status
       const freshConn = database.bankConnections.findById(connectionId);
       if (freshConn?.panel_message_id) {
-        const panelText = buildBankStatusText(freshConn);
-        const keyboard = buildBankManageKeyboard(freshConn);
+        const { text: panelText, keyboard } = buildPanelContent(freshConn);
         await editMessageText(freshConn.panel_message_id, panelText, {
           reply_markup: { inline_keyboard: keyboard },
         }).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
@@ -501,6 +507,26 @@ function zenErrorMessage(error: unknown): string {
   return String(error);
 }
 
+/** Builds text + keyboard for a bank panel, using combined layout when multiple banks exist. */
+function buildPanelContent(conn: BankConnection): {
+  text: string;
+  keyboard: ReturnType<typeof buildBankManageKeyboard>;
+} {
+  const allConns = database.bankConnections.findAllByGroupId(conn.group_id);
+  if (allConns.length > 1) {
+    const accounts = database.bankAccounts.findByGroupId(conn.group_id);
+    const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
+    return {
+      text: buildCombinedBankStatusText(allConns, totalEur),
+      keyboard: buildCombinedBankKeyboard(allConns),
+    };
+  }
+  return {
+    text: buildBankStatusText(conn),
+    keyboard: buildBankManageKeyboard(conn),
+  };
+}
+
 async function handleSyncError(
   connectionId: number,
   conn: BankConnection,
@@ -524,8 +550,9 @@ async function handleSyncError(
     // Always update the panel message to reflect the new error state
     const freshConn = database.bankConnections.findById(connectionId);
     if (freshConn?.panel_message_id) {
-      await editMessageText(freshConn.panel_message_id, buildBankStatusText(freshConn), {
-        reply_markup: { inline_keyboard: buildBankManageKeyboard(freshConn) },
+      const { text: panelText, keyboard } = buildPanelContent(freshConn);
+      await editMessageText(freshConn.panel_message_id, panelText, {
+        reply_markup: { inline_keyboard: keyboard },
       }).catch((err) => logger.warn({ err }, 'Failed to update panel message after error'));
     }
 
@@ -582,6 +609,13 @@ export function normalizePluginsTransaction(
   const result: ZenTransaction = { id, sum, currency, date };
 
   if (accId) result.account = accId;
+
+  // Populate invoice fields when the operation currency differs from the account currency.
+  // Both sum and invoice.sum follow ZenMoney sign convention (negative = debit).
+  if (movement.invoice && movement.invoice.instrument !== currency) {
+    result.invoice_sum = Math.abs(movement.invoice.sum);
+    result.invoice_currency = movement.invoice.instrument;
+  }
 
   if (raw.merchant !== null && raw.merchant !== undefined) {
     const title =
@@ -766,7 +800,12 @@ function formatConfirmationCard(
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
   const dateTime = tx.time ? `${tx.date} ${tx.time}` : tx.date;
 
-  return `${prefix} ${escapeHtml(bankName)} — ${formatAmount(tx.amount, tx.currency)}
+  const amountStr =
+    tx.invoice_amount != null && tx.invoice_currency
+      ? `${formatAmount(tx.invoice_amount, tx.invoice_currency)} (${formatAmount(tx.amount, tx.currency)})`
+      : formatAmount(tx.amount, tx.currency);
+
+  return `${prefix} ${escapeHtml(bankName)} — ${amountStr}
 📅 ${dateTime}
 📍 ${merchant}
 🗂 Категория: ${escapeHtml(category)}${mccLine}`;

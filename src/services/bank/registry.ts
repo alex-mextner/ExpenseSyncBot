@@ -25,6 +25,10 @@ export interface ZenTransaction {
   mcc?: number;
   comment?: string;
   account?: string;
+  // Present when the transaction was made in a different currency than the card account.
+  // Example: USD card used in Serbia — sum=-68.30 USD, invoice_sum=6703.40 RSD.
+  invoice_sum?: number;
+  invoice_currency?: string;
 }
 
 export type ScrapeResult = {

@@ -128,6 +128,8 @@ describe('buildBankStatusText', () => {
         telegram_message_id: null,
         prefill_category: null,
         prefill_comment: null,
+        invoice_amount: null,
+        invoice_currency: null,
         edit_in_progress: 0,
         awaiting_comment: 0,
         created_at: '',

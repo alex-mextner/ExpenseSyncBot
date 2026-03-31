@@ -25,6 +25,7 @@ import {
   handleBankSettingsBackCallback,
   handleBankSettingsCallback,
   handleBankSetupCallback,
+  handleBankSyncAllCallback,
   handleBankSyncCallback,
   handleBankWizardCancelCallback,
   handleBankWizardStartCallback,
@@ -328,6 +329,15 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankSyncCallback(ctx, connId, chatId);
+        break;
+      }
+
+      case 'bank_sync_all': {
+        if (!chatId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankSyncAllCallback(ctx, chatId);
         break;
       }
 
