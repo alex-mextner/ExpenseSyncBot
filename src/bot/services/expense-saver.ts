@@ -1,5 +1,7 @@
 /** Saving expenses (manual and receipt) to Google Sheets and local DB */
 import { format } from 'date-fns';
+import { InlineKeyboard } from 'gramio';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
 import { silentSyncBudgets } from '../commands/budget';
@@ -286,10 +288,18 @@ export async function saveReceiptExpenses(
   const totalItems = confirmedItems.length;
   const totalCategories = itemsByCategory.size;
 
+  const scanButton = env.MINIAPP_URL
+    ? new InlineKeyboard().webApp(
+        '📷 Сканировать чек',
+        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=scanner`,
+      )
+    : undefined;
+
   await bot.api.sendMessage({
     chat_id: group.telegram_group_id,
     text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
     parse_mode: 'HTML',
+    ...(scanButton ? { reply_markup: scanButton } : {}),
   });
 
   logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);

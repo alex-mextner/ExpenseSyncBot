@@ -22,6 +22,7 @@ export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'prompt', description: 'Настроить AI-промпт группы' },
   { command: 'topic', description: 'Привязать бота к топику форума' },
   { command: 'bank', description: 'Импорт транзакций из банка' },
+  { command: 'scan', description: 'Сканировать чек через Mini App' },
 ];
 
 /**

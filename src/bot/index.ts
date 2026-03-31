@@ -20,6 +20,7 @@ import { handlePingCommand } from './commands/ping';
 import { handlePromptCommand } from './commands/prompt';
 import { handlePushCommand } from './commands/push';
 import { handleReconnectCommand } from './commands/reconnect';
+import { handleScanCommand } from './commands/scan';
 import { handleSettingsCommand } from './commands/settings';
 import { handleSpreadsheetCommand } from './commands/spreadsheet';
 import { handleStartCommand } from './commands/start';
@@ -106,6 +107,7 @@ export function createBot(): Bot {
   bot.command('topic', requireGroup(handleTopicCommand));
   bot.command('dev', requireGroup(handleDevCommand));
   bot.command('sync', requireGroup(requireGoogle(handleSyncCommand)));
+  bot.command('scan', requireGroup(handleScanCommand));
   bot.command(
     'bank',
     requireGroup((ctx, group) => handleBankCommand(ctx, group, bot)),

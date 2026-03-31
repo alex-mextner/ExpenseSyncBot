@@ -7,6 +7,7 @@ import {
   isValidCurrencyCode,
   MESSAGES,
 } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet } from '../../services/google/sheets';
@@ -322,6 +323,7 @@ export async function handleDefaultCurrencyCallback(
       { parse_mode: 'HTML' },
     );
     await ctx.answerCallbackQuery({ text: '✅ Настройка завершена!' });
+    await setMiniAppMenuButton(ctx, chatId);
     await sendCurrencyHints(group.enabled_currencies, currency);
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId} (without Google Sheets)`);
@@ -411,6 +413,7 @@ async function createSpreadsheetForGroup(ctx: Ctx['CallbackQuery'], chatId: numb
     await ctx.editText(MESSAGES.setupComplete.replace('{spreadsheetUrl}', spreadsheetUrl), {
       parse_mode: 'HTML',
     });
+    await setMiniAppMenuButton(ctx, chatId);
     await sendCurrencyHints(group.enabled_currencies, group.default_currency);
     await sendTopicRecommendation(ctx, chatId);
     logger.info(`[CMD] ✅ Setup completed for group ${chatId}`);
@@ -418,6 +421,28 @@ async function createSpreadsheetForGroup(ctx: Ctx['CallbackQuery'], chatId: numb
     logger.error({ err }, '[CMD] ❌ Error creating spreadsheet');
     await ctx.editText('❌ Ошибка при создании таблицы. Попробуй еще раз: /connect');
   }
+}
+
+/**
+ * Set a persistent Mini App menu button for the chat after successful setup.
+ */
+async function setMiniAppMenuButton(
+  ctx: Ctx['CallbackQuery'] | Ctx['Command'],
+  chatId: number,
+): Promise<void> {
+  if (!env.MINIAPP_URL) return;
+  await ctx.bot.api
+    .setChatMenuButton({
+      chat_id: chatId,
+      menu_button: {
+        type: 'web_app',
+        text: 'Расходы',
+        web_app: { url: `${env.MINIAPP_URL}?groupId=${chatId}` },
+      },
+    })
+    .catch((err) => {
+      logger.warn({ err }, '[CMD] Failed to set chat menu button, continuing');
+    });
 }
 
 /**

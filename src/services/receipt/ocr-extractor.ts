@@ -58,6 +58,61 @@ export function startTempImageCleanup(): void {
 }
 
 /**
+ * Extract text from receipt image using Qwen Vision model — fully in-memory via base64 data URL.
+ * No disk writes, no temp files.
+ * @param imageBuffer - Image buffer (JPEG/PNG)
+ * @returns Extracted text from receipt
+ */
+export async function extractTextFromImageBuffer(imageBuffer: Buffer): Promise<string> {
+  logger.info('[OCR] Extracting text from image buffer using Qwen Vision model (in-memory)');
+
+  const dataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+
+  const response = await client.chatCompletion({
+    model: 'Qwen/Qwen2.5-VL-72B-Instruct',
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: dataUrl,
+            },
+          },
+          {
+            type: 'text',
+            text: `Extract ALL text from this receipt image. Include:
+- Store name
+- Date and time
+- All items with their names and prices
+- Quantities
+- Subtotals and totals
+- Any other visible text
+
+Return the text exactly as it appears on the receipt, preserving the structure and order.`,
+          },
+        ],
+      },
+    ],
+    max_tokens: 2000,
+    temperature: 0.1,
+  });
+
+  const extractedText = response.choices[0]?.message?.content?.trim();
+
+  if (!extractedText) {
+    throw new Error('No text extracted from image');
+  }
+
+  logger.info(
+    `[OCR] Successfully extracted text (${extractedText.length} chars): ${extractedText.substring(0, 200)}...`,
+  );
+
+  return extractedText;
+}
+
+/**
  * Extract text from receipt image using Qwen Vision model
  * @param imageBuffer - Image buffer (JPEG/PNG)
  * @returns Extracted text from receipt

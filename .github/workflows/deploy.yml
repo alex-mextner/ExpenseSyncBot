@@ -47,6 +47,10 @@ jobs:
             echo "📦 Installing ZenPlugins dependencies..."
             /var/www/.bun/bin/bun install --cwd src/services/bank/ZenPlugins
 
+            echo "🏗️ Building Mini App..."
+            /var/www/.bun/bin/bun install --frozen-lockfile --cwd miniapp
+            /var/www/.bun/bin/bun run build --cwd miniapp
+
             echo "🔧 Making start script executable..."
             chmod +x start.sh
 

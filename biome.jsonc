@@ -13,7 +13,8 @@
       "!data",
       "!dist",
       "!scripts",
-      "!src/services/bank/ZenPlugins"
+      "!src/services/bank/ZenPlugins",
+      "!miniapp"
     ]
   },
   "formatter": {

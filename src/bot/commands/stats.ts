@@ -1,5 +1,7 @@
 /** /stats command handler — shows per-currency expense totals and category breakdown */
+import { InlineKeyboard } from 'gramio';
 import { BASE_CURRENCY, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -39,7 +41,17 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
       message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;
     }
 
-    await sendToChat(message, { parse_mode: 'HTML' });
+    const keyboard = env.MINIAPP_URL
+      ? new InlineKeyboard().webApp(
+          '📊 Дашборд',
+          `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=dashboard`,
+        )
+      : undefined;
+
+    await sendToChat(message, {
+      parse_mode: 'HTML',
+      ...(keyboard ? { reply_markup: keyboard } : {}),
+    });
 
     // Maybe send daily advice (20% probability)
     await maybeSmartAdvice(group.id);

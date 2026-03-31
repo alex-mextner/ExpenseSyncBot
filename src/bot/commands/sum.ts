@@ -1,7 +1,9 @@
 /** /sum command handler — totals expenses for a date range with optional category filter */
 import { endOfMonth, format, startOfMonth } from 'date-fns';
+import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -215,6 +217,7 @@ async function addBudgetInfo(
   baseMessage: string,
   group: {
     id: number;
+    telegram_group_id: number;
     google_refresh_token: string | null;
     spreadsheet_id: string | null;
     default_currency: import('../../config/constants').CurrencyCode;
@@ -224,12 +227,19 @@ async function addBudgetInfo(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
+  const keyboard = env.MINIAPP_URL
+    ? new InlineKeyboard().webApp(
+        '📊 Дашборд',
+        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=dashboard`,
+      )
+    : undefined;
+
   // Get budgets for current month
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
   if (budgets.length === 0) {
     // No budgets set - just send base message
-    await sendToChat(baseMessage);
+    await sendToChat(baseMessage, keyboard ? { reply_markup: keyboard } : {});
     return;
   }
 
@@ -275,7 +285,7 @@ async function addBudgetInfo(
     budgetMessage += `\nℹ️ Используй /budget для полного отчета`;
   }
 
-  await sendToChat(baseMessage + budgetMessage);
+  await sendToChat(baseMessage + budgetMessage, keyboard ? { reply_markup: keyboard } : {});
 }
 
 /**
