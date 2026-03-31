@@ -1,7 +1,11 @@
 // Tests for Mini App API handler: HMAC validation, group membership, routing, CORS
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
+import { env } from '../config/env.ts';
+import { database } from '../database/index.ts';
 import type { AIExtractionResult } from '../services/receipt/ai-extractor.ts';
+import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
+import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
 
 const TEST_BOT_TOKEN = 'test_bot_token_12345';
 const CORS_ORIGIN = 'https://app.example.com';
@@ -84,14 +88,14 @@ const mockFetch = mock(
     ),
 );
 // Bun's typeof fetch includes namespace.preconnect which a plain mock can't satisfy structurally
+const originalFetch = global.fetch;
 global.fetch = mockFetch as unknown as typeof fetch;
 
-mock.module('../config/env.ts', () => ({
-  env: {
-    BOT_TOKEN: TEST_BOT_TOKEN,
-    MINIAPP_URL: CORS_ORIGIN,
-  },
-}));
+// Override env properties directly instead of mock.module (which pollutes globally)
+const originalBotToken = env.BOT_TOKEN;
+const originalMiniappUrl = env.MINIAPP_URL;
+(env as { BOT_TOKEN: string }).BOT_TOKEN = TEST_BOT_TOKEN;
+(env as { MINIAPP_URL: string }).MINIAPP_URL = CORS_ORIGIN;
 
 mock.module('sharp', () => ({ default: mockSharp }));
 
@@ -99,39 +103,31 @@ mock.module('../services/receipt/ocr-extractor.ts', () => ({
   extractTextFromImageBuffer: mockExtractTextFromImageBuffer,
 }));
 
-mock.module('../database/index.ts', () => ({
-  database: {
-    users: {
-      findByTelegramId: mockFindByTelegramId,
-    },
-    categories: {
-      findByGroupId: mockCategoriesFindByGroupId,
-    },
-    groups: {
-      findById: mockGroupsFindById,
-    },
-    queryOne: mockDbQueryOne,
-    queryAll: mockDbQueryAll,
-    exec: mockDbExec,
-    transaction: (fn: () => unknown) => fn(),
-  },
-}));
-
-mock.module('../services/receipt/receipt-fetcher.ts', () => ({
-  fetchReceiptData: mockFetchReceiptData,
-}));
-
-mock.module('../services/receipt/ai-extractor.ts', () => ({
-  extractExpensesFromReceipt: mockExtractExpensesFromReceipt,
-}));
-
 mock.module('../services/expense-recorder.ts', () => ({
   getExpenseRecorder: mockGetExpenseRecorder,
 }));
 
-mock.module('../services/currency/converter.ts', () => ({
-  convertCurrency: (_amount: number, _from: string, _to: string) => _amount,
-}));
+// Use spyOn instead of mock.module for modules that have their own test files.
+// mock.module pollutes Bun's global module cache, breaking unrelated tests.
+// Type casts required: spyOn enforces real method signatures, but mock functions
+// use intentionally loose types for test convenience.
+// biome-ignore lint/suspicious/noExplicitAny: test mock bridge — spy expects real method types but mock functions use loose types
+type MockBridge = (...args: any[]) => any;
+spyOn(database.users, 'findByTelegramId').mockImplementation(mockFindByTelegramId as MockBridge);
+spyOn(database.categories, 'findByGroupId').mockImplementation(
+  mockCategoriesFindByGroupId as MockBridge,
+);
+spyOn(database.groups, 'findById').mockImplementation(mockGroupsFindById as MockBridge);
+spyOn(database, 'queryOne').mockImplementation(mockDbQueryOne as MockBridge);
+spyOn(database, 'queryAll').mockImplementation(mockDbQueryAll as MockBridge);
+spyOn(database, 'exec').mockImplementation(mockDbExec as MockBridge);
+spyOn(database, 'transaction').mockImplementation(((fn: () => unknown) => fn()) as MockBridge);
+spyOn(receiptFetcherModule, 'fetchReceiptData').mockImplementation(
+  mockFetchReceiptData as MockBridge,
+);
+spyOn(aiExtractorModule, 'extractExpensesFromReceipt').mockImplementation(
+  mockExtractExpensesFromReceipt as MockBridge,
+);
 
 mock.module('./sse-emitter.ts', () => ({
   emitForGroup: mockEmitForGroup,
@@ -1133,4 +1129,12 @@ describe('GET /api/dashboard/events', () => {
     expect(res.headers.get('Content-Type')).toContain('text/event-stream');
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(CORS_ORIGIN);
   });
+});
+
+// Restore global.fetch, env overrides, and spyOn mocks so they don't pollute other test files
+afterAll(() => {
+  global.fetch = originalFetch;
+  (env as { BOT_TOKEN: string }).BOT_TOKEN = originalBotToken;
+  (env as { MINIAPP_URL: string | undefined }).MINIAPP_URL = originalMiniappUrl;
+  mock.restore();
 });

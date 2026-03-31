@@ -33,14 +33,18 @@ node_modules/.bin/lefthook install --force
 
 ### Deployment
 
-The bot is deployed on Digital Ocean using PM2. See [DEPLOY.md](DEPLOY.md) for full deployment guide.
+**Auto-deploy via GitHub Actions** on every push to `main`. The pipeline runs typecheck → lint → tests → SSH deploy → PM2 reload. If tests fail, deploy is blocked.
+
+**NEVER manually SSH to the server to `git pull` and restart.** Use `git push` and let CI handle it. Manual deploys bypass test gates and can conflict with the CI pipeline.
 
 ```bash
-# PM2 commands (on server)
+# Monitor deploy status
+gh run list --limit 5
+gh run view <run-id> --log-failed
+
+# PM2 commands (on server, for diagnostics only)
 /var/www/.bun/bin/pm2 list
-/var/www/.bun/bin/pm2 restart expensesyncbot
 /var/www/.bun/bin/pm2 logs expensesyncbot
-/var/www/.bun/bin/pm2 reload expensesyncbot  # zero-downtime restart
 ```
 
 ### Database
@@ -348,7 +352,7 @@ Required in `.env` (see [.env.example](.env.example)):
 - **Server:** Digital Ocean (www-data user)
 - **Process Manager:** PM2
 - **Reverse Proxy:** Caddy (for HTTPS OAuth callback)
-- **Auto-deploy:** GitHub Actions on push to main (`git pull` on server)
+- **Auto-deploy:** GitHub Actions on push to main (test → deploy → PM2 reload). Never bypass with manual SSH.
 - **Logs:** PM2 logs at `/var/www/ExpenseSyncBot/logs/`
 
 See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
@@ -387,6 +391,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
 12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendToChat()` from `src/bot/send.ts`. See "Sending Messages" section above.
+13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
 
 ## When Modifying Code
 
