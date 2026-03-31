@@ -303,7 +303,7 @@ export async function handleDefaultCurrencyCallback(
   if (group.google_refresh_token) {
     await ctx.answerCallbackQuery({ text: '⏳ Создаю таблицу...' });
     await ctx.editText(
-      `⏳ Валюта по умолчанию: <b>${currency}</b>\n` + `Создаю Google Sheets таблицу...`,
+      `⏳ Валюта по умолчанию: <b>${currency}</b>\nСоздаю Google Sheets таблицу...`,
       { parse_mode: 'HTML' },
     );
     creatingSpreadsheet.add(chatId);

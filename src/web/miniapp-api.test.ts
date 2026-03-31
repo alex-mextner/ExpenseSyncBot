@@ -3,9 +3,13 @@ import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:t
 import { createHmac } from 'node:crypto';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
+import * as expenseRecorderModule from '../services/expense-recorder.ts';
 import type { AIExtractionResult } from '../services/receipt/ai-extractor.ts';
 import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
+import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
+import * as loggerModule from '../utils/logger.ts';
+import * as sseEmitterModule from './sse-emitter.ts';
 
 const TEST_BOT_TOKEN = 'test_bot_token_12345';
 const CORS_ORIGIN = 'https://app.example.com';
@@ -99,18 +103,8 @@ const originalMiniappUrl = env.MINIAPP_URL;
 
 mock.module('sharp', () => ({ default: mockSharp }));
 
-mock.module('../services/receipt/ocr-extractor.ts', () => ({
-  extractTextFromImageBuffer: mockExtractTextFromImageBuffer,
-}));
-
-mock.module('../services/expense-recorder.ts', () => ({
-  getExpenseRecorder: mockGetExpenseRecorder,
-}));
-
-// Use spyOn instead of mock.module for modules that have their own test files.
+// Use spyOn instead of mock.module for all project modules.
 // mock.module pollutes Bun's global module cache, breaking unrelated tests.
-// Type casts required: spyOn enforces real method signatures, but mock functions
-// use intentionally loose types for test convenience.
 // biome-ignore lint/suspicious/noExplicitAny: test mock bridge — spy expects real method types but mock functions use loose types
 type MockBridge = (...args: any[]) => any;
 spyOn(database.users, 'findByTelegramId').mockImplementation(mockFindByTelegramId as MockBridge);
@@ -128,20 +122,16 @@ spyOn(receiptFetcherModule, 'fetchReceiptData').mockImplementation(
 spyOn(aiExtractorModule, 'extractExpensesFromReceipt').mockImplementation(
   mockExtractExpensesFromReceipt as MockBridge,
 );
-
-mock.module('./sse-emitter.ts', () => ({
-  emitForGroup: mockEmitForGroup,
-  subscribeGroup: mockSubscribeGroup,
-}));
-
-mock.module('../utils/logger.ts', () => ({
-  createLogger: () => ({
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-  }),
-}));
+spyOn(ocrExtractorModule, 'extractTextFromImageBuffer').mockImplementation(
+  mockExtractTextFromImageBuffer as MockBridge,
+);
+spyOn(expenseRecorderModule, 'getExpenseRecorder').mockImplementation(
+  mockGetExpenseRecorder as MockBridge,
+);
+spyOn(sseEmitterModule, 'emitForGroup').mockImplementation(mockEmitForGroup as MockBridge);
+spyOn(sseEmitterModule, 'subscribeGroup').mockImplementation(mockSubscribeGroup as MockBridge);
+const silentLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+spyOn(loggerModule, 'createLogger').mockImplementation((() => silentLogger) as MockBridge);
 
 // Import after mocks are set up
 import { handleMiniAppRequest, validateAndResolveContext } from './miniapp-api.ts';
