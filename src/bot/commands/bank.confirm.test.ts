@@ -117,6 +117,7 @@ const group: Group = {
   enabled_currencies: ['EUR'],
   custom_prompt: null,
   active_topic_id: null,
+  oauth_client: 'legacy' as const,
   bank_panel_summary_message_id: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

@@ -13,6 +13,7 @@ export interface Group {
   enabled_currencies: CurrencyCode[];
   custom_prompt: string | null;
   active_topic_id: number | null;
+  oauth_client: 'legacy' | 'service_account';
   bank_panel_summary_message_id: number | null;
   created_at: string;
   updated_at: string;

@@ -552,6 +552,13 @@ Also scan the conversation history for items explicitly deferred, noted as "pend
 
 ## Working with Third-Party Submodules
 
+### No Imports from Submodule Paths in Parent Code
+
+**Never import from `./ZenPlugins/...`** or any other submodule path in parent project code (`src/`). Submodules are not checked out in CI (`submodules: false` in deploy.yml), so such imports break typecheck and block deploys.
+
+- Types needed from ZenPlugins are maintained locally in `src/services/bank/zenmoney-types.ts`.
+- If a new type is needed, copy it to the local file — don't add a submodule import.
+
 ### Before Writing Any Code
 
 Always read existing files in the target submodule first — especially existing tests and utility files — to understand its style conventions. Writing code without checking leads to a full rewrite.

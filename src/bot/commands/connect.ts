@@ -154,7 +154,7 @@ async function startGoogleOAuth(
     '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
     'После авторизации вернись сюда — я продолжу настройку.';
 
-  if ('editText' in ctx && typeof ctx.editText === 'function') {
+  if ('callbackQuery' in ctx && ctx.callbackQuery) {
     await ctx.editText(text, { reply_markup: authKeyboard });
   } else {
     await ctx.send(text, { reply_markup: authKeyboard });
