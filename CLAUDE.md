@@ -496,6 +496,7 @@ Follow this framework for ANY technical issue:
 - Commit frequently throughout development, even if high-level tasks are not yet done
 - NEVER skip, evade, or disable a pre-commit hook
 - **NEVER use `git add -A`** without checking `git status` first.
+- **Worktree workflow**: when working in a worktree, **NEVER push directly to main** (`git push origin branch:main`). Accumulate all commits in the worktree branch, then merge or create a PR at the end. Pushing each commit to main produces noisy history and bypasses review. Never `cd` into the main repo from a worktree — it has the user's in-progress changes.
 - **Deferred findings**: when skipping a review finding (out of scope, pre-existing), create a GitHub
   issue for it. Don't silently drop known issues.
 - **Before every commit** (3-stage review, mandatory even if the user just says "commit"):
