@@ -446,9 +446,10 @@ describe('ExpenseBotAgent', () => {
   describe('run() — error handling (throws AgentError)', () => {
     beforeEach(() => {
       // Make retry delays instant for tests
-      spyOn(agent as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(
-        undefined,
-      );
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
     });
 
     it('throws AgentError on Anthropic 429 rate limit after retries', async () => {
@@ -603,7 +604,8 @@ describe('ExpenseBotAgent', () => {
       // Should have sent error message (beyond just the placeholder)
       const sendCalls = mockBot.api.sendMessage.mock.calls;
       const errorCall = sendCalls.find(
-        (c: unknown[]) => typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка AI'),
+        (c: unknown[]) =>
+          typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка AI'),
       );
       expect(errorCall).toBeTruthy();
     });
@@ -634,9 +636,10 @@ describe('ExpenseBotAgent', () => {
 
   describe('run() — error wrapping', () => {
     beforeEach(() => {
-      spyOn(agent as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(
-        undefined,
-      );
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
     });
 
     it('wraps error with status:429 (non-Anthropic) as AgentError', async () => {
