@@ -7,8 +7,8 @@ import type { OAuthClientType } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import { decryptToken, isEncryptedToken } from './token-encryption';
 
-/** Ten-minute TTL for OAuth state tokens */
-const STATE_TTL_MS = 10 * 60 * 1000;
+/** One-hour TTL — OAuth URL is pre-generated in /connect, user may not click immediately */
+const STATE_TTL_MS = 60 * 60 * 1000;
 
 /** In-memory map of UUID state → { groupId, expiresAt } */
 const pendingStates = new Map<string, { groupId: number; expiresAt: number }>();
