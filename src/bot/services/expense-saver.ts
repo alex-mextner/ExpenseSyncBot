@@ -2,11 +2,11 @@
 import { format } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
-import { env } from '../../config/env';
 import { database } from '../../database';
 import { convertCurrency, formatAmount, getExchangeRate } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from '../commands/budget';
 import { sendToChat } from '../send';
 
@@ -288,11 +288,9 @@ export async function saveReceiptExpenses(
   const totalItems = confirmedItems.length;
   const totalCategories = itemsByCategory.size;
 
-  const scanButton = env.MINIAPP_URL
-    ? new InlineKeyboard().webApp(
-        '📷 Сканировать чек',
-        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=scanner`,
-      )
+  const miniAppUrl = buildMiniAppUrl('scanner');
+  const scanButton = miniAppUrl
+    ? new InlineKeyboard().url('📷 Сканировать чек', miniAppUrl)
     : undefined;
 
   await sendToChat(

@@ -8,7 +8,6 @@ import {
   type CurrencyCode,
   getCurrencySymbol,
 } from '../../config/constants';
-import { env } from '../../config/env';
 import { database } from '../../database';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
@@ -21,6 +20,7 @@ import {
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import type { GoogleConnectedGroup } from '../guards';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
 import { sendToChat } from '../send';
@@ -438,12 +438,8 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
 
   const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
 
-  const keyboard = env.MINIAPP_URL
-    ? new InlineKeyboard().webApp(
-        '📊 Дашборд',
-        `${env.MINIAPP_URL}?groupId=${group.telegram_group_id}&tab=dashboard`,
-      )
-    : undefined;
+  const miniAppUrl = buildMiniAppUrl('dashboard');
+  const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
   if (budgets.length === 0) {
     await sendToChat(

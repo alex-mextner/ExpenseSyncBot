@@ -24,6 +24,7 @@ interface EnvConfig {
   AI_DEBUG_LOGS: boolean;
   NODE_ENV: 'development' | 'production';
   MINIAPP_URL: string | undefined;
+  MINIAPP_SHORTNAME: string | undefined;
 }
 
 function getEnvVariable(name: string, required = true): string {
@@ -61,6 +62,7 @@ function validateEnv(): EnvConfig {
     AI_DEBUG_LOGS: process.env['AI_DEBUG_LOGS'] === 'true',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
     MINIAPP_URL: getEnvVariable('MINIAPP_URL', false) || undefined,
+    MINIAPP_SHORTNAME: getEnvVariable('MINIAPP_SHORTNAME', false) || undefined,
   };
 }
 
