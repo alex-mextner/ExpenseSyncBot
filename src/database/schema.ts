@@ -1203,18 +1203,23 @@ export function runMigrations(db: Database): void {
 
   const recordMigration = db.query<void, [string]>('INSERT INTO migrations (name) VALUES (?)');
 
+  let applied = 0;
+
   for (const migration of migrations) {
     const result = checkMigration.get(migration.name);
-
     if (result && result.count === 0) {
       logger.info(`Running migration: ${migration.name}`);
       migration.up();
       recordMigration.run(migration.name);
-      logger.info(`✓ Migration ${migration.name} completed`);
+      applied++;
     }
   }
 
-  logger.info('✓ All migrations completed');
+  if (applied > 0) {
+    logger.info(`✓ ${applied} migration(s) applied`);
+  } else {
+    logger.debug('No pending migrations');
+  }
 }
 
 /**

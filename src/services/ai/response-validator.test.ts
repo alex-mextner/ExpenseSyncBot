@@ -2,6 +2,14 @@
  * Tests for the response validation pass
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { createMockLogger } from '../../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import type Anthropic from '@anthropic-ai/sdk';
 import { validateResponse } from './response-validator';
 

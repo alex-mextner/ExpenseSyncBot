@@ -22,7 +22,7 @@ jobs:
       - run: bun run type-check
       - run: bun run lint
       - name: Run tests
-        run: bun test
+        run: bun run test
       - name: Build Mini App
         run: cd miniapp && bun install --frozen-lockfile && bun run build
 

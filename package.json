@@ -9,7 +9,10 @@
     "type-check": "tsc --noEmit",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
-    "format": "biome format --write src/"
+    "format": "biome format --write src/",
+    "test": "bun scripts/test-runner.ts",
+    "test:single": "bun test",
+    "test:coverage": "bun test --coverage"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",

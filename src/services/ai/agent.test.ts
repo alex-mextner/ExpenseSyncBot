@@ -3,8 +3,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import Anthropic from '@anthropic-ai/sdk';
+
+mock.module('./response-validator', () => ({
+  validateResponse: mock(async () => ({ approved: true })),
+}));
+
 import { ExpenseBotAgent } from './agent';
-import * as responseValidator from './response-validator';
 import type { AgentContext } from './types';
 
 // Minimal AgentContext with all required fields
@@ -67,6 +71,17 @@ function makeFakeStream(
   };
 }
 
+/** Spy on anthropic.messages.stream and return a fake stream with given chunks */
+function mockStreamReturn(
+  anthropic: Anthropic,
+  chunks: string[] = ['ok'],
+  toolUseBlock?: Parameters<typeof makeFakeStream>[1],
+) {
+  return spyOn(anthropic.messages, 'stream').mockReturnValue(
+    makeFakeStream(chunks, toolUseBlock) as unknown as ReturnType<typeof anthropic.messages.stream>,
+  );
+}
+
 /** Extract the first call args from a spy as Anthropic stream params */
 function getCallArgs(spy: {
   mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
@@ -101,8 +116,6 @@ describe('ExpenseBotAgent', () => {
   beforeEach(() => {
     agent = new ExpenseBotAgent('test-api-key', makeCtx());
     mockBot = makeMockBot();
-    // Prevent real API calls from the response validator
-    spyOn(responseValidator, 'validateResponse').mockResolvedValue({ approved: true });
   });
 
   afterEach(() => {
@@ -140,11 +153,7 @@ describe('ExpenseBotAgent', () => {
   describe('run() — basic streaming', () => {
     it('returns a string response', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['Hello', ' world']) as unknown as ReturnType<
-          typeof anthropic.messages.stream
-        >,
-      );
+      mockStreamReturn(anthropic, ['Hello', ' world']);
 
       const result = await agent.run(
         'What are my expenses?',
@@ -156,9 +165,7 @@ describe('ExpenseBotAgent', () => {
 
     it('returns non-empty string for normal response', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['Hello world']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      mockStreamReturn(anthropic, ['Hello world']);
 
       const result = await agent.run('Hello', [], mockBot as unknown as import('gramio').Bot);
       expect(result.length).toBeGreaterThanOrEqual(0); // may be empty if only tool calls happened
@@ -166,9 +173,7 @@ describe('ExpenseBotAgent', () => {
 
     it('calls anthropic.messages.stream exactly once for no-tool response', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['Answer.']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic, ['Answer.']);
 
       await agent.run('How much did I spend?', [], mockBot as unknown as import('gramio').Bot);
       expect(streamSpy).toHaveBeenCalledTimes(1);
@@ -176,9 +181,7 @@ describe('ExpenseBotAgent', () => {
 
     it('passes model and max_tokens to Anthropic', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
       const callArgs = getCallArgs(streamSpy);
@@ -188,9 +191,7 @@ describe('ExpenseBotAgent', () => {
 
     it('passes system prompt with current date', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
       const callArgs = getCallArgs(streamSpy);
@@ -201,9 +202,7 @@ describe('ExpenseBotAgent', () => {
 
     it('includes user message as last message in messages array', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       const question = 'What is my total?';
       await agent.run(question, [], mockBot as unknown as import('gramio').Bot);
@@ -217,9 +216,7 @@ describe('ExpenseBotAgent', () => {
 
     it('includes tools in stream call', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
@@ -234,9 +231,7 @@ describe('ExpenseBotAgent', () => {
   describe('run() — conversation history', () => {
     it('handles empty conversation history without error', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      mockStreamReturn(anthropic);
 
       await expect(
         agent.run('Hello', [], mockBot as unknown as import('gramio').Bot),
@@ -245,9 +240,7 @@ describe('ExpenseBotAgent', () => {
 
     it('includes conversation history in Anthropic call', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       const history = [
         {
@@ -276,9 +269,7 @@ describe('ExpenseBotAgent', () => {
 
     it('maps history role user correctly', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       const history = [
         {
@@ -298,9 +289,7 @@ describe('ExpenseBotAgent', () => {
 
     it('maps history role assistant correctly', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       const history = [
         {
@@ -320,9 +309,7 @@ describe('ExpenseBotAgent', () => {
 
     it('parses JSON array content from history', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       const jsonContent = JSON.stringify([{ type: 'text', text: 'Hi' }]);
       const history = [
@@ -344,9 +331,7 @@ describe('ExpenseBotAgent', () => {
 
     it('falls back to plain text when history content is invalid JSON', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       const history = [
         {
@@ -371,9 +356,7 @@ describe('ExpenseBotAgent', () => {
     it('includes current user name in system prompt', async () => {
       const a = new ExpenseBotAgent('key', makeCtx({ userName: 'johndoe' }));
       const anthropic = (a as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
@@ -385,9 +368,7 @@ describe('ExpenseBotAgent', () => {
     it('includes custom prompt when set', async () => {
       const a = new ExpenseBotAgent('key', makeCtx({ customPrompt: 'Only answer in English.' }));
       const anthropic = (a as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
@@ -399,9 +380,7 @@ describe('ExpenseBotAgent', () => {
     it('does not include custom prompt section when customPrompt is null', async () => {
       const a = new ExpenseBotAgent('key', makeCtx({ customPrompt: null }));
       const anthropic = (a as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
@@ -412,9 +391,7 @@ describe('ExpenseBotAgent', () => {
 
     it('system prompt includes set_custom_prompt mutation rule', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
@@ -426,9 +403,7 @@ describe('ExpenseBotAgent', () => {
 
     it('system block has cache_control ephemeral', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      const streamSpy = spyOn(anthropic.messages, 'stream').mockReturnValue(
-        makeFakeStream(['ok']) as unknown as ReturnType<typeof anthropic.messages.stream>,
-      );
+      const streamSpy = mockStreamReturn(anthropic);
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 

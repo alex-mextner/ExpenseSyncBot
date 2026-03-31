@@ -3,13 +3,14 @@
 // Import after mocking dependencies sync-service needs at module load.
 // sync-service imports database, env, cron — mock them all to prevent startup side-effects.
 import { describe, expect, mock, test } from 'bun:test';
+import { mockDatabase } from '../../test-utils/mocks/database';
 import type { ZenTransaction } from './registry';
 import type { Transaction as ZenPluginsTransaction } from './zenmoney-types';
 import { AccountType } from './zenmoney-types';
 
 const ACCOUNT_TYPE_CASH = AccountType.cash;
 
-mock.module('../../database', () => ({ database: {} }));
+mock.module('../../database', () => ({ database: mockDatabase() }));
 mock.module('../../config/env', () => ({
   env: {
     BOT_TOKEN: 'test',

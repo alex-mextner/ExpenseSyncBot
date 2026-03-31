@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Budget, Category, Expense, Group } from '../../database/types';
+import { mockDatabase } from '../../test-utils/mocks/database';
 import type { AgentContext } from './types';
 
 // ── Mock database ────────────────────────────────────────────────────
@@ -51,13 +52,13 @@ const mockUsers = {
 };
 
 mock.module('../../database', () => ({
-  database: {
+  database: mockDatabase({
     expenses: mockExpenses,
     budgets: mockBudgets,
     categories: mockCategories,
     groups: mockGroups,
     users: mockUsers,
-  },
+  }),
 }));
 
 // Mock Google Sheets (used by sync/write tools)

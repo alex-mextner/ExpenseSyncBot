@@ -1,15 +1,12 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { mockDatabase } from '../../test-utils/mocks/database';
 import { computeOverallSeverity, formatSnapshotForPrompt } from './formatters';
 
 mock.module('../../database', () => ({
-  database: {
-    bankAccounts: {
-      findByGroupId: () => [],
-    },
-    bankTransactions: {
-      findByGroupId: () => [],
-    },
-  },
+  database: mockDatabase({
+    bankAccounts: { findByGroupId: mock(() => []) },
+    bankTransactions: { findByGroupId: mock(() => []) },
+  }),
 }));
 
 import type {

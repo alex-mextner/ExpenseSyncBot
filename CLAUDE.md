@@ -510,12 +510,15 @@ Follow this framework for ANY technical issue:
 - **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
-- **Never use `mock.module()` for project modules.** It replaces modules in Bun's global cache and poisons unrelated test files that import the same module. Use `spyOn` on the imported module namespace instead:
-  ```ts
-  import * as converterModule from '../services/currency/converter.ts';
-  spyOn(converterModule, 'convertCurrency').mockReturnValue(100);
-  ```
-  `spyOn` + `mock.restore()` is scoped and doesn't leak. `mock.module` is only acceptable for npm packages with no project tests (e.g., `sharp`).
+- **`mock.module()` is safe** — each test file runs in its own process via `scripts/test-runner.ts`. Use `mock.module()` freely for mocking dependencies. Use `spyOn` when you need to assert call counts or arguments on a real implementation.
+- **Always run tests via `bun run test`** (isolated runner), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
+- **Coverage**: run `bun run test:coverage` — uses single-process `bun test --coverage` (coverage requires single process). Isolated runner does not collect coverage.
+- **Test logging discipline**: every test that exercises code with logging MUST mock the logger:
+  - Error-path tests: mock logger AND assert expected error/warn calls (`expect(logMock.error).toHaveBeenCalled()`)
+  - Happy-path tests: mock logger AND assert NO unexpected error/warn calls (`expect(logMock.error).not.toHaveBeenCalled()`)
+  - Use `createMockLogger()` from `src/test-utils/mocks/logger.ts` + `mock.module` on `../../utils/logger`
+  - `NODE_ENV=test` silences pino globally (prevents stdout pollution), but tests must STILL verify log behavior, not just suppress it
+  - Test output must be pristine — zero noise from pino, zero warnings from third-party libs
 - NEVER write tests that "test" mocked behavior instead of real logic
 - **No real network/DNS/external calls in tests.** Tests must run offline, in CI, in sandboxes — anywhere. Mock ALL external dependencies:
   - **DNS**: `spyOn(dns.promises, 'resolve4').mockResolvedValue([...])` — never call real DNS

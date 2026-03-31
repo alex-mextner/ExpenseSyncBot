@@ -1,9 +1,12 @@
-// Tests for receipt-fetcher.ts — uses dependency injection for browser, no mock.module()
+// Tests for receipt-fetcher.ts — uses dependency injection for browser
 
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
+
+const isUrlSafe = mock(() => Promise.resolve(true));
+mock.module('./url-validator', () => ({ isUrlSafe }));
+
 import { NetworkError } from '../../errors';
 import { extractTextFromHTML, fetchReceiptData } from './receipt-fetcher';
-import * as urlValidatorModule from './url-validator';
 
 // Minimal page interface matching what fetchReceiptData needs
 interface FakePage {
@@ -89,14 +92,12 @@ describe('fetchReceiptData', () => {
 
   describe('URL input — success cases', () => {
     it('returns page HTML content for valid URL', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const result = await fetchReceiptData('https://example.com/receipt', makeFakeBrowser());
       expect(typeof result).toBe('string');
       expect(result.length).toBeGreaterThan(0);
     });
 
     it('returned content contains the faked page content', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const fakeContent =
         '<html><body>My Receipt Store: Item 1 - 100 EUR, Item 2 - 200 EUR, Total: 300 EUR date: 2026-01-01</body></html>';
       const result = await fetchReceiptData(
@@ -107,7 +108,6 @@ describe('fetchReceiptData', () => {
     });
 
     it('calls browser for http URL', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       let browserCalled = false;
       const trackingBrowser = async (): Promise<FakeBrowser> => {
         browserCalled = true;
@@ -118,7 +118,6 @@ describe('fetchReceiptData', () => {
     });
 
     it('handles URL with query params', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const result = await fetchReceiptData('https://store.com/r?id=abc&t=xyz', makeFakeBrowser());
       expect(typeof result).toBe('string');
     });
@@ -126,7 +125,6 @@ describe('fetchReceiptData', () => {
 
   describe('URL input — NetworkError cases (TDD: these define new error behavior)', () => {
     it('throws NetworkError when page content is too short (< 100 chars)', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const shortContent = '<html><body>Short</body></html>';
       await expect(
         fetchReceiptData('https://example.com/empty', makeFakeBrowser({ content: shortContent })),
@@ -134,14 +132,12 @@ describe('fetchReceiptData', () => {
     });
 
     it('throws NetworkError when page content is exactly empty', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       await expect(
         fetchReceiptData('https://example.com/empty', makeFakeBrowser({ content: '' })),
       ).rejects.toBeInstanceOf(NetworkError);
     });
 
     it('throws NetworkError when browser navigation fails', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const navError = new Error('net::ERR_CONNECTION_REFUSED');
       await expect(
         fetchReceiptData(
@@ -152,7 +148,6 @@ describe('fetchReceiptData', () => {
     });
 
     it('NetworkError from navigation has NAVIGATION_FAILED code', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const navError = new Error('net::ERR_CONNECTION_REFUSED');
       try {
         await fetchReceiptData(
@@ -169,7 +164,6 @@ describe('fetchReceiptData', () => {
     });
 
     it('NetworkError from empty content has EMPTY_CONTENT code', async () => {
-      spyOn(urlValidatorModule, 'isUrlSafe').mockResolvedValue(true);
       const shortContent = '<html></html>';
       try {
         await fetchReceiptData(

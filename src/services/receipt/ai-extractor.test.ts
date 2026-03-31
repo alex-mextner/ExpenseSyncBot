@@ -3,6 +3,14 @@
 // decimal separator normalization, category validation, fallback behavior, and error paths.
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { createMockLogger } from '../../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import { extractExpensesFromReceipt } from './ai-extractor';
 
 // The HuggingFace SDK makes two separate fetch calls for each chat completion:

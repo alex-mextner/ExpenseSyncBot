@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { createMockLogger } from '../../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import { TelegramError } from 'gramio';
 import { TelegramStreamWriter } from './telegram-stream';
 

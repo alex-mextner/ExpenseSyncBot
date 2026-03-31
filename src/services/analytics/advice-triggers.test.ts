@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
 import type { BankConnection, BankTransaction } from '../../database/types';
+import { mockDatabase } from '../../test-utils/mocks/database';
 import type { AdviceLog, BudgetBurnRate, CategoryAnomaly, FinancialSnapshot } from './types';
 
 // ── Mock database ──────────────────────────────────────────────────────
@@ -32,14 +33,14 @@ const mockRecurringPatterns = {
 };
 
 mock.module('../../database', () => ({
-  database: {
+  database: mockDatabase({
     adviceLogs: mockAdviceLogs,
     expenses: mockExpenses,
     bankConnections: mockBankConnections,
     bankTransactions: mockBankTransactions,
     bankAccounts: mockBankAccounts,
     recurringPatterns: mockRecurringPatterns,
-  },
+  }),
 }));
 
 // Load real SpendingAnalytics with the mocked database so other test files
