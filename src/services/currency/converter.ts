@@ -309,10 +309,11 @@ export function formatAmount(amount: number, currency: CurrencyCode, aiContext =
 }
 
 /**
- * Update exchange rates from API
- * Call this periodically or on bot startup
+ * Force-fetch exchange rates from API, bypassing cache.
+ * Called from cron and on bot startup.
  */
 export async function updateExchangeRates(): Promise<void> {
+  cacheTimestamp = 0;
   await getExchangeRates();
 }
 
