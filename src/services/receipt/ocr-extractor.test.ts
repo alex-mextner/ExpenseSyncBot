@@ -5,6 +5,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import path from 'node:path';
+import { createMockLogger } from '../../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import { startTempImageCleanup } from './ocr-extractor';
 
 describe('startTempImageCleanup', () => {

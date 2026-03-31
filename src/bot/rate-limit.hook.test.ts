@@ -1,5 +1,13 @@
 // Tests for the universal Telegram API rate limiter hooks
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { createMockLogger } from '../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import { TelegramError } from 'gramio';
 import {
   getBackoffUntil,

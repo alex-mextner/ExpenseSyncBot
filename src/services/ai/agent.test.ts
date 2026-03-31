@@ -2,6 +2,14 @@
 // Tests for ExpenseBotAgent — streaming, tool calls, error handling
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { createMockLogger } from '../../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import Anthropic from '@anthropic-ai/sdk';
 import { ExpenseBotAgent } from './agent';
 import * as responseValidator from './response-validator';
@@ -103,6 +111,8 @@ describe('ExpenseBotAgent', () => {
     mockBot = makeMockBot();
     // Prevent real API calls from the response validator
     spyOn(responseValidator, 'validateResponse').mockResolvedValue({ approved: true });
+    logMock.error.mockClear();
+    logMock.warn.mockClear();
   });
 
   afterEach(() => {

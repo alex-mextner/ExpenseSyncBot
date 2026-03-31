@@ -3,7 +3,6 @@
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import pino from 'pino';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
 import type { Category, Group, User } from '../database/types.ts';
@@ -18,6 +17,7 @@ import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
 import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
 import type { BrowserLike } from '../services/receipt/receipt-fetcher.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
+import { createMockLogger } from '../test-utils/mocks/logger';
 import * as loggerModule from '../utils/logger.ts';
 import type { SseEventType } from './sse-emitter.ts';
 import * as sseEmitterModule from './sse-emitter.ts';
@@ -167,8 +167,10 @@ spyOn(ocrExtractorModule, 'extractTextFromImageBuffer').mockImplementation(
 spyOn(expenseRecorderModule, 'getExpenseRecorder').mockImplementation(mockGetExpenseRecorder);
 spyOn(sseEmitterModule, 'emitForGroup').mockImplementation(mockEmitForGroup);
 spyOn(sseEmitterModule, 'subscribeGroup').mockImplementation(mockSubscribeGroup);
-const silentLogger = pino({ enabled: false });
-spyOn(loggerModule, 'createLogger').mockImplementation((_module: string) => silentLogger);
+const logMock = createMockLogger();
+spyOn(loggerModule, 'createLogger').mockImplementation(
+  (_module: string) => logMock as unknown as ReturnType<typeof loggerModule.createLogger>,
+);
 
 // Import after mocks are set up
 import { handleMiniAppRequest, validateAndResolveContext } from './miniapp-api.ts';

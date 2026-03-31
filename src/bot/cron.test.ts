@@ -1,6 +1,14 @@
 // Tests for registerExchangeRateCron — startup fetch, retry, admin notification
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { createMockLogger } from '../test-utils/mocks/logger';
+
+const logMock = createMockLogger();
+mock.module('../utils/logger.ts', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
 import cron from 'node-cron';
 import { env } from '../config/env';
 import * as senderModule from '../services/bank/telegram-sender';
@@ -23,6 +31,8 @@ beforeEach(() => {
   sendDirectSpy = spyOn(senderModule, 'sendDirect').mockResolvedValue(null);
 
   savedAdminChatId = env.BOT_ADMIN_CHAT_ID;
+
+  logMock.error.mockClear();
 
   // Make backoff delays instant in tests
   // @ts-expect-error -- simplified mock for test, real setTimeout has complex overloads
@@ -60,6 +70,7 @@ describe('registerExchangeRateCron', () => {
 
     expect(updateSpy).toHaveBeenCalledTimes(1);
     expect(sendDirectSpy).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
   it('retries 3 times then notifies admin', async () => {
