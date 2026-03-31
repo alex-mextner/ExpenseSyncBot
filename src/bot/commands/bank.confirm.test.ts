@@ -1,7 +1,17 @@
 // Tests for the bank transaction confirm flow:
 // Принять → dedup check → (auto-merge | merge prompt | comment prompt)
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import type { TelegramMessage } from '@gramio/types';
 import { database } from '../../database';
 import type { BankTransaction, Expense, Group, User } from '../../database/types';
@@ -71,7 +81,9 @@ const spies: { mockRestore: () => void }[] = [];
 
 beforeAll(() => {
   spies.push(
-    spyOn(database.groups, 'findByTelegramGroupId').mockImplementation(mockGroups.findByTelegramGroupId),
+    spyOn(database.groups, 'findByTelegramGroupId').mockImplementation(
+      mockGroups.findByTelegramGroupId,
+    ),
     spyOn(database.users, 'findByTelegramId').mockImplementation(mockUsers.findByTelegramId),
     spyOn(database.bankTransactions, 'findById').mockImplementation(mockBankTransactions.findById),
     spyOn(database.bankTransactions, 'findPendingByConnectionId').mockImplementation(
@@ -92,8 +104,10 @@ beforeAll(() => {
     spyOn(database.bankTransactions, 'setMatchedExpense').mockImplementation(
       mockBankTransactions.setMatchedExpense,
     ),
-    // @ts-expect-error — mock returns simplified { id } objects, not full BankConnection
-    spyOn(database.bankConnections, 'findActiveByGroupId').mockImplementation(mockBankConnections.findActiveByGroupId),
+    spyOn(database.bankConnections, 'findActiveByGroupId').mockImplementation(
+      // @ts-expect-error — mock returns simplified { id } objects, not full BankConnection
+      mockBankConnections.findActiveByGroupId,
+    ),
     // @ts-expect-error — mock returns simplified { id } objects, not full Expense
     spyOn(database.expenses, 'create').mockImplementation(mockExpenses.create),
     spyOn(database.expenses, 'findById').mockImplementation(mockExpenses.findById),
@@ -111,8 +125,10 @@ beforeAll(() => {
     spyOn(senderModule, 'sendDirect').mockResolvedValue(null),
     spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined),
     spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined),
-    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
-    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn()),
+    spyOn(senderModule, 'withChatContext').mockImplementation(
+      // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+      (_c: number, _t: number | null, fn: () => unknown) => fn(),
+    ),
   );
 });
 
@@ -260,7 +276,10 @@ describe('handleBankConfirmCallback', () => {
     mockTransaction.mockImplementation((fn: () => unknown) => fn());
     mockDb.transaction.mockImplementation((fn: () => unknown) => fn);
     // By default: no duplicates found
-    mockExpenses.findPotentialDuplicates.mockImplementation(() => ({ exact: [], fuzzy: [] }));
+    mockExpenses.findPotentialDuplicates.mockImplementation(() => ({
+      exact: [],
+      fuzzy: [],
+    }));
   });
 
   test('sends comment prompt when transaction is pending', async () => {
@@ -268,7 +287,9 @@ describe('handleBankConfirmCallback', () => {
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
     const bot = makeBot();
-    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 600 } as TelegramMessage));
+    mockBankSendMessage.mockImplementation(() =>
+      Promise.resolve({ message_id: 600 } as TelegramMessage),
+    );
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
@@ -277,7 +298,9 @@ describe('handleBankConfirmCallback', () => {
 
     const text = mockBankSendMessage.mock.calls[0]?.[0] as string;
     const opts = mockBankSendMessage.mock.calls[0]?.[1] as {
-      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+      reply_markup: {
+        inline_keyboard: { text: string; callback_data: string }[][];
+      };
     };
     expect(text.toLowerCase()).toContain('комментарий');
 
@@ -303,7 +326,9 @@ describe('handleBankConfirmCallback', () => {
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
     const bot = makeBot();
-    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 777 } as TelegramMessage));
+    mockBankSendMessage.mockImplementation(() =>
+      Promise.resolve({ message_id: 777 } as TelegramMessage),
+    );
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
@@ -393,7 +418,9 @@ describe('handleBankConfirmCallback', () => {
     expect(mockBankSendMessage).toHaveBeenCalledTimes(1);
     const text = mockBankSendMessage.mock.calls[0]?.[0] as string;
     const opts = mockBankSendMessage.mock.calls[0]?.[1] as {
-      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+      reply_markup: {
+        inline_keyboard: { text: string; callback_data: string }[][];
+      };
     };
     expect(text).toContain('похожий расход');
     const keyboard = opts['reply_markup']['inline_keyboard'];
@@ -452,7 +479,9 @@ describe('handleBankMergeCallback', () => {
 
     expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('Расход не найден') }),
+      expect.objectContaining({
+        text: expect.stringContaining('Расход не найден'),
+      }),
     );
   });
 
@@ -487,7 +516,9 @@ describe('handleBankMergeCallback', () => {
 
     expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('уже привязан') }),
+      expect.objectContaining({
+        text: expect.stringContaining('уже привязан'),
+      }),
     );
   });
 });
@@ -503,7 +534,9 @@ describe('handleBankNewCallback', () => {
     const tx = makeTx({ edit_in_progress: 1 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
-    mockBankSendMessage.mockImplementation(() => Promise.resolve({ message_id: 700 } as TelegramMessage));
+    mockBankSendMessage.mockImplementation(() =>
+      Promise.resolve({ message_id: 700 } as TelegramMessage),
+    );
 
     await handleBankNewCallback(ctx as never, tx.id, 100);
 
@@ -542,7 +575,11 @@ describe('handleBankEditReply with awaiting_comment=1', () => {
   });
 
   test('uses prefill_category and user text as comment', async () => {
-    const tx = makeTx({ edit_in_progress: 1, awaiting_comment: 1, prefill_category: 'Кафе' });
+    const tx = makeTx({
+      edit_in_progress: 1,
+      awaiting_comment: 1,
+      prefill_category: 'Кафе',
+    });
     mockBankTransactions.findPendingByConnectionId.mockImplementation(() => [tx]);
 
     const ctx = makeMsgCtx();
@@ -640,7 +677,10 @@ describe('handleBankEditReply with awaiting_comment=0', () => {
     await handleBankEditReply(ctx as never, 100, 'Рестораны — ужин с друзьями', promptMsgId);
 
     expect(mockExpenses.create).toHaveBeenCalledWith(
-      expect.objectContaining({ category: 'Рестораны', comment: 'ужин с друзьями' }),
+      expect.objectContaining({
+        category: 'Рестораны',
+        comment: 'ужин с друзьями',
+      }),
     );
   });
 
@@ -673,7 +713,11 @@ describe('handleBankNoCommentCallback', () => {
   });
 
   test('confirms transaction with empty comment using prefill_category', async () => {
-    const tx = makeTx({ prefill_category: 'Кафе', awaiting_comment: 1, edit_in_progress: 1 });
+    const tx = makeTx({
+      prefill_category: 'Кафе',
+      awaiting_comment: 1,
+      edit_in_progress: 1,
+    });
     mockBankTransactions.findById.mockImplementation(() => tx);
 
     const ctx = makeCallbackCtx();
@@ -687,7 +731,11 @@ describe('handleBankNoCommentCallback', () => {
   });
 
   test('clears edit_in_progress and awaiting_comment flags', async () => {
-    const tx = makeTx({ prefill_category: 'Кафе', awaiting_comment: 1, edit_in_progress: 1 });
+    const tx = makeTx({
+      prefill_category: 'Кафе',
+      awaiting_comment: 1,
+      edit_in_progress: 1,
+    });
     mockBankTransactions.findById.mockImplementation(() => tx);
 
     const ctx = makeCallbackCtx();

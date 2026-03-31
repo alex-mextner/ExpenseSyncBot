@@ -65,7 +65,10 @@ const mockTransaction = mock((fn: () => void) => fn());
 
 // ── Mock sendMessage (used by both saveReceiptExpenses and checkBudgetLimit) ──
 
-const sentMessages: { text: string; options: Record<string, unknown> | undefined }[] = [];
+const sentMessages: {
+  text: string;
+  options: Record<string, unknown> | undefined;
+}[] = [];
 const mockSendMessage = mock((text: string, options?: Record<string, unknown>) => {
   sentMessages.push({ text, options });
   return Promise.resolve({ message_id: 1 } as TelegramMessage);
@@ -152,25 +155,35 @@ beforeEach(() => {
   mockSendMessage.mockClear();
 
   // Route real module calls through mock objects via spyOn
-  spyOn(database.receiptItems, 'findConfirmedByPhotoQueueId').mockImplementation(mockReceiptItems.findConfirmedByPhotoQueueId);
-  // @ts-expect-error — mock returns void, real returns number
-  spyOn(database.receiptItems, 'deleteProcessedByPhotoQueueId').mockImplementation(mockReceiptItems.deleteProcessedByPhotoQueueId);
+  spyOn(database.receiptItems, 'findConfirmedByPhotoQueueId').mockImplementation(
+    mockReceiptItems.findConfirmedByPhotoQueueId,
+  );
+  spyOn(database.receiptItems, 'deleteProcessedByPhotoQueueId').mockImplementation(
+    // @ts-expect-error — mock returns void, real returns number
+    mockReceiptItems.deleteProcessedByPhotoQueueId,
+  );
   spyOn(database.groups, 'findById').mockImplementation(mockGroups.findById);
   // @ts-expect-error — mock returns simplified expense objects
   spyOn(database.expenses, 'create').mockImplementation(mockExpenses.create);
   spyOn(database.expenses, 'sumByCategory').mockImplementation(mockExpenses.sumByCategory);
-  // @ts-expect-error — mock returns simplified expense item objects
-  spyOn(database.expenseItems, 'create').mockImplementation(mockExpenseItems.create);
-  // @ts-expect-error — mock returns simplified budget objects
-  spyOn(database.budgets, 'getBudgetForMonth').mockImplementation(mockBudgets.getBudgetForMonth);
+  spyOn(database.expenseItems, 'create').mockImplementation(
+    // @ts-expect-error — mock returns simplified expense item objects
+    mockExpenseItems.create,
+  );
+  spyOn(database.budgets, 'getBudgetForMonth').mockImplementation(
+    // @ts-expect-error — mock returns simplified budget objects
+    mockBudgets.getBudgetForMonth,
+  );
   // @ts-expect-error — mock has simplified types for the generic transaction method
   spyOn(database, 'transaction').mockImplementation(mockTransaction);
   spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
   spyOn(senderModule, 'sendDirect').mockResolvedValue(null);
   spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined);
   spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined);
-  // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
-  spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
+  spyOn(senderModule, 'withChatContext').mockImplementation(
+    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+    (_c: number, _t: number | null, fn: () => unknown) => fn(),
+  );
 
   // Spy on real module exports
   appendRowSpy = spyOn(sheetsModule, 'appendExpenseRow').mockResolvedValue(undefined);

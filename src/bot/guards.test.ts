@@ -47,8 +47,10 @@ describe('requireGroup', () => {
     sent.length = 0;
     mockSendMessage.mockClear();
     spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
-    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
-    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
+    spyOn(senderModule, 'withChatContext').mockImplementation(
+      // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+      (_c: number, _t: number | null, fn: () => unknown) => fn(),
+    );
     findSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
@@ -123,8 +125,10 @@ describe('requireGoogle', () => {
     sent.length = 0;
     mockSendMessage.mockClear();
     spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
-    // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
-    spyOn(senderModule, 'withChatContext').mockImplementation((_c: number, _t: number | null, fn: () => unknown) => fn());
+    spyOn(senderModule, 'withChatContext').mockImplementation(
+      // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+      (_c: number, _t: number | null, fn: () => unknown) => fn(),
+    );
   });
 
   afterEach(() => {
