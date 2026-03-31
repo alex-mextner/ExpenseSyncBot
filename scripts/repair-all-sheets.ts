@@ -151,8 +151,6 @@ for (const { name, id: spreadsheetId } of toProcess) {
 
   // Check if current order matches canonical
   const needsReorder = JSON.stringify(headers) !== JSON.stringify(canonicalHeaders);
-  // Check if Rate column is missing
-  const hasRate = headers.includes('Rate (→EUR)');
 
   if (needsReorder) {
     console.log(`  ⚠️  Column order wrong!`);
@@ -256,7 +254,7 @@ for (const { name, id: spreadsheetId } of toProcess) {
   for (let i = 0; i < currentHeaders.length; i++) {
     if (isCurrencyHeader(currentHeaders[i]!)) {
       const m = currentHeaders[i]!.match(/^([A-Z]{3})/);
-      if (m) currCols.push({ idx: i, code: m[1] });
+      if (m?.[1]) currCols.push({ idx: i, code: m[1] });
     }
   }
 
@@ -477,7 +475,6 @@ console.log('Checking for DB expenses not in any spreadsheet...');
 console.log('='.repeat(70));
 
 // Re-read current sheets to get all dates+categories
-const dbDates = new Set(dbExpenses.map((e) => e.date));
 const missingMonths = new Set<string>();
 for (const exp of dbExpenses) {
   const month = exp.date.slice(0, 7);
