@@ -324,7 +324,6 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
     // Load approved merchant rules once for this cycle
     const approvedRules = database.merchantRules.findApproved();
-    const today = format(new Date(), 'yyyy-MM-dd');
 
     // Phase 1: insert all transactions into DB
     const newPendingTxs: BankTransaction[] = [];
@@ -374,49 +373,54 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       }
     }
 
-    // Phase 3: send confirmation cards — only for today's transactions
+    // Phase 3: send confirmation cards
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const todayTxs: { tx: BankTransaction; category: string }[] = [];
+    const oldTxs: { tx: BankTransaction; category: string }[] = [];
+
+    const excludedAccountIds = new Set(
+      database.bankAccounts
+        .findByConnectionId(connectionId)
+        .filter((a) => a.is_excluded === 1)
+        .map((a) => a.account_id),
+    );
+
     for (let i = 0; i < newPendingTxs.length; i++) {
       const inserted = newPendingTxs[i];
       const prefilled = prefillResults[i];
       if (!inserted || !prefilled) continue;
 
-      // Skip cards for old transactions — stored in DB but no card sent
-      if (inserted.date !== today) continue;
+      if (inserted.account_id && excludedAccountIds.has(inserted.account_id)) continue;
 
-      // Skip cards for transactions from excluded accounts
-      if (inserted.account_id) {
-        const accounts = database.bankAccounts.findByConnectionId(connectionId);
-        const account = accounts.find((a) => a.account_id === inserted.account_id);
-        if (account?.is_excluded === 1) continue;
+      if (inserted.date === todayStr) {
+        todayTxs.push({ tx: inserted, category: prefilled.category });
+      } else {
+        oldTxs.push({ tx: inserted, category: prefilled.category });
       }
+    }
 
-      // Large transaction: compare EUR equivalent to threshold
-      const amountInEur = convertAnyToEUR(inserted.amount, inserted.currency);
-      const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
+    // Check for orphaned today's transactions from previous syncs (user ignored the summary).
+    // These have no telegram_message_id — send cards now so they don't stay stuck.
+    const orphanedToday = getUnsentPendingTxs(connectionId).filter(
+      (tx) => tx.date === todayStr && !newPendingTxs.some((n) => n.id === tx.id),
+    );
+    for (const tx of orphanedToday) {
+      todayTxs.push({ tx, category: tx.prefill_category ?? '—' });
+    }
 
-      const cardText = formatConfirmationCard(
-        inserted,
-        prefilled.category,
-        conn.display_name,
-        isLarge,
+    if (oldTxs.length > 0) {
+      // Old transactions exist — defer ALL cards (including today's) behind user confirmation.
+      // Summary is a gate: user decides whether to review old ones first.
+      // Telegram delivery failure here is not a bank sync error — don't let it bubble up.
+      await sendOldTransactionsSummary(oldTxs, conn, group).catch((err) =>
+        logger.error({ err, connectionId }, 'Failed to send old transactions summary'),
       );
-
-      const result = await sendMessage(env.BOT_TOKEN, group.telegram_group_id, cardText, {
-        ...(conn.panel_message_thread_id !== null
-          ? { message_thread_id: conn.panel_message_thread_id }
-          : {}),
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Принять', callback_data: `bank_confirm:${inserted.id}` },
-              { text: '✏️ Исправить', callback_data: `bank_edit:${inserted.id}` },
-            ],
-          ],
-        },
-      });
-
-      if (result) {
-        database.bankTransactions.setTelegramMessageId(inserted.id, result.message_id);
+    } else {
+      // No old transactions — send today's cards immediately
+      for (const { tx, category } of todayTxs) {
+        await sendConfirmationCard(tx, category, conn, group).catch((err) =>
+          logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+        );
       }
     }
 
@@ -658,6 +662,155 @@ function extractTime(dateStr: string): string | null {
   // Strip timezone offset and seconds — keep HH:MM
   const hhmm = timePart.slice(0, 5);
   return /^\d{2}:\d{2}$/.test(hhmm) ? hhmm : null;
+}
+
+async function sendConfirmationCard(
+  tx: BankTransaction,
+  category: string,
+  conn: BankConnection,
+  group: { telegram_group_id: number },
+): Promise<void> {
+  const amountInEur = convertAnyToEUR(tx.amount, tx.currency);
+  const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
+
+  const cardText = formatConfirmationCard(tx, category, conn.display_name, isLarge);
+
+  const result = await sendMessage(env.BOT_TOKEN, group.telegram_group_id, cardText, {
+    ...(conn.panel_message_thread_id !== null
+      ? { message_thread_id: conn.panel_message_thread_id }
+      : {}),
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Принять', callback_data: `bank_confirm:${tx.id}` },
+          { text: '✏️ Исправить', callback_data: `bank_edit:${tx.id}` },
+        ],
+      ],
+    },
+  });
+
+  if (result) {
+    database.bankTransactions.setTelegramMessageId(tx.id, result.message_id);
+  }
+}
+
+/**
+ * Builds a truncated summary of old transactions using the N+2 rule:
+ * either show all items, or truncate so that "и ещё N" has N ≥ 3.
+ */
+export function buildOldTxSummaryText(
+  txs: { tx: BankTransaction; category: string }[],
+  bankName: string,
+): string {
+  const MAX_VISIBLE = 10;
+  const total = txs.length;
+  const showAll = total - MAX_VISIBLE < 3;
+  const visible = showAll ? txs : txs.slice(0, MAX_VISIBLE);
+
+  const lines = visible.map(({ tx }) => {
+    const merchant = tx.merchant_normalized ?? tx.merchant ?? '—';
+    return `• ${tx.date} — ${tx.amount.toFixed(2)} ${tx.currency} — ${escapeHtml(merchant)}`;
+  });
+
+  if (!showAll) {
+    lines.push(`\n<i>...и ещё ${total - MAX_VISIBLE}</i>`);
+  }
+
+  return `📋 ${escapeHtml(bankName)} — ${total} необработанных транзакций\n\n${lines.join('\n')}\n\nПоказать для подтверждения?`;
+}
+
+async function sendOldTransactionsSummary(
+  oldTxs: { tx: BankTransaction; category: string }[],
+  conn: BankConnection,
+  group: { telegram_group_id: number; active_topic_id: number | null },
+): Promise<void> {
+  const text = buildOldTxSummaryText(oldTxs, conn.display_name);
+  const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
+
+  await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text, {
+    ...(threadId !== null ? { message_thread_id: threadId } : {}),
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Показать', callback_data: `bank_show_old:${conn.id}` },
+          { text: '⏭ Пропустить', callback_data: `bank_skip_old:${conn.id}` },
+        ],
+      ],
+    },
+  });
+}
+
+/** Returns unsent pending transactions for a connection, excluding excluded accounts. */
+function getUnsentPendingTxs(connectionId: number): BankTransaction[] {
+  const excludedIds = new Set(
+    database.bankAccounts
+      .findByConnectionId(connectionId)
+      .filter((a) => a.is_excluded === 1)
+      .map((a) => a.account_id),
+  );
+
+  return database.bankTransactions
+    .findPendingByConnectionId(connectionId)
+    .filter(
+      (tx) => tx.telegram_message_id === null && !(tx.account_id && excludedIds.has(tx.account_id)),
+    )
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+}
+
+/**
+ * Sends confirmation cards for all pending transactions without cards (old + today).
+ * Old transactions first (chronological), then today's.
+ * Called from callback handler when user clicks "Показать".
+ */
+export async function sendOldTransactionCards(connectionId: number): Promise<number> {
+  const conn = database.bankConnections.findById(connectionId);
+  if (!conn) return 0;
+
+  const group = database.groups.findById(conn.group_id);
+  if (!group) return 0;
+
+  const unsent = getUnsentPendingTxs(connectionId);
+
+  for (const tx of unsent) {
+    const category = tx.prefill_category ?? '—';
+    await sendConfirmationCard(tx, category, conn, group).catch((err) =>
+      logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+    );
+  }
+
+  return unsent.length;
+}
+
+/**
+ * Skips old transactions, then sends cards for today's.
+ * Called from callback handler when user clicks "Пропустить".
+ * Returns count of skipped old transactions.
+ */
+export async function skipOldTransactions(connectionId: number): Promise<number> {
+  const conn = database.bankConnections.findById(connectionId);
+  if (!conn) return 0;
+
+  const group = database.groups.findById(conn.group_id);
+  if (!group) return 0;
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const unsent = getUnsentPendingTxs(connectionId);
+
+  let skippedCount = 0;
+  for (const tx of unsent) {
+    if (tx.date !== todayStr) {
+      database.bankTransactions.updateStatus(tx.id, conn.group_id, 'skipped');
+      skippedCount++;
+    } else {
+      const category = tx.prefill_category ?? '—';
+      await sendConfirmationCard(tx, category, conn, group).catch((err) =>
+        logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+      );
+    }
+  }
+
+  return skippedCount;
 }
 
 function formatConfirmationCard(

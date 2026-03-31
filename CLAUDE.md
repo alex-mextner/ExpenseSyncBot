@@ -627,6 +627,18 @@ When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
 - **Mock pattern**: `global.fetch = async (url, init?) => new Response(...)` — real `Response`, not a cast
 - **Install deps**: `npm install --ignore-scripts` (bun fails on some git-sourced deps like `pdf-extraction`)
 
+## UX Conventions
+
+### N+2 Truncation Rule
+
+When showing a truncated list with "и ещё N..." at the bottom, N must be ≥ 3. Showing "и ещё 1" or "и ещё 2" is pointless — just show those items instead. So either show all items, or truncate such that the hidden count is ≥ 3.
+
+Example with max 10 visible items:
+- ≤ 12 items → show all (because 1–2 more is wasteful)
+- 13+ items → show 10, then "и ещё 3..."
+
+Formula: `if (total - maxVisible < 3) showAll; else truncate;`
+
 ## Telegram Bot API Limits
 
 ### Message length

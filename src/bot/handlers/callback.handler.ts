@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
+import { sendOldTransactionCards, skipOldTransactions } from '../../services/bank/sync-service';
 import { createLogger } from '../../utils/logger.ts';
 import {
   handleBankAccountsCallback,
@@ -414,6 +415,31 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankAccountToggleCallback(ctx, bot, accountId, connectionId, chatId);
+        break;
+      }
+
+      case 'bank_show_old': {
+        const connectionId = Number(params[0]);
+        if (!chatId || !connectionId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await ctx.answerCallbackQuery({ text: 'Отправляю карточки...' });
+        await ctx.editText('⌛ Отправляю карточки для подтверждения...');
+        const count = await sendOldTransactionCards(connectionId);
+        await ctx.editText(`✅ Отправлено ${count} карточек для подтверждения`);
+        break;
+      }
+
+      case 'bank_skip_old': {
+        const connectionId = Number(params[0]);
+        if (!chatId || !connectionId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await ctx.answerCallbackQuery({ text: 'Пропускаю старые...' });
+        const skipped = await skipOldTransactions(connectionId);
+        await ctx.editText(`⏭ Пропущено ${skipped} старых транзакций`);
         break;
       }
 
