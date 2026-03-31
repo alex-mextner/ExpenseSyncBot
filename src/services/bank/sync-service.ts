@@ -16,7 +16,7 @@ import { preFillTransactions } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
 import { createZenMoneyShim } from './runtime';
-import { editMessageText, sendMessage } from './telegram-sender';
+import { editMessageText, sendMessage, withChatContext } from './telegram-sender';
 import type {
   AccountReferenceByData,
   Merchant,
@@ -152,11 +152,8 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
       // Always send a new message for OTP prompts so it doesn't overwrite the
       // credentials panel that is still visible above in the chat.
-      const sent = await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        otpText,
-        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
+      const sent = await withChatContext(group.telegram_group_id, otpThreadId, () =>
+        sendMessage(otpText),
       );
       const promptMsgId: number | null = sent?.message_id ?? null;
 
@@ -173,23 +170,23 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       } catch (err) {
         // OTP timed out — edit the prompt message to offer a retry button.
         if (promptMsgId && err instanceof Error && err.message.includes('истекло')) {
-          await editMessageText(
-            env.BOT_TOKEN,
-            group.telegram_group_id,
-            promptMsgId,
-            `⏰ Время ожидания кода истекло.\n\nНажми кнопку ниже чтобы синхронизировать снова.`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: '🔄 Синхронизировать снова',
-                      callback_data: `bank_sync:${connectionId}`,
-                    },
+          await withChatContext(group.telegram_group_id, null, () =>
+            editMessageText(
+              promptMsgId,
+              `⏰ Время ожидания кода истекло.\n\nНажми кнопку ниже чтобы синхронизировать снова.`,
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: '🔄 Синхронизировать снова',
+                        callback_data: `bank_sync:${connectionId}`,
+                      },
+                    ],
                   ],
-                ],
+                },
               },
-            },
+            ),
           ).catch(() => {});
         }
         throw err;
@@ -197,11 +194,8 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
       // Send a new "accepted" message — keep the original credentials panel intact
       // so the final sync status continues to edit it.
-      await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        '⌛ Принято, синхронизируем...',
-        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
+      await withChatContext(group.telegram_group_id, otpThreadId, () =>
+        sendMessage('⌛ Принято, синхронизируем...'),
       ).catch(() => {});
 
       // Re-acquire the global shim mutex before the plugin resumes execution.
@@ -226,11 +220,11 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
 
     // Show connecting progress now that we have the mutex and are about to scrape.
     if (conn.panel_message_id) {
-      await editMessageText(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        conn.panel_message_id,
-        `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`,
+      await withChatContext(group.telegram_group_id, null, () =>
+        editMessageText(
+          conn.panel_message_id!,
+          `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`,
+        ),
       ).catch(() => {});
     }
 
@@ -282,11 +276,11 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     if (connAfterScrape?.panel_message_id) {
       const txCount = transactions.length;
       const txInfo = txCount > 0 ? `\n\nПолучено транзакций: ${txCount}` : '';
-      await editMessageText(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        connAfterScrape.panel_message_id,
-        `⌛ ${escapeHtml(conn.display_name)} — Обрабатываем данные...${txInfo}`,
+      await withChatContext(group.telegram_group_id, null, () =>
+        editMessageText(
+          connAfterScrape.panel_message_id!,
+          `⌛ ${escapeHtml(conn.display_name)} — Обрабатываем данные...${txInfo}`,
+        ),
       ).catch(() => {});
     }
 
@@ -401,19 +395,21 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
         isLarge,
       );
 
-      const result = await sendMessage(env.BOT_TOKEN, group.telegram_group_id, cardText, {
-        ...(conn.panel_message_thread_id !== null
-          ? { message_thread_id: conn.panel_message_thread_id }
-          : {}),
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Принять', callback_data: `bank_confirm:${inserted.id}` },
-              { text: '✏️ Исправить', callback_data: `bank_edit:${inserted.id}` },
-            ],
-          ],
-        },
-      });
+      const result = await withChatContext(
+        group.telegram_group_id,
+        conn.panel_message_thread_id,
+        () =>
+          sendMessage(cardText, {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Принять', callback_data: `bank_confirm:${inserted.id}` },
+                  { text: '✏️ Исправить', callback_data: `bank_edit:${inserted.id}` },
+                ],
+              ],
+            },
+          }),
+      );
 
       if (result) {
         database.bankTransactions.setTelegramMessageId(inserted.id, result.message_id);
@@ -437,14 +433,10 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     if (freshConn?.panel_message_id && group) {
       const panelText = buildBankStatusText(freshConn);
       const keyboard = buildBankManageKeyboard(freshConn);
-      await editMessageText(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        freshConn.panel_message_id,
-        panelText,
-        {
+      await withChatContext(group.telegram_group_id, null, () =>
+        editMessageText(freshConn.panel_message_id!, panelText, {
           reply_markup: { inline_keyboard: keyboard },
-        },
+        }),
       ).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
     }
   } catch (error) {
@@ -465,19 +457,19 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
           ],
         };
         if (freshConn.panel_message_id) {
-          await editMessageText(
-            env.BOT_TOKEN,
-            notifyGroup.telegram_group_id,
-            freshConn.panel_message_id,
-            `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
-            { reply_markup: keyboard },
+          await withChatContext(notifyGroup.telegram_group_id, null, () =>
+            editMessageText(
+              freshConn.panel_message_id!,
+              `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
+              { reply_markup: keyboard },
+            ),
           ).catch(() => {});
         } else if (threadId !== null) {
-          await sendMessage(
-            env.BOT_TOKEN,
-            notifyGroup.telegram_group_id,
-            `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
-            { message_thread_id: threadId, reply_markup: keyboard },
+          await withChatContext(notifyGroup.telegram_group_id, threadId, () =>
+            sendMessage(
+              `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
+              { reply_markup: keyboard },
+            ),
           ).catch(() => {});
         }
       }
@@ -544,23 +536,20 @@ async function handleSyncError(
   // Always update the panel message to reflect the new error state
   const freshConn = database.bankConnections.findById(connectionId);
   if (freshConn?.panel_message_id && group) {
-    await editMessageText(
-      env.BOT_TOKEN,
-      group.telegram_group_id,
-      freshConn.panel_message_id,
-      buildBankStatusText(freshConn),
-      { reply_markup: { inline_keyboard: buildBankManageKeyboard(freshConn) } },
+    await withChatContext(group.telegram_group_id, null, () =>
+      editMessageText(freshConn.panel_message_id!, buildBankStatusText(freshConn), {
+        reply_markup: { inline_keyboard: buildBankManageKeyboard(freshConn) },
+      }),
     ).catch((err) => logger.warn({ err }, 'Failed to update panel message after error'));
   }
 
   // Send alert only on the 3rd failure (not on every subsequent failure)
   if (failures === MAX_CONSECUTIVE_FAILURES) {
     if (group) {
-      await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        `⚠️ ${escapeHtml(conn.display_name)} — ошибка синхронизации\n\nНе удаётся подключиться 3 раза подряд.\nПоследняя ошибка: ${escapeHtml(message)}\n\nВозможно, изменился пароль или истекла сессия.\n/bank ${escapeHtml(conn.bank_name)} — переподключить`,
-        group.active_topic_id !== null ? { message_thread_id: group.active_topic_id } : undefined,
+      await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+        sendMessage(
+          `⚠️ ${escapeHtml(conn.display_name)} — ошибка синхронизации\n\nНе удаётся подключиться 3 раза подряд.\nПоследняя ошибка: ${escapeHtml(message)}\n\nВозможно, изменился пароль или истекла сессия.\n/bank ${escapeHtml(conn.bank_name)} — переподключить`,
+        ),
       ).catch((e) => logger.error({ err: e }, 'Failed to send escalation alert'));
     }
   }
