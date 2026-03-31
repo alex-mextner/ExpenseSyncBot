@@ -1,6 +1,7 @@
 // src/services/ai/bank-tools.test.ts
 
 import { describe, expect, mock, test } from 'bun:test';
+import { mockDatabase } from '../../test-utils/mocks/database';
 
 type FindByGroupIdFn = (groupId: number, includeExcluded?: boolean) => unknown[];
 
@@ -8,18 +9,22 @@ const mockFindByGroupId: { impl: FindByGroupIdFn } = { impl: () => [] };
 const mockFindById: { impl: (id: number) => unknown } = { impl: () => null };
 
 mock.module('../../database', () => ({
-  database: {
+  database: mockDatabase({
     bankAccounts: {
-      findByGroupId: (groupId: number, includeExcluded?: boolean) =>
+      findByGroupId: mock((groupId: number, includeExcluded?: boolean) =>
         mockFindByGroupId.impl(groupId, includeExcluded),
+      ),
     },
-    bankTransactions: { findByGroupId: () => [], findUnmatched: () => [] },
+    bankTransactions: {
+      findByGroupId: mock(() => []),
+      findUnmatched: mock(() => []),
+    },
     bankConnections: {
-      findById: (id: number) => mockFindById.impl(id),
-      findActiveByGroupId: () => [],
+      findById: mock((id: number) => mockFindById.impl(id)),
+      findActiveByGroupId: mock(() => []),
     },
-    expenses: { findByDateRange: () => [] },
-  },
+    expenses: { findByDateRange: mock(() => []) },
+  }),
 }));
 
 import { executeTool } from './tool-executor';

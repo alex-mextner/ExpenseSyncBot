@@ -42,6 +42,8 @@ export function mockDatabase(
     'devTasks',
     'groupSpreadsheets',
     'syncSnapshots',
+    'adviceLogs',
+    'recurringPatterns',
   ] as const;
 
   const db: Record<string, MockRepo> = {};

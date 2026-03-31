@@ -2,6 +2,7 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import type { BankAccount, BankTransaction } from '../../database/types';
+import { mockDatabase } from '../../test-utils/mocks/database';
 
 // Mutable mock state — individual tests can override these to inject fixture data.
 const mockAccounts: { findByConnectionId: (id: number) => BankAccount[] } = {
@@ -12,10 +13,12 @@ const mockTxs: { findPendingByConnectionId: (id: number) => BankTransaction[] } 
 };
 
 mock.module('../../database', () => ({
-  database: {
-    bankAccounts: mockAccounts,
-    bankTransactions: mockTxs,
-  },
+  database: mockDatabase({
+    bankAccounts: { findByConnectionId: mock((id: number) => mockAccounts.findByConnectionId(id)) },
+    bankTransactions: {
+      findPendingByConnectionId: mock((id: number) => mockTxs.findPendingByConnectionId(id)),
+    },
+  }),
 }));
 
 import type { BankConnection } from '../../database/types';

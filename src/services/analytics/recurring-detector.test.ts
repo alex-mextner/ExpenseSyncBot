@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { CurrencyCode } from '../../config/constants';
 import type { Expense } from '../../database/types';
 
+import { mockDatabase } from '../../test-utils/mocks/database';
+
 const mockFindByDateRange = mock<(groupId: number, start: string, end: string) => Expense[]>(
   () => [],
 );
@@ -13,14 +15,10 @@ const mockFindByGroupCategoryCurrency = mock<
 >(() => null);
 
 mock.module('../../database', () => ({
-  database: {
-    expenses: {
-      findByDateRange: mockFindByDateRange,
-    },
-    recurringPatterns: {
-      findByGroupCategoryCurrency: mockFindByGroupCategoryCurrency,
-    },
-  },
+  database: mockDatabase({
+    expenses: { findByDateRange: mockFindByDateRange },
+    recurringPatterns: { findByGroupCategoryCurrency: mockFindByGroupCategoryCurrency },
+  }),
 }));
 
 // Import after mock is set up
