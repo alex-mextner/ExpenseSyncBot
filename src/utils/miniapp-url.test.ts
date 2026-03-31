@@ -51,9 +51,11 @@ describe('buildMiniAppUrl', () => {
     );
   });
 
-  it('ignores telegramGroupId when tab is omitted', () => {
+  it('encodes telegramGroupId even when tab is omitted', () => {
     envW.BOT_USERNAME = 'ExpenseSyncBot';
     envW.MINIAPP_SHORTNAME = 'extra';
-    expect(buildMiniAppUrl(undefined, -1001234567)).toBe('https://t.me/ExpenseSyncBot/extra');
+    expect(buildMiniAppUrl(undefined, -1001234567)).toBe(
+      'https://t.me/ExpenseSyncBot/extra?startapp=_-1001234567',
+    );
   });
 });

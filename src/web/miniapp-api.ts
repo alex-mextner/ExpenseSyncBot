@@ -769,7 +769,7 @@ export async function handleMiniAppRequest(
 
     const user = database.users.findByTelegramId(userId);
     if (!user || !user.group_id) {
-      return new Response(JSON.stringify({ groups: [] }), {
+      return new Response(JSON.stringify({ groups: [], botUsername: env.BOT_USERNAME }), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
@@ -778,7 +778,7 @@ export async function handleMiniAppRequest(
     const group = database.groups.findById(user.group_id);
     const groups = group ? [{ telegramGroupId: group.telegram_group_id }] : [];
 
-    return new Response(JSON.stringify({ groups }), {
+    return new Response(JSON.stringify({ groups, botUsername: env.BOT_USERNAME }), {
       status: 200,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });

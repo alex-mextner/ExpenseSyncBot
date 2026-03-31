@@ -14,6 +14,9 @@ export function buildMiniAppUrl(tab?: string, telegramGroupId?: number): string 
   if (tab && telegramGroupId) {
     return `${base}?startapp=${tab}_${telegramGroupId}`;
   }
+  if (telegramGroupId) {
+    return `${base}?startapp=_${telegramGroupId}`;
+  }
   if (tab) {
     return `${base}?startapp=${tab}`;
   }

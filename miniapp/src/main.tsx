@@ -5,11 +5,11 @@ import { apiRequest } from './api/client';
 import { Dashboard } from './tabs/Dashboard';
 import { Scanner } from './tabs/Scanner';
 
-/** Parse startapp param format: "tab_groupId" or just "tab" */
-function parseStartParam(startParam: string): { tab: string; groupId: string | null } {
-  const match = startParam.match(/^([a-z]+)_(-?\d+)$/);
+/** Parse startapp param format: "tab_groupId", "_groupId", or just "tab" */
+function parseStartParam(startParam: string): { tab: string | null; groupId: string | null } {
+  const match = startParam.match(/^([a-z]*)_(-?\d+)$/);
   if (match) {
-    return { tab: match[1], groupId: match[2] };
+    return { tab: match[1] || null, groupId: match[2] };
   }
   return { tab: startParam, groupId: null };
 }
@@ -52,15 +52,24 @@ interface UserGroup {
   telegramGroupId: number;
 }
 
+interface UserGroupsResponse {
+  groups: UserGroup[];
+  botUsername: string;
+}
+
 /** Fallback screen when no groupId is available — shows links to user's groups */
 function NoGroupScreen() {
   const [groups, setGroups] = useState<UserGroup[]>([]);
+  const [botUsername, setBotUsername] = useState('ExpenseSyncBot');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    apiRequest<{ groups: UserGroup[] }>('/api/user/groups')
-      .then((data) => setGroups(data.groups))
+    apiRequest<UserGroupsResponse>('/api/user/groups')
+      .then((data) => {
+        setGroups(data.groups);
+        setBotUsername(data.botUsername);
+      })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, []);
@@ -135,7 +144,7 @@ function NoGroupScreen() {
           color: 'var(--tg-theme-hint-color, #999)',
           lineHeight: 1.4,
         }}>
-          Добавь <b>@ExpenseSyncBot</b> в группу<br />
+          Добавь <b>@{botUsername}</b> в группу<br />
           и набери /connect
         </p>
       )}
