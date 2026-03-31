@@ -32,16 +32,22 @@ const RATE_HEADER = 'Rate (→EUR)';
 const EUR_CALC_HEADER = 'EUR (calc)';
 
 const db = new Database('./data/expenses.db', { readonly: true });
-const group = db.query('SELECT id, google_refresh_token, oauth_client_type FROM groups WHERE id = ?').get(GROUP_ID) as {
+const group = db.query('SELECT id, google_refresh_token FROM groups WHERE id = ?').get(GROUP_ID) as {
   id: number;
   google_refresh_token: string;
-  oauth_client_type: string | null;
 } | null;
 
 if (!group?.google_refresh_token) {
   console.error(`Group ${GROUP_ID} not found or has no Google refresh token.`);
   process.exit(1);
 }
+
+// Try to read oauth_client_type if column exists (added in later migration)
+let oauthClientType = 'current';
+try {
+  const row = db.query('SELECT oauth_client_type FROM groups WHERE id = ?').get(group.id) as { oauth_client_type: string | null } | null;
+  if (row?.oauth_client_type) oauthClientType = row.oauth_client_type;
+} catch { /* column doesn't exist yet */ }
 
 // Get all spreadsheets for this group (one per year)
 const spreadsheetRows = db
@@ -55,7 +61,7 @@ if (spreadsheetRows.length === 0) {
 
 console.log(`Found ${spreadsheetRows.length} spreadsheet(s): ${spreadsheetRows.map((r) => `${r.year}`).join(', ')}\n`);
 
-const auth = getAuthenticatedClient(group.google_refresh_token, (group.oauth_client_type || 'current') as 'current' | 'legacy');
+const auth = getAuthenticatedClient(group.google_refresh_token, oauthClientType as 'current' | 'legacy');
 const sheets = google.sheets({ version: 'v4', auth });
 
 // Process each spreadsheet
