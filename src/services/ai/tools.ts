@@ -276,33 +276,31 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
         bank_name: {
           type: 'string',
-          description: 'Filter by bank registry key (e.g. "tbc"). Omit for all banks.',
+          description:
+            'Which bank to show: "all" for all banks, or a bank registry key for a specific one (case-insensitive substring match). Always specify explicitly.',
         },
         status: {
           type: 'string',
           description: '"pending" | "confirmed" | "skipped" — omit for all statuses.',
         },
       },
+      required: ['bank_name'],
     },
   },
   {
     name: 'get_bank_balances',
     description:
-      'Get current account balances from all connected banks for this group. By default returns only active (non-excluded) accounts.',
+      'Get current account balances from connected banks for this group. Always returns all accounts — hidden/excluded ones are marked with hidden: true.',
     input_schema: {
       type: 'object' as const,
       properties: {
         bank_name: {
           type: 'string',
           description:
-            'Optional: filter by bank registry key (case-insensitive substring match). The key comes from previous results — e.g. "tbc-ge", not "tbc". Omit to see all banks.',
-        },
-        include_excluded: {
-          type: 'boolean',
-          description:
-            'If true, include accounts that have been manually excluded/disabled (is_excluded=true). Default: false.',
+            'Which bank to show: "all" for all banks, or a bank registry key for a specific one (case-insensitive substring match, e.g. "tbc-ge"). Always specify explicitly.',
         },
       },
+      required: ['bank_name'],
     },
   },
   {

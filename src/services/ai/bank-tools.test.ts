@@ -40,35 +40,13 @@ const ctx: AgentContext = {
 describe('bank AI tools', () => {
   test('get_bank_balances returns empty list when no connections', async () => {
     mockFindByGroupId.impl = () => [];
-    const result = await executeTool('get_bank_balances', {}, ctx);
+    const result = await executeTool('get_bank_balances', { bank_name: 'all' }, ctx);
     expect(result.success).toBe(true);
     expect(Array.isArray(result.data)).toBe(true);
     expect(result.data).toEqual([]);
   });
 
-  test('get_bank_balances filters excluded accounts by default', async () => {
-    const activeAccount = {
-      id: 1,
-      connection_id: 1,
-      title: 'Card USD',
-      balance: 100,
-      currency: 'USD',
-      type: null,
-      is_excluded: 0,
-    };
-    mockFindByGroupId.impl = (_groupId, includeExcluded) =>
-      includeExcluded
-        ? [activeAccount, { ...activeAccount, id: 2, is_excluded: 1, title: 'Lena' }]
-        : [activeAccount];
-    mockFindById.impl = () => ({ bank_name: 'tbc-ge', display_name: 'TBC Georgia' });
-
-    const result = await executeTool('get_bank_balances', {}, ctx);
-    expect(result.success).toBe(true);
-    expect(Array.isArray(result.data)).toBe(true);
-    expect((result.data as unknown[]).length).toBe(1);
-  });
-
-  test('get_bank_balances with include_excluded: true returns all accounts', async () => {
+  test('get_bank_balances always returns all accounts including hidden ones', async () => {
     const accounts = [
       {
         id: 1,
@@ -89,13 +67,15 @@ describe('bank AI tools', () => {
         is_excluded: 1,
       },
     ];
-    mockFindByGroupId.impl = (_groupId, includeExcluded) =>
-      includeExcluded ? accounts : [accounts[0]];
+    mockFindByGroupId.impl = () => accounts;
     mockFindById.impl = () => ({ bank_name: 'tbc-ge', display_name: 'TBC Georgia' });
 
-    const result = await executeTool('get_bank_balances', { include_excluded: true }, ctx);
+    const result = await executeTool('get_bank_balances', { bank_name: 'all' }, ctx);
     expect(result.success).toBe(true);
-    expect((result.data as unknown[]).length).toBe(2);
+    const data = result.data as Array<{ hidden: boolean; account_title: string }>;
+    expect(data.length).toBe(2);
+    expect(data.find((a) => a.account_title === 'Card USD')?.hidden).toBe(false);
+    expect(data.find((a) => a.account_title === 'Lena')?.hidden).toBe(true);
   });
 
   test('get_bank_balances with bank_name filter does case-insensitive substring match', async () => {
@@ -137,7 +117,11 @@ describe('bank AI tools', () => {
   });
 
   test('get_bank_transactions returns empty list when no transactions', async () => {
-    const result = await executeTool('get_bank_transactions', { period: 'current_month' }, ctx);
+    const result = await executeTool(
+      'get_bank_transactions',
+      { period: 'current_month', bank_name: 'all' },
+      ctx,
+    );
     expect(result.success).toBe(true);
     expect(Array.isArray(result.data)).toBe(true);
     expect(result.data).toEqual([]);
