@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a parallel test runner that spawns each test file in its own bun process (full mock isolation), then clean up the worst test files.
+**Goal:** Build a parallel test runner that spawns each test file in its own bun process (full mock isolation), make test output pristine (zero noise), then clean up the worst test files.
 
-**Architecture:** A `scripts/test-runner.ts` script finds `*.test.ts` files, spawns `bun test <file>` per file via `Bun.spawn` in a concurrency pool, parses stdout for pass/fail, prints aggregated results. With process isolation, `mock.module()` is safe — no cross-file leakage.
+**Architecture:** A `scripts/test-runner.ts` script finds `*.test.ts` files, spawns `bun test <file>` per file via `Bun.spawn` in a concurrency pool, parses stdout for pass/fail, prints aggregated results. With process isolation, `mock.module()` is safe — no cross-file leakage. Logger silenced in test env. Migration logging fixed for both test and prod.
 
 **Tech Stack:** Bun (Bun.spawn, Bun.Glob), existing bun:test API
 
@@ -17,6 +17,8 @@
 | Create | `scripts/test-runner.ts` | Parallel isolated test runner |
 | Modify | `package.json` | Add `test:isolated` script |
 | Modify | `CLAUDE.md` | Update mock rules (mock.module is safe with isolation) |
+| Modify | `src/utils/logger.ts` | Silent logging in NODE_ENV=test |
+| Modify | `src/database/schema.ts` | Fix migration logging (skip-if-applied, quiet in test) |
 | Create | `src/test-utils/mocks/database.ts` | Shared database singleton mock |
 | Create | `src/test-utils/mocks/fetch.ts` | Fetch mock helpers |
 | Create | `src/test-utils/fixtures.ts` | Shared make* factories |
@@ -197,6 +199,17 @@ New:
 - **Always run tests via `bun run test`** (isolated runner), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
 ```
 
+Also add a new **Test logging** rule to the Testing section:
+
+```
+- **Test logging discipline**: every test that exercises code with logging MUST mock the logger:
+  - Error-path tests: mock logger AND assert expected error/warn calls (`expect(logMock.error).toHaveBeenCalled()`)
+  - Happy-path tests: mock logger AND assert NO unexpected error/warn calls (`expect(logMock.error).not.toHaveBeenCalled()`)
+  - Use `createMockLogger()` from `src/test-utils/mocks/logger.ts` + `mock.module` on `../../utils/logger`
+  - `NODE_ENV=test` silences pino globally (prevents stdout pollution), but tests must STILL verify log behavior, not just suppress it
+  - Test output must be pristine — zero noise from pino, zero warnings from third-party libs
+```
+
 - [ ] **Step 3: Update lefthook.yml if it uses `bun test`**
 
 Check if pre-push hook uses `bun test` and update to `bun run test`.
@@ -210,7 +223,231 @@ git commit -m "chore: wire isolated test runner as default test command"
 
 ---
 
-### Task 3: Shared Mock — Database Singleton
+### Task 3: Silent Logging + Logger Mock Infrastructure
+
+**Files:**
+- Modify: `src/utils/logger.ts`
+- Create: `src/test-utils/mocks/logger.ts`
+
+Two-part fix: (1) silence pino in tests so stdout is clean, (2) provide a mockable logger so tests can **verify** which logs are produced.
+
+**Philosophy:** Silencing is not enough. Tests must CONTROL logging:
+- Error-path tests: assert expected error/warn logs ARE produced
+- Happy-path tests: assert NO error/warn logs are produced
+- Every test that exercises code with logging should mock the logger and verify
+
+- [ ] **Step 1: Add test level to logger**
+
+```ts
+// src/utils/logger.ts
+import pino from 'pino';
+
+function getLogLevel(): string {
+  if (process.env.LOG_LEVEL) return process.env.LOG_LEVEL;
+  if (process.env.NODE_ENV === 'test') return 'silent';
+  if (process.env.NODE_ENV === 'production') return 'info';
+  return 'debug';
+}
+
+export const logger = pino({
+  level: getLogLevel(),
+  ...(process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test'
+    ? {
+        transport: {
+          target: 'pino-pretty',
+          options: { colorize: true, translateTime: 'SYS:HH:MM:ss' },
+        },
+      }
+    : {}),
+});
+
+export function createLogger(module: string): pino.Logger {
+  return logger.child({ module });
+}
+```
+
+- [ ] **Step 2: Create logger mock utility**
+
+```ts
+// src/test-utils/mocks/logger.ts
+// Mock logger for test assertions — verify expected logs, catch unexpected ones
+import { mock } from 'bun:test';
+
+type MockFn = ReturnType<typeof mock>;
+
+export interface MockLogger {
+  trace: MockFn;
+  debug: MockFn;
+  info: MockFn;
+  warn: MockFn;
+  error: MockFn;
+  fatal: MockFn;
+  child: MockFn;
+}
+
+/**
+ * Create a mock logger with spyable methods.
+ * Use with mock.module to replace createLogger in tests.
+ *
+ * Usage:
+ *   const logMock = createMockLogger();
+ *   mock.module('../../utils/logger', () => ({
+ *     createLogger: () => logMock,
+ *     logger: logMock,
+ *   }));
+ *
+ * Assertions:
+ *   expect(logMock.error).toHaveBeenCalled();               // error-path test
+ *   expect(logMock.error).not.toHaveBeenCalled();            // happy-path test
+ *   expect(logMock.warn).toHaveBeenCalledWith('expected');    // specific message
+ */
+export function createMockLogger(): MockLogger {
+  const mockLogger: MockLogger = {
+    trace: mock(),
+    debug: mock(),
+    info: mock(),
+    warn: mock(),
+    error: mock(),
+    fatal: mock(),
+    child: mock(),
+  };
+  // child() returns the same mock logger (flat hierarchy in tests)
+  mockLogger.child.mockReturnValue(mockLogger);
+  return mockLogger;
+}
+```
+
+- [ ] **Step 3: Update test-runner.ts to set NODE_ENV=test**
+
+In `scripts/test-runner.ts`, ensure the spawned processes get `NODE_ENV=test`:
+
+```ts
+env: { ...process.env, NODE_ENV: 'test', FORCE_COLOR: '1' },
+```
+
+- [ ] **Step 4: Verify test output is clean**
+
+Run: `NODE_ENV=test bun test src/services/currency/parser.test.ts 2>&1`
+Expected: only bun test output (pass/fail), zero pino log lines.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/utils/logger.ts src/test-utils/mocks/logger.ts
+git commit -m "feat: silent logging in tests + mock logger for log assertions"
+```
+
+---
+
+### Task 4: Fix Migration Logging for Both Test and Prod
+
+**Files:**
+- Modify: `src/database/schema.ts`
+
+**Problems:**
+1. In prod: every restart logs "Running migration" + "completed" for all 42 even when none are pending, always shows "✓ All migrations completed"
+2. In tests: `createTestDb()` runs all 42 migrations on fresh in-memory DB, generating 84+ log lines per test file
+
+**Fix:** Only log when migrations actually run. Short-circuit if nothing pending. This fix benefits prod independently of test silencing.
+
+- [ ] **Step 1: Improve the migration loop**
+
+Replace the current migration loop (lines 1180-1191 in schema.ts):
+
+```ts
+  let applied = 0;
+
+  for (const migration of migrations) {
+    const result = checkMigration.get(migration.name);
+    if (result && result.count === 0) {
+      logger.info(`Running migration: ${migration.name}`);
+      migration.up();
+      recordMigration.run(migration.name);
+      applied++;
+    }
+  }
+
+  if (applied > 0) {
+    logger.info(`✓ ${applied} migration(s) applied`);
+  } else {
+    logger.debug('No pending migrations');
+  }
+```
+
+Changes:
+- Removed per-migration "completed" line (redundant — if it didn't throw, it completed)
+- Summary line only when migrations ran
+- `debug` level for "nothing to do" (invisible at prod `info` level)
+
+- [ ] **Step 2: Run tests to verify nothing broke**
+
+Run: `bun test src/database/schema.test.ts`
+Expected: all pass.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/database/schema.ts
+git commit -m "fix: improve migration logging — only log when migrations actually run"
+```
+
+---
+
+### Task 5: Audit Noisy Tests — Assert Expected Logs, Suppress Unexpected
+
+**Files:** Multiple test files that exercise error paths.
+
+After Tasks 3-4, pino is silenced globally in tests. But that's just stdout cleanup. The REAL fix is: tests that exercise error paths should **mock the logger and assert the expected log calls**. Tests that don't exercise error paths should **assert no error/warn logs**.
+
+**Identified noisy test files (from output analysis):**
+- `src/services/ai/agent.test.ts` — 30+ AGENT retry/error logs
+- `src/services/receipt/ai-extractor.test.ts` — AI_EXTRACTOR error logs
+- `src/services/receipt/ocr-extractor.test.ts` — OCR failure logs
+- `src/bot/cron.test.ts` — CRON exchange rate fetch errors
+- `src/bot/rate-limit.hook.test.ts` — RATE-LIMIT 429 logs
+- `src/services/ai/telegram-stream.test.ts` — STREAM HTML parse error warnings
+- `src/services/ai/response-validator.test.ts` — VALIDATOR failure logs
+- `src/web/miniapp-api.test.ts` — Receipt scan failures, JSON parse warnings
+
+- [ ] **Step 1: For each noisy file, add logger mock + assertions**
+
+Pattern for error-path tests:
+```ts
+import { createMockLogger } from '../../test-utils/mocks/logger';
+const logMock = createMockLogger();
+mock.module('../../utils/logger', () => ({
+  createLogger: () => logMock,
+  logger: logMock,
+}));
+
+// In error-path test:
+test('logs error on API failure', async () => {
+  // ... trigger error ...
+  expect(logMock.error).toHaveBeenCalled();
+});
+
+// In happy-path test:
+test('no errors on success', async () => {
+  // ... trigger success ...
+  expect(logMock.error).not.toHaveBeenCalled();
+});
+```
+
+- [ ] **Step 2: Check for remaining noise after all mocks in place**
+
+Run: `NODE_ENV=test bun test 2>&1 | grep -vE "^\s*(✓|✗|bun test|pass|fail|expect|Ran |$)" | head -50`
+Expected: zero noise lines.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add -A
+git commit -m "test: assert expected logs in error-path tests, verify no unexpected logs"
+```
+
+---
+
+### Task 6: Shared Mock — Database Singleton
 
 **Files:**
 - Create: `src/test-utils/mocks/database.ts`
@@ -278,7 +515,7 @@ git commit -m "feat: add shared database mock for test files"
 
 ---
 
-### Task 4: Shared Mock — Fetch Helper
+### Task 7: Shared Mock — Fetch Helper
 
 **Files:**
 - Create: `src/test-utils/mocks/fetch.ts`
@@ -343,7 +580,7 @@ git commit -m "feat: add shared fetch mock helpers for tests"
 
 ---
 
-### Task 5: Shared Fixtures
+### Task 8: Shared Fixtures
 
 **Files:**
 - Create: `src/test-utils/fixtures.ts`
@@ -424,7 +661,7 @@ git commit -m "feat: add shared test fixtures (seedGroupAndUser, makeExpense)"
 
 ---
 
-### Task 6: Rewrite agent.test.ts (worst offender — massive spyOn repetition)
+### Task 9: Rewrite agent.test.ts (worst offender — massive spyOn repetition)
 
 **Files:**
 - Modify: `src/services/ai/agent.test.ts`
@@ -488,7 +725,7 @@ git commit -m "refactor: extract mock stream helpers in agent tests"
 
 ---
 
-### Task 7: Rewrite ocr-extractor.test.ts (43% boilerplate — fetch mocking)
+### Task 10: Rewrite ocr-extractor.test.ts (43% boilerplate — fetch mocking)
 
 **Files:**
 - Modify: `src/services/receipt/ocr-extractor.test.ts`
@@ -515,7 +752,7 @@ git commit -m "refactor: use shared fetch mocks in ocr-extractor tests"
 
 ---
 
-### Task 8: Rewrite spending-analytics.test.ts (25% boilerplate — inline DDL)
+### Task 11: Rewrite spending-analytics.test.ts (25% boilerplate — inline DDL)
 
 **Files:**
 - Modify: `src/services/analytics/spending-analytics.test.ts`
@@ -554,7 +791,7 @@ git commit -m "refactor: use shared test DB and fixtures in spending-analytics t
 
 ---
 
-### Task 9: Rewrite expense-saver.test.ts (mixed mock.module + spyOn)
+### Task 12: Rewrite expense-saver.test.ts (mixed mock.module + spyOn)
 
 **Files:**
 - Modify: `src/bot/services/expense-saver.test.ts`
@@ -603,7 +840,7 @@ git commit -m "refactor: use mock.module and shared mocks in expense-saver tests
 
 ---
 
-### Task 10: Rewrite receipt-fetcher.test.ts (repeated spyOn on urlValidator)
+### Task 13: Rewrite receipt-fetcher.test.ts (repeated spyOn on urlValidator)
 
 **Files:**
 - Modify: `src/services/receipt/receipt-fetcher.test.ts`
@@ -637,7 +874,7 @@ git commit -m "refactor: use mock.module for url-validator in receipt-fetcher te
 
 ---
 
-### Task 11: Rewrite cron.test.ts and feedback.test.ts (spyOn → mock.module)
+### Task 14: Rewrite cron.test.ts and feedback.test.ts (spyOn → mock.module)
 
 **Files:**
 - Modify: `src/bot/cron.test.ts`
@@ -671,7 +908,7 @@ git commit -m "refactor: use mock.module in cron and feedback tests"
 
 ---
 
-### Task 12: Batch cleanup — remaining test files
+### Task 15: Batch cleanup — remaining test files
 
 **Files:** All remaining `*.test.ts` files not covered by Tasks 6-11.
 
@@ -709,7 +946,7 @@ git commit -m "refactor: apply shared mocks and fixtures across test suite"
 
 ---
 
-### Task 13: Final Verification
+### Task 16: Final Verification
 
 - [ ] **Step 1: Run full test suite with isolated runner**
 
