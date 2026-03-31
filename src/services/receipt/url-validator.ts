@@ -73,15 +73,41 @@ function checkIPLiteral(hostname: string): boolean | null {
   return null; // not an IP literal
 }
 
+/** DNS resolution timeout — fail-closed if DNS hangs */
+const DNS_TIMEOUT_MS = 3000;
+
+/** Wrap a promise with a timeout that rejects on expiry */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('DNS timeout')), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
- * Resolves hostname via DNS and returns true if ANY resolved address is private.
- * Checks both A (IPv4) and AAAA (IPv6) records.
+ * Resolves hostname via DNS and checks resolved addresses.
+ * Returns true if ANY resolved address is private.
+ * Returns null if DNS resolution failed entirely (no addresses resolved).
+ * Times out after DNS_TIMEOUT_MS.
  */
-async function hasPrivateResolvedAddress(hostname: string): Promise<boolean> {
+async function resolveAndCheckAddresses(hostname: string): Promise<boolean | null> {
   const results = await Promise.allSettled([
-    dns.promises.resolve4(hostname),
-    dns.promises.resolve6(hostname),
+    withTimeout(dns.promises.resolve4(hostname), DNS_TIMEOUT_MS),
+    withTimeout(dns.promises.resolve6(hostname), DNS_TIMEOUT_MS),
   ]);
+
+  // If ALL DNS queries failed, we have no addresses — caller must decide
+  const allFailed = results.every((r) => r.status === 'rejected');
+  if (allFailed) return null;
 
   for (const result of results) {
     if (result.status === 'rejected') continue;
@@ -121,11 +147,9 @@ export async function isUrlSafe(url: string): Promise<boolean> {
   }
 
   // For named hostnames, resolve and check all returned addresses
-  try {
-    const resolvesToPrivate = await hasPrivateResolvedAddress(hostname);
-    return !resolvesToPrivate;
-  } catch {
-    // DNS resolution failed entirely — treat as unsafe (fail-closed)
-    return false;
-  }
+  const result = await resolveAndCheckAddresses(hostname);
+  // null = DNS failed entirely — fail-closed (treat as unsafe)
+  if (result === null) return false;
+  // true = private IP found — not safe
+  return !result;
 }

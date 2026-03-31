@@ -460,6 +460,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
   2. If the problem is in a third-party library (gramio, @huggingface/inference, etc.) — fix the library: clone it, patch the types, verify locally, save the patch, open a PR upstream. Do NOT work around bad library types with casts.
   3. Only if all else fails AND the cast is truly unavoidable (e.g. a runtime value that TypeScript structurally cannot express) — use `as unknown as T` with an explicit comment explaining WHY there is no alternative.
   Skipping this process hides real bugs. Type casts are bug laundering.
+  **Exception — tests:** `as unknown as T` is allowed in test files for accessing private/protected members and for stubbing bot/SDK objects that have no public test-friendly interface. No comment required for these cases.
 - **`Record<string, unknown>` is banned.** It's almost always a broken construct — an escape hatch that loses type information. Use a proper typed interface instead. `Record<string, unknown>` is the `any` of objects. Same goes for `Record<string, any>`, `object`, `{}` used as "some object".
 - No commented-out code. No template literals without variables. `Number.parseInt`. `T[]` not `Array<T>`.
 - **Unused parameters**: remove entirely (parameter + argument at call sites), don't prefix with `_`.
@@ -516,6 +517,12 @@ Follow this framework for ANY technical issue:
   ```
   `spyOn` + `mock.restore()` is scoped and doesn't leak. `mock.module` is only acceptable for npm packages with no project tests (e.g., `sharp`).
 - NEVER write tests that "test" mocked behavior instead of real logic
+- **No real network/DNS/external calls in tests.** Tests must run offline, in CI, in sandboxes — anywhere. Mock ALL external dependencies:
+  - **DNS**: `spyOn(dns.promises, 'resolve4').mockResolvedValue([...])` — never call real DNS
+  - **HTTP/fetch**: mock via `spyOn` or inject a fake, never hit real endpoints
+  - **External APIs** (Telegram, Google, HuggingFace, Anthropic): always mock, never depend on API availability
+  - **Browser/Playwright**: use dependency injection (`getBrowserFn` pattern), pass fake browser in tests
+  - If a test hangs or times out, the root cause is almost always a missing mock — fix the mock, not the timeout
 - **NEVER ignore test/system output** — logs and messages often contain CRITICAL information.
   Read test output, don't just check pass/fail. Warnings in logs point to real bugs.
 - Test output MUST BE PRISTINE TO PASS
@@ -526,6 +533,7 @@ Follow this framework for ANY technical issue:
 - Commit frequently throughout development, even if high-level tasks are not yet done
 - NEVER skip, evade, or disable a pre-commit hook
 - **NEVER use `git add -A`** without checking `git status` first.
+- **Worktree workflow**: when working in a worktree, **NEVER push directly to main** (`git push origin branch:main`). Accumulate all commits in the worktree branch, then merge or create a PR at the end. Pushing each commit to main produces noisy history and bypasses review. Never `cd` into the main repo from a worktree — it has the user's in-progress changes.
 - **Deferred findings**: when skipping a review finding (out of scope, pre-existing), create a GitHub
   issue for it. Don't silently drop known issues.
 - **Before every commit** (3-stage review, mandatory even if the user just says "commit"):

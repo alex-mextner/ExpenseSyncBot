@@ -42,7 +42,7 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
       message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;
     }
 
-    const miniAppUrl = buildMiniAppUrl('dashboard');
+    const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
     const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
     await sendMessage(message, {

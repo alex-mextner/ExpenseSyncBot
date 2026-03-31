@@ -227,7 +227,7 @@ async function addBudgetInfo(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
-  const miniAppUrl = buildMiniAppUrl('dashboard');
+  const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
   const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
   // Get budgets for current month

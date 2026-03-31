@@ -55,13 +55,28 @@ describe('validateResponse', () => {
     }
   });
 
-  test('approves on API error (fail-open)', async () => {
+  test('rejects on API error when no tools were called (prevents hallucination)', async () => {
     mockCreate.mockRejectedValueOnce(new Error('API down'));
 
     const result = await validateResponse('test-key', {
-      userMessage: 'hello',
+      userMessage: 'сколько денег на картах',
       toolCalls: [],
-      response: 'Привет!',
+      response: 'Всего на картах: $85',
+    });
+
+    expect(result.approved).toBe(false);
+    if (!result.approved) {
+      expect(result.reason).toContain('hallucination');
+    }
+  });
+
+  test('approves on API error when tools were called (fail-open)', async () => {
+    mockCreate.mockRejectedValueOnce(new Error('API down'));
+
+    const result = await validateResponse('test-key', {
+      userMessage: 'сколько я потратил?',
+      toolCalls: ['get_expenses'],
+      response: 'Ты потратил 500 EUR',
     });
 
     expect(result.approved).toBe(true);

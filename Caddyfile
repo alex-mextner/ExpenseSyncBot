@@ -20,25 +20,20 @@ expense-sync-bot.invntrm.ru {
 		file_server
 	}
 
-	# OAuth callback endpoint (proxied to Bun server)
-	handle /callback* {
-		reverse_proxy localhost:3311
+	# All proxied endpoints — retry during PM2 reload so clients see a delay, not 502.
+	# Caddy holds the connection and retries every 500ms for up to 10s.
+	@backend path /callback* /health /api/*
+	handle @backend {
+		reverse_proxy localhost:3311 {
+			lb_try_duration 10s
+			lb_try_interval 500ms
+		}
 	}
 
 	# Temporary images for OCR processing
 	handle /temp-images/* {
 		root * /var/www/ExpenseSyncBot
 		file_server
-	}
-
-	# Health check endpoint
-	handle /health {
-		reverse_proxy localhost:3311
-	}
-
-	# Mini App API endpoints
-	handle /api/* {
-		reverse_proxy localhost:3311
 	}
 
 	# Everything else
@@ -61,9 +56,12 @@ expense-sync-bot-app.invntrm.ru {
 	# SPA fallback — serve index.html for client-side routing
 	try_files {path} /index.html
 
-	# API requests proxied to the Bun server (same-origin CORS via Caddy)
+	# API requests proxied to the Bun server — retry during PM2 reload
 	handle /api/* {
-		reverse_proxy localhost:3311
+		reverse_proxy localhost:3311 {
+			lb_try_duration 10s
+			lb_try_interval 500ms
+		}
 	}
 
 	log {

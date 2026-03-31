@@ -8,6 +8,7 @@ import { BASE_CURRENCY } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
+import { AgentError } from '../../errors';
 import { AI_BASE_URL, AI_MODEL, ExpenseBotAgent } from '../../services/ai/agent';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
@@ -164,9 +165,15 @@ async function handleAskWithAnthropic(
     // Prune old messages (keep last 50)
     database.chatMessages.pruneOldMessages(group.id, 50);
 
-    // Maybe send daily advice (20% probability)
+    // Maybe send smart advice after successful response
     await maybeSmartAdvice(group.id);
   } catch (error) {
+    if (error instanceof AgentError) {
+      // Agent already sent the error message to the user and cleaned up.
+      // Don't save error to chat history, don't trigger advice.
+      logger.info(`[ASK] Agent error (already reported to user): ${error.userMessage}`);
+      return;
+    }
     logger.error({ err: error }, '[ASK] Anthropic agent error');
     await sendMessage('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
   }

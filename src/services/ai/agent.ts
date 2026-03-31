@@ -10,7 +10,7 @@ import type { Bot } from 'gramio';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
-import { AnthropicError, NetworkError } from '../../errors';
+import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
@@ -26,8 +26,38 @@ export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
+const MAX_API_RETRIES = 2; // 3 attempts total (1 initial + 2 retries)
 export const AI_MODEL = env.AI_MODEL;
 export const AI_BASE_URL = env.AI_BASE_URL;
+
+/** Transient errors worth retrying: overload, rate limit, server errors, network, timeout */
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'AbortError') return true;
+  if (error instanceof Anthropic.APIError) {
+    return error.status === 429 || error.status >= 500;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  if (
+    code &&
+    ['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'ENOTFOUND'].includes(code)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Exponential backoff: 2s → 6s. For 429, uses retry-after header when available (capped at 30s). */
+function getBackoffDelay(attempt: number, error: unknown): number {
+  if (error instanceof Anthropic.APIError && error.status === 429) {
+    const retryAfter = error.headers?.get('retry-after');
+    if (retryAfter) {
+      const seconds = Number.parseInt(retryAfter, 10);
+      if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
+    }
+    return 5000;
+  }
+  return Math.min(2000 * 3 ** attempt, 30_000);
+}
 
 export class ExpenseBotAgent {
   private anthropic: Anthropic;
@@ -67,9 +97,6 @@ export class ExpenseBotAgent {
       { role: 'user', content: userMessage },
     ];
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
-
     logger.info(`[AGENT] Starting: model=${AI_MODEL} base=${AI_BASE_URL}`);
     logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
@@ -80,12 +107,11 @@ export class ExpenseBotAgent {
     const toolCallNames: string[] = [];
 
     try {
-      const result = await this.runAgentLoop(
+      const result = await this.runWithRetry(
         messages,
         systemPrompt,
         writer,
         debugCtx,
-        controller.signal,
         toolCallNames,
       );
       let { text: finalText } = result;
@@ -152,54 +178,107 @@ export class ExpenseBotAgent {
       await writer.sendRemainingChunks();
       return finalText;
     } catch (error) {
+      // Always clean up: stop typing indicator and remove placeholder message
+      await writer.deleteSentMessage();
+
       if (error instanceof Error && error.name === 'AbortError') {
         const timeoutMsg = '\u23f3 Время ожидания истекло. Попробуйте ещё раз.';
-        try {
-          await bot.api.sendMessage({
-            chat_id: this.ctx.chatId,
-            text: timeoutMsg,
-          });
-        } catch {
-          // Best-effort timeout notification to user
-        }
-        return timeoutMsg;
+        await this.sendErrorToUser(bot, timeoutMsg);
+        throw new AgentError(timeoutMsg);
       }
 
       if (error instanceof Anthropic.APIError) {
-        let errorMsg: string;
-        if (error.status === 429) {
-          errorMsg = '\u23f3 Слишком много запросов к AI. Подождите минуту.';
-        } else if (error.status === 529) {
-          errorMsg = '\u26a1 AI сервер перегружен. Попробуйте позже.';
-        } else {
-          errorMsg = '\u274c Ошибка AI. Попробуйте позже.';
-          logger.error({ err: error }, `[AGENT] Anthropic API error: ${error.status}`);
-        }
-
-        try {
-          await bot.api.sendMessage({
-            chat_id: this.ctx.chatId,
-            text: errorMsg,
-          });
-        } catch {
-          // Best-effort error notification to user
-        }
-        return errorMsg;
+        const errorMsg = this.formatApiError(error);
+        await this.sendErrorToUser(bot, errorMsg);
+        throw new AgentError(errorMsg);
       }
 
-      // Wrap unknown errors in typed classes for callers to handle uniformly
+      // Network and unknown HTTP errors: notify user, then wrap for callers
       const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
       const errCode = (error as NodeJS.ErrnoException).code;
       if (errCode && networkCodes.includes(errCode)) {
-        throw new NetworkError((error as Error).message, errCode, error);
+        const msg = '\u274c Ошибка сети. Попробуйте позже.';
+        await this.sendErrorToUser(bot, msg);
+        throw new AgentError(msg);
       }
       const errStatus = (error as { status?: number }).status;
       if (typeof errStatus === 'number') {
-        throw new AnthropicError((error as Error).message, `HTTP_${errStatus}`, error);
+        const msg = '\u274c Ошибка AI. Попробуйте позже.';
+        await this.sendErrorToUser(bot, msg);
+        throw new AgentError(msg);
       }
       throw error;
-    } finally {
-      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Retry wrapper: runs runAgentLoop with exponential backoff for transient API errors.
+   * After all retries exhausted, the error propagates to run()'s catch for user notification.
+   */
+  private async runWithRetry(
+    messages: Anthropic.MessageParam[],
+    systemPrompt: string,
+    writer: TelegramStreamWriter,
+    debugCtx: AiDebugRunContext | null,
+    toolCallNames: string[],
+  ): Promise<{ text: string; toolCount: number }> {
+    for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+
+      try {
+        return await this.runAgentLoop(
+          messages,
+          systemPrompt,
+          writer,
+          debugCtx,
+          controller.signal,
+          toolCallNames,
+        );
+      } catch (error) {
+        if (attempt < MAX_API_RETRIES && isRetryableError(error)) {
+          const delay = getBackoffDelay(attempt, error);
+          const errName = error instanceof Error ? error.message : String(error);
+          logger.warn(
+            `[AGENT] Attempt ${attempt + 1}/${MAX_API_RETRIES + 1} failed (${errName}), retrying in ${delay}ms`,
+          );
+          writer.reset();
+          toolCallNames.length = 0;
+          await this.sleep(delay);
+          continue;
+        }
+
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    // Unreachable: loop always returns or throws on final attempt. Satisfies TypeScript.
+    throw new Error('[AGENT] Retry loop exhausted');
+  }
+
+  protected async sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private formatApiError(error: InstanceType<typeof Anthropic.APIError>): string {
+    if (error.status === 429) {
+      logger.warn(`[AGENT] Rate limited (429) after all retries`);
+      return '\u23f3 Слишком много запросов к AI. Подождите минуту.';
+    }
+    if (error.status === 529) {
+      logger.warn(`[AGENT] Overloaded (529) after all retries`);
+      return '\u26a1 AI сервер перегружен. Попробуйте позже.';
+    }
+    logger.error({ err: error }, `[AGENT] Anthropic API error: ${error.status}`);
+    return '\u274c Ошибка AI. Попробуйте позже.';
+  }
+
+  private async sendErrorToUser(bot: Bot, message: string): Promise<void> {
+    try {
+      await bot.api.sendMessage({ chat_id: this.ctx.chatId, text: message });
+    } catch {
+      // Best-effort error notification
     }
   }
 
