@@ -10,7 +10,7 @@ import type { Bot } from 'gramio';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
-import { AgentError, AnthropicError, NetworkError } from '../../errors';
+import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
@@ -34,7 +34,7 @@ export const AI_BASE_URL = env.AI_BASE_URL;
 function isRetryableError(error: unknown): boolean {
   if (error instanceof Error && error.name === 'AbortError') return true;
   if (error instanceof Anthropic.APIError) {
-    return error.status === 429 || error.status === 529 || error.status >= 500;
+    return error.status === 429 || error.status >= 500;
   }
   const code = (error as NodeJS.ErrnoException).code;
   if (
@@ -46,13 +46,13 @@ function isRetryableError(error: unknown): boolean {
   return false;
 }
 
-/** Exponential backoff: 2s → 6s. For 429, uses retry-after header when available. */
+/** Exponential backoff: 2s → 6s. For 429, uses retry-after header when available (capped at 30s). */
 function getBackoffDelay(attempt: number, error: unknown): number {
   if (error instanceof Anthropic.APIError && error.status === 429) {
-    const retryAfter = (error.headers as Record<string, string> | undefined)?.['retry-after'];
+    const retryAfter = error.headers?.get('retry-after');
     if (retryAfter) {
       const seconds = Number.parseInt(retryAfter, 10);
-      if (!Number.isNaN(seconds) && seconds > 0) return seconds * 1000;
+      if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
     }
     return 5000;
   }
@@ -193,15 +193,19 @@ export class ExpenseBotAgent {
         throw new AgentError(errorMsg);
       }
 
-      // Wrap unknown errors in typed classes for callers to handle uniformly
+      // Network and unknown HTTP errors: notify user, then wrap for callers
       const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
       const errCode = (error as NodeJS.ErrnoException).code;
       if (errCode && networkCodes.includes(errCode)) {
-        throw new NetworkError((error as Error).message, errCode, error);
+        const msg = '\u274c Ошибка сети. Попробуйте позже.';
+        await this.sendErrorToUser(bot, msg);
+        throw new AgentError(msg);
       }
       const errStatus = (error as { status?: number }).status;
       if (typeof errStatus === 'number') {
-        throw new AnthropicError((error as Error).message, `HTTP_${errStatus}`, error);
+        const msg = '\u274c Ошибка AI. Попробуйте позже.';
+        await this.sendErrorToUser(bot, msg);
+        throw new AgentError(msg);
       }
       throw error;
     }
@@ -232,8 +236,6 @@ export class ExpenseBotAgent {
           toolCallNames,
         );
       } catch (error) {
-        clearTimeout(timeout);
-
         if (attempt < MAX_API_RETRIES && isRetryableError(error)) {
           const delay = getBackoffDelay(attempt, error);
           const errName = error instanceof Error ? error.message : String(error);
@@ -251,7 +253,7 @@ export class ExpenseBotAgent {
         clearTimeout(timeout);
       }
     }
-
+    // Unreachable: loop always returns or throws on final attempt. Satisfies TypeScript.
     throw new Error('[AGENT] Retry loop exhausted');
   }
 
@@ -261,9 +263,11 @@ export class ExpenseBotAgent {
 
   private formatApiError(error: InstanceType<typeof Anthropic.APIError>): string {
     if (error.status === 429) {
+      logger.warn(`[AGENT] Rate limited (429) after all retries`);
       return '\u23f3 Слишком много запросов к AI. Подождите минуту.';
     }
     if (error.status === 529) {
+      logger.warn(`[AGENT] Overloaded (529) after all retries`);
       return '\u26a1 AI сервер перегружен. Попробуйте позже.';
     }
     logger.error({ err: error }, `[AGENT] Anthropic API error: ${error.status}`);

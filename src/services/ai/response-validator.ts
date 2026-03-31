@@ -87,7 +87,10 @@ ${input.response.substring(0, 2000)}`;
     logger.error({ err: error }, '[VALIDATOR] Validation pass failed');
     // When no tools were called, a validator failure likely hides a hallucination — reject to force retry
     if (input.toolCalls.length === 0) {
-      return { approved: false, reason: 'Validator unavailable and no tools were called — likely hallucination' };
+      return {
+        approved: false,
+        reason: 'Validator unavailable and no tools were called — likely hallucination',
+      };
     }
     // Tools were called → data is probably real, approve by default
     return { approved: true };

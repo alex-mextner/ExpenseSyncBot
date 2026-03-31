@@ -629,92 +629,110 @@ describe('ExpenseBotAgent', () => {
     });
   });
 
-  // ── run() — TDD typed error wrapping ─────────────────────────────
-  // These tests drive changes to agent.ts to wrap unknown errors in typed classes
+  // ── run() — error wrapping and user notification ─────────────────
+  // Network/status errors → AgentError (with user notification). Unknown errors → rethrown.
 
-  describe('run() — TDD typed error wrapping', () => {
+  describe('run() — error wrapping', () => {
     beforeEach(() => {
-      // Make retry delays instant for retryable errors that reach this section
       spyOn(agent as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(
         undefined,
       );
     });
 
-    it('[TDD] wraps error with status:429 as AnthropicError when not Anthropic.APIError instance', async () => {
+    it('wraps error with status:429 (non-Anthropic) as AgentError', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
-      // Simulate a status:429 error that is NOT an Anthropic.APIError instance
-      // (e.g., proxy server returning 429 wrapped in a plain Error)
       const rawErr = Object.assign(new Error('Rate limit exceeded'), { status: 429 });
       spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw rawErr;
       });
 
-      const { AnthropicError } = await import('../../errors');
+      const { AgentError } = await import('../../errors');
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
-      ).rejects.toBeInstanceOf(AnthropicError);
+      ).rejects.toBeInstanceOf(AgentError);
     });
 
-    it('[TDD] wraps error with status:500 as AnthropicError', async () => {
+    it('wraps error with status:500 (non-Anthropic) as AgentError', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const serverErr = Object.assign(new Error('Internal server error'), { status: 500 });
       spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw serverErr;
       });
 
-      const { AnthropicError } = await import('../../errors');
+      const { AgentError } = await import('../../errors');
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
-      ).rejects.toBeInstanceOf(AnthropicError);
+      ).rejects.toBeInstanceOf(AgentError);
     });
 
-    it('[TDD] wraps ETIMEDOUT error as NetworkError', async () => {
+    it('wraps ETIMEDOUT error as AgentError and retries 3 times', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const timeoutErr = Object.assign(new Error('Request timed out'), { code: 'ETIMEDOUT' });
-      spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+      const streamSpy = spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw timeoutErr;
       });
 
-      const { NetworkError } = await import('../../errors');
+      const { AgentError } = await import('../../errors');
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
-      ).rejects.toBeInstanceOf(NetworkError);
+      ).rejects.toBeInstanceOf(AgentError);
+      // Network errors are retryable: 1 initial + 2 retries = 3
+      expect(streamSpy).toHaveBeenCalledTimes(3);
     });
 
-    it('[TDD] wraps ECONNREFUSED error as NetworkError', async () => {
+    it('wraps ECONNREFUSED error as AgentError', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const connErr = Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' });
       spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw connErr;
       });
 
-      const { NetworkError } = await import('../../errors');
+      const { AgentError } = await import('../../errors');
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
-      ).rejects.toBeInstanceOf(NetworkError);
+      ).rejects.toBeInstanceOf(AgentError);
     });
 
-    it('[TDD] wraps ENOTFOUND error as NetworkError', async () => {
+    it('wraps ENOTFOUND error as AgentError', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const dnsErr = Object.assign(new Error('DNS lookup failed'), { code: 'ENOTFOUND' });
       spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw dnsErr;
       });
 
-      const { NetworkError } = await import('../../errors');
+      const { AgentError } = await import('../../errors');
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
-      ).rejects.toBeInstanceOf(NetworkError);
+      ).rejects.toBeInstanceOf(AgentError);
     });
 
-    it('[TDD] rethrows unknown error without wrapping', async () => {
+    it('sends network error message to user', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      const connErr = Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' });
+      spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+        throw connErr;
+      });
+
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      const sendCalls = mockBot.api.sendMessage.mock.calls;
+      const errorCall = sendCalls.find(
+        (c: unknown[]) =>
+          typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка сети'),
+      );
+      expect(errorCall).toBeTruthy();
+    });
+
+    it('rethrows unknown error without wrapping', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       const unknownErr = new TypeError('Unexpected type error');
       spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw unknownErr;
       });
 
-      // Should rethrow as-is (no wrapping for plain errors without status/code)
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
       ).rejects.toBeInstanceOf(TypeError);
