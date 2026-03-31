@@ -309,10 +309,13 @@ export function formatAmount(amount: number, currency: CurrencyCode, aiContext =
 }
 
 /**
- * Force-fetch exchange rates from API, bypassing cache.
+ * Force-fetch exchange rates from API, resetting all caches.
  * Called from cron and on bot startup.
  */
 export async function updateExchangeRates(): Promise<void> {
+  cachedRates = null;
+  cachedRatesStr = null;
+  cachedAllRates = null;
   cacheTimestamp = 0;
   await getExchangeRates();
 }
