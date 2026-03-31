@@ -50,10 +50,10 @@ export class GroupRepository {
 
   create(data: CreateGroupData): Group {
     const result = this.db
-      .query<{ id: number }, [number, string]>(
-        'INSERT INTO groups (telegram_group_id, default_currency) VALUES (?, ?) RETURNING id',
+      .query<{ id: number }, [number, string, string]>(
+        'INSERT INTO groups (telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?) RETURNING id',
       )
-      .get(data.telegram_group_id, data.default_currency || 'USD');
+      .get(data.telegram_group_id, data.default_currency || 'USD', '[]');
 
     if (!result) throw new Error('Failed to create group');
 

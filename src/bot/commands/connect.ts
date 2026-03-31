@@ -152,7 +152,7 @@ export async function handleSetupChoiceCallback(
  */
 async function startCurrencySelection(chatId: number): Promise<void> {
   const group = database.groups.findByTelegramGroupId(chatId);
-  const keyboard = createCurrencyKeyboard(group?.enabled_currencies);
+  const keyboard = createCurrencyKeyboard(group?.enabled_currencies ?? []);
   await sendMessage(
     '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
       '• Можно выбрать несколько\n' +
