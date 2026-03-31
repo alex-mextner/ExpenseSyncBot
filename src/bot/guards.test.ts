@@ -3,16 +3,20 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:
 import { database } from '../database';
 import type { Group } from '../database/types';
 
-// Mock sendToChat before importing guards (which use it)
+// Mock sendMessage before importing guards (which use it)
 const sent: string[] = [];
-const mockSendToChat = mock((text: string) => {
+const mockSendMessage = mock((text: string) => {
   sent.push(text);
-  return Promise.resolve({});
+  return Promise.resolve({ message_id: 1 });
 });
 
-mock.module('./send', () => ({
-  sendToChat: mockSendToChat,
-  initSend: () => {},
+mock.module('../services/bank/telegram-sender', () => ({
+  sendMessage: mockSendMessage,
+  sendDirect: mock(() => Promise.resolve(null)),
+  editMessageText: mock(() => Promise.resolve()),
+  deleteMessage: mock(() => Promise.resolve()),
+  withChatContext: mock((_c: number, _t: number | null, fn: () => unknown) => fn()),
+  initSender: () => {},
 }));
 
 import { requireGoogle, requireGroup } from './guards';
@@ -50,7 +54,7 @@ function createMockCtx(overrides: { chatId?: number; chatType?: string } = {}) {
 describe('requireGroup', () => {
   beforeEach(() => {
     sent.length = 0;
-    mockSendToChat.mockClear();
+    mockSendMessage.mockClear();
     findSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
@@ -123,7 +127,7 @@ describe('requireGroup', () => {
 describe('requireGoogle', () => {
   beforeEach(() => {
     sent.length = 0;
-    mockSendToChat.mockClear();
+    mockSendMessage.mockClear();
   });
 
   afterEach(() => {

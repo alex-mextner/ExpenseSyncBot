@@ -1,11 +1,11 @@
 /** /push command handler — writes local expenses to Google Sheets and reconciles missing rows */
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { googleConn, readExpensesFromSheet, type SheetRow } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import type { GoogleConnectedGroup } from '../guards';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('push');
@@ -43,7 +43,7 @@ export async function handlePushCommand(
   group: GoogleConnectedGroup,
 ): Promise<void> {
   void ctx;
-  await sendToChat('🔄 Читаю данные из БД и Google Sheets...');
+  await sendMessage('🔄 Читаю данные из БД и Google Sheets...');
 
   try {
     logger.info(`[PUSH] Reading expenses from database for group ${group.id}`);
@@ -84,7 +84,7 @@ export async function handlePushCommand(
     );
 
     if (expensesToAdd.length === 0) {
-      await sendToChat(
+      await sendMessage(
         `✅ Все данные уже синхронизированы!\n\n` +
           `📊 В БД: ${dbExpenses.length}\n` +
           `📋 В таблице: ${sheetExpenses.expenses.length}\n` +
@@ -93,7 +93,7 @@ export async function handlePushCommand(
       return;
     }
 
-    await sendToChat(`📤 Добавляю ${expensesToAdd.length} записей в таблицу...`);
+    await sendMessage(`📤 Добавляю ${expensesToAdd.length} записей в таблицу...`);
 
     // Push expenses to sheet via ExpenseRecorder
     const recorder = getExpenseRecorder();
@@ -127,9 +127,11 @@ export async function handlePushCommand(
       message += `\n⚠️ Ошибок: ${errorCount}`;
     }
 
-    await sendToChat(message);
+    await sendMessage(message);
   } catch (error) {
     logger.error({ err: error }, '[PUSH] ❌ Push failed');
-    await sendToChat(`❌ Ошибка push: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    await sendMessage(
+      `❌ Ошибка push: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    );
   }
 }

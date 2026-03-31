@@ -1,9 +1,9 @@
 /** Scheduled news broadcasts to all active groups */
-import type { Bot } from 'gramio';
 import cron from 'node-cron';
 import { env } from '../config/env';
 import { database } from '../database';
 import { createLogger } from '../utils/logger.ts';
+import { sendMessage, withChatContext } from './bank/telegram-sender';
 
 const logger = createLogger('broadcast');
 
@@ -33,7 +33,7 @@ let alreadySent = false;
 /**
  * Broadcast a message to all active groups
  */
-async function broadcastToAllGroups(bot: Bot): Promise<void> {
+async function broadcastToAllGroups(): Promise<void> {
   if (alreadySent) {
     logger.info('[BROADCAST] Already sent, skipping');
     return;
@@ -47,18 +47,15 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
   let failed = 0;
 
   for (const group of groups) {
-    try {
-      await bot.api.sendMessage({
-        chat_id: group.telegram_group_id,
-        text: newsMessage,
-        parse_mode: 'HTML',
-        ...(group.active_topic_id ? { message_thread_id: group.active_topic_id } : {}),
-      });
+    const result = await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+      sendMessage(newsMessage),
+    );
+    if (result) {
       sent++;
       logger.info(`[BROADCAST] ✓ Sent to group ${group.telegram_group_id}`);
-    } catch (error: unknown) {
+    } else {
       failed++;
-      logger.error({ err: error }, `[BROADCAST] ✗ Failed for group ${group.telegram_group_id}`);
+      logger.error(`[BROADCAST] ✗ Failed for group ${group.telegram_group_id}`);
     }
   }
 
@@ -69,11 +66,11 @@ async function broadcastToAllGroups(bot: Bot): Promise<void> {
 /**
  * Schedule news broadcast for March 24 at 12:00 UTC (one-time)
  */
-export function scheduleNewsBroadcast(bot: Bot): void {
+export function scheduleNewsBroadcast(): void {
   // Run at 12:00 on March 29 only — stops after execution
   const task = cron.schedule('0 12 29 3 *', () => {
     logger.info('[BROADCAST] Cron triggered — March 29 12:00');
-    broadcastToAllGroups(bot).then(() => {
+    broadcastToAllGroups().then(() => {
       task.stop();
       logger.info('[BROADCAST] Cron task stopped after execution');
     });

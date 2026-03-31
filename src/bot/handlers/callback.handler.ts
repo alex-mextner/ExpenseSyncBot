@@ -4,6 +4,7 @@ import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { sendOldTransactionCards, skipOldTransactions } from '../../services/bank/sync-service';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
 import {
@@ -181,7 +182,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankEditCallback(ctx, bot, txId, chatId);
+        await handleBankEditCallback(ctx, txId, chatId);
         break;
       }
 
@@ -212,7 +213,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankNewCallback(ctx, bot, txId, chatId);
+        await handleBankNewCallback(ctx, txId, chatId);
         break;
       }
 
@@ -453,12 +454,12 @@ export async function handleCallbackQuery(
       }
 
       case 'sync_more': {
-        await handleSyncMoreCallback(ctx, params, bot);
+        await handleSyncMoreCallback(ctx, params);
         break;
       }
 
       case 'bsync_more': {
-        await handleBudgetSyncMoreCallback(ctx, params, bot);
+        await handleBudgetSyncMoreCallback(ctx, params);
         break;
       }
 
@@ -532,10 +533,7 @@ async function handleCategoryAction(
           logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
           database.pendingExpenses.delete(pending.id);
           if (chatId) {
-            await bot.api.sendMessage({
-              chat_id: chatId,
-              text: getSheetWriteErrorMessage(group.id),
-            });
+            await sendMessage(getSheetWriteErrorMessage(group.id));
           }
         }
       }
@@ -543,9 +541,7 @@ async function handleCategoryAction(
       // Prompt for budget setup only if expense was saved
       if (expenseSaved && chatId) {
         const keyboard = createBudgetPromptKeyboard(categoryName, group.default_currency);
-        await bot.api.sendMessage({
-          chat_id: chatId,
-          text: `💰 Хочешь установить бюджет для категории "${categoryName}"?`,
+        await sendMessage(`💰 Хочешь установить бюджет для категории "${categoryName}"?`, {
           reply_markup: keyboard,
         });
       }
@@ -621,10 +617,7 @@ async function handleCategoryAction(
         logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
         database.pendingExpenses.delete(pending.id);
         if (chatId) {
-          await bot.api.sendMessage({
-            chat_id: chatId,
-            text: getSheetWriteErrorMessage(group.id),
-          });
+          await sendMessage(getSheetWriteErrorMessage(group.id));
         }
       }
       break;
@@ -911,7 +904,7 @@ async function handleReceiptItemConfirm(
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
-    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+    await showNextItemForConfirmation(group.id, item.photo_queue_id);
   }
 }
 
@@ -963,11 +956,9 @@ async function handleReceiptItemOther(
 
   // Send new message asking for category
   if (chatId) {
-    await bot.api.sendMessage({
-      chat_id: chatId,
-      text: `✏️ Напишите категорию для товара:\n<b>${item.name_ru}</b>\n\nПросто отправьте сообщение с названием категории.`,
-      parse_mode: 'HTML',
-    });
+    await sendMessage(
+      `✏️ Напишите категорию для товара:\n<b>${item.name_ru}</b>\n\nПросто отправьте сообщение с названием категории.`,
+    );
   }
 }
 
@@ -1045,7 +1036,7 @@ async function handleUseFoundCategory(
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
-    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+    await showNextItemForConfirmation(group.id, item.photo_queue_id);
   }
 }
 
@@ -1113,7 +1104,7 @@ async function handleSkipReceiptItem(
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
-    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+    await showNextItemForConfirmation(group.id, item.photo_queue_id);
   }
 }
 
@@ -1197,7 +1188,7 @@ async function handleCreateNewCategory(
   } else {
     // Show next pending item
     const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
-    await showNextItemForConfirmation(bot, group.id, item.photo_queue_id);
+    await showNextItemForConfirmation(group.id, item.photo_queue_id);
   }
 }
 
@@ -1268,7 +1259,7 @@ async function handleReceiptSummaryAction(
       break;
 
     case 'cancel':
-      await handleReceiptCancel(ctx, queueItem, group, bot, messageId, chatId);
+      await handleReceiptCancel(ctx, queueItem, bot, messageId, chatId);
       break;
 
     default:
@@ -1399,7 +1390,7 @@ async function handleReceiptItemwise(
 
   // Show first item
   const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
-  await showNextItemForConfirmation(bot, group.id, queueItem.id);
+  await showNextItemForConfirmation(group.id, queueItem.id);
 }
 
 /**
@@ -1500,7 +1491,6 @@ async function handleReceiptAcceptBulk(
 async function handleReceiptCancel(
   ctx: Ctx['CallbackQuery'],
   queueItem: PhotoQueueItem,
-  group: Group,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
@@ -1529,18 +1519,10 @@ async function handleReceiptCancel(
   }
 
   // Send cancellation notification
-  await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text: '❌ Обработка чека отменена',
-    parse_mode: 'HTML',
-  });
+  await sendMessage('❌ Обработка чека отменена');
 }
 
-async function handleSyncMoreCallback(
-  ctx: Ctx['CallbackQuery'],
-  params: string[],
-  bot: BotInstance,
-): Promise<void> {
+async function handleSyncMoreCallback(ctx: Ctx['CallbackQuery'], params: string[]): Promise<void> {
   const [cacheKey, section] = params;
   const chatId = ctx.message?.chat?.id;
 
@@ -1588,15 +1570,14 @@ async function handleSyncMoreCallback(
   if (text.length > 4096) text = `${text.slice(0, 4090)}\n...`;
 
   await ctx.answerCallbackQuery();
-  await bot.api
-    .sendMessage({ chat_id: chatId, text })
-    .catch((err: unknown) => logger.error({ err }, '[CALLBACK] sync_more send failed'));
+  await sendMessage(text).catch((err: unknown) =>
+    logger.error({ err }, '[CALLBACK] sync_more send failed'),
+  );
 }
 
 async function handleBudgetSyncMoreCallback(
   ctx: Ctx['CallbackQuery'],
   params: string[],
-  bot: BotInstance,
 ): Promise<void> {
   const [cacheKey, section] = params;
   const chatId = ctx.message?.chat?.id;
@@ -1636,7 +1617,7 @@ async function handleBudgetSyncMoreCallback(
   if (text.length > 4096) text = `${text.slice(0, 4090)}\n...`;
 
   await ctx.answerCallbackQuery();
-  await bot.api
-    .sendMessage({ chat_id: chatId, text })
-    .catch((err: unknown) => logger.error({ err }, '[CALLBACK] bsync_more send failed'));
+  await sendMessage(text).catch((err: unknown) =>
+    logger.error({ err }, '[CALLBACK] bsync_more send failed'),
+  );
 }

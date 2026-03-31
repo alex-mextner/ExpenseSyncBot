@@ -15,11 +15,11 @@
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
 import { DevPipeline, type NotifyCallback } from '../../services/dev-pipeline/pipeline';
 import { DevTaskState, STATE_EMOJI, STATE_LABELS } from '../../services/dev-pipeline/types';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
-import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('dev');
@@ -48,7 +48,7 @@ export function consumePendingDesignEdit(chatId: number): number | null {
  *
  * Must be called once with a bot instance to enable notifications.
  */
-export function initDevPipeline(bot: BotInstance): DevPipeline {
+export function initDevPipeline(): DevPipeline {
   const notify: NotifyCallback = async (
     groupId: number,
     message: string,
@@ -58,13 +58,9 @@ export function initDevPipeline(bot: BotInstance): DevPipeline {
     if (!group) return;
 
     try {
-      await bot.api.sendMessage({
-        chat_id: group.telegram_group_id,
-        text: message,
-        parse_mode: 'HTML',
-        ...(group.active_topic_id && { message_thread_id: group.active_topic_id }),
-        ...options,
-      });
+      await withChatContext(group.telegram_group_id, group.active_topic_id ?? null, () =>
+        sendMessage(message, options),
+      );
     } catch (error) {
       logger.error({ err: error }, '[DEV-CMD] Failed to send notification');
     }
@@ -163,7 +159,7 @@ export async function handleDevCommand(ctx: Ctx['Command'], group: Group): Promi
  * Show usage help
  */
 async function showUsage(): Promise<void> {
-  await sendToChat(
+  await sendMessage(
     '<b>Dev Pipeline</b>\n\n' +
       'Usage:\n' +
       '/dev &lt;description&gt; — start a new task\n' +
@@ -175,7 +171,6 @@ async function showUsage(): Promise<void> {
       '/dev continue &lt;id&gt; [msg] — resume a failed/stuck task\n' +
       '/dev history — recent completed tasks\n' +
       '/dev logs prod|stage — download PM2 logs',
-    { parse_mode: 'HTML' },
   );
 }
 
@@ -192,19 +187,19 @@ async function handleNewTask(
   const pl = getPipeline();
 
   if (!pl) {
-    await sendToChat('Dev pipeline not initialized. Bot needs restart.');
+    await sendMessage('Dev pipeline not initialized. Bot needs restart.');
     return;
   }
 
   if (!description.trim()) {
-    await sendToChat('Provide a task description: /dev <description>');
+    await sendMessage('Provide a task description: /dev <description>');
     return;
   }
 
   // Limit concurrent tasks
   const activeCount = database.devTasks.countActive(groupId);
   if (activeCount >= 3) {
-    await sendToChat(
+    await sendMessage(
       `Too many active tasks (${activeCount}). Wait for some to finish or cancel them.`,
     );
     return;
@@ -215,7 +210,7 @@ async function handleNewTask(
     // The pipeline sends its own notifications, so no need to reply here
   } catch (error) {
     logger.error({ err: error }, '[DEV-CMD] Failed to start task');
-    await sendToChat(`Failed to start task: ${getErrorMessage(error)}`);
+    await sendMessage(`Failed to start task: ${getErrorMessage(error)}`);
   }
 }
 
@@ -227,7 +222,7 @@ async function showStatus(ctx: Ctx['Command'], groupId: number): Promise<void> {
   const tasks = database.devTasks.findActiveByGroupId(groupId);
 
   if (tasks.length === 0) {
-    await sendToChat('No active dev tasks.');
+    await sendMessage('No active dev tasks.');
     return;
   }
 
@@ -251,7 +246,7 @@ async function showStatus(ctx: Ctx['Command'], groupId: number): Promise<void> {
     message += '\n';
   }
 
-  await sendToChat(message, { parse_mode: 'HTML' });
+  await sendMessage(message);
 }
 
 /**
@@ -262,14 +257,14 @@ async function handleApprove(ctx: Ctx['Command'], args: string[], groupId: numbe
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
-    await sendToChat('Usage: /dev approve <task_id>');
+    await sendMessage('Usage: /dev approve <task_id>');
     return;
   }
 
   const pl = getPipeline();
 
   if (!pl) {
-    await sendToChat('Dev pipeline not initialized.');
+    await sendMessage('Dev pipeline not initialized.');
     return;
   }
 
@@ -277,19 +272,19 @@ async function handleApprove(ctx: Ctx['Command'], args: string[], groupId: numbe
     const task = database.devTasks.findById(taskId);
 
     if (!task) {
-      await sendToChat(`Task #${taskId} not found.`);
+      await sendMessage(`Task #${taskId} not found.`);
       return;
     }
 
     if (task.group_id !== groupId) {
-      await sendToChat(`Task #${taskId} does not belong to this group.`);
+      await sendMessage(`Task #${taskId} does not belong to this group.`);
       return;
     }
 
     await pl.approveTask(taskId);
     // Pipeline sends its own notification
   } catch (error) {
-    await sendToChat(`Failed to approve: ${getErrorMessage(error)}`);
+    await sendMessage(`Failed to approve: ${getErrorMessage(error)}`);
   }
 }
 
@@ -301,14 +296,14 @@ async function handleCancel(ctx: Ctx['Command'], args: string[], groupId: number
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
-    await sendToChat('Usage: /dev cancel <task_id>');
+    await sendMessage('Usage: /dev cancel <task_id>');
     return;
   }
 
   const pl = getPipeline();
 
   if (!pl) {
-    await sendToChat('Dev pipeline not initialized.');
+    await sendMessage('Dev pipeline not initialized.');
     return;
   }
 
@@ -316,18 +311,18 @@ async function handleCancel(ctx: Ctx['Command'], args: string[], groupId: number
     const task = database.devTasks.findById(taskId);
 
     if (!task) {
-      await sendToChat(`Task #${taskId} not found.`);
+      await sendMessage(`Task #${taskId} not found.`);
       return;
     }
 
     if (task.group_id !== groupId) {
-      await sendToChat(`Task #${taskId} does not belong to this group.`);
+      await sendMessage(`Task #${taskId} does not belong to this group.`);
       return;
     }
 
     await pl.cancelTask(taskId);
   } catch (error) {
-    await sendToChat(`Failed to cancel: ${getErrorMessage(error)}`);
+    await sendMessage(`Failed to cancel: ${getErrorMessage(error)}`);
   }
 }
 
@@ -339,34 +334,34 @@ async function handlePlan(ctx: Ctx['Command'], args: string[], groupId: number):
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
-    await sendToChat('Usage: /dev plan <task_id>');
+    await sendMessage('Usage: /dev plan <task_id>');
     return;
   }
 
   const task = database.devTasks.findById(taskId);
 
   if (!task) {
-    await sendToChat(`Task #${taskId} not found.`);
+    await sendMessage(`Task #${taskId} not found.`);
     return;
   }
 
   if (task.group_id !== groupId) {
-    await sendToChat(`Task #${taskId} does not belong to this group.`);
+    await sendMessage(`Task #${taskId} does not belong to this group.`);
     return;
   }
 
   if (!task.design) {
-    await sendToChat(`Task #${taskId} has no design plan yet.`);
+    await sendMessage(`Task #${taskId} has no design plan yet.`);
     return;
   }
 
   const { escapeHtml } = await import('../../utils/html');
   const keyboard = new InlineKeyboard().text('✕ Скрыть', `dev:hide_plan:${taskId}`);
 
-  await sendToChat(
+  await sendMessage(
     `📐 <b>Dev task #${taskId}:</b> ${escapeHtml(task.title || 'plan')}\n\n` +
       `<pre>${escapeHtml(task.design.slice(0, 3500))}</pre>`,
-    { parse_mode: 'HTML', reply_markup: keyboard },
+    { reply_markup: keyboard },
   );
 }
 
@@ -378,36 +373,36 @@ async function handleAnswer(ctx: Ctx['Command'], args: string[], groupId: number
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
-    await sendToChat('Usage: /dev answer <task_id> <your answers>');
+    await sendMessage('Usage: /dev answer <task_id> <your answers>');
     return;
   }
 
   const answer = args.slice(2).join(' ');
   if (!answer.trim()) {
-    await sendToChat('Provide your answers: /dev answer <task_id> <text>');
+    await sendMessage('Provide your answers: /dev answer <task_id> <text>');
     return;
   }
 
   const pl = getPipeline();
   if (!pl) {
-    await sendToChat('Dev pipeline not initialized.');
+    await sendMessage('Dev pipeline not initialized.');
     return;
   }
 
   try {
     const task = database.devTasks.findById(taskId);
     if (!task) {
-      await sendToChat(`Task #${taskId} not found.`);
+      await sendMessage(`Task #${taskId} not found.`);
       return;
     }
     if (task.group_id !== groupId) {
-      await sendToChat(`Task #${taskId} does not belong to this group.`);
+      await sendMessage(`Task #${taskId} does not belong to this group.`);
       return;
     }
 
     await pl.answerTask(taskId, answer);
   } catch (error) {
-    await sendToChat(`Failed: ${getErrorMessage(error)}`);
+    await sendMessage(`Failed: ${getErrorMessage(error)}`);
   }
 }
 
@@ -419,7 +414,7 @@ async function handleContinue(ctx: Ctx['Command'], args: string[], groupId: numb
   const taskId = parseInt(args[1] || '', 10);
 
   if (Number.isNaN(taskId)) {
-    await sendToChat('Usage: /dev continue <task_id> [message]');
+    await sendMessage('Usage: /dev continue <task_id> [message]');
     return;
   }
 
@@ -427,24 +422,24 @@ async function handleContinue(ctx: Ctx['Command'], args: string[], groupId: numb
 
   const pl = getPipeline();
   if (!pl) {
-    await sendToChat('Dev pipeline not initialized.');
+    await sendMessage('Dev pipeline not initialized.');
     return;
   }
 
   try {
     const task = database.devTasks.findById(taskId);
     if (!task) {
-      await sendToChat(`Task #${taskId} not found.`);
+      await sendMessage(`Task #${taskId} not found.`);
       return;
     }
     if (task.group_id !== groupId) {
-      await sendToChat(`Task #${taskId} does not belong to this group.`);
+      await sendMessage(`Task #${taskId} does not belong to this group.`);
       return;
     }
 
     await pl.continueTask(taskId, message);
   } catch (error) {
-    await sendToChat(`Failed: ${getErrorMessage(error)}`);
+    await sendMessage(`Failed: ${getErrorMessage(error)}`);
   }
 }
 
@@ -456,7 +451,7 @@ async function showHistory(ctx: Ctx['Command'], groupId: number): Promise<void> 
   const tasks = database.devTasks.findByGroupId(groupId, 10);
 
   if (tasks.length === 0) {
-    await sendToChat('No dev tasks found.');
+    await sendMessage('No dev tasks found.');
     return;
   }
 
@@ -476,7 +471,7 @@ async function showHistory(ctx: Ctx['Command'], groupId: number): Promise<void> 
     message += '\n';
   }
 
-  await sendToChat(message, { parse_mode: 'HTML' });
+  await sendMessage(message);
 }
 
 /** PM2 log file paths on the server */
@@ -501,7 +496,7 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
   const target = args[1]?.toLowerCase();
 
   if (!target || !LOG_PATHS[target]) {
-    await sendToChat('Usage: /dev logs prod|stage');
+    await sendMessage('Usage: /dev logs prod|stage');
     return;
   }
 
@@ -516,7 +511,7 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
   const errorExists = await errorFile.exists();
 
   if (!outExists && !errorExists) {
-    await sendToChat(`No log files found for ${target}. Is the bot running?`);
+    await sendMessage(`No log files found for ${target}. Is the bot running?`);
     return;
   }
 
@@ -535,7 +530,7 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
   if (errorExists) {
     const errorSize = errorFile.size;
     if (errorSize === 0) {
-      await sendToChat(`✅ ${target} error log is empty — no errors.`);
+      await sendMessage(`✅ ${target} error log is empty — no errors.`);
     } else {
       const errorStart = Math.max(0, errorSize - MAX_LOG_BYTES);
       const errorContent = await errorFile.slice(errorStart, errorSize).text();
@@ -640,9 +635,7 @@ export async function handleDevCallback(
           ? `✏️ Опишите, что изменить в дизайне задачи #${taskId}:`
           : `✏️ Опишите, что изменить в коде задачи #${taskId}:`;
 
-        await bot.api.sendMessage({
-          chat_id: chatId,
-          text: promptText,
+        await sendMessage(promptText, {
           reply_markup: { force_reply: true, selective: true },
         });
         logger.info(`[DEV-CB] Edit force_reply sent for task #${taskId}`);

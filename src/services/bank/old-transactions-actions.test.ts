@@ -2,8 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { format } from 'date-fns';
-import type { BankAccount, BankConnection, BankTransaction, Group } from '../../database/types';
 import { database } from '../../database';
+import type { BankAccount, BankConnection, BankTransaction, Group } from '../../database/types';
 import * as prefillModule from './prefill';
 import * as senderModule from './telegram-sender';
 
@@ -80,14 +80,24 @@ let withChatContextSpy: ReturnType<typeof mock>;
 beforeEach(() => {
   findConnectionByIdSpy = spyOn(database.bankConnections, 'findById').mockReturnValue(null);
   findGroupByIdSpy = spyOn(database.groups, 'findById').mockReturnValue(null);
-  findAccountsByConnectionIdSpy = spyOn(database.bankAccounts, 'findByConnectionId').mockReturnValue([]);
-  findPendingByConnectionIdSpy = spyOn(database.bankTransactions, 'findPendingByConnectionId').mockReturnValue([]);
+  findAccountsByConnectionIdSpy = spyOn(
+    database.bankAccounts,
+    'findByConnectionId',
+  ).mockReturnValue([]);
+  findPendingByConnectionIdSpy = spyOn(
+    database.bankTransactions,
+    'findPendingByConnectionId',
+  ).mockReturnValue([]);
   updateStatusSpy = spyOn(database.bankTransactions, 'updateStatus');
   setTelegramMessageIdSpy = spyOn(database.bankTransactions, 'setTelegramMessageId');
 
   spyOn(prefillModule, 'preFillTransactions').mockResolvedValue([]);
 
-  sendMessageSpy = spyOn(senderModule, 'sendMessage').mockResolvedValue({ message_id: 42 });
+  sendMessageSpy = spyOn(senderModule, 'sendMessage').mockResolvedValue({
+    message_id: 42,
+    date: 0,
+    chat: { id: 1, type: 'group' },
+  } as import('@gramio/types').TelegramMessage);
   spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined);
   withChatContextSpy = spyOn(senderModule, 'withChatContext').mockImplementation(
     <T>(_c: number, _th: number | null, fn: () => Promise<T>) => fn(),

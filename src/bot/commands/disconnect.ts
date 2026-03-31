@@ -1,8 +1,8 @@
 // /disconnect command — remove all group data and revoke Google access
 import { database } from '../../database';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { createConfirmKeyboard } from '../keyboards';
-import { sendToChat } from '../send';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('disconnect');
@@ -33,8 +33,7 @@ export async function handleDisconnectCommand(ctx: Ctx['Command']): Promise<void
     '❗ Google-таблица <b>не будет удалена</b> — она останется в твоём Google Drive.\n\n' +
     'Ты уверен?';
 
-  await sendToChat(message, {
-    parse_mode: 'HTML',
+  await sendMessage(message, {
     reply_markup: createConfirmKeyboard('disconnect'),
   });
 }

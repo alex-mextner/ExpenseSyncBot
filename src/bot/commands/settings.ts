@@ -1,8 +1,8 @@
 /** /settings and /reconnect command handlers — show current config and re-authorize Google OAuth */
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-settings');
@@ -18,9 +18,9 @@ export async function handleSettingsCommand(ctx: Ctx['Command'], group: Group): 
     message += `💵 Включенные валюты: ${group.enabled_currencies.join(', ')}\n`;
     message += `📊 Таблица: ${group.spreadsheet_id ? 'настроена' : 'не настроена'}\n`;
 
-    await sendToChat(message);
+    await sendMessage(message);
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /settings');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

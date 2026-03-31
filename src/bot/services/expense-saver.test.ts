@@ -71,17 +71,21 @@ mock.module('../../database', () => ({
   },
 }));
 
-// ── Mock sendToChat (used by both saveReceiptExpenses and checkBudgetLimit) ──
+// ── Mock sendMessage (used by both saveReceiptExpenses and checkBudgetLimit) ──
 
 const sentMessages: { text: string; options: Record<string, unknown> | undefined }[] = [];
-const mockSendToChat = mock((text: string, options?: Record<string, unknown>) => {
+const mockSendMessage = mock((text: string, options?: Record<string, unknown>) => {
   sentMessages.push({ text, options });
   return Promise.resolve({ message_id: 1 });
 });
 
-mock.module('../send', () => ({
-  sendToChat: mockSendToChat,
-  initSend: () => {},
+mock.module('../../services/bank/telegram-sender', () => ({
+  sendMessage: mockSendMessage,
+  sendDirect: mock(() => Promise.resolve(null)),
+  editMessageText: mock(() => Promise.resolve()),
+  deleteMessage: mock(() => Promise.resolve()),
+  withChatContext: mock((_c: number, _t: number | null, fn: () => unknown) => fn()),
+  initSender: () => {},
 }));
 
 // Import after mocks are set up (sheets/converter are spied via spyOn below)
@@ -162,7 +166,7 @@ beforeEach(() => {
   mockExpenseItems.create.mockReset();
   mockBudgets.getBudgetForMonth.mockReset().mockReturnValue(null);
   mockTransaction.mockReset().mockImplementation((fn: () => void) => fn());
-  mockSendToChat.mockClear();
+  mockSendMessage.mockClear();
 
   // Spy on real module exports
   appendRowSpy = spyOn(sheetsModule, 'appendExpenseRow').mockResolvedValue(undefined);
@@ -184,7 +188,7 @@ describe('saveReceiptExpenses', () => {
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     expect(appendRowSpy).not.toHaveBeenCalled();
-    expect(mockSendToChat).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it('saves receipt items and sends completion message', async () => {
@@ -196,7 +200,7 @@ describe('saveReceiptExpenses', () => {
     expect(mockExpenses.create).toHaveBeenCalledTimes(1);
     expect(mockReceiptItems.deleteProcessedByPhotoQueueId).toHaveBeenCalledTimes(1);
 
-    // Completion message via sendToChat
+    // Completion message via sendMessage
     const completionMsg = sentMessages.find((m) => m.text.includes('Чек обработан'));
     expect(completionMsg).toBeDefined();
   });
@@ -233,7 +237,7 @@ describe('saveReceiptExpenses', () => {
     // 2 categories → 2 sheet writes
     expect(appendRowSpy).toHaveBeenCalledTimes(2);
 
-    // Budget warning for Продукты (exceeded) via sendToChat
+    // Budget warning for Продукты (exceeded) via sendMessage
     const budgetMsg = sentMessages.find((m) => m.text.includes('ПРЕВЫШЕН БЮДЖЕТ'));
     expect(budgetMsg).toBeDefined();
     expect(budgetMsg?.text).toContain('Продукты');

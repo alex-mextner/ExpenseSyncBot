@@ -6,6 +6,7 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
+import { sendMessage, withChatContext } from '../bank/telegram-sender';
 import {
   type AIExtractionResult,
   type AIReceiptItem,
@@ -221,7 +222,6 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
           // Notify user
           await notifyUser(
-            bot,
             queueItem.group_id,
             `❌ Не удалось загрузить чек: ${errorMessage}`,
             queueItem.message_thread_id,
@@ -254,7 +254,6 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
       // Notify user
       await notifyUser(
-        bot,
         queueItem.group_id,
         `❌ AI не распознал чек: ${errorMessage}`,
         queueItem.message_thread_id,
@@ -270,7 +269,6 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
       // Notify user
       await notifyUser(
-        bot,
         queueItem.group_id,
         '❌ В чеке не найдены расходы',
         queueItem.message_thread_id,
@@ -286,7 +284,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     saveExtractedItems(queueItemId, extractionResult.items, currency);
 
     // Show confirmation options (summary for >5 items, item-by-item otherwise)
-    await showReceiptConfirmationOptions(bot, queueItem.group_id, queueItemId);
+    await showReceiptConfirmationOptions(queueItem.group_id, queueItemId);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error({ err: errorMessage }, '[PHOTO_PROCESSOR] Unexpected error');
@@ -298,7 +296,6 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
     // Notify user
     await notifyUser(
-      bot,
       queueItem.group_id,
       `❌ Ошибка обработки: ${errorMessage}`,
       queueItem.message_thread_id,
@@ -335,7 +332,6 @@ async function downloadPhoto(bot: Bot, fileId: string): Promise<Buffer> {
  * Otherwise: show item-by-item confirmation
  */
 export async function showReceiptConfirmationOptions(
-  bot: Bot,
   groupId: number,
   photoQueueId: number,
 ): Promise<void> {
@@ -349,7 +345,7 @@ export async function showReceiptConfirmationOptions(
 
   // If 5 or fewer items, use item-by-item confirmation
   if (pendingItems.length <= 5) {
-    await showNextItemForConfirmation(bot, groupId, photoQueueId);
+    await showNextItemForConfirmation(groupId, photoQueueId);
     return;
   }
 
@@ -374,18 +370,19 @@ export async function showReceiptConfirmationOptions(
   const queueItem = database.photoQueue.findById(photoQueueId);
 
   // Send summary message with keyboard
-  const sentMessage = await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
-    text: summaryMessage,
-    parse_mode: 'HTML',
-    reply_markup: createReceiptSummaryKeyboard(photoQueueId).toJSON(),
-  });
+  const threadId = queueItem?.message_thread_id ?? null;
+  const sentMessage = await withChatContext(group.telegram_group_id, threadId, () =>
+    sendMessage(summaryMessage, {
+      reply_markup: createReceiptSummaryKeyboard(photoQueueId).toJSON(),
+    }),
+  );
 
   // Store message ID for later editing
-  database.photoQueue.update(photoQueueId, {
-    summary_message_id: sentMessage.message_id,
-  });
+  if (sentMessage) {
+    database.photoQueue.update(photoQueueId, {
+      summary_message_id: sentMessage.message_id,
+    });
+  }
 
   logger.info(
     `[PHOTO_PROCESSOR] Showed receipt summary for ${pendingItems.length} items, queue #${photoQueueId}`,
@@ -396,7 +393,6 @@ export async function showReceiptConfirmationOptions(
  * Show next pending receipt item for confirmation
  */
 export async function showNextItemForConfirmation(
-  bot: Bot,
   groupId: number,
   photoQueueId?: number,
 ): Promise<void> {
@@ -505,22 +501,18 @@ export async function showNextItemForConfirmation(
   );
 
   // Send message to group
-  await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    ...(queueItem?.message_thread_id && { message_thread_id: queueItem.message_thread_id }),
-    text: message,
-    parse_mode: 'HTML',
-    reply_markup: {
-      inline_keyboard: buttons,
-    },
-  });
+  const threadId = queueItem?.message_thread_id ?? null;
+  await withChatContext(group.telegram_group_id, threadId, () =>
+    sendMessage(message, {
+      reply_markup: { inline_keyboard: buttons },
+    }),
+  );
 }
 
 /**
  * Notify user about errors
  */
 async function notifyUser(
-  bot: Bot,
   groupId: number,
   message: string,
   messageThreadId?: number | null,
@@ -532,10 +524,7 @@ async function notifyUser(
     return;
   }
 
-  await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    ...(messageThreadId && { message_thread_id: messageThreadId }),
-    text: message,
-    parse_mode: 'HTML',
-  });
+  await withChatContext(group.telegram_group_id, messageThreadId ?? null, () =>
+    sendMessage(message),
+  );
 }

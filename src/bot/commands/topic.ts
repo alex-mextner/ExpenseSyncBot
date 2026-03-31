@@ -1,9 +1,9 @@
 /** /topic command handler — restrict the bot to a specific Telegram forum topic */
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-topic');
@@ -28,23 +28,21 @@ export async function handleTopicCommand(ctx: Ctx['Command'], group: Group): Pro
     // If "clear", remove topic restriction
     if (args.toLowerCase() === 'clear') {
       database.groups.update(chatId, { active_topic_id: null });
-      await sendToChat('✅ Ограничение по топику снято. Бот слушает все сообщения в группе.');
+      await sendMessage('✅ Ограничение по топику снято. Бот слушает все сообщения в группе.');
       return;
     }
 
     // If no thread_id, we're in the general chat
     if (!threadId) {
       if (group.active_topic_id) {
-        await sendToChat(
+        await sendMessage(
           `📍 Бот слушает топик #${group.active_topic_id}\n\n` +
             `<i>Вызови /topic в нужном топике чтобы сменить, или /topic clear чтобы слушать всё</i>`,
-          { parse_mode: 'HTML' },
         );
       } else {
-        await sendToChat(
+        await sendMessage(
           '📍 Бот слушает все сообщения в группе.\n\n' +
             '<i>Вызови /topic в нужном топике чтобы ограничить</i>',
-          { parse_mode: 'HTML' },
         );
       }
       return;
@@ -52,14 +50,13 @@ export async function handleTopicCommand(ctx: Ctx['Command'], group: Group): Pro
 
     // Set topic restriction
     database.groups.update(chatId, { active_topic_id: threadId });
-    await sendToChat(
+    await sendMessage(
       `✅ Бот теперь слушает только этот топик (#${threadId})\n\n` +
         `<i>Расходы и команды из других топиков будут игнорироваться.\n` +
         `/topic clear — слушать все сообщения</i>`,
-      { parse_mode: 'HTML' },
     );
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /topic');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

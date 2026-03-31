@@ -1,9 +1,9 @@
 /** /prompt command handler — view or set the custom AI system prompt for a group */
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-prompt');
@@ -26,12 +26,11 @@ export async function handlePromptCommand(ctx: Ctx['Command'], group: Group): Pr
     // If no args, show current prompt
     if (!args) {
       if (group.custom_prompt) {
-        await sendToChat(
+        await sendMessage(
           `📝 Текущий кастомный промпт:\n\n${group.custom_prompt}\n\n<i>Используй /prompt clear чтобы очистить</i>`,
-          { parse_mode: 'HTML' },
         );
       } else {
-        await sendToChat(
+        await sendMessage(
           '📝 Кастомный промпт не установлен.\n\nИспользуй: /prompt <текст> чтобы установить промпт',
         );
       }
@@ -41,18 +40,17 @@ export async function handlePromptCommand(ctx: Ctx['Command'], group: Group): Pr
     // If "clear", remove custom prompt
     if (args.toLowerCase() === 'clear') {
       database.groups.update(chatId, { custom_prompt: null });
-      await sendToChat('✅ Кастомный промпт очищен');
+      await sendMessage('✅ Кастомный промпт очищен');
       return;
     }
 
     // Set new prompt
     database.groups.update(chatId, { custom_prompt: args });
-    await sendToChat(
+    await sendMessage(
       `✅ Кастомный промпт установлен:\n\n${args}\n\n<i>Этот промпт будет добавлен к системному при ответах бота</i>`,
-      { parse_mode: 'HTML' },
     );
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /prompt');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

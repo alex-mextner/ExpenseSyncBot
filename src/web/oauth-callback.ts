@@ -1,9 +1,9 @@
 // OAuth callback HTTP server — handles Google OAuth redirects and token exchange.
-import type { Bot } from 'gramio';
 import { createCurrencyKeyboard } from '../bot/keyboards';
 import { MESSAGES } from '../config/constants';
 import { env } from '../config/env';
 import { database } from '../database';
+import { sendMessage, withChatContext } from '../services/bank/telegram-sender';
 import { getTokensFromCode, resolveOAuthState } from '../services/google/oauth';
 import { encryptToken } from '../services/google/token-encryption';
 import { createLogger } from '../utils/logger.ts';
@@ -12,17 +12,6 @@ import { handleMiniAppRequest } from './miniapp-api.ts';
 import { handleTempImage } from './temp-image.handler';
 
 const logger = createLogger('oauth-callback');
-
-/** Bot instance for sending messages after OAuth completes (set via setBotInstance) */
-let botInstance: Bot | null = null;
-
-/**
- * Register the bot instance so the OAuth callback can send Telegram messages.
- * Called from startBot() after the bot is created and started.
- */
-export function setBotInstance(bot: Bot): void {
-  botInstance = bot;
-}
 
 /**
  * OAuth callback server
@@ -302,35 +291,23 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
 
 /**
  * Send success message + currency selection keyboard to Telegram chat.
- * Runs as a background operation (outside handler context), so message_thread_id is passed explicitly.
+ * Runs as a background operation (outside handler context) — uses withChatContext.
  */
 async function notifyTelegramSuccess(
   telegramGroupId: number,
   activeTopicId: number | null,
 ): Promise<void> {
-  if (!botInstance) {
-    logger.error('[OAuth] Bot instance not set — cannot send success message');
-    return;
-  }
+  await withChatContext(telegramGroupId, activeTopicId, async () => {
+    await sendMessage(MESSAGES.authSuccess);
 
-  const topicParams = activeTopicId ? { message_thread_id: activeTopicId } : {};
-
-  await botInstance.api.sendMessage({
-    chat_id: telegramGroupId,
-    text: MESSAGES.authSuccess,
-    ...topicParams,
-  });
-
-  const keyboard = createCurrencyKeyboard();
-  await botInstance.api.sendMessage({
-    chat_id: telegramGroupId,
-    text:
+    const keyboard = createCurrencyKeyboard();
+    await sendMessage(
       '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
-      '• Можно выбрать несколько\n' +
-      '• Эти валюты будут столбцами в таблице\n' +
-      '• Нажми ✅ Далее когда закончишь',
-    reply_markup: keyboard,
-    ...topicParams,
+        '• Можно выбрать несколько\n' +
+        '• Эти валюты будут столбцами в таблице\n' +
+        '• Нажми ✅ Далее когда закончишь',
+      { reply_markup: keyboard },
+    );
   });
 }
 
@@ -339,22 +316,15 @@ async function notifyTelegramSuccess(
  * Looks up the group by DB id to get the telegram_group_id.
  */
 async function notifyTelegramError(groupId: number, errorMessage: string): Promise<void> {
-  if (!botInstance) {
-    logger.error('[OAuth] Bot instance not set — cannot send error message');
-    return;
-  }
-
   const group = database.groups.findById(groupId);
   if (!group) {
     logger.error({ groupId }, '[OAuth] Group not found — cannot send error message');
     return;
   }
 
-  const topicParams = group.active_topic_id ? { message_thread_id: group.active_topic_id } : {};
-
-  await botInstance.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text: `❌ Не удалось подключить Google аккаунт: ${errorMessage}\n\nПопробуй еще раз: /connect`,
-    ...topicParams,
-  });
+  await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+    sendMessage(
+      `❌ Не удалось подключить Google аккаунт: ${errorMessage}\n\nПопробуй еще раз: /connect`,
+    ),
+  );
 }

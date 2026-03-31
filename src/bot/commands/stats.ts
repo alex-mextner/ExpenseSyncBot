@@ -3,12 +3,12 @@ import { InlineKeyboard } from 'gramio';
 import { BASE_CURRENCY, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { pluralize } from '../../utils/pluralize';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
@@ -45,8 +45,7 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
     const miniAppUrl = buildMiniAppUrl('dashboard');
     const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
-    await sendToChat(message, {
-      parse_mode: 'HTML',
+    await sendMessage(message, {
       ...(keyboard ? { reply_markup: keyboard } : {}),
     });
 
@@ -54,6 +53,6 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
     await maybeSmartAdvice(group.id);
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /stats');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

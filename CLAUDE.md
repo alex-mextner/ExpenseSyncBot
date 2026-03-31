@@ -296,61 +296,61 @@ const percentage = budget.limit_amount > 0
 `${formatAmount(spentInCurrency, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%)`
 ```
 
-### Sending Messages — `sendToChat` only
+### Sending Messages — `sendMessage` only
 
-**NEVER use `ctx.send()`** — in `CallbackQueryContext` it sends to the user's private chat, not to the group. This is a GramIO behavior that causes silent bugs.
+**The ONLY way to send messages is `sendMessage` from [src/services/bank/telegram-sender.ts](src/services/bank/telegram-sender.ts).**
 
-**Always use `sendToChat(text, options?)` from [src/bot/send.ts](src/bot/send.ts).** It reads `chatId` from `AsyncLocalStorage` (populated by topic-middleware) and uses `bot.api.sendMessage`, which correctly targets the group chat and works with topic injection.
+Banned alternatives:
+- **`ctx.send()`** — in `CallbackQueryContext` it sends to private chat, not group. Silent bug.
+- **`bot.api.sendMessage()`** — bypasses `AsyncLocalStorage` context, loses `message_thread_id` injection. Messages go to General instead of the topic.
+- **`sendToChat`** — removed, was a redundant wrapper.
 
 ```ts
-import { sendToChat } from '../send';
+import { sendMessage } from '../../services/bank/telegram-sender';
 
-// In any command, message, or callback handler:
-await sendToChat('Hello');
-await sendToChat('Formatted', { parse_mode: 'HTML' });
-const msg = await sendToChat('Get ID', { reply_markup: keyboard });
-// msg.message_id — NOT .id (this is TelegramMessage, not GramIO context)
+// In any handler (command, message, callback):
+await sendMessage('Hello');
+await sendMessage('With keyboard', { reply_markup: keyboard });
+const msg = await sendMessage('Get ID');
+// msg?.message_id — returns TelegramMessage | null (null on error)
 ```
 
-**Exceptions (background workers only):** Code running outside handler context (photo-processor, cron, sync-service) has no `AsyncLocalStorage` — use `bot.api.sendMessage` with explicit `chat_id` there.
+`sendMessage` always sets `parse_mode: 'HTML'`. No need to pass it explicitly.
 
-- `ctx.editText` and `ctx.answerCallbackQuery` are fine — they operate on the callback message, not on a new send.
+**`ctx.editText` and `ctx.answerCallbackQuery` are fine** — they operate on the callback message, not a new send.
+
+### Sending to Admin — `sendDirect`
+
+For admin notifications (feedback, merchant rules) — use `sendDirect(chatId, text, options?)` from telegram-sender. No context needed, sends to a specific personal chat.
 
 ### Topic-Aware Messaging
 
-Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/topic-middleware.ts)) to automatically inject `message_thread_id` into all outgoing Telegram API calls within request handler context.
+Bot uses `AsyncLocalStorage` ([src/utils/chat-context.ts](src/utils/chat-context.ts)) + GramIO `preRequest` hook ([src/bot/topic-middleware.ts](src/bot/topic-middleware.ts)) to automatically inject `message_thread_id` into all outgoing API calls.
 
-**Rules:**
+**Two contexts, one mechanism:**
 
-- **Do NOT manually pass `message_thread_id`** in command handlers, message handlers, or callback handlers — the middleware handles it
-- **DO pass `message_thread_id` explicitly** in background operations (photo-processor, broadcast, dev pipeline notify) since they run outside handler context
-- The middleware is registered in [src/bot/index.ts](src/bot/index.ts) before all handlers
-- Topic restriction checks still require extracting `message_thread_id` from context manually
-
-**Background workers: `sendMessage` from `telegram-sender.ts`**
-
-`sendMessage` uses `AsyncLocalStorage` — same pattern as `topic-middleware`. Context is set once at the entry point via `withChatContext`, all `sendMessage`/`editMessageText` calls inside read chatId + threadId automatically:
+| Context | Who sets it | How |
+|---------|------------|-----|
+| Handlers (commands, messages, callbacks) | `topic-middleware` | Automatically from incoming update |
+| Background workers (sync, cron, photo-processor, oauth) | Developer | `withChatContext(chatId, threadId, fn)` |
 
 ```ts
 import { sendMessage, editMessageText, withChatContext } from './telegram-sender';
 
-// Set context once at the entry point (e.g. start of sync cycle):
+// Background worker — set context once, all calls inside use it:
 const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
-await withChatContext(env.BOT_TOKEN, group.telegram_group_id, threadId, async () => {
-  // All calls inside read chatId + threadId from context:
+await withChatContext(group.telegram_group_id, threadId, async () => {
   await sendMessage(text);
   await sendMessage(cardText, { reply_markup: keyboard });
   await editMessageText(messageId, statusText);
 });
 ```
 
-**`sendMessage` is for group chat only.** For admin notifications (feedback, merchant rules), use `sendDirect(botToken, chatId, text, options?)` — no context, no topic handling.
-
-**Never compute `message_thread_id` manually.** Set the context via `withChatContext` — `sendMessage` handles the rest.
-
-Never send to the main chat (no thread) when the group has an `active_topic_id` — the user won't see messages from a topic-based group in the General channel.
-
-**Never send to personal (private) chats from background workers.** All messages from sync, cron, OTP prompts, and background jobs MUST go to `group.telegram_group_id` (always a group chat ID, never a user ID). If a message ends up in someone's personal chat, it means the wrong chat ID was used — check the DB.
+**Rules:**
+- **Never pass `message_thread_id` manually** — the preRequest hook handles it from context
+- **Never use `bot.api.sendMessage` directly** — use `sendMessage` which reads context automatically
+- **Never send to General** when the group has `active_topic_id` — user won't see it
+- **Never send to personal chats from workers** — all worker messages go to `group.telegram_group_id`
 
 ### Testing
 

@@ -1,9 +1,9 @@
 /** /categories command handler — lists all expense categories for the group */
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('cmd-categories');
@@ -17,7 +17,7 @@ export async function handleCategoriesCommand(ctx: Ctx['Command'], group: Group)
     const categories = database.categories.findByGroupId(group.id);
 
     if (categories.length === 0) {
-      await sendToChat(
+      await sendMessage(
         '📋 Категории пока не созданы.\n\nОни будут создаваться автоматически из ваших расходов.',
       );
       return;
@@ -28,9 +28,9 @@ export async function handleCategoriesCommand(ctx: Ctx['Command'], group: Group)
       message += `• ${category.name}\n`;
     }
 
-    await sendToChat(message);
+    await sendMessage(message);
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /categories');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

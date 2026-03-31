@@ -5,12 +5,11 @@ import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
-
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 import { silentSyncBudgets } from './budget';
@@ -26,7 +25,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   if (group.google_refresh_token) {
     const syncedCount = await silentSyncBudgets(googleConn(group), group.id);
     if (syncedCount > 0) {
-      await sendToChat(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
+      await sendMessage(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
   }
 
@@ -42,7 +41,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   logger.info(`[SUM] Date range: ${currentMonthStart} to ${currentMonthEnd}`);
 
   if (allExpenses.length === 0) {
-    await sendToChat('📊 Пока нет расходов');
+    await sendMessage('📊 Пока нет расходов');
     return;
   }
 
@@ -60,7 +59,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   });
 
   if (currentMonthExpenses.length === 0) {
-    await sendToChat(`📊 В ${format(now, 'LLLL yyyy')} пока нет расходов`);
+    await sendMessage(`📊 В ${format(now, 'LLLL yyyy')} пока нет расходов`);
     return;
   }
 
@@ -236,7 +235,7 @@ async function addBudgetInfo(
 
   if (budgets.length === 0) {
     // No budgets set - just send base message
-    await sendToChat(baseMessage, keyboard ? { reply_markup: keyboard } : {});
+    await sendMessage(baseMessage, keyboard ? { reply_markup: keyboard } : {});
     return;
   }
 
@@ -282,7 +281,7 @@ async function addBudgetInfo(
     budgetMessage += `\nℹ️ Используй /budget для полного отчета`;
   }
 
-  await sendToChat(baseMessage + budgetMessage, keyboard ? { reply_markup: keyboard } : {});
+  await sendMessage(baseMessage + budgetMessage, keyboard ? { reply_markup: keyboard } : {});
 }
 
 /**

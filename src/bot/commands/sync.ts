@@ -2,6 +2,7 @@
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
+import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
 import {
   type GoogleConn,
   googleConn,
@@ -13,8 +14,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { GoogleConnectedGroup } from '../guards';
-import { sendToChat } from '../send';
-import type { BotInstance, Ctx } from '../types';
+import type { Ctx } from '../types';
 
 const logger = createLogger('sync');
 
@@ -444,7 +444,6 @@ function buildAutoSyncExpensesMessage(result: SyncResult, cacheKey: string): Syn
 export async function ensureFreshExpenses(
   groupId: number,
   telegramGroupId?: number,
-  bot?: BotInstance,
 ): Promise<void> {
   const last = lastExpenseSyncByGroup.get(groupId) || 0;
   if (Date.now() - last < SYNC_COOLDOWN_MS) return;
@@ -455,15 +454,19 @@ export async function ensureFreshExpenses(
     const hasChanges =
       result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0;
 
-    if (hasChanges && telegramGroupId && bot) {
+    if (hasChanges && telegramGroupId) {
       cleanSyncCache();
       const cacheKey = Math.random().toString(36).slice(2, 10);
       syncNotifyCache.set(cacheKey, { result, expires: Date.now() + NOTIFY_CACHE_TTL_MS });
       const msgData = buildAutoSyncExpensesMessage(result, cacheKey);
-      await bot.api.sendMessage({
-        chat_id: telegramGroupId,
-        ...msgData,
-      });
+      const group = database.groups.findById(groupId);
+      const threadId = group?.active_topic_id ?? null;
+      await withChatContext(telegramGroupId, threadId, () =>
+        sendMessage(
+          msgData.text,
+          msgData.reply_markup ? { reply_markup: msgData.reply_markup } : {},
+        ),
+      );
     }
   } catch (err) {
     logger.error({ err }, `[AUTO-SYNC] Expenses failed for group ${groupId}`);
@@ -487,7 +490,7 @@ export async function handleSyncCommand(
     return;
   }
 
-  await sendToChat('🔄 Синхронизирую...');
+  await sendMessage('🔄 Синхронизирую...');
 
   try {
     // Save snapshot of current expenses + budgets BEFORE sync (enables rollback)
@@ -508,7 +511,7 @@ export async function handleSyncCommand(
       const errorLines = result.errors.map(
         (e) => `• Строка ${e.row}: ${e.date} ${e.category} — валюты: ${e.currencies.join(', ')}`,
       );
-      await sendToChat(
+      await sendMessage(
         `⚠️ Строки с суммами в нескольких валютах (пропущены):\n${errorLines.join('\n')}`,
       );
     }
@@ -516,10 +519,10 @@ export async function handleSyncCommand(
     const msg = formatSyncResult(result);
     const suffix =
       currentExpenses.length > 0 ? '\n\n<i>Если что-то пошло не так — /sync rollback</i>' : '';
-    await sendToChat(msg + suffix, { parse_mode: 'HTML' });
+    await sendMessage(msg + suffix);
   } catch (error) {
     logger.error({ err: error }, '[SYNC] Sync failed');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }
 
@@ -530,7 +533,7 @@ async function handleSyncRollback(groupId: number): Promise<void> {
   const snapshots = database.syncSnapshots.listSnapshots(groupId);
 
   if (snapshots.length === 0) {
-    await sendToChat('❌ Нет сохранённых снимков для отката. Откат доступен после /sync.');
+    await sendMessage('❌ Нет сохранённых снимков для отката. Откат доступен после /sync.');
     return;
   }
 
@@ -539,7 +542,7 @@ async function handleSyncRollback(groupId: number): Promise<void> {
   if (!latest) return;
   const snapshotDate = new Date(latest.createdAt).toLocaleString('ru-RU');
 
-  await sendToChat(
+  await sendMessage(
     `🔄 Восстанавливаю ${latest.expenseCount} ${pluralize(latest.expenseCount, 'расход', 'расхода', 'расходов')} и ${latest.budgetCount} ${pluralize(latest.budgetCount, 'бюджет', 'бюджета', 'бюджетов')} из снимка от ${snapshotDate}...`,
   );
 
@@ -574,7 +577,7 @@ async function handleSyncRollback(groupId: number): Promise<void> {
       }
     });
 
-    await sendToChat(
+    await sendMessage(
       `✅ Откат завершён! Восстановлено ${expenses.length} ${pluralize(expenses.length, 'расход', 'расхода', 'расходов')} и ${budgets.length} ${pluralize(budgets.length, 'бюджет', 'бюджета', 'бюджетов')}.`,
     );
 
@@ -583,6 +586,6 @@ async function handleSyncRollback(groupId: number): Promise<void> {
     );
   } catch (error) {
     logger.error({ err: error }, '[SYNC] Rollback failed');
-    await sendToChat('❌ Ошибка при откате. Попробуй ещё раз.');
+    await sendMessage('❌ Ошибка при откате. Попробуй ещё раз.');
   }
 }

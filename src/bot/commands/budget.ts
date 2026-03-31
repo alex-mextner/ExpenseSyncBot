@@ -9,6 +9,7 @@ import {
   getCurrencySymbol,
 } from '../../config/constants';
 import { database } from '../../database';
+import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
@@ -23,8 +24,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import type { GoogleConnectedGroup } from '../guards';
 import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
-import { sendToChat } from '../send';
-import type { BotInstance, Ctx } from '../types';
+import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
 const logger = createLogger('budget');
@@ -243,11 +243,7 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
 /**
  * Sync budgets if stale. Blocking. Notifies chat only if changes detected.
  */
-export async function ensureFreshBudgets(
-  groupId: number,
-  telegramGroupId?: number,
-  bot?: BotInstance,
-): Promise<void> {
+export async function ensureFreshBudgets(groupId: number, telegramGroupId?: number): Promise<void> {
   const last = lastBudgetSyncByGroup.get(groupId) || 0;
   if (Date.now() - last < BUDGET_SYNC_COOLDOWN_MS) return;
 
@@ -257,15 +253,19 @@ export async function ensureFreshBudgets(
     const hasChanges =
       result.added.length > 0 || result.deleted.length > 0 || result.updated.length > 0;
 
-    if (hasChanges && telegramGroupId && bot) {
+    if (hasChanges && telegramGroupId) {
       cleanBudgetCache();
       const cacheKey = Math.random().toString(36).slice(2, 10);
       budgetNotifyCache.set(cacheKey, { result, expires: Date.now() + BUDGET_NOTIFY_CACHE_TTL_MS });
       const msgData = buildAutoSyncBudgetsMessage(result, cacheKey);
-      await bot.api.sendMessage({
-        chat_id: telegramGroupId,
-        ...msgData,
-      });
+      const group = database.groups.findById(groupId);
+      const threadId = group?.active_topic_id ?? null;
+      await withChatContext(telegramGroupId, threadId, () =>
+        sendMessage(
+          msgData.text,
+          msgData.reply_markup ? { reply_markup: msgData.reply_markup } : {},
+        ),
+      );
     }
   } catch (err) {
     logger.error({ err }, `[AUTO-SYNC] Budgets failed for group ${groupId}`);
@@ -371,7 +371,7 @@ export async function handleBudgetCommand(
   if (group.google_refresh_token) {
     const syncedCount = await silentSyncBudgets(googleConn(group), group.id);
     if (syncedCount > 0) {
-      await sendToChat(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
+      await sendMessage(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
   }
 
@@ -391,7 +391,7 @@ export async function handleBudgetCommand(
     const parsed = parseBudgetAmount(amountStr, group.default_currency);
 
     if (!parsed) {
-      await sendToChat(
+      await sendMessage(
         '❌ Неверная сумма. Используй: /budget set Категория 500 или /budget set Категория $500',
       );
       return;
@@ -408,7 +408,7 @@ export async function handleBudgetCommand(
   }
 
   // Invalid usage
-  await sendToChat(
+  await sendMessage(
     '❌ Неверный формат команды.\n\n' +
       'Использование:\n' +
       '• /budget - показать бюджеты\n' +
@@ -442,7 +442,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
   const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
   if (budgets.length === 0) {
-    await sendToChat(
+    await sendMessage(
       `Бюджет на ${currentMonthName}\n\n` +
         `Бюджеты не установлены.\n\n` +
         `Используй:\n` +
@@ -498,7 +498,7 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  await sendToChat(message.trim(), keyboard ? { reply_markup: keyboard } : {});
+  await sendMessage(message.trim(), keyboard ? { reply_markup: keyboard } : {});
   await maybeSmartAdvice(group.id);
 }
 
@@ -527,7 +527,7 @@ async function setBudget(
     const keyboard = createAddCategoryWithBudgetKeyboard(normalizedCategory, amount, currency);
     const currencySymbol = getCurrencySymbol(currency);
 
-    await sendToChat(
+    await sendMessage(
       `Категория "${normalizedCategory}" не существует.\n\n` +
         `Хочешь добавить новую категорию "${normalizedCategory}" с бюджетом ${currencySymbol}${amount}?\n\n` +
         `Или выбери из существующих:\n${existingCategories.join(', ')}`,
@@ -546,7 +546,7 @@ async function setBudget(
 
   if (!group.google_refresh_token || !group.spreadsheet_id) {
     const emoji = getCategoryEmoji(normalizedCategory);
-    await sendToChat(
+    await sendMessage(
       `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
         'Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
     );
@@ -567,12 +567,12 @@ async function setBudget(
     });
 
     const emoji = getCategoryEmoji(normalizedCategory);
-    await sendToChat(
+    await sendMessage(
       `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
     );
   } catch (err) {
     logger.error({ err }, '[BUDGET] Failed to write to Google Sheets');
-    await sendToChat(
+    await sendMessage(
       `Бюджет сохранен в базу данных, но не удалось записать в Google Sheets.\n` +
         `Проверь доступ к таблице или используй /budget sync позже.`,
     );
@@ -655,7 +655,7 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
 
     if (!tabExists) {
       await createEmptyMonthTab(conn, group.spreadsheet_id, currentMonthAbbr);
-      await sendToChat(
+      await sendMessage(
         `Вкладка ${currentMonthAbbr} создана в таблице.\n\n` +
           `Добавь бюджеты через:\n/budget set <Категория> <Сумма>`,
       );
@@ -665,7 +665,7 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
     const budgetsFromSheet = await readMonthBudget(conn, group.spreadsheet_id, currentMonthAbbr);
 
     if (budgetsFromSheet.length === 0) {
-      await sendToChat(`В вкладке ${currentMonthAbbr} нет бюджетов для синхронизации.`);
+      await sendMessage(`В вкладке ${currentMonthAbbr} нет бюджетов для синхронизации.`);
       return;
     }
 
@@ -691,10 +691,10 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
     if (createdCategoriesCount > 0) {
       message += `\nСоздано новых категорий: ${createdCategoriesCount}`;
     }
-    await sendToChat(message);
+    await sendMessage(message);
     await maybeSmartAdvice(group.id);
   } catch (err) {
     logger.error({ err }, '[BUDGET] Failed to sync budgets');
-    await sendToChat('Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');
+    await sendMessage('Не удалось синхронизировать бюджеты. Проверь доступ к Google Sheets.');
   }
 }

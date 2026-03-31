@@ -1,8 +1,8 @@
 /** /start command handler */
 import { database } from '../../database';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { buildHelpText, EXPENSE_EXAMPLES } from './help';
 
@@ -15,7 +15,7 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
     const chatType = ctx.chat?.type;
 
     if (!telegramId || !chatId) {
-      await sendToChat('❌ Не удалось определить пользователя или чат');
+      await sendMessage('❌ Не удалось определить пользователя или чат');
       return;
     }
 
@@ -35,9 +35,9 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
           message += `\n\n💡 /connect — подключить Google Sheets, расходы будут вноситься в таблицу и читаться из неё.`;
         }
 
-        await sendToChat(message, { parse_mode: 'HTML' });
+        await sendMessage(message);
       } else {
-        await sendToChat(
+        await sendMessage(
           `👋 Привет! Я помогу вести учёт расходов группы и синхронизировать их с Google Sheets.\n\n` +
             `<b>Что умеет бот:</b>\n` +
             `• Учёт расходов в нескольких валютах с автоконвертацией\n` +
@@ -50,17 +50,16 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
             `Набери /connect и следуй инструкциям.\n\n` +
             `<b>Формат расходов:</b>\n` +
             EXPENSE_EXAMPLES,
-          { parse_mode: 'HTML' },
         );
       }
     } else {
-      await sendToChat(
+      await sendMessage(
         `👋 Я работаю только в группах.\n\n` +
           `Добавь меня в группу и набери /connect для настройки.`,
       );
     }
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /start');
-    await sendToChat(formatErrorForUser(error));
+    await sendMessage(formatErrorForUser(error));
   }
 }

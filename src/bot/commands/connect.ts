@@ -9,11 +9,11 @@ import {
 } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { generateAuthUrl } from '../../services/google/oauth';
 import { createExpenseSpreadsheet, googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 
 const logger = createLogger('connect');
@@ -44,7 +44,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 
   if (!telegramId || !chatId) {
     logger.info(`[CMD] Error: missing telegramId or chatId`);
-    await sendToChat('❌ Не удалось определить пользователя или чат');
+    await sendMessage('❌ Не удалось определить пользователя или чат');
     return;
   }
 
@@ -53,7 +53,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
 
   if (!isGroup) {
     logger.info(`[CMD] Rejected: /connect only works in groups`);
-    await sendToChat(
+    await sendMessage(
       '❌ Эта команда работает только в группах.\n\n' +
         'Добавь бота в группу и используй /connect там.',
     );
@@ -75,11 +75,10 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     if (group.google_refresh_token && group.spreadsheet_id) {
       logger.info(`[CMD] Group ${group.id} already configured, skipping`);
       const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${group.spreadsheet_id}`;
-      await sendToChat(
+      await sendMessage(
         `✅ Группа уже подключена к Google Sheets.\n\n` +
           `📊 <a href="${spreadsheetUrl}">Открыть таблицу</a>\n\n` +
           `Если нужно переподключить аккаунт, используй /reconnect`,
-        { parse_mode: 'HTML' },
       );
       return;
     }
@@ -88,7 +87,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     if (database.groups.hasCompletedSetup(chatId) && !group.google_refresh_token) {
       const authUrl = generateAuthUrl(group.id);
       const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
-      await sendToChat(
+      await sendMessage(
         '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
           'После авторизации вернись сюда — я продолжу настройку.',
         { reply_markup: authKeyboard },
@@ -105,7 +104,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     .row()
     .text('⏩ Пропустить (подключить позже)', `setup:skip_google:${group.id}`);
 
-  await sendToChat(
+  await sendMessage(
     `👋 Настройка бота для группы\n\n` +
       `<b>Google Sheets</b> позволяет:\n` +
       `• Все расходы — в твоей таблице, ты владелец\n` +
@@ -114,7 +113,7 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
       `• Делиться с семьёй или бухгалтером\n` +
       `• Скачать как CSV/Excel\n\n` +
       `Нажми кнопку ниже, чтобы подключить. Или пропусти — можно подключить позже через /connect.`,
-    { parse_mode: 'HTML', reply_markup: keyboard },
+    { reply_markup: keyboard },
   );
   logger.info(`[CMD] OAuth URL sent for group ${group.id}, waiting for user to authorize`);
 }
@@ -154,7 +153,7 @@ export async function handleSetupChoiceCallback(
 async function startCurrencySelection(chatId: number): Promise<void> {
   const group = database.groups.findByTelegramGroupId(chatId);
   const keyboard = createCurrencyKeyboard(group?.enabled_currencies);
-  await sendToChat(
+  await sendMessage(
     '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
       '• Можно выбрать несколько\n' +
       '• Нажми ✅ Далее когда закончишь',
@@ -181,10 +180,9 @@ export async function handleCurrencyCallback(
   if (action === 'custom') {
     awaitingCustomCurrency.set(chatId, true);
     await ctx.answerCallbackQuery({ text: 'Напиши код валюты в чат' });
-    await sendToChat(
+    await sendMessage(
       '✏️ Напиши код валюты (3 буквы, например <code>TRY</code>, <code>PLN</code>, <code>GEL</code>):\n\n' +
         'Поддерживаются все валюты мира по стандарту ISO 4217.',
-      { parse_mode: 'HTML' },
     );
     return;
   }
@@ -328,12 +326,12 @@ export async function handleCustomCurrencyInput(
 
   if (!isValidCurrencyCode(text)) {
     const keyboard = createCurrencyKeyboard(group.enabled_currencies);
-    await sendToChat(
+    await sendMessage(
       `❌ <code>${text}</code> — не похоже на код валюты.\n\n` +
         'Код валюты — 3 латинские буквы (например USD, EUR, TRY, PLN).\n' +
         'Попробуй ещё раз, нажав «✏️ Ввести код валюты».\n\n' +
         `📊 Выбрано: ${group.enabled_currencies.join(', ') || 'нет'}`,
-      { parse_mode: 'HTML', reply_markup: keyboard },
+      { reply_markup: keyboard },
     );
     return true;
   }
@@ -342,13 +340,13 @@ export async function handleCustomCurrencyInput(
   const enabledCurrencies = [...group.enabled_currencies];
 
   if (enabledCurrencies.includes(code)) {
-    await sendToChat(`✅ ${code} уже в наборе.`);
+    await sendMessage(`✅ ${code} уже в наборе.`);
   } else {
     enabledCurrencies.push(code);
     database.groups.update(chatId, { enabled_currencies: enabledCurrencies });
 
     const label = getCurrencyLabel(code);
-    await sendToChat(`✅ ${label} — добавлена в набор.`);
+    await sendMessage(`✅ ${label} — добавлена в набор.`);
   }
 
   // Show updated keyboard
@@ -356,7 +354,7 @@ export async function handleCustomCurrencyInput(
   if (!updatedGroup) return true;
 
   const keyboard = createCurrencyKeyboard(updatedGroup.enabled_currencies);
-  await sendToChat(
+  await sendMessage(
     '💱 Шаг 1/2: Выбери набор валют для учета:\n\n' +
       '• Можно выбрать несколько\n' +
       '• Нажми ✅ Далее когда закончишь\n\n' +
@@ -434,7 +432,7 @@ async function sendCurrencyHints(
   if (enabledCurrencies.length <= 1) return; // no hints needed for single currency
 
   const hints = buildCurrencyHints(enabledCurrencies, defaultCurrency);
-  await sendToChat(`💡 <b>Подсказка по валютам</b>\n\n${hints}`, { parse_mode: 'HTML' });
+  await sendMessage(`💡 <b>Подсказка по валютам</b>\n\n${hints}`);
 }
 
 /**
@@ -451,7 +449,7 @@ async function sendTopicRecommendation(
   const isForum = 'chat' in ctx && ctx.chat && 'isForum' in ctx.chat && ctx.chat.isForum === true;
   if (!isForum) return;
 
-  await sendToChat(
+  await sendMessage(
     `💡 <b>У тебя группа с топиками</b>\n\n` +
       `Сейчас бот слушает все топики — любое сообщение с числом он может принять за расход, ` +
       `а разговоры попытается обработать.\n\n` +
@@ -459,6 +457,5 @@ async function sendTopicRecommendation(
       `1. Перейди в нужный топик\n` +
       `2. Напиши там /topic\n\n` +
       `После этого в остальных топиках бот не будет реагировать на сообщения.`,
-    { parse_mode: 'HTML' },
   );
 }

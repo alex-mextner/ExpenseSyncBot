@@ -2,6 +2,7 @@
 import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
@@ -14,7 +15,6 @@ import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import { sendToChat } from '../send';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
@@ -84,17 +84,17 @@ export async function handleExpenseMessage(
           ],
         };
 
-        await sendToChat(
+        await sendMessage(
           '💬 Бот работает только в группах.\n\nДля учета расходов используй команды в группе:',
           { reply_markup: keyboard },
         );
       } else {
-        await sendToChat(
+        await sendMessage(
           '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
         );
       }
     } else {
-      await sendToChat(
+      await sendMessage(
         '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
       );
     }
@@ -113,7 +113,7 @@ export async function handleExpenseMessage(
   if (!group) {
     // Group not set up yet
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} not found in database`);
-    await sendToChat(`Группа не настроена. Для настройки используй команду /connect`);
+    await sendMessage(`Группа не настроена. Для настройки используй команду /connect`);
     return true;
   }
 
@@ -137,7 +137,7 @@ export async function handleExpenseMessage(
   // Check if group has completed setup
   if (!database.groups.hasCompletedSetup(telegramGroupId)) {
     logger.info(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
-    await sendToChat('Завершите настройку группы: /connect');
+    await sendMessage('Завершите настройку группы: /connect');
     return true;
   }
 
@@ -193,7 +193,7 @@ export async function handleExpenseMessage(
           await pl.editDesign(pendingTaskId, text);
         }
       } catch (error) {
-        await sendToChat(getErrorMessage(error));
+        await sendMessage(getErrorMessage(error));
       }
     }
     return true;
@@ -209,14 +209,14 @@ export async function handleExpenseMessage(
   // Check if we're waiting for bulk correction text input
   const waitingBulkCorrection = database.photoQueue.findWaitingForBulkCorrection(group.id);
   if (waitingBulkCorrection) {
-    await handleBulkCorrectionInput(ctx, bot, text, waitingBulkCorrection, group);
+    await handleBulkCorrectionInput(text, waitingBulkCorrection, group);
     return true;
   }
 
   // Check if we're waiting for category text input from user
   const waitingItem = database.receiptItems.findWaitingForCategoryInput(group.id);
   if (waitingItem) {
-    await handleCategoryTextInput(ctx, bot, text, waitingItem, group.id);
+    await handleCategoryTextInput(ctx, text, waitingItem, group.id);
     return true;
   }
 
@@ -327,10 +327,7 @@ export async function handleExpenseMessage(
       } catch (error) {
         logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
         database.pendingExpenses.delete(pendingExpense.id);
-        await bot.api.sendMessage({
-          chat_id: telegramGroupId,
-          text: getSheetWriteErrorMessage(group.id),
-        });
+        await sendMessage(getSheetWriteErrorMessage(group.id));
       }
     }
   }
@@ -356,9 +353,7 @@ export async function handleExpenseMessage(
     logger.info(`[MSG] Asking for confirmation of ${newCategories.length} new categories`);
     for (const category of newCategories) {
       const keyboard = createCategoryConfirmKeyboard(category);
-      await bot.api.sendMessage({
-        chat_id: telegramGroupId,
-        text: MESSAGES.newCategoryDetected.replace('{category}', category),
+      await sendMessage(MESSAGES.newCategoryDetected.replace('{category}', category), {
         reply_markup: keyboard,
       });
     }
@@ -382,7 +377,6 @@ export async function handleExpenseMessage(
  */
 async function handleCategoryTextInput(
   ctx: Ctx['Message'],
-  bot: BotInstance,
   categoryText: string,
   waitingItem: ReceiptItem,
   groupId: number,
@@ -415,7 +409,7 @@ async function handleCategoryTextInput(
         waiting_for_category_input: 0,
       });
 
-      await sendToChat(`✅ Используется категория: <b>${bestMatch}</b>`, { parse_mode: 'HTML' });
+      await sendMessage(`✅ Используется категория: <b>${bestMatch}</b>`);
 
       // Check if all items are confirmed
       const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
@@ -436,7 +430,7 @@ async function handleCategoryTextInput(
         const { showNextItemForConfirmation } = await import(
           '../../services/receipt/photo-processor'
         );
-        await showNextItemForConfirmation(bot, groupId, waitingItem.photo_queue_id);
+        await showNextItemForConfirmation(groupId, waitingItem.photo_queue_id);
       }
 
       return;
@@ -462,10 +456,7 @@ async function handleCategoryTextInput(
       ],
     };
 
-    await bot.api.sendMessage({
-      chat_id: ctx.chat.id,
-      text: `Найдена похожая категория: <b>${bestMatch}</b>\n\nВыберите действие:`,
-      parse_mode: 'HTML',
+    await sendMessage(`Найдена похожая категория: <b>${bestMatch}</b>\n\nВыберите действие:`, {
       reply_markup: keyboard,
     });
   } else {
@@ -489,9 +480,7 @@ async function handleCategoryTextInput(
       });
     }
 
-    await sendToChat(`✅ Создана новая категория: <b>${normalizedCategory}</b>`, {
-      parse_mode: 'HTML',
-    });
+    await sendMessage(`✅ Создана новая категория: <b>${normalizedCategory}</b>`);
 
     // Check if all items are confirmed (categories will be collected dynamically in showNextItemForConfirmation)
     const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
@@ -511,7 +500,7 @@ async function handleCategoryTextInput(
       const { showNextItemForConfirmation } = await import(
         '../../services/receipt/photo-processor'
       );
-      await showNextItemForConfirmation(bot, groupId, waitingItem.photo_queue_id);
+      await showNextItemForConfirmation(groupId, waitingItem.photo_queue_id);
     }
   }
 }
@@ -520,8 +509,6 @@ async function handleCategoryTextInput(
  * Handle bulk correction text input from user
  */
 async function handleBulkCorrectionInput(
-  ctx: Ctx['Message'],
-  bot: BotInstance,
   correctionText: string,
   queueItem: PhotoQueueItem,
   group: Group,
@@ -537,13 +524,13 @@ async function handleBulkCorrectionInput(
   logger.info(`[BULK_CORRECTION] User correction: "${correctionText}" for queue ${queueItem.id}`);
 
   // Immediately respond that we're processing
-  await sendToChat('⏳ Корректирую...');
+  await sendMessage('⏳ Корректирую...');
 
   // Get receipt items
   const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
 
   if (items.length === 0) {
-    await sendToChat('❌ Товары не найдены');
+    await sendMessage('❌ Товары не найдены');
     return;
   }
 
@@ -589,11 +576,10 @@ async function handleBulkCorrectionInput(
     // Validate totals match (±1%)
     const originalTotal = items.reduce((sum, i) => sum + i.total, 0);
     if (!validateSummaryTotals(newSummary, originalTotal)) {
-      await sendToChat(
+      await sendMessage(
         '❌ Суммы не сходятся. AI изменил суммы товаров, что недопустимо.\n\n' +
           'Попробуйте переформулировать корректировку. Например:\n' +
           '<code>перенеси салфетки в Хозтовары</code>',
-        { parse_mode: 'HTML' },
       );
       return;
     }
@@ -615,27 +601,25 @@ async function handleBulkCorrectionInput(
     const message = `${summaryText}\n\n✅ <i>Корректировка применена!</i>`;
 
     // Always send NEW message with result and buttons
-    const sentMessage = await bot.api.sendMessage({
-      chat_id: ctx.chat?.id,
-      text: message,
-      parse_mode: 'HTML',
+    const sentMessage = await sendMessage(message, {
       reply_markup: createBulkEditKeyboard(queueItem.id),
     });
 
     // Save message ID for buttons to work
-    database.photoQueue.update(queueItem.id, {
-      summary_message_id: sentMessage.message_id,
-    });
+    if (sentMessage) {
+      database.photoQueue.update(queueItem.id, {
+        summary_message_id: sentMessage.message_id,
+      });
+    }
 
     logger.info(`[BULK_CORRECTION] Correction applied successfully`);
   } catch (error) {
     logger.error({ err: error }, '[BULK_CORRECTION] AI correction failed');
-    await sendToChat(
+    await sendMessage(
       '❌ Не удалось применить корректировку.\n\n' +
         'Попробуйте переформулировать. Например:\n' +
         '<code>перенеси салфетки в Хозтовары</code>\n' +
         '<code>объедини Еда и Напитки</code>',
-      { parse_mode: 'HTML' },
     );
   }
 }
