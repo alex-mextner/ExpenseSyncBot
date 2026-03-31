@@ -11,6 +11,7 @@ import {
   appendExpenseRowsRaw,
   createEmptyMonthTab,
   deleteExpenseRowsByIndex,
+  type GoogleConn,
   monthTabExists,
   readExpenseRowsRaw,
   repairEurFormulas,
@@ -123,12 +124,12 @@ function normalizeMonth(month: string): string {
  * and no Budget sheet). Throws on backup failure or any subsequent error.
  */
 export async function runYearSplitMigration(
-  refreshToken: string,
+  conn: GoogleConn,
   oldSpreadsheetId: string,
   newSpreadsheetId: string,
   splitYear: number,
 ): Promise<string | null> {
-  const auth = getAuthenticatedClient(refreshToken);
+  const auth = getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
   const sheetsApi = google.sheets({ version: 'v4', auth });
 
   // Check what needs to be done
@@ -136,7 +137,7 @@ export async function runYearSplitMigration(
   const budgetSheet = oldSpreadsheet.data.sheets?.find((s) => s.properties?.title === 'Budget');
   const budgetSheetId = budgetSheet?.properties?.sheetId;
 
-  const allExpenseRows = await readExpenseRowsRaw(refreshToken, oldSpreadsheetId);
+  const allExpenseRows = await readExpenseRowsRaw(conn, oldSpreadsheetId);
   const splitYearRows = allExpenseRows
     .map((row, idx) => ({ row, sheetRowIdx: idx + 2 })) // +2: 1-based + skip header
     .filter(({ row }) => yearFromDateCell(row[0] ?? '') === splitYear);
@@ -161,23 +162,23 @@ export async function runYearSplitMigration(
   // 2. Copy splitYear expense rows to new spreadsheet
   if (splitYearRows.length > 0) {
     await appendExpenseRowsRaw(
-      refreshToken,
+      conn,
       newSpreadsheetId,
       splitYearRows.map(({ row }) => row),
     );
     logger.info(`[MIGRATION] Copied ${splitYearRows.length} expense rows to new spreadsheet`);
 
-    const fixedFormulas = await repairEurFormulas(refreshToken, newSpreadsheetId);
+    const fixedFormulas = await repairEurFormulas(conn, newSpreadsheetId);
     if (fixedFormulas > 0) {
       logger.info(`[MIGRATION] Restored ${fixedFormulas} EUR formula(s) in new spreadsheet`);
     }
 
-    await sortExpensesTab(refreshToken, newSpreadsheetId);
+    await sortExpensesTab(conn, newSpreadsheetId);
     logger.info('[MIGRATION] Sorted Expenses tab by date');
 
     // 3. Delete those rows from the old spreadsheet
     await deleteExpenseRowsByIndex(
-      refreshToken,
+      conn,
       oldSpreadsheetId,
       splitYearRows.map(({ sheetRowIdx }) => sheetRowIdx),
     );
@@ -211,12 +212,12 @@ export async function runYearSplitMigration(
       const targetSpreadsheetId = monthYear >= splitYear ? newSpreadsheetId : oldSpreadsheetId;
 
       const tabName = monthAbbrFromYYYYMM(month);
-      const tabExists = await monthTabExists(refreshToken, targetSpreadsheetId, tabName);
+      const tabExists = await monthTabExists(conn, targetSpreadsheetId, tabName);
       if (!tabExists) {
-        await createEmptyMonthTab(refreshToken, targetSpreadsheetId, tabName);
+        await createEmptyMonthTab(conn, targetSpreadsheetId, tabName);
       }
       for (const row of budgetRows) {
-        await writeMonthBudgetRow(refreshToken, targetSpreadsheetId, tabName, row);
+        await writeMonthBudgetRow(conn, targetSpreadsheetId, tabName, row);
       }
       logger.info(
         `[MIGRATION] Wrote ${budgetRows.length} budget rows to ${monthYear >= splitYear ? 'new' : 'old'} spreadsheet tab ${tabName}`,

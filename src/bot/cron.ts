@@ -7,6 +7,7 @@ import {
   cloneMonthTab,
   createEmptyMonthTab,
   createExpenseSpreadsheet,
+  googleConn,
   monthTabExists,
   sortExpensesTab,
 } from '../services/google/sheets';
@@ -37,10 +38,12 @@ export function registerMonthlyCron(bot: BotInstance): void {
         let spreadsheetId = database.groupSpreadsheets.getByYear(group.id, year);
         let newYearUrl: string | null = null;
 
+        const conn = googleConn(group);
+
         if (!spreadsheetId) {
           // New year — create spreadsheet (Expenses tab only)
           const { spreadsheetId: newId } = await createExpenseSpreadsheet(
-            group.google_refresh_token,
+            conn,
             group.default_currency,
             group.enabled_currencies,
           );
@@ -52,11 +55,7 @@ export function registerMonthlyCron(bot: BotInstance): void {
           );
         }
 
-        const tabAlreadyExists = await monthTabExists(
-          group.google_refresh_token,
-          spreadsheetId,
-          month,
-        );
+        const tabAlreadyExists = await monthTabExists(conn, spreadsheetId, month);
         if (tabAlreadyExists) {
           logger.info(`[CRON] Tab ${month} already exists for group ${group.id}, skipping`);
           continue;
@@ -66,21 +65,12 @@ export function registerMonthlyCron(bot: BotInstance): void {
         const prevSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, prevYear);
 
         let notifyText: string;
-        if (
-          prevSpreadsheetId &&
-          (await monthTabExists(group.google_refresh_token, prevSpreadsheetId, prevMonth))
-        ) {
-          await cloneMonthTab(
-            group.google_refresh_token,
-            prevSpreadsheetId,
-            prevMonth,
-            spreadsheetId,
-            month,
-          );
+        if (prevSpreadsheetId && (await monthTabExists(conn, prevSpreadsheetId, prevMonth))) {
+          await cloneMonthTab(conn, prevSpreadsheetId, prevMonth, spreadsheetId, month);
           notifyText = `Создана вкладка ${month} — скопирована из ${prevMonth}`;
           logger.info(`[CRON] Cloned ${prevMonth} → ${month} for group ${group.id}`);
         } else {
-          await createEmptyMonthTab(group.google_refresh_token, spreadsheetId, month);
+          await createEmptyMonthTab(conn, spreadsheetId, month);
           notifyText = `Создана вкладка ${month}`;
           logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
         }
@@ -120,7 +110,7 @@ export async function backfillSortExpensesTabs(): Promise<void> {
 
     for (const { year, spreadsheetId } of database.groupSpreadsheets.listAll(group.id)) {
       try {
-        await sortExpensesTab(group.google_refresh_token, spreadsheetId);
+        await sortExpensesTab(googleConn(group), spreadsheetId);
         logger.info(`[BACKFILL] Sorted Expenses tab for group ${group.id}, year ${year}`);
       } catch (err) {
         logger.error({ err }, `[BACKFILL] Sort failed for group ${group.id}, year ${year}`);
@@ -147,11 +137,7 @@ export async function recoverPriorYearExpenses(): Promise<void> {
 
     for (const { year, spreadsheetId } of priorSheets) {
       try {
-        const inserted = await importExpensesFromSheet(
-          group.id,
-          group.google_refresh_token,
-          spreadsheetId,
-        );
+        const inserted = await importExpensesFromSheet(group.id, googleConn(group), spreadsheetId);
         if (inserted > 0) {
           logger.info(
             `[RECOVER] Restored ${inserted} expense(s) for group ${group.id}, year ${year}`,

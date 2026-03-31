@@ -14,6 +14,8 @@ import { convertCurrency, formatAmount } from '../../services/currency/converter
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   createEmptyMonthTab,
+  type GoogleConn,
+  googleConn,
   monthTabExists,
   readMonthBudget,
   writeMonthBudgetRow,
@@ -157,20 +159,14 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
     return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
   }
 
-  const tabExists = await monthTabExists(
-    group.google_refresh_token,
-    spreadsheetId,
-    currentMonthAbbr,
-  );
+  const conn = googleConn(group);
+
+  const tabExists = await monthTabExists(conn, spreadsheetId, currentMonthAbbr);
   if (!tabExists) {
     return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
   }
 
-  const sheetBudgets = await readMonthBudget(
-    group.google_refresh_token,
-    spreadsheetId,
-    currentMonthAbbr,
-  );
+  const sheetBudgets = await readMonthBudget(conn, spreadsheetId, currentMonthAbbr);
 
   const result: BudgetSyncResult = {
     unchanged: 0,
@@ -373,7 +369,7 @@ export async function handleBudgetCommand(
 
   // Silent sync budgets from Google Sheets
   if (group.google_refresh_token) {
-    const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
+    const syncedCount = await silentSyncBudgets(googleConn(group), group.id);
     if (syncedCount > 0) {
       await sendToChat(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }
@@ -562,16 +558,13 @@ async function setBudget(
   }
 
   try {
-    const tabExists = await monthTabExists(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      currentMonthAbbr,
-    );
+    const conn = googleConn(group);
+    const tabExists = await monthTabExists(conn, group.spreadsheet_id, currentMonthAbbr);
     if (!tabExists) {
-      await createEmptyMonthTab(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr);
+      await createEmptyMonthTab(conn, group.spreadsheet_id, currentMonthAbbr);
     }
 
-    await writeMonthBudgetRow(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr, {
+    await writeMonthBudgetRow(conn, group.spreadsheet_id, currentMonthAbbr, {
       category: normalizedCategory,
       limit: amount,
       currency,
@@ -596,10 +589,7 @@ async function setBudget(
  * Silently sync budgets from Google Sheets to database
  * Returns number of synced budgets
  */
-export async function silentSyncBudgets(
-  googleRefreshToken: string,
-  groupId: number,
-): Promise<number> {
+export async function silentSyncBudgets(conn: GoogleConn, groupId: number): Promise<number> {
   try {
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -609,14 +599,10 @@ export async function silentSyncBudgets(
     const spreadsheetId = database.groupSpreadsheets.getByYear(groupId, currentYear);
     if (!spreadsheetId) return 0;
 
-    const tabExists = await monthTabExists(googleRefreshToken, spreadsheetId, currentMonthAbbr);
+    const tabExists = await monthTabExists(conn, spreadsheetId, currentMonthAbbr);
     if (!tabExists) return 0;
 
-    const budgetsFromSheet = await readMonthBudget(
-      googleRefreshToken,
-      spreadsheetId,
-      currentMonthAbbr,
-    );
+    const budgetsFromSheet = await readMonthBudget(conn, spreadsheetId, currentMonthAbbr);
     if (budgetsFromSheet.length === 0) return 0;
 
     // Wrap all DB writes in a transaction for atomicity
@@ -664,18 +650,15 @@ export async function silentSyncBudgets(
 async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
   void ctx;
   try {
+    const conn = googleConn(group);
     const now = new Date();
     const currentMonthAbbr = monthAbbrFromDate(now);
     const currentMonth = format(now, 'yyyy-MM');
 
-    const tabExists = await monthTabExists(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      currentMonthAbbr,
-    );
+    const tabExists = await monthTabExists(conn, group.spreadsheet_id, currentMonthAbbr);
 
     if (!tabExists) {
-      await createEmptyMonthTab(group.google_refresh_token, group.spreadsheet_id, currentMonthAbbr);
+      await createEmptyMonthTab(conn, group.spreadsheet_id, currentMonthAbbr);
       await sendToChat(
         `Вкладка ${currentMonthAbbr} создана в таблице.\n\n` +
           `Добавь бюджеты через:\n/budget set <Категория> <Сумма>`,
@@ -683,11 +666,7 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
       return;
     }
 
-    const budgetsFromSheet = await readMonthBudget(
-      group.google_refresh_token,
-      group.spreadsheet_id,
-      currentMonthAbbr,
-    );
+    const budgetsFromSheet = await readMonthBudget(conn, group.spreadsheet_id, currentMonthAbbr);
 
     if (budgetsFromSheet.length === 0) {
       await sendToChat(`В вкладке ${currentMonthAbbr} нет бюджетов для синхронизации.`);

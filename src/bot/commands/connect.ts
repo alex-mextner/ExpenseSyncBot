@@ -10,7 +10,7 @@ import {
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { generateAuthUrl } from '../../services/google/oauth';
-import { createExpenseSpreadsheet } from '../../services/google/sheets';
+import { createExpenseSpreadsheet, googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { createCurrencyKeyboard, createDefaultCurrencyKeyboard } from '../keyboards';
 import { sendToChat } from '../send';
@@ -403,7 +403,7 @@ async function createSpreadsheetForGroup(ctx: Ctx['CallbackQuery'], chatId: numb
   logger.info(`[CMD] Creating spreadsheet for group ${chatId}...`);
   try {
     const { spreadsheetId, spreadsheetUrl } = await createExpenseSpreadsheet(
-      group.google_refresh_token,
+      googleConn(group),
       group.default_currency as CurrencyCode,
       group.enabled_currencies,
     );

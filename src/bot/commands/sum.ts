@@ -8,6 +8,7 @@ import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 
+import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { sendToChat } from '../send';
 import type { Ctx } from '../types';
@@ -23,7 +24,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   void ctx;
   // Silent sync budgets from Google Sheets
   if (group.google_refresh_token) {
-    const syncedCount = await silentSyncBudgets(group.google_refresh_token, group.id);
+    const syncedCount = await silentSyncBudgets(googleConn(group), group.id);
     if (syncedCount > 0) {
       await sendToChat(`🔄 Синхронизировано записей бюджета: ${syncedCount}`);
     }

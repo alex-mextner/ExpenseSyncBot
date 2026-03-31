@@ -141,7 +141,7 @@ describe('ExpenseRecorder', () => {
       expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(1);
       const sheetCall = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
       if (!sheetCall) throw new Error('Expected sheet write call');
-      expect(sheetCall[0]).toBe('token-abc');
+      expect(sheetCall[0]).toEqual({ refreshToken: 'token-abc', oauthClient: 'legacy' });
       expect(sheetCall[1]).toBe('sheet-123');
       expect(sheetCall[2]).toEqual({
         date: '2026-03-24',
