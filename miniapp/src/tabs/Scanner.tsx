@@ -3,6 +3,17 @@ import React, { useCallback, useState } from 'react';
 import { confirmExpenses, scanQR, uploadOCR } from '../api/receipt';
 import type { ReceiptItem } from '../api/receipt';
 
+/** Russian numeral declension — picks correct noun form for a given count */
+function pluralize(n: number, one: string, few: string, many: string): string {
+	const abs = Math.abs(n);
+	const mod10 = abs % 10;
+	const mod100 = abs % 100;
+	if (mod100 >= 11 && mod100 <= 19) return many;
+	if (mod10 === 1) return one;
+	if (mod10 >= 2 && mod10 <= 4) return few;
+	return many;
+}
+
 type Phase = 'idle' | 'url-input' | 'ocr-input' | 'loading' | 'confirm' | 'done' | 'error';
 
 interface Props {
@@ -43,8 +54,10 @@ export function Scanner({ groupId }: Props) {
 		}
 
 		tg.showScanQrPopup({ text: 'Наведи на QR-код чека' }, (text: string) => {
-			tg.closeScanQrPopup();
-			handleQRDetected(text);
+			handleQRDetected(text).catch((err: unknown) => {
+				setError(err instanceof Error ? err.message : 'Ошибка сканирования');
+				setPhase('error');
+			});
 			return true;
 		});
 	}, [handleQRDetected]);
@@ -208,7 +221,7 @@ export function Scanner({ groupId }: Props) {
 				))}
 				{items.length > 0 && (
 					<button type="button" onClick={handleConfirm} style={{ ...btnStyle, marginTop: 8 }}>
-						Записать {items.length} расход{items.length === 1 ? '' : 'а'}
+						Записать {items.length} {pluralize(items.length, 'расход', 'расхода', 'расходов')}
 					</button>
 				)}
 				<button type="button" onClick={resetToIdle} style={{ ...secondaryBtnStyle, marginTop: 8 }}>
@@ -309,7 +322,6 @@ export function Scanner({ groupId }: Props) {
 
 const pageStyle: React.CSSProperties = {
 	padding: 24,
-	fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
 	color: 'var(--tg-theme-text-color, #000)',
 	backgroundColor: 'var(--tg-theme-bg-color, #fff)',
 	minHeight: '100dvh',
