@@ -1,78 +1,121 @@
 // Tests for Mini App API handler: HMAC validation, group membership, routing, CORS
+
+import type { SQLQueryBindings } from 'bun:sqlite';
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
+import pino from 'pino';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
+import type { Category, Group, User } from '../database/types.ts';
+import type {
+  RecordExpenseData,
+  RecordExpenseResult,
+  RecorderApi,
+} from '../services/expense-recorder.ts';
 import * as expenseRecorderModule from '../services/expense-recorder.ts';
-import type { AIExtractionResult } from '../services/receipt/ai-extractor.ts';
+import type { AIExtractionResult, CategoryExample } from '../services/receipt/ai-extractor.ts';
 import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
 import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
+import type { BrowserLike } from '../services/receipt/receipt-fetcher.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
 import * as loggerModule from '../utils/logger.ts';
+import type { SseEventType } from './sse-emitter.ts';
 import * as sseEmitterModule from './sse-emitter.ts';
 
 const TEST_BOT_TOKEN = 'test_bot_token_12345';
 const CORS_ORIGIN = 'https://app.example.com';
 
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+/** Build a full Expense stub with sensible defaults, overriding only what the test cares about */
+function stubExpense(
+  overrides: Partial<import('../database/types.ts').Expense> & { id: number },
+): import('../database/types.ts').Expense {
+  return {
+    group_id: 7,
+    user_id: 1,
+    date: '2024-01-15',
+    category: 'test',
+    comment: '',
+    amount: 10,
+    currency: 'EUR',
+    eur_amount: 10,
+    created_at: '2024-01-15',
+    ...overrides,
+  };
+}
+
+/** Build a full Category stub — tests only care about `name` */
+function stubCategory(name: string, overrides?: Partial<Category>): Category {
+  return { id: 1, group_id: 7, name, created_at: '2024-01-01', ...overrides };
+}
+
+/** Build a full Group stub */
+function stubGroup(overrides?: Partial<Group>): Group {
+  return {
+    id: 7,
+    telegram_group_id: -1001234567,
+    default_currency: 'RSD',
+    enabled_currencies: ['RSD'],
+    google_refresh_token: null,
+    spreadsheet_id: null,
+    custom_prompt: null,
+    active_topic_id: null,
+    bank_panel_summary_message_id: null,
+    oauth_client: 'current',
+    created_at: '2024-01-01',
+    updated_at: '2024-01-01',
+    ...overrides,
+  };
+}
+
 // ── Mocks (must be declared before importing the module under test) ───────────
 
-const mockFindByTelegramId = mock(
-  (_id: number) =>
-    null as {
-      id: number;
-      telegram_id: number;
-      group_id: number | null;
-      created_at: string;
-      updated_at: string;
-    } | null,
-);
-// Generic queryOne mock — used by membership checks, dashboard queries, analytics, etc.
+const mockFindByTelegramId = mock((_id: number): User | null => null);
+// Generic queryOne/queryAll — spyOn preserves the generic type parameter, but
+// mockImplementation() can't accept a non-generic function. We define concrete
+// function types matching the erased signature so mocks type-check at call sites.
 // Union covers all row shapes returned across the different query calls in tests.
 type MockDbRow =
   | { id: number }
   | { config: string; updated_at: string }
   | { updated_at: string }
   | null;
-const mockDbQueryOne = mock((_sql: string, ..._params: unknown[]) => null as MockDbRow);
-// Generic queryAll mock — used by analytics and similar multi-row queries
-const mockDbQueryAll = mock((_sql: string, ..._params: unknown[]) => [] as unknown[]);
+type QueryOneFn = (sql: string, ...params: SQLQueryBindings[]) => MockDbRow;
+type QueryAllFn = (sql: string, ...params: SQLQueryBindings[]) => unknown[];
+const mockDbQueryOne = mock<QueryOneFn>((_sql, ..._params) => null);
+const mockDbQueryAll = mock<QueryAllFn>((_sql, ..._params) => []);
 // Generic exec mock — used by UPDATE/INSERT statements
-const mockDbExec = mock((_sql: string, ..._params: unknown[]) => {});
-const mockCategoriesFindByGroupId = mock((_groupId: number) => [] as { name: string }[]);
-const mockGroupsFindById = mock(
-  (_id: number) =>
-    null as {
-      id: number;
-      telegram_group_id: number;
-      default_currency: string;
-      enabled_currencies: string[];
-      google_refresh_token: string | null;
-      spreadsheet_id: string | null;
-      custom_prompt: string | null;
-      active_topic_id: number | null;
-      panel_message_thread_id: number | null;
-      created_at: string;
-      updated_at: string;
-    } | null,
+const mockDbExec = mock((_sql: string, ..._params: SQLQueryBindings[]): void => {});
+const mockCategoriesFindByGroupId = mock((_groupId: number): Category[] => []);
+const mockGroupsFindById = mock((_id: number): Group | null => null);
+const mockFetchReceiptData = mock(
+  (_qrData: string, _getBrowserFn?: () => Promise<BrowserLike>): Promise<string> =>
+    Promise.resolve(''),
 );
-const mockFetchReceiptData = mock((_qrData: string) => Promise.resolve('') as Promise<string>);
 const mockExtractExpensesFromReceipt = mock(
-  (_data: string, _categories: string[]): Promise<AIExtractionResult> =>
-    Promise.resolve({ items: [] }),
+  (
+    _data: string,
+    _categories: string[],
+    _categoryExamples?: Map<string, CategoryExample[]>,
+    _maxRetries?: number,
+  ): Promise<AIExtractionResult> => Promise.resolve({ items: [] }),
 );
 const mockExtractTextFromImageBuffer = mock(
   (_buf: Buffer): Promise<string> => Promise.resolve('OCR text'),
 );
 const mockExpenseRecorderRecord = mock(
-  (
-    _groupId: number,
-    _userId: number,
-    _data: unknown,
-  ): Promise<{ expense: { id: number }; eurAmount: number }> =>
-    Promise.resolve({ expense: { id: 99 }, eurAmount: 10 }),
+  (_groupId: number, _userId: number, _data: RecordExpenseData): Promise<RecordExpenseResult> =>
+    Promise.resolve({ expense: stubExpense({ id: 99 }), eurAmount: 10 }),
 );
-const mockGetExpenseRecorder = mock(() => ({ record: mockExpenseRecorderRecord }));
-const mockEmitForGroup = mock((_groupId: number, _eventType: string) => {});
+const mockGetExpenseRecorder = mock(
+  (): RecorderApi => ({
+    record: mockExpenseRecorderRecord,
+    recordBatch: () => Promise.resolve([]),
+    pushToSheet: () => Promise.resolve(),
+  }),
+);
+const mockEmitForGroup = mock((_groupId: number, _eventType: SseEventType): void => {});
 const mockSubscribeGroup = mock(
   (_groupId: number, _send: (event: string) => void): (() => void) =>
     () => {},
@@ -105,33 +148,27 @@ mock.module('sharp', () => ({ default: mockSharp }));
 
 // Use spyOn instead of mock.module for all project modules.
 // mock.module pollutes Bun's global module cache, breaking unrelated tests.
-// biome-ignore lint/suspicious/noExplicitAny: test mock bridge — spy expects real method types but mock functions use loose types
-type MockBridge = (...args: any[]) => any;
-spyOn(database.users, 'findByTelegramId').mockImplementation(mockFindByTelegramId as MockBridge);
-spyOn(database.categories, 'findByGroupId').mockImplementation(
-  mockCategoriesFindByGroupId as MockBridge,
-);
-spyOn(database.groups, 'findById').mockImplementation(mockGroupsFindById as MockBridge);
-spyOn(database, 'queryOne').mockImplementation(mockDbQueryOne as MockBridge);
-spyOn(database, 'queryAll').mockImplementation(mockDbQueryAll as MockBridge);
-spyOn(database, 'exec').mockImplementation(mockDbExec as MockBridge);
-spyOn(database, 'transaction').mockImplementation(((fn: () => unknown) => fn()) as MockBridge);
-spyOn(receiptFetcherModule, 'fetchReceiptData').mockImplementation(
-  mockFetchReceiptData as MockBridge,
-);
+spyOn(database.users, 'findByTelegramId').mockImplementation(mockFindByTelegramId);
+spyOn(database.categories, 'findByGroupId').mockImplementation(mockCategoriesFindByGroupId);
+spyOn(database.groups, 'findById').mockImplementation(mockGroupsFindById);
+// queryOne/queryAll are generic — TypeScript can't match a concrete mock to a generic signature,
+// so we widen the mock type to the erased method signature via `as typeof database.queryOne`.
+spyOn(database, 'queryOne').mockImplementation(mockDbQueryOne as typeof database.queryOne);
+spyOn(database, 'queryAll').mockImplementation(mockDbQueryAll as typeof database.queryAll);
+spyOn(database, 'exec').mockImplementation(mockDbExec);
+spyOn(database, 'transaction').mockImplementation(<T>(fn: () => T): T => fn());
+spyOn(receiptFetcherModule, 'fetchReceiptData').mockImplementation(mockFetchReceiptData);
 spyOn(aiExtractorModule, 'extractExpensesFromReceipt').mockImplementation(
-  mockExtractExpensesFromReceipt as MockBridge,
+  mockExtractExpensesFromReceipt,
 );
 spyOn(ocrExtractorModule, 'extractTextFromImageBuffer').mockImplementation(
-  mockExtractTextFromImageBuffer as MockBridge,
+  mockExtractTextFromImageBuffer,
 );
-spyOn(expenseRecorderModule, 'getExpenseRecorder').mockImplementation(
-  mockGetExpenseRecorder as MockBridge,
-);
-spyOn(sseEmitterModule, 'emitForGroup').mockImplementation(mockEmitForGroup as MockBridge);
-spyOn(sseEmitterModule, 'subscribeGroup').mockImplementation(mockSubscribeGroup as MockBridge);
-const silentLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-spyOn(loggerModule, 'createLogger').mockImplementation((() => silentLogger) as MockBridge);
+spyOn(expenseRecorderModule, 'getExpenseRecorder').mockImplementation(mockGetExpenseRecorder);
+spyOn(sseEmitterModule, 'emitForGroup').mockImplementation(mockEmitForGroup);
+spyOn(sseEmitterModule, 'subscribeGroup').mockImplementation(mockSubscribeGroup);
+const silentLogger = pino({ enabled: false });
+spyOn(loggerModule, 'createLogger').mockImplementation((_module: string) => silentLogger);
 
 // Import after mocks are set up
 import { handleMiniAppRequest, validateAndResolveContext } from './miniapp-api.ts';
@@ -416,8 +453,8 @@ describe('POST /api/receipt/scan', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [
-      { name: 'Продукты' },
-      { name: 'Разное' },
+      stubCategory('Продукты'),
+      stubCategory('Разное'),
     ]);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockExtractExpensesFromReceipt.mockImplementation(() =>
@@ -495,7 +532,10 @@ describe('POST /api/receipt/scan', () => {
   test('categories are loaded from DB and passed to extractor', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockCategoriesFindByGroupId.mockImplementation(() => [{ name: 'Еда' }, { name: 'Транспорт' }]);
+    mockCategoriesFindByGroupId.mockImplementation(() => [
+      stubCategory('Еда'),
+      stubCategory('Транспорт'),
+    ]);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockExtractExpensesFromReceipt.mockImplementation(() =>
       Promise.resolve({
@@ -644,7 +684,7 @@ describe('POST /api/receipt/ocr', () => {
   test('success → 200 with items and file_id', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockCategoriesFindByGroupId.mockImplementation(() => [{ name: 'Продукты' }]);
+    mockCategoriesFindByGroupId.mockImplementation(() => [stubCategory('Продукты')]);
     mockExtractTextFromImageBuffer.mockImplementation(() =>
       Promise.resolve('Store: TestMart\nMilk 2x85.50'),
     );
@@ -781,7 +821,7 @@ describe('POST /api/receipt/confirm', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockExpenseRecorderRecord.mockImplementation(() =>
-      Promise.resolve({ expense: { id: 55 }, eurAmount: 8.5 }),
+      Promise.resolve({ expense: stubExpense({ id: 55 }), eurAmount: 8.5 }),
     );
 
     const initData = buildInitData(42);
@@ -811,7 +851,7 @@ describe('POST /api/receipt/confirm', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockExpenseRecorderRecord.mockImplementation(() =>
-      Promise.resolve({ expense: { id: 88 }, eurAmount: 5 }),
+      Promise.resolve({ expense: stubExpense({ id: 88 }), eurAmount: 5 }),
     );
 
     const initData = buildInitData(42);
@@ -834,7 +874,7 @@ describe('POST /api/receipt/confirm', () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockExpenseRecorderRecord.mockImplementation(() =>
-      Promise.resolve({ expense: { id: 77 }, eurAmount: 5 }),
+      Promise.resolve({ expense: stubExpense({ id: 77 }), eurAmount: 5 }),
     );
 
     const initData = buildInitData(42);
@@ -877,19 +917,7 @@ describe('GET /api/analytics', () => {
   test('success → 200 with correct shape', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockGroupsFindById.mockImplementation(() => ({
-      id: 7,
-      telegram_group_id: GROUP_ID,
-      default_currency: 'RSD',
-      enabled_currencies: ['RSD'],
-      google_refresh_token: null,
-      spreadsheet_id: null,
-      custom_prompt: null,
-      active_topic_id: null,
-      panel_message_thread_id: null,
-      created_at: '2024-01-01',
-      updated_at: '2024-01-01',
-    }));
+    mockGroupsFindById.mockImplementation(() => stubGroup({ telegram_group_id: GROUP_ID }));
     mockDbQueryAll.mockImplementation(() => [
       { category: 'Food', total: 100 },
       { category: 'Transport', total: 50 },

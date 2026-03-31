@@ -322,7 +322,7 @@ export async function handleExpenseMessage(
     if (categoryExists || !parsed.category) {
       logger.info(`[MSG] Line ${index + 1}: saving to sheet`);
       try {
-        await saveExpenseToSheet(user.id, group.id, pendingExpense.id, telegramGroupId, bot);
+        await saveExpenseToSheet(user.id, group.id, pendingExpense.id);
         successCount++;
       } catch (error) {
         logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
@@ -428,7 +428,7 @@ async function handleCategoryTextInput(
         if (user) {
           const group = database.groups.findById(groupId);
           if (group) {
-            await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id, bot);
+            await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id);
           }
         }
       } else {
@@ -503,7 +503,7 @@ async function handleCategoryTextInput(
       if (user) {
         const group = database.groups.findById(groupId);
         if (group) {
-          await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id, bot);
+          await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id);
         }
       }
     } else {

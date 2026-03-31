@@ -8,7 +8,7 @@ import { convertCurrency, formatAmount } from '../../services/currency/converter
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { silentSyncBudgets } from '../commands/budget';
-import type { BotInstance } from '../types';
+import { sendToChat } from '../send';
 
 const logger = createLogger('expense-saver');
 
@@ -19,8 +19,6 @@ export async function saveExpenseToSheet(
   userId: number,
   groupId: number,
   pendingExpenseId: number,
-  telegramGroupId?: number,
-  bot?: BotInstance,
 ): Promise<void> {
   logger.info('[SAVE] Starting save to sheet...');
 
@@ -107,10 +105,8 @@ export async function saveExpenseToSheet(
   });
   logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
 
-  // Check budget limits
-  if (telegramGroupId && bot) {
-    await checkBudgetLimit(groupId, category, currentDate, telegramGroupId, bot);
-  }
+  // Check budget limits (sendToChat reads chat from AsyncLocalStorage)
+  await checkBudgetLimit(groupId, category, currentDate);
 }
 
 /**
@@ -120,8 +116,6 @@ async function checkBudgetLimit(
   groupId: number,
   category: string,
   currentDate: string,
-  telegramGroupId: number,
-  bot: BotInstance,
 ): Promise<void> {
   const { startOfMonth, endOfMonth, format } = await import('date-fns');
   const { getCategoryEmoji } = await import('../../config/category-emojis');
@@ -164,10 +158,7 @@ async function checkBudgetLimit(
     }
 
     try {
-      await bot.api.sendMessage({
-        chat_id: telegramGroupId,
-        text: message,
-      });
+      await sendToChat(message);
       logger.info(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
     } catch (error) {
       logger.error({ err: error }, '[BUDGET] Failed to send warning');
@@ -182,7 +173,6 @@ export async function saveReceiptExpenses(
   photoQueueId: number,
   groupId: number,
   userId: number,
-  bot: BotInstance,
 ): Promise<void> {
   const confirmedItems = database.receiptItems.findConfirmedByPhotoQueueId(photoQueueId);
 
@@ -300,12 +290,13 @@ export async function saveReceiptExpenses(
       )
     : undefined;
 
-  await bot.api.sendMessage({
-    chat_id: group.telegram_group_id,
-    text: `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
-    parse_mode: 'HTML',
-    ...(scanButton ? { reply_markup: scanButton } : {}),
-  });
+  await sendToChat(
+    `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
+    {
+      parse_mode: 'HTML',
+      ...(scanButton ? { reply_markup: scanButton } : {}),
+    },
+  );
 
   logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
 }

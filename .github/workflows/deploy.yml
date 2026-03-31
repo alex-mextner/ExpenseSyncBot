@@ -6,39 +6,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  typecheck:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: false
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-
       - run: bun install
       - run: bun run type-check
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install
       - run: bun run lint
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install
       - name: Run tests
         run: bun test
+      - name: Build Mini App
+        run: cd miniapp && bun install --frozen-lockfile && bun run build
 
   deploy:
-    needs: [typecheck, lint, test]
+    needs: [check]
     runs-on: ubuntu-latest
 
     steps:
@@ -113,8 +102,8 @@ jobs:
 
   notify-failure:
     name: Notify on failure
-    needs: [typecheck, lint, test, deploy]
-    if: always() && (needs.typecheck.result == 'failure' || needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.deploy.result == 'failure')
+    needs: [check, deploy]
+    if: always() && (needs.check.result == 'failure' || needs.deploy.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Send failure notification
