@@ -28,7 +28,7 @@ import { handleStatsCommand } from './commands/stats';
 import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
-import { registerMonthlyCron } from './cron';
+import { registerExchangeRateCron, registerMonthlyCron } from './cron';
 import { requireGoogle, requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
@@ -196,6 +196,9 @@ export function createBot(): Bot {
   bot.onError(({ kind, error }) => {
     logger.error({ err: error, kind }, '[BOT] Unhandled error');
   });
+
+  // Fetch exchange rates on startup + every 6h
+  registerExchangeRateCron();
 
   // Register monthly budget tab cron
   registerMonthlyCron(bot);

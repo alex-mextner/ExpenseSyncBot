@@ -279,6 +279,8 @@ export async function saveReceiptExpenses(
         });
       }
     });
+
+    await checkBudgetLimit(groupId, category, currentDate);
   }
 
   // Delete all processed receipt items (confirmed + skipped)

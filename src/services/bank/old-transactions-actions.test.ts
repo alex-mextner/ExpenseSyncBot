@@ -85,12 +85,12 @@ beforeEach(() => {
   updateStatusSpy = spyOn(database.bankTransactions, 'updateStatus');
   setTelegramMessageIdSpy = spyOn(database.bankTransactions, 'setTelegramMessageId');
 
-  spyOn(prefillModule, 'preFillTransaction').mockResolvedValue({});
+  spyOn(prefillModule, 'preFillTransactions').mockResolvedValue([]);
 
   sendMessageSpy = spyOn(senderModule, 'sendMessage').mockResolvedValue({ message_id: 42 });
   spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined);
   withChatContextSpy = spyOn(senderModule, 'withChatContext').mockImplementation(
-    (_c: number, _th: number | null, fn: () => Promise<void>) => fn(),
+    <T>(_c: number, _th: number | null, fn: () => Promise<T>) => fn(),
   );
   spyOn(senderModule, 'sendDirect').mockResolvedValue(null);
 });

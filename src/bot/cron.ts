@@ -1,7 +1,10 @@
-// Monthly budget tab auto-clone — runs at 00:00 on the 1st of every month
+// Scheduled tasks: daily exchange rate update + monthly budget tab auto-clone
 
 import cron from 'node-cron';
+import { env } from '../config/env';
 import { database } from '../database';
+import { sendDirect } from '../services/bank/telegram-sender';
+import { updateExchangeRates } from '../services/currency/converter';
 import { monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
 import {
   cloneMonthTab,
@@ -16,6 +19,54 @@ import { importExpensesFromSheet } from './commands/sync';
 import type { BotInstance } from './types';
 
 const logger = createLogger('cron');
+
+const RATE_FETCH_MAX_RETRIES = 3;
+const RATE_FETCH_BASE_DELAY_MS = 10_000; // 10s, 20s, 40s
+
+/**
+ * Fetch exchange rates with exponential backoff.
+ * After all retries fail, notifies admin via Telegram.
+ */
+async function fetchRatesWithRetry(): Promise<void> {
+  for (let attempt = 1; attempt <= RATE_FETCH_MAX_RETRIES; attempt++) {
+    try {
+      await updateExchangeRates();
+      return;
+    } catch (err) {
+      logger.error({ err, attempt }, '[CRON] Exchange rate fetch failed');
+      if (attempt < RATE_FETCH_MAX_RETRIES) {
+        const delay = RATE_FETCH_BASE_DELAY_MS * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+
+  logger.error('[CRON] Exchange rate fetch failed after all retries');
+  if (env.BOT_ADMIN_CHAT_ID) {
+    await sendDirect(
+      env.BOT_ADMIN_CHAT_ID,
+      `⚠️ Курсы валют не обновились после ${RATE_FETCH_MAX_RETRIES} попыток. Бот использует fallback-курсы.`,
+    ).catch((sendErr) =>
+      logger.error({ err: sendErr }, '[CRON] Failed to notify admin about rate failure'),
+    );
+  }
+}
+
+/**
+ * Fetch exchange rates on startup and daily at 01:00 UTC.
+ * open.er-api.com updates around 00:00 UTC — fetching at 01:00 ensures fresh data.
+ */
+export function registerExchangeRateCron(): void {
+  fetchRatesWithRetry().catch((err) =>
+    logger.error({ err }, '[CRON] Initial exchange rate fetch failed'),
+  );
+  cron.schedule('0 1 * * *', () => {
+    fetchRatesWithRetry().catch((err) =>
+      logger.error({ err }, '[CRON] Exchange rate refresh failed'),
+    );
+  });
+  logger.info('[CRON] Exchange rate cron registered (daily 01:00 UTC, fetch on startup)');
+}
 
 export function registerMonthlyCron(bot: BotInstance): void {
   cron.schedule('0 0 1 * *', async () => {
