@@ -3,8 +3,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import Anthropic from '@anthropic-ai/sdk';
+
+mock.module('./response-validator', () => ({
+  validateResponse: mock(async () => ({ approved: true })),
+}));
+
 import { ExpenseBotAgent } from './agent';
-import * as responseValidator from './response-validator';
 import type { AgentContext } from './types';
 
 // Minimal AgentContext with all required fields
@@ -112,8 +116,6 @@ describe('ExpenseBotAgent', () => {
   beforeEach(() => {
     agent = new ExpenseBotAgent('test-api-key', makeCtx());
     mockBot = makeMockBot();
-    // Prevent real API calls from the response validator
-    spyOn(responseValidator, 'validateResponse').mockResolvedValue({ approved: true });
   });
 
   afterEach(() => {
