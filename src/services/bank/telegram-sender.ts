@@ -1,5 +1,6 @@
-// Send-only Telegram Bot API client for the bank-sync service.
-// The main bot handles incoming updates; bank-sync uses this to send notifications only.
+// Send-only Telegram Bot API client for background workers (sync-service, cron, etc.).
+// Uses AsyncLocalStorage for chat context — set once at the entry point, sendMessage reads automatically.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('telegram-sender');
@@ -17,6 +18,30 @@ interface TelegramResponse<T> {
   ok: boolean;
   result?: T;
   description?: string;
+}
+
+interface ChatContext {
+  botToken: string;
+  chatId: number;
+  threadId: number | null;
+}
+
+const chatContext = new AsyncLocalStorage<ChatContext>();
+
+/** Run a function with chat context — sendMessage/editMessageText read from it automatically. */
+export function withChatContext<T>(
+  botToken: string,
+  chatId: number,
+  threadId: number | null,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return chatContext.run({ botToken, chatId, threadId }, fn);
+}
+
+function getContext(): ChatContext {
+  const ctx = chatContext.getStore();
+  if (!ctx) throw new Error('Telegram sender called outside withChatContext');
+  return ctx;
 }
 
 async function telegramRequest<T>(
@@ -42,13 +67,56 @@ async function telegramRequest<T>(
   }
 }
 
+/** Send a message. Reads chatId + threadId from withChatContext automatically. */
 export async function sendMessage(
+  text: string,
+  options?: {
+    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
+  },
+): Promise<SendMessageResult | null> {
+  const ctx = getContext();
+  return telegramRequest<SendMessageResult>(ctx.botToken, 'sendMessage', {
+    chat_id: ctx.chatId,
+    text,
+    parse_mode: 'HTML',
+    ...(ctx.threadId !== null ? { message_thread_id: ctx.threadId } : {}),
+    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
+  });
+}
+
+/** Edit a message. Reads chatId from withChatContext automatically. */
+export async function editMessageText(
+  messageId: number,
+  text: string,
+  options?: {
+    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
+  },
+): Promise<void> {
+  const ctx = getContext();
+  await telegramRequest(ctx.botToken, 'editMessageText', {
+    chat_id: ctx.chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'HTML',
+    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
+  });
+}
+
+export async function deleteMessage(messageId: number): Promise<void> {
+  const ctx = getContext();
+  await telegramRequest(ctx.botToken, 'deleteMessage', {
+    chat_id: ctx.chatId,
+    message_id: messageId,
+  });
+}
+
+/** Direct send to a specific chatId — no context, no topic handling.
+ * Use for admin notifications and other non-group messages. */
+export async function sendDirect(
   botToken: string,
   chatId: number,
   text: string,
   options?: {
-    message_thread_id?: number;
-    parse_mode?: 'HTML';
     reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
   },
 ): Promise<SendMessageResult | null> {
@@ -56,36 +124,6 @@ export async function sendMessage(
     chat_id: chatId,
     text,
     parse_mode: 'HTML',
-    ...options,
-  });
-}
-
-export async function editMessageText(
-  botToken: string,
-  chatId: number,
-  messageId: number,
-  text: string,
-  options?: {
-    parse_mode?: 'HTML';
-    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
-  },
-): Promise<void> {
-  await telegramRequest(botToken, 'editMessageText', {
-    chat_id: chatId,
-    message_id: messageId,
-    text,
-    parse_mode: 'HTML',
-    ...options,
-  });
-}
-
-export async function deleteMessage(
-  botToken: string,
-  chatId: number,
-  messageId: number,
-): Promise<void> {
-  await telegramRequest(botToken, 'deleteMessage', {
-    chat_id: chatId,
-    message_id: messageId,
+    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {}),
   });
 }

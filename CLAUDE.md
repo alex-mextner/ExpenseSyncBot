@@ -233,6 +233,26 @@ Uses `date-fns` library. Spreadsheet dates are in `DD.MM.YYYY` format (European)
 Uses `formatAmount(amount, currency)` from `src/services/currency/converter.ts`.
 For amounts ≥ 1 million, it outputs suffix form: `1.5 млн RSD`, `2 млрд RUB`.
 
+**Never use `.toFixed()` for user-facing amounts.** Always use `formatAmount()` — it handles large numbers (млн/млрд) and consistent decimal formatting. Raw `.toFixed()` is only acceptable inside `formatAmount` itself or for non-currency values.
+
+### Russian Numeral Declension
+
+**Every user-facing `${count} <noun>` must use `pluralize()` from `src/utils/pluralize.ts`.**
+
+```ts
+import { pluralize } from '../../utils/pluralize';
+
+// pluralize(n, one, few, many)
+`${count} ${pluralize(count, 'расход', 'расхода', 'расходов')}`
+`${count} ${pluralize(count, 'транзакция', 'транзакции', 'транзакций')}`
+`${count} ${pluralize(count, 'карточка', 'карточки', 'карточек')}`
+`${count} ${pluralize(count, 'бюджет', 'бюджета', 'бюджетов')}`
+`${count} ${pluralize(count, 'категория', 'категории', 'категорий')}`
+`${count} ${pluralize(count, 'запись', 'записи', 'записей')}`
+```
+
+Hardcoding a single form like `${n} расходов` is wrong for n=1 ("1 расходов") and n=3 ("3 расходов"). No exceptions.
+
 ### EUR vs Default Currency — Critical Rules
 
 **EUR is the internal calculation currency only.** It is used for:
@@ -307,16 +327,26 @@ Bot uses `AsyncLocalStorage` middleware ([src/bot/topic-middleware.ts](src/bot/t
 - The middleware is registered in [src/bot/index.ts](src/bot/index.ts) before all handlers
 - Topic restriction checks still require extracting `message_thread_id` from context manually
 
-**Background workers: topic fallback pattern**
+**Background workers: `sendMessage` from `telegram-sender.ts`**
 
-When sending a message from a background worker (sync-service, cron jobs, etc.), use the bank panel thread with a fallback to the group's active topic:
+`sendMessage` uses `AsyncLocalStorage` — same pattern as `topic-middleware`. Context is set once at the entry point via `withChatContext`, all `sendMessage`/`editMessageText` calls inside read chatId + threadId automatically:
 
 ```ts
+import { sendMessage, editMessageText, withChatContext } from './telegram-sender';
+
+// Set context once at the entry point (e.g. start of sync cycle):
 const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
-await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text,
-  threadId !== null ? { message_thread_id: threadId } : undefined,
-);
+await withChatContext(env.BOT_TOKEN, group.telegram_group_id, threadId, async () => {
+  // All calls inside read chatId + threadId from context:
+  await sendMessage(text);
+  await sendMessage(cardText, { reply_markup: keyboard });
+  await editMessageText(messageId, statusText);
+});
 ```
+
+**`sendMessage` is for group chat only.** For admin notifications (feedback, merchant rules), use `sendDirect(botToken, chatId, text, options?)` — no context, no topic handling.
+
+**Never compute `message_thread_id` manually.** Set the context via `withChatContext` — `sendMessage` handles the rest.
 
 Never send to the main chat (no thread) when the group has an `active_topic_id` — the user won't see messages from a topic-based group in the General channel.
 

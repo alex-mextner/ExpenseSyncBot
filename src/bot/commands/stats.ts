@@ -6,6 +6,7 @@ import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import { formatErrorForUser } from '../bot-error-formatter';
 import { sendToChat } from '../send';
 import type { Ctx } from '../types';
@@ -35,7 +36,7 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
     const totalDisplay = convertCurrency(totalEUR, BASE_CURRENCY, group.default_currency);
     message += `\n<b>Всего:</b> ${formatAmount(totalDisplay, group.default_currency)}\n`;
 
-    message += `\n<b>Последние ${recentExpenses.length} расходов:</b>\n`;
+    message += `\n<b>Последние ${recentExpenses.length} ${pluralize(recentExpenses.length, 'расход', 'расхода', 'расходов')}:</b>\n`;
     for (const expense of recentExpenses) {
       const symbol = getCurrencySymbol(expense.currency);
       message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;

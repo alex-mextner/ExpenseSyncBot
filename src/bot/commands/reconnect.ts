@@ -20,6 +20,7 @@ import {
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { importExpensesFromSheet } from './sync';
@@ -408,7 +409,9 @@ function formatFullSyncReport(report: FullSyncReport): string {
   if (report.snapshotId || report.sheetBackupUrl) {
     lines.push('💾 Бекапы:');
     if (report.snapshotId) {
-      lines.push(`  БД: ${report.snapshotExpenses} расходов + ${report.snapshotBudgets} бюджетов`);
+      lines.push(
+        `  БД: ${report.snapshotExpenses} ${pluralize(report.snapshotExpenses, 'расход', 'расхода', 'расходов')} + ${report.snapshotBudgets} ${pluralize(report.snapshotBudgets, 'бюджет', 'бюджета', 'бюджетов')}`,
+      );
     }
     if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
     lines.push('');
@@ -420,14 +423,18 @@ function formatFullSyncReport(report: FullSyncReport): string {
 
   // Sheet → DB expenses
   if (report.sheetToDbExpenses > 0) {
-    lines.push(`\n📥 Таблица → БД: +${report.sheetToDbExpenses} расходов добавлено`);
+    lines.push(
+      `\n📥 Таблица → БД: +${report.sheetToDbExpenses} ${pluralize(report.sheetToDbExpenses, 'расход добавлен', 'расхода добавлено', 'расходов добавлено')}`,
+    );
   } else {
     lines.push('\n📥 Таблица → БД: расходы синхронизированы');
   }
 
   // DB → Sheet expenses
   if (report.dbToSheetExpenses > 0) {
-    lines.push(`📤 БД → Таблица: +${report.dbToSheetExpenses} расходов добавлено`);
+    lines.push(
+      `📤 БД → Таблица: +${report.dbToSheetExpenses} ${pluralize(report.dbToSheetExpenses, 'расход добавлен', 'расхода добавлено', 'расходов добавлено')}`,
+    );
   } else {
     lines.push('📤 БД → Таблица: всё синхронизировано');
   }

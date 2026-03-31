@@ -3,7 +3,7 @@ import { env } from '../config/env';
 import { database } from '../database';
 import { escapeHtml } from '../utils/html';
 import { createLogger } from '../utils/logger.ts';
-import { sendMessage } from './bank/telegram-sender';
+import { sendDirect } from './bank/telegram-sender';
 
 const logger = createLogger('feedback');
 
@@ -42,7 +42,7 @@ export async function sendFeedback(params: FeedbackParams): Promise<FeedbackResu
   const safeMessage = escapeHtml(message);
   const text = `💬 Фидбек из группы ${groupLabel}${userLabel}:\n\n${safeMessage}`;
 
-  await sendMessage(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text);
+  await sendDirect(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text);
   logger.info({ groupId, chatId }, 'Feedback sent to admin');
   return { success: true };
 }

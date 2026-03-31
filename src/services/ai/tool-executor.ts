@@ -10,6 +10,7 @@ import { database } from '../../database';
 import type { BankTransaction, BankTransactionFilters } from '../../database/types';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
@@ -771,7 +772,7 @@ async function executeFindMissingExpenses(
   return {
     success: true,
     data: missing,
-    summary: `${missing.length} транзакций без записи в расходах за период ${startDate}–${endDate}`,
+    summary: `${missing.length} ${pluralize(missing.length, 'транзакция', 'транзакции', 'транзакций')} без записи в расходах за период ${startDate}–${endDate}`,
   };
 }
 

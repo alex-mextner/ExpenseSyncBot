@@ -7,8 +7,9 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { convertAnyToEUR } from '../currency/converter';
+import { convertAnyToEUR, formatAmount } from '../currency/converter';
 import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
@@ -16,7 +17,8 @@ import { preFillTransactions } from './prefill';
 import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
 import { createZenMoneyShim } from './runtime';
-import { editMessageText, sendMessage } from './telegram-sender';
+import { editMessageText, sendMessage, withChatContext } from './telegram-sender';
+import { buildOldTxSummaryText } from './transaction-summary';
 import type {
   AccountReferenceByData,
   Merchant,
@@ -130,327 +132,300 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       return;
     }
 
-    // shimRef allows readLineImpl to reference the shim before it is created.
-    const shimRef: { current: ReturnType<typeof createZenMoneyShim> | null } = { current: null };
+    const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
+    await withChatContext(env.BOT_TOKEN, group.telegram_group_id, threadId, async () => {
+      // shimRef allows readLineImpl to reference the shim before it is created.
+      const shimRef: { current: ReturnType<typeof createZenMoneyShim> | null } = { current: null };
 
-    // releaseMutex declared here so readLineImpl closure can reassign it on re-acquire.
-    let releaseMutex: () => void = () => {};
+      // releaseMutex declared here so readLineImpl closure can reassign it on re-acquire.
+      let releaseMutex: () => void = () => {};
 
-    const readLineImpl = async (prompt: string): Promise<string> => {
-      logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
+      const readLineImpl = async (prompt: string): Promise<string> => {
+        logger.info({ connectionId, prompt }, 'Plugin requesting interactive input (readLine)');
 
-      if (!allowOtp) {
-        // Cron sync — don't interrupt user with automatic OTP requests.
-        throw new Error('OTP required — use manual sync button');
-      }
-
-      // Prefer the bank panel thread; fall back to the group's active topic so the
-      // prompt is visible where the user actually reads messages.
-      const otpThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
-      const hint = getOtpHint(conn.bank_name, prompt);
-      const otpText = `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}${hint ? `\n\n💡 ${escapeHtml(hint)}` : ''}\n\nОтправь код сюда (есть 5 минут).`;
-
-      // Always send a new message for OTP prompts so it doesn't overwrite the
-      // credentials panel that is still visible above in the chat.
-      const sent = await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        otpText,
-        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
-      );
-      const promptMsgId: number | null = sent?.message_id ?? null;
-
-      // Release the global shim mutex while waiting for user OTP input so other sync
-      // cycles are not blocked for the full 5-minute OTP wait window.
-      delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
-      const releaseBeforeOtp = releaseMutex;
-      releaseMutex = () => {}; // guard against double-release from finally
-      releaseBeforeOtp();
-
-      let code: string;
-      try {
-        code = await registerOtpRequest(connectionId, group.telegram_group_id);
-      } catch (err) {
-        // OTP timed out — edit the prompt message to offer a retry button.
-        if (promptMsgId && err instanceof Error && err.message.includes('истекло')) {
-          await editMessageText(
-            env.BOT_TOKEN,
-            group.telegram_group_id,
-            promptMsgId,
-            `⏰ Время ожидания кода истекло.\n\nНажми кнопку ниже чтобы синхронизировать снова.`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: '🔄 Синхронизировать снова',
-                      callback_data: `bank_sync:${connectionId}`,
-                    },
-                  ],
-                ],
-              },
-            },
-          ).catch(() => {});
+        if (!allowOtp) {
+          // Cron sync — don't interrupt user with automatic OTP requests.
+          throw new Error('OTP required — use manual sync button');
         }
-        throw err;
-      }
 
-      // Send a new "accepted" message — keep the original credentials panel intact
-      // so the final sync status continues to edit it.
-      await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        '⌛ Принято, синхронизируем...',
-        otpThreadId !== null ? { message_thread_id: otpThreadId } : undefined,
-      ).catch(() => {});
+        const hint = getOtpHint(conn.bank_name, prompt);
+        const otpText = `🔐 ${escapeHtml(conn.display_name)} — код подтверждения\n\n${escapeHtml(prompt)}${hint ? `\n\n💡 ${escapeHtml(hint)}` : ''}\n\nОтправь код сюда (есть 5 минут).`;
 
-      // Re-acquire the global shim mutex before the plugin resumes execution.
-      const prevForReacquire = shimMutex;
+        // Always send a new message for OTP prompts so it doesn't overwrite the
+        // credentials panel that is still visible above in the chat.
+        const sent = await sendMessage(otpText);
+        const promptMsgId: number | null = sent?.message_id ?? null;
+
+        // Release the global shim mutex while waiting for user OTP input so other sync
+        // cycles are not blocked for the full 5-minute OTP wait window.
+        delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+        const releaseBeforeOtp = releaseMutex;
+        releaseMutex = () => {}; // guard against double-release from finally
+        releaseBeforeOtp();
+
+        let code: string;
+        try {
+          code = await registerOtpRequest(connectionId, group.telegram_group_id);
+        } catch (err) {
+          // OTP timed out — edit the prompt message to offer a retry button.
+          if (promptMsgId && err instanceof Error && err.message.includes('истекло')) {
+            await editMessageText(
+              promptMsgId,
+              `⏰ Время ожидания кода истекло.\n\nНажми кнопку ниже чтобы синхронизировать снова.`,
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: '🔄 Синхронизировать снова',
+                        callback_data: `bank_sync:${connectionId}`,
+                      },
+                    ],
+                  ],
+                },
+              },
+            ).catch(() => {});
+          }
+          throw err;
+        }
+
+        // Send a new "accepted" message — keep the original credentials panel intact
+        // so the final sync status continues to edit it.
+        await sendMessage('⌛ Принято, синхронизируем...').catch(() => {});
+
+        // Re-acquire the global shim mutex before the plugin resumes execution.
+        const prevForReacquire = shimMutex;
+        shimMutex = new Promise<void>((resolve) => {
+          releaseMutex = resolve;
+        });
+        await prevForReacquire;
+        if (shimRef.current) {
+          (globalThis as { ZenMoney?: unknown }).ZenMoney = shimRef.current;
+        }
+
+        return code;
+      };
+
+      // Serialize plugin execution — globalThis.ZenMoney is shared and not concurrency-safe.
+      const prevMutex = shimMutex;
       shimMutex = new Promise<void>((resolve) => {
         releaseMutex = resolve;
       });
-      await prevForReacquire;
-      if (shimRef.current) {
-        (globalThis as { ZenMoney?: unknown }).ZenMoney = shimRef.current;
+      await prevMutex;
+
+      // Show connecting progress now that we have the mutex and are about to scrape.
+      if (conn.panel_message_id) {
+        await editMessageText(
+          conn.panel_message_id,
+          `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`,
+        ).catch(() => {});
       }
 
-      return code;
-    };
+      let accounts: ZenAccount[] = [];
+      let transactions: ZenTransaction[] = [];
 
-    // Serialize plugin execution — globalThis.ZenMoney is shared and not concurrency-safe.
-    const prevMutex = shimMutex;
-    shimMutex = new Promise<void>((resolve) => {
-      releaseMutex = resolve;
-    });
-    await prevMutex;
+      try {
+        const shim = createZenMoneyShim(connectionId, database.getDb(), preferences, readLineImpl);
+        shimRef.current = shim;
+        (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
+        // assert() is a ZenPlugins global not available in Bun — set before plugin runs.
+        (globalThis as { assert?: unknown }).assert = function assert(
+          condition: unknown,
+          ...args: unknown[]
+        ): asserts condition {
+          if (!condition) {
+            throw new Error(`Assertion failed: ${args.map(String).join(' ')}`);
+          }
+        };
 
-    // Show connecting progress now that we have the mutex and are about to scrape.
-    if (conn.panel_message_id) {
-      await editMessageText(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        conn.panel_message_id,
-        `⌛ ${escapeHtml(conn.display_name)} — Подключаемся...`,
-      ).catch(() => {});
-    }
+        const { scrape } = await plugin.plugin();
+        const rawResult = (await scrape({ preferences, fromDate, toDate })) as
+          | Partial<ScrapeResult>
+          | undefined;
 
-    let accounts: ZenAccount[] = [];
-    let transactions: ZenTransaction[] = [];
+        accounts = [
+          ...(rawResult?.accounts ?? []),
+          ...(shim._getCollectedAccounts() as ZenAccount[]),
+        ];
+        transactions = [
+          ...(rawResult?.transactions ?? []),
+          ...(shim._getCollectedTransactions() as ZenTransaction[]),
+        ];
 
-    try {
-      const shim = createZenMoneyShim(connectionId, database.getDb(), preferences, readLineImpl);
-      shimRef.current = shim;
-      (globalThis as { ZenMoney?: typeof shim }).ZenMoney = shim;
-      // assert() is a ZenPlugins global not available in Bun — set before plugin runs.
-      (globalThis as { assert?: unknown }).assert = function assert(
-        condition: unknown,
-        ...args: unknown[]
-      ): asserts condition {
-        if (!condition) {
-          throw new Error(`Assertion failed: ${args.map(String).join(' ')}`);
+        const setResultData = shim._getSetResult() as Partial<ScrapeResult> | undefined;
+        if (setResultData) {
+          accounts.push(...(setResultData.accounts ?? []));
+          transactions.push(...(setResultData.transactions ?? []));
         }
-      };
-
-      const { scrape } = await plugin.plugin();
-      const rawResult = (await scrape({ preferences, fromDate, toDate })) as
-        | Partial<ScrapeResult>
-        | undefined;
-
-      accounts = [
-        ...(rawResult?.accounts ?? []),
-        ...(shim._getCollectedAccounts() as ZenAccount[]),
-      ];
-      transactions = [
-        ...(rawResult?.transactions ?? []),
-        ...(shim._getCollectedTransactions() as ZenTransaction[]),
-      ];
-
-      const setResultData = shim._getSetResult() as Partial<ScrapeResult> | undefined;
-      if (setResultData) {
-        accounts.push(...(setResultData.accounts ?? []));
-        transactions.push(...(setResultData.transactions ?? []));
+      } finally {
+        delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
+        releaseMutex(); // release before cancelling OTP so other syncs can queue up
+        cancelOtpRequest(connectionId); // clean up if plugin exited without consuming the OTP
       }
-    } finally {
-      delete (globalThis as { ZenMoney?: unknown }).ZenMoney;
-      releaseMutex(); // release before cancelling OTP so other syncs can queue up
-      cancelOtpRequest(connectionId); // clean up if plugin exited without consuming the OTP
-    }
 
-    // Scrape done — re-read panel_message_id (OTP handler may have updated it) and show
-    // intermediate progress so the user sees we're still working.
-    const connAfterScrape = database.bankConnections.findById(connectionId);
-    if (connAfterScrape?.panel_message_id) {
-      const txCount = transactions.length;
-      const txInfo = txCount > 0 ? `\n\nПолучено транзакций: ${txCount}` : '';
-      await editMessageText(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        connAfterScrape.panel_message_id,
-        `⌛ ${escapeHtml(conn.display_name)} — Обрабатываем данные...${txInfo}`,
-      ).catch(() => {});
-    }
-
-    // Build account currency map for ZenPlugins-format transaction normalization
-    const accountCurrencyMap = new Map<string, string>();
-    for (const acc of accounts) {
-      const currency = acc.instrument ?? acc.currency ?? '';
-      if (currency) accountCurrencyMap.set(acc.id, currency);
-    }
-
-    // Normalize transactions from ZenPlugins movements-based format to our flat ZenTransaction
-    const normalizedTransactions: ZenTransaction[] = [];
-    for (const rawTx of transactions) {
-      const normalized = normalizePluginsTransaction(rawTx, accountCurrencyMap);
-      if (normalized !== null) normalizedTransactions.push(normalized);
-    }
-    transactions = normalizedTransactions;
-
-    // Upsert accounts
-    for (const account of accounts) {
-      const currency = account.instrument ?? account.currency ?? '';
-      if (!currency) {
-        logger.warn({ accountId: account.id }, 'Account has no currency/instrument — skipping');
-        continue;
+      // Scrape done — re-read panel_message_id (OTP handler may have updated it) and show
+      // intermediate progress so the user sees we're still working.
+      const connAfterScrape = database.bankConnections.findById(connectionId);
+      if (connAfterScrape?.panel_message_id) {
+        const txCount = transactions.length;
+        const txInfo = txCount > 0 ? `\n\nПолучено транзакций: ${txCount}` : '';
+        await editMessageText(
+          connAfterScrape.panel_message_id,
+          `⌛ ${escapeHtml(conn.display_name)} — Обрабатываем данные...${txInfo}`,
+        ).catch(() => {});
       }
-      database.bankAccounts.upsert({
-        connection_id: connectionId,
-        account_id: account.id,
-        title: account.title,
-        balance: account.balance ?? 0,
-        currency,
-        type: account.type ?? null,
-      });
-    }
 
-    // Load approved merchant rules once for this cycle
-    const approvedRules = database.merchantRules.findApproved();
-
-    // Phase 1: insert all transactions into DB
-    const newPendingTxs: BankTransaction[] = [];
-    for (const tx of transactions) {
-      const amount = Math.abs(tx.sum);
-      if (amount === 0) continue;
-
-      const signType = determineSignType(tx);
-      // Credit/incoming transactions are stored for reference but not confirmed as expenses
-      const status: BankTransaction['status'] =
-        signType === 'debit' ? 'pending' : 'skipped_reversal';
-
-      // Apply merchant normalization
-      const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
-
-      const txDate = tx.date.includes('T') ? (tx.date.split('T')[0] ?? tx.date) : tx.date;
-      const txTime = extractTime(tx.date);
-
-      const inserted = database.bankTransactions.insertIgnore({
-        connection_id: connectionId,
-        external_id: tx.id,
-        account_id: tx.account ?? null,
-        date: txDate,
-        time: txTime,
-        amount,
-        sign_type: signType,
-        currency: tx.currency,
-        merchant: tx.merchant ?? null,
-        merchant_normalized: merchantNormalized,
-        mcc: tx.mcc ?? null,
-        raw_data: JSON.stringify(tx),
-        status,
-      });
-
-      if (inserted && status === 'pending') {
-        newPendingTxs.push(inserted);
+      // Build account currency map for ZenPlugins-format transaction normalization
+      const accountCurrencyMap = new Map<string, string>();
+      for (const acc of accounts) {
+        const currency = acc.instrument ?? acc.currency ?? '';
+        if (currency) accountCurrencyMap.set(acc.id, currency);
       }
-    }
 
-    // Phase 2: batch AI pre-fill for all new pending transactions
-    const prefillResults = await preFillTransactions(newPendingTxs, group.id);
-    for (let i = 0; i < newPendingTxs.length; i++) {
-      const tx = newPendingTxs[i];
-      const prefilled = prefillResults[i];
-      if (tx && prefilled) {
-        database.bankTransactions.setPrefill(tx.id, prefilled.category, '');
+      // Normalize transactions from ZenPlugins movements-based format to our flat ZenTransaction
+      const normalizedTransactions: ZenTransaction[] = [];
+      for (const rawTx of transactions) {
+        const normalized = normalizePluginsTransaction(rawTx, accountCurrencyMap);
+        if (normalized !== null) normalizedTransactions.push(normalized);
       }
-    }
+      transactions = normalizedTransactions;
 
-    // Phase 3: send confirmation cards
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
-    const todayTxs: { tx: BankTransaction; category: string }[] = [];
-    const oldTxs: { tx: BankTransaction; category: string }[] = [];
-
-    const excludedAccountIds = new Set(
-      database.bankAccounts
-        .findByConnectionId(connectionId)
-        .filter((a) => a.is_excluded === 1)
-        .map((a) => a.account_id),
-    );
-
-    for (let i = 0; i < newPendingTxs.length; i++) {
-      const inserted = newPendingTxs[i];
-      const prefilled = prefillResults[i];
-      if (!inserted || !prefilled) continue;
-
-      if (inserted.account_id && excludedAccountIds.has(inserted.account_id)) continue;
-
-      if (inserted.date === todayStr) {
-        todayTxs.push({ tx: inserted, category: prefilled.category });
-      } else {
-        oldTxs.push({ tx: inserted, category: prefilled.category });
+      // Upsert accounts
+      for (const account of accounts) {
+        const currency = account.instrument ?? account.currency ?? '';
+        if (!currency) {
+          logger.warn({ accountId: account.id }, 'Account has no currency/instrument — skipping');
+          continue;
+        }
+        database.bankAccounts.upsert({
+          connection_id: connectionId,
+          account_id: account.id,
+          title: account.title,
+          balance: account.balance ?? 0,
+          currency,
+          type: account.type ?? null,
+        });
       }
-    }
 
-    // Check for orphaned today's transactions from previous syncs (user ignored the summary).
-    // These have no telegram_message_id — send cards now so they don't stay stuck.
-    const orphanedToday = getUnsentPendingTxs(connectionId).filter(
-      (tx) => tx.date === todayStr && !newPendingTxs.some((n) => n.id === tx.id),
-    );
-    for (const tx of orphanedToday) {
-      todayTxs.push({ tx, category: tx.prefill_category ?? '—' });
-    }
+      // Load approved merchant rules once for this cycle
+      const approvedRules = database.merchantRules.findApproved();
 
-    if (oldTxs.length > 0) {
-      // Old transactions exist — defer ALL cards (including today's) behind user confirmation.
-      // Summary is a gate: user decides whether to review old ones first.
-      // Telegram delivery failure here is not a bank sync error — don't let it bubble up.
-      await sendOldTransactionsSummary(oldTxs, conn, group).catch((err) =>
-        logger.error({ err, connectionId }, 'Failed to send old transactions summary'),
+      // Phase 1: insert all transactions into DB
+      const newPendingTxs: BankTransaction[] = [];
+      for (const tx of transactions) {
+        const amount = Math.abs(tx.sum);
+        if (amount === 0) continue;
+
+        const signType = determineSignType(tx);
+        // Credit/incoming transactions are stored for reference but not confirmed as expenses
+        const status: BankTransaction['status'] =
+          signType === 'debit' ? 'pending' : 'skipped_reversal';
+
+        // Apply merchant normalization
+        const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
+
+        const txDate = tx.date.includes('T') ? (tx.date.split('T')[0] ?? tx.date) : tx.date;
+        const txTime = extractTime(tx.date);
+
+        const inserted = database.bankTransactions.insertIgnore({
+          connection_id: connectionId,
+          external_id: tx.id,
+          account_id: tx.account ?? null,
+          date: txDate,
+          time: txTime,
+          amount,
+          sign_type: signType,
+          currency: tx.currency,
+          merchant: tx.merchant ?? null,
+          merchant_normalized: merchantNormalized,
+          mcc: tx.mcc ?? null,
+          raw_data: JSON.stringify(tx),
+          status,
+        });
+
+        if (inserted && status === 'pending') {
+          newPendingTxs.push(inserted);
+        }
+      }
+
+      // Phase 2: batch AI pre-fill for all new pending transactions
+      const prefillResults = await preFillTransactions(newPendingTxs, group.id);
+      for (let i = 0; i < newPendingTxs.length; i++) {
+        const tx = newPendingTxs[i];
+        const prefilled = prefillResults[i];
+        if (tx && prefilled) {
+          database.bankTransactions.setPrefill(tx.id, prefilled.category, '');
+        }
+      }
+
+      // Phase 3: send confirmation cards
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
+      const todayTxs: { tx: BankTransaction; category: string }[] = [];
+      const oldTxs: { tx: BankTransaction; category: string }[] = [];
+
+      const excludedAccountIds = getExcludedAccountIds(connectionId);
+
+      for (let i = 0; i < newPendingTxs.length; i++) {
+        const inserted = newPendingTxs[i];
+        const prefilled = prefillResults[i];
+        if (!inserted || !prefilled) continue;
+
+        if (inserted.account_id && excludedAccountIds.has(inserted.account_id)) continue;
+
+        if (inserted.date === todayStr) {
+          todayTxs.push({ tx: inserted, category: prefilled.category });
+        } else {
+          oldTxs.push({ tx: inserted, category: prefilled.category });
+        }
+      }
+
+      // Check for orphaned today's transactions from previous syncs (user ignored the summary).
+      // These have no telegram_message_id — send cards now so they don't stay stuck.
+      const orphanedToday = getUnsentPendingTxs(connectionId).filter(
+        (tx) => tx.date === todayStr && !newPendingTxs.some((n) => n.id === tx.id),
       );
-    } else {
-      // No old transactions — send today's cards immediately
-      for (const { tx, category } of todayTxs) {
-        await sendConfirmationCard(tx, category, conn, group).catch((err) =>
-          logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
-        );
+      for (const tx of orphanedToday) {
+        todayTxs.push({ tx, category: tx.prefill_category ?? '—' });
       }
-    }
 
-    // Success: reset failures
-    database.bankConnections.update(connectionId, {
-      consecutive_failures: 0,
-      last_sync_at: new Date().toISOString(),
-      last_error: null,
-    });
+      if (oldTxs.length > 0) {
+        // Old transactions exist — defer ALL cards (including today's) behind user confirmation.
+        // Summary is a gate: user decides whether to review old ones first.
+        // Telegram delivery failure here is not a bank sync error — don't let it bubble up.
+        await sendOldTransactionsSummary(oldTxs, conn).catch((err) =>
+          logger.error({ err, connectionId }, 'Failed to send old transactions summary'),
+        );
+      } else {
+        // No old transactions — send today's cards immediately
+        for (const { tx, category } of todayTxs) {
+          await sendConfirmationCard(tx, category, conn).catch((err) =>
+            logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+          );
+        }
+      }
 
-    logger.info(
-      { connectionId, accounts: accounts.length, transactions: transactions.length },
-      'Sync cycle completed',
-    );
+      // Success: reset failures
+      database.bankConnections.update(connectionId, {
+        consecutive_failures: 0,
+        last_sync_at: new Date().toISOString(),
+        last_error: null,
+      });
 
-    // Update panel message with fresh status
-    const freshConn = database.bankConnections.findById(connectionId);
-    if (freshConn?.panel_message_id && group) {
-      const panelText = buildBankStatusText(freshConn);
-      const keyboard = buildBankManageKeyboard(freshConn);
-      await editMessageText(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
-        freshConn.panel_message_id,
-        panelText,
-        {
+      logger.info(
+        { connectionId, accounts: accounts.length, transactions: transactions.length },
+        'Sync cycle completed',
+      );
+
+      // Update panel message with fresh status
+      const freshConn = database.bankConnections.findById(connectionId);
+      if (freshConn?.panel_message_id) {
+        const panelText = buildBankStatusText(freshConn);
+        const keyboard = buildBankManageKeyboard(freshConn);
+        await editMessageText(freshConn.panel_message_id, panelText, {
           reply_markup: { inline_keyboard: keyboard },
-        },
-      ).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
-    }
+        }).catch((err) => logger.warn({ err }, 'Failed to update panel message after sync'));
+      }
+    }); // end withChatContext
   } catch (error) {
     // OTP events are not bank-side failures — don't count them against consecutive_failures.
     if (error instanceof Error && error.message.includes('истекло')) {
@@ -462,28 +437,31 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       const notifyGroup = database.groups.findById(conn.group_id);
       const freshConn = database.bankConnections.findById(connectionId);
       if (freshConn && notifyGroup) {
-        const threadId = freshConn.panel_message_thread_id ?? notifyGroup.active_topic_id;
         const keyboard = {
           inline_keyboard: [
             [{ text: '🔄 Синхронизировать', callback_data: `bank_sync:${connectionId}` }],
           ],
         };
-        if (freshConn.panel_message_id) {
-          await editMessageText(
-            env.BOT_TOKEN,
-            notifyGroup.telegram_group_id,
-            freshConn.panel_message_id,
-            `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
-            { reply_markup: keyboard },
-          ).catch(() => {});
-        } else if (threadId !== null) {
-          await sendMessage(
-            env.BOT_TOKEN,
-            notifyGroup.telegram_group_id,
-            `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
-            { message_thread_id: threadId, reply_markup: keyboard },
-          ).catch(() => {});
-        }
+        const notifyThreadId = freshConn.panel_message_thread_id ?? notifyGroup.active_topic_id;
+        await withChatContext(
+          env.BOT_TOKEN,
+          notifyGroup.telegram_group_id,
+          notifyThreadId,
+          async () => {
+            if (freshConn.panel_message_id) {
+              await editMessageText(
+                freshConn.panel_message_id,
+                `🔐 ${escapeHtml(conn.display_name)} — для синхронизации нужен код`,
+                { reply_markup: keyboard },
+              ).catch(() => {});
+            } else {
+              await sendMessage(
+                `🔐 ${escapeHtml(conn.display_name)} — требует код. Нажми кнопку для синхронизации.`,
+                { reply_markup: keyboard },
+              ).catch(() => {});
+            }
+          },
+        );
       }
       return;
     }
@@ -544,30 +522,25 @@ async function handleSyncError(
   logger.error({ err: error, connectionId, failures }, 'Sync cycle failed');
 
   const group = database.groups.findById(conn.group_id);
+  if (!group) return;
 
-  // Always update the panel message to reflect the new error state
-  const freshConn = database.bankConnections.findById(connectionId);
-  if (freshConn?.panel_message_id && group) {
-    await editMessageText(
-      env.BOT_TOKEN,
-      group.telegram_group_id,
-      freshConn.panel_message_id,
-      buildBankStatusText(freshConn),
-      { reply_markup: { inline_keyboard: buildBankManageKeyboard(freshConn) } },
-    ).catch((err) => logger.warn({ err }, 'Failed to update panel message after error'));
-  }
+  const errorThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
+  await withChatContext(env.BOT_TOKEN, group.telegram_group_id, errorThreadId, async () => {
+    // Always update the panel message to reflect the new error state
+    const freshConn = database.bankConnections.findById(connectionId);
+    if (freshConn?.panel_message_id) {
+      await editMessageText(freshConn.panel_message_id, buildBankStatusText(freshConn), {
+        reply_markup: { inline_keyboard: buildBankManageKeyboard(freshConn) },
+      }).catch((err) => logger.warn({ err }, 'Failed to update panel message after error'));
+    }
 
-  // Send alert only on the 3rd failure (not on every subsequent failure)
-  if (failures === MAX_CONSECUTIVE_FAILURES) {
-    if (group) {
+    // Send alert only on the 3rd failure (not on every subsequent failure)
+    if (failures === MAX_CONSECUTIVE_FAILURES) {
       await sendMessage(
-        env.BOT_TOKEN,
-        group.telegram_group_id,
         `⚠️ ${escapeHtml(conn.display_name)} — ошибка синхронизации\n\nНе удаётся подключиться 3 раза подряд.\nПоследняя ошибка: ${escapeHtml(message)}\n\nВозможно, изменился пароль или истекла сессия.\n/bank ${escapeHtml(conn.bank_name)} — переподключить`,
-        group.active_topic_id !== null ? { message_thread_id: group.active_topic_id } : undefined,
       ).catch((e) => logger.error({ err: e }, 'Failed to send escalation alert'));
     }
-  }
+  });
 }
 
 /** Converts ZenPlugins movements-based Transaction to our flat ZenTransaction.
@@ -632,10 +605,6 @@ function determineSignType(tx: ZenTransaction): 'debit' | 'credit' | 'reversal' 
   return 'credit';
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 function applyMerchantRules(
   merchant: string | undefined,
   rules: { pattern: string; flags: string; replacement: string }[],
@@ -668,17 +637,13 @@ async function sendConfirmationCard(
   tx: BankTransaction,
   category: string,
   conn: BankConnection,
-  group: { telegram_group_id: number },
 ): Promise<void> {
   const amountInEur = convertAnyToEUR(tx.amount, tx.currency);
   const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
 
   const cardText = formatConfirmationCard(tx, category, conn.display_name, isLarge);
 
-  const result = await sendMessage(env.BOT_TOKEN, group.telegram_group_id, cardText, {
-    ...(conn.panel_message_thread_id !== null
-      ? { message_thread_id: conn.panel_message_thread_id }
-      : {}),
+  const result = await sendMessage(cardText, {
     reply_markup: {
       inline_keyboard: [
         [
@@ -694,42 +659,13 @@ async function sendConfirmationCard(
   }
 }
 
-/**
- * Builds a truncated summary of old transactions using the N+2 rule:
- * either show all items, or truncate so that "и ещё N" has N ≥ 3.
- */
-export function buildOldTxSummaryText(
-  txs: { tx: BankTransaction; category: string }[],
-  bankName: string,
-): string {
-  const MAX_VISIBLE = 10;
-  const total = txs.length;
-  const showAll = total - MAX_VISIBLE < 3;
-  const visible = showAll ? txs : txs.slice(0, MAX_VISIBLE);
-
-  const lines = visible.map(({ tx }) => {
-    const merchant = tx.merchant_normalized ?? tx.merchant ?? '—';
-    return `• ${tx.date} — ${tx.amount.toFixed(2)} ${tx.currency} — ${escapeHtml(merchant)}`;
-  });
-
-  if (!showAll) {
-    lines.push(`\n<i>...и ещё ${total - MAX_VISIBLE}</i>`);
-  }
-
-  return `📋 ${escapeHtml(bankName)} — ${total} необработанных транзакций\n\n${lines.join('\n')}\n\nПоказать для подтверждения?`;
-}
-
 async function sendOldTransactionsSummary(
   oldTxs: { tx: BankTransaction; category: string }[],
   conn: BankConnection,
-  group: { telegram_group_id: number; active_topic_id: number | null },
 ): Promise<void> {
   const text = buildOldTxSummaryText(oldTxs, conn.display_name);
-  const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
 
-  await sendMessage(env.BOT_TOKEN, group.telegram_group_id, text, {
-    ...(threadId !== null ? { message_thread_id: threadId } : {}),
-    parse_mode: 'HTML',
+  await sendMessage(text, {
     reply_markup: {
       inline_keyboard: [
         [
@@ -741,14 +677,19 @@ async function sendOldTransactionsSummary(
   });
 }
 
-/** Returns unsent pending transactions for a connection, excluding excluded accounts. */
-function getUnsentPendingTxs(connectionId: number): BankTransaction[] {
-  const excludedIds = new Set(
+/** Returns account IDs excluded from sync for a given connection. */
+function getExcludedAccountIds(connectionId: number): Set<string> {
+  return new Set(
     database.bankAccounts
       .findByConnectionId(connectionId)
       .filter((a) => a.is_excluded === 1)
       .map((a) => a.account_id),
   );
+}
+
+/** Returns unsent pending transactions for a connection, excluding excluded accounts. */
+function getUnsentPendingTxs(connectionId: number): BankTransaction[] {
+  const excludedIds = getExcludedAccountIds(connectionId);
 
   return database.bankTransactions
     .findPendingByConnectionId(connectionId)
@@ -772,12 +713,15 @@ export async function sendOldTransactionCards(connectionId: number): Promise<num
 
   const unsent = getUnsentPendingTxs(connectionId);
 
-  for (const tx of unsent) {
-    const category = tx.prefill_category ?? '—';
-    await sendConfirmationCard(tx, category, conn, group).catch((err) =>
-      logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
-    );
-  }
+  const cardThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
+  await withChatContext(env.BOT_TOKEN, group.telegram_group_id, cardThreadId, async () => {
+    for (const tx of unsent) {
+      const category = tx.prefill_category ?? '—';
+      await sendConfirmationCard(tx, category, conn).catch((err) =>
+        logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+      );
+    }
+  });
 
   return unsent.length;
 }
@@ -798,17 +742,20 @@ export async function skipOldTransactions(connectionId: number): Promise<number>
   const unsent = getUnsentPendingTxs(connectionId);
 
   let skippedCount = 0;
-  for (const tx of unsent) {
-    if (tx.date !== todayStr) {
-      database.bankTransactions.updateStatus(tx.id, conn.group_id, 'skipped');
-      skippedCount++;
-    } else {
-      const category = tx.prefill_category ?? '—';
-      await sendConfirmationCard(tx, category, conn, group).catch((err) =>
-        logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
-      );
+  const skipThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
+  await withChatContext(env.BOT_TOKEN, group.telegram_group_id, skipThreadId, async () => {
+    for (const tx of unsent) {
+      if (tx.date !== todayStr) {
+        database.bankTransactions.updateStatus(tx.id, conn.group_id, 'skipped');
+        skippedCount++;
+      } else {
+        const category = tx.prefill_category ?? '—';
+        await sendConfirmationCard(tx, category, conn).catch((err) =>
+          logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+        );
+      }
     }
-  }
+  });
 
   return skippedCount;
 }
@@ -824,7 +771,7 @@ function formatConfirmationCard(
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
   const dateTime = tx.time ? `${tx.date} ${tx.time}` : tx.date;
 
-  return `${prefix} ${escapeHtml(bankName)} — ${tx.amount.toFixed(2)} ${escapeHtml(tx.currency)}
+  return `${prefix} ${escapeHtml(bankName)} — ${formatAmount(tx.amount, tx.currency)}
 📅 ${dateTime}
 📍 ${merchant}
 🗂 Категория: ${escapeHtml(category)}${mccLine}`;

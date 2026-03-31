@@ -10,6 +10,7 @@ import {
   type SheetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import { formatErrorForUser } from '../bot-error-formatter';
 import type { GoogleConnectedGroup } from '../guards';
 import { sendToChat } from '../send';
@@ -539,7 +540,7 @@ async function handleSyncRollback(groupId: number): Promise<void> {
   const snapshotDate = new Date(latest.createdAt).toLocaleString('ru-RU');
 
   await sendToChat(
-    `🔄 Восстанавливаю ${latest.expenseCount} расходов и ${latest.budgetCount} бюджетов из снимка от ${snapshotDate}...`,
+    `🔄 Восстанавливаю ${latest.expenseCount} ${pluralize(latest.expenseCount, 'расход', 'расхода', 'расходов')} и ${latest.budgetCount} ${pluralize(latest.budgetCount, 'бюджет', 'бюджета', 'бюджетов')} из снимка от ${snapshotDate}...`,
   );
 
   try {
@@ -574,7 +575,7 @@ async function handleSyncRollback(groupId: number): Promise<void> {
     });
 
     await sendToChat(
-      `✅ Откат завершён! Восстановлено ${expenses.length} расходов и ${budgets.length} бюджетов.`,
+      `✅ Откат завершён! Восстановлено ${expenses.length} ${pluralize(expenses.length, 'расход', 'расхода', 'расходов')} и ${budgets.length} ${pluralize(budgets.length, 'бюджет', 'бюджета', 'бюджетов')}.`,
     );
 
     logger.info(

@@ -1,20 +1,8 @@
-// Tests for buildOldTxSummaryText — N+2 truncation rule and HTML escaping.
+// Tests for buildOldTxSummaryText — N+2 truncation rule, HTML escaping, formatAmount.
 
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import type { BankTransaction } from '../../database/types';
-
-mock.module('../../database', () => ({ database: {} }));
-mock.module('../../config/env', () => ({
-  env: { BOT_TOKEN: 'test', LARGE_TX_THRESHOLD_EUR: 500, NODE_ENV: 'test' },
-}));
-mock.module('node-cron', () => ({ default: { schedule: () => {} } }));
-mock.module('./prefill', () => ({ preFillTransaction: async () => ({}) }));
-mock.module('./telegram-sender', () => ({
-  sendMessage: async () => null,
-  editMessageText: async () => null,
-}));
-
-import { buildOldTxSummaryText } from './sync-service';
+import { buildOldTxSummaryText } from './transaction-summary';
 
 function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
   return {
@@ -60,7 +48,7 @@ describe('buildOldTxSummaryText', () => {
   test('shows all items when count <= 10', () => {
     const items = makeTxList(5);
     const text = buildOldTxSummaryText(items, 'TBC');
-    expect(text).toContain('5 необработанных');
+    expect(text).toContain('5 необработанных транзакций');
     expect(text).toContain('Store 1');
     expect(text).toContain('Store 5');
     expect(text).not.toContain('и ещё');
@@ -69,7 +57,7 @@ describe('buildOldTxSummaryText', () => {
   test('shows all items when count is 12 (N+2: 12-10=2 < 3)', () => {
     const items = makeTxList(12);
     const text = buildOldTxSummaryText(items, 'TBC');
-    expect(text).toContain('12 необработанных');
+    expect(text).toContain('12 необработанных транзакций');
     expect(text).toContain('Store 12');
     expect(text).not.toContain('и ещё');
   });
@@ -77,7 +65,7 @@ describe('buildOldTxSummaryText', () => {
   test('truncates when count is 13 (N+2: 13-10=3 >= 3)', () => {
     const items = makeTxList(13);
     const text = buildOldTxSummaryText(items, 'TBC');
-    expect(text).toContain('13 необработанных');
+    expect(text).toContain('13 необработанных транзакций');
     expect(text).toContain('Store 10');
     expect(text).not.toContain('Store 11');
     expect(text).toContain('и ещё 3');
@@ -114,15 +102,33 @@ describe('buildOldTxSummaryText', () => {
     expect(text).not.toContain('RAW MERCHANT');
   });
 
-  test('formats amount with two decimals', () => {
+  test('formats amount via formatAmount', () => {
     const items = [{ tx: makeTx({ amount: 7285.5 }), category: 'food' }];
     const text = buildOldTxSummaryText(items, 'TBC');
-    expect(text).toContain('7285.50');
+    expect(text).toContain('7285.50 RSD');
+  });
+
+  test('formats large amounts with млн suffix', () => {
+    const items = [{ tx: makeTx({ amount: 1_500_000 }), category: 'food' }];
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('1.5 млн RSD');
   });
 
   test('shows dash for missing merchant', () => {
     const items = [{ tx: makeTx({ merchant: null, merchant_normalized: null }), category: 'food' }];
     const text = buildOldTxSummaryText(items, 'TBC');
     expect(text).toContain('— —');
+  });
+
+  test('uses correct Russian declension for count=1', () => {
+    const items = makeTxList(1);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('1 необработанная транзакция');
+  });
+
+  test('uses correct Russian declension for count=3', () => {
+    const items = makeTxList(3);
+    const text = buildOldTxSummaryText(items, 'TBC');
+    expect(text).toContain('3 необработанные транзакции');
   });
 });

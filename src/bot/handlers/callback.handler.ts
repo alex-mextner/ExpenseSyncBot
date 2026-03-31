@@ -5,6 +5,7 @@ import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { sendOldTransactionCards, skipOldTransactions } from '../../services/bank/sync-service';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import {
   handleBankAccountsCallback,
   handleBankAccountToggleCallback,
@@ -427,7 +428,13 @@ export async function handleCallbackQuery(
         await ctx.answerCallbackQuery({ text: 'Отправляю карточки...' });
         await ctx.editText('⌛ Отправляю карточки для подтверждения...');
         const count = await sendOldTransactionCards(connectionId);
-        await ctx.editText(`✅ Отправлено ${count} карточек для подтверждения`);
+        if (count === 0) {
+          await ctx.editText('ℹ️ Нет транзакций для подтверждения');
+        } else {
+          await ctx.editText(
+            `✅ Отправлено ${count} ${pluralize(count, 'карточка', 'карточки', 'карточек')} для подтверждения`,
+          );
+        }
         break;
       }
 
@@ -439,7 +446,9 @@ export async function handleCallbackQuery(
         }
         await ctx.answerCallbackQuery({ text: 'Пропускаю старые...' });
         const skipped = await skipOldTransactions(connectionId);
-        await ctx.editText(`⏭ Пропущено ${skipped} старых транзакций`);
+        await ctx.editText(
+          `⏭ Пропущено ${skipped} ${pluralize(skipped, 'старая транзакция', 'старые транзакции', 'старых транзакций')}`,
+        );
         break;
       }
 

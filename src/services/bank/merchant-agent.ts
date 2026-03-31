@@ -6,7 +6,7 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import type { MerchantRuleRequest } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
-import { sendMessage } from './telegram-sender';
+import { sendDirect } from './telegram-sender';
 
 const logger = createLogger('merchant-agent');
 
@@ -190,7 +190,7 @@ async function sendAdminApprovalCard(
 
   const text = `🔧 Новое правило для мерчанта\n\nПаттерн: <code>${suggestion.pattern}</code>\n→ <b>${suggestion.replacement}</b>\n🗂 Категория: ${suggestion.category ?? '—'}\n📊 Уверенность: ${Math.round(suggestion.confidence * 100)}%${exampleLines}`;
 
-  await sendMessage(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text, {
+  await sendDirect(env.BOT_TOKEN, env.BOT_ADMIN_CHAT_ID, text, {
     reply_markup: {
       inline_keyboard: [
         [
