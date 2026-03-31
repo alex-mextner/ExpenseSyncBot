@@ -4,7 +4,7 @@ import { InlineKeyboard } from 'gramio';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
-import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { convertCurrency, formatAmount, getExchangeRate } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { silentSyncBudgets } from '../commands/budget';
@@ -73,6 +73,8 @@ export async function saveExpenseToSheet(
     `[SAVE] Writing to Google Sheet`,
   );
 
+  const rate = getExchangeRate(pendingExpense.parsed_currency);
+
   try {
     await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
       date: currentDate,
@@ -80,6 +82,7 @@ export async function saveExpenseToSheet(
       comment: pendingExpense.comment,
       amounts,
       eurAmount,
+      rate,
     });
 
     logger.info('[SAVE] ✅ Successfully wrote to Google Sheet');
@@ -235,6 +238,7 @@ export async function saveReceiptExpenses(
 
     // Convert to EUR
     const eurAmount = convertToEUR(totalAmount, currency);
+    const rate = getExchangeRate(currency as CurrencyCode);
 
     // Build comment with item details
     const itemNames = items.map((item) => `${item.name_ru} (${item.quantity}x${item.price})`);
@@ -254,6 +258,7 @@ export async function saveReceiptExpenses(
         comment,
         amounts,
         eurAmount,
+        rate,
       });
     } catch (error) {
       logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet');

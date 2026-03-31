@@ -281,15 +281,15 @@ export class ExpenseRecorder {
 
     for (const expense of expenseList) {
       const amounts = buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies);
+      const rate = this.eurConverter.getExchangeRate(expense.currency as CurrencyCode);
 
-      // Rate omitted: DB expenses store eur_amount but not the original rate.
-      // Re-deriving rate from eur_amount/amount would give a stale approximation.
       await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
         date: expense.date,
         category: expense.category,
         comment: expense.comment,
         amounts,
         eurAmount: expense.eur_amount,
+        rate,
       });
     }
 
