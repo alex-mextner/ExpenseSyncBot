@@ -2,15 +2,34 @@
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { format } from 'date-fns';
-import { database } from '../../database';
 import type { BankAccount, BankConnection, BankTransaction, Group } from '../../database/types';
-import * as prefillModule from './prefill';
-import * as senderModule from './telegram-sender';
+
+// ── Mock repositories (defined before mock.module so spyOn can target them) ──
+const mockBankConnections = { findById: () => null as BankConnection | null };
+const mockGroups = { findById: () => null as Group | null };
+const mockBankAccounts = { findByConnectionId: () => [] as BankAccount[] };
+const mockBankTransactions = {
+  findPendingByConnectionId: () => [] as BankTransaction[],
+  updateStatus: (_id: number, _gid: number, _s: string) => {},
+  setTelegramMessageId: (_id: number, _mid: number) => {},
+};
+
+// Other test files poison ../../database via mock.module — must mock here too.
+mock.module('../../database', () => ({
+  database: {
+    bankConnections: mockBankConnections,
+    groups: mockGroups,
+    bankAccounts: mockBankAccounts,
+    bankTransactions: mockBankTransactions,
+  },
+}));
 
 // node-cron is called at module load time in sync-service — must mock before import.
 mock.module('node-cron', () => ({ default: { schedule: () => {} } }));
 
+import * as prefillModule from './prefill';
 import { sendOldTransactionCards, skipOldTransactions } from './sync-service';
+import * as senderModule from './telegram-sender';
 
 const CONN: BankConnection = {
   id: 10,
@@ -78,18 +97,15 @@ let sendMessageSpy: ReturnType<typeof mock>;
 let withChatContextSpy: ReturnType<typeof mock>;
 
 beforeEach(() => {
-  findConnectionByIdSpy = spyOn(database.bankConnections, 'findById').mockReturnValue(null);
-  findGroupByIdSpy = spyOn(database.groups, 'findById').mockReturnValue(null);
-  findAccountsByConnectionIdSpy = spyOn(
-    database.bankAccounts,
-    'findByConnectionId',
-  ).mockReturnValue([]);
+  findConnectionByIdSpy = spyOn(mockBankConnections, 'findById').mockReturnValue(null);
+  findGroupByIdSpy = spyOn(mockGroups, 'findById').mockReturnValue(null);
+  findAccountsByConnectionIdSpy = spyOn(mockBankAccounts, 'findByConnectionId').mockReturnValue([]);
   findPendingByConnectionIdSpy = spyOn(
-    database.bankTransactions,
+    mockBankTransactions,
     'findPendingByConnectionId',
   ).mockReturnValue([]);
-  updateStatusSpy = spyOn(database.bankTransactions, 'updateStatus');
-  setTelegramMessageIdSpy = spyOn(database.bankTransactions, 'setTelegramMessageId');
+  updateStatusSpy = spyOn(mockBankTransactions, 'updateStatus');
+  setTelegramMessageIdSpy = spyOn(mockBankTransactions, 'setTelegramMessageId');
 
   spyOn(prefillModule, 'preFillTransactions').mockResolvedValue([]);
 
