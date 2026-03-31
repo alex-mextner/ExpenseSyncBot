@@ -1,18 +1,30 @@
 // Tests for SSRF protection: isUrlSafe() must block private/internal IP ranges
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import dns from 'node:dns';
 import { isUrlSafe } from './url-validator';
+
+/** Spy on dns.promises.resolve4/6 to avoid real DNS calls in CI/sandboxed envs */
+function mockDns(ipv4: string[] = [], ipv6: string[] = []) {
+  spyOn(dns.promises, 'resolve4').mockResolvedValue(ipv4);
+  spyOn(dns.promises, 'resolve6').mockResolvedValue(ipv6);
+}
+
+afterEach(() => {
+  (dns.promises.resolve4 as ReturnType<typeof spyOn>)?.mockRestore?.();
+  (dns.promises.resolve6 as ReturnType<typeof spyOn>)?.mockRestore?.();
+});
 
 describe('isUrlSafe', () => {
   describe('allowed URLs', () => {
     it('allows a normal HTTPS URL', async () => {
-      // example.com resolves to a public IP — safe
+      mockDns(['93.184.216.34']); // example.com public IP
       const result = await isUrlSafe('https://example.com/receipt');
       expect(result).toBe(true);
     });
 
     it('allows an HTTP URL with a public IP', async () => {
-      // 93.184.216.34 is example.com — public
+      // 93.184.216.34 is a public IP — no DNS needed (IP literal path)
       const result = await isUrlSafe('http://93.184.216.34/path');
       expect(result).toBe(true);
     });
@@ -72,6 +84,7 @@ describe('isUrlSafe', () => {
     });
 
     it('blocks localhost hostname', async () => {
+      mockDns(['127.0.0.1']);
       const result = await isUrlSafe('http://localhost/');
       expect(result).toBe(false);
     });
@@ -131,6 +144,27 @@ describe('isUrlSafe', () => {
 
     it('blocks a non-URL string', async () => {
       const result = await isUrlSafe('not a url at all');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('DNS resolution edge cases', () => {
+    it('blocks hostname that resolves to private IP', async () => {
+      mockDns(['10.0.0.5']);
+      const result = await isUrlSafe('https://internal.corp/');
+      expect(result).toBe(false);
+    });
+
+    it('blocks hostname that resolves to private IPv6', async () => {
+      mockDns([], ['fd00::1']);
+      const result = await isUrlSafe('https://internal.corp/');
+      expect(result).toBe(false);
+    });
+
+    it('fails closed when DNS resolution fails', async () => {
+      spyOn(dns.promises, 'resolve4').mockRejectedValue(new Error('ENOTFOUND'));
+      spyOn(dns.promises, 'resolve6').mockRejectedValue(new Error('ENOTFOUND'));
+      const result = await isUrlSafe('https://nonexistent.invalid/');
       expect(result).toBe(false);
     });
   });
