@@ -7,8 +7,9 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import type { BankConnection, BankTransaction } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { convertAnyToEUR } from '../currency/converter';
+import { convertAnyToEUR, formatAmount } from '../currency/converter';
 import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
@@ -602,6 +603,13 @@ export function normalizePluginsTransaction(
 
   if (accId) result.account = accId;
 
+  // Populate invoice fields when the operation currency differs from the account currency.
+  // Both sum and invoice.sum follow ZenMoney sign convention (negative = debit).
+  if (movement.invoice && movement.invoice.instrument !== currency) {
+    result.invoice_sum = Math.abs(movement.invoice.sum);
+    result.invoice_currency = movement.invoice.instrument;
+  }
+
   if (raw.merchant !== null && raw.merchant !== undefined) {
     const title =
       'title' in raw.merchant ? (raw.merchant as Merchant).title : raw.merchant.fullTitle;
@@ -617,10 +625,6 @@ export function normalizePluginsTransaction(
 function determineSignType(tx: ZenTransaction): 'debit' | 'credit' | 'reversal' {
   if (tx.sum < 0) return 'debit';
   return 'credit';
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function applyMerchantRules(
@@ -662,8 +666,122 @@ function formatConfirmationCard(
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
   const dateTime = tx.time ? `${tx.date} ${tx.time}` : tx.date;
 
-  return `${prefix} ${escapeHtml(bankName)} — ${tx.amount.toFixed(2)} ${escapeHtml(tx.currency)}
+  const amountStr =
+    tx.invoice_amount != null && tx.invoice_currency
+      ? `${formatAmount(tx.invoice_amount, tx.invoice_currency)} (${formatAmount(tx.amount, tx.currency)})`
+      : formatAmount(tx.amount, tx.currency);
+
+  return `${prefix} ${escapeHtml(bankName)} — ${amountStr}
 📅 ${dateTime}
 📍 ${merchant}
 🗂 Категория: ${escapeHtml(category)}${mccLine}`;
+}
+
+async function sendConfirmationCard(
+  tx: BankTransaction,
+  category: string,
+  conn: BankConnection,
+): Promise<void> {
+  const amountInEur = convertAnyToEUR(tx.amount, tx.currency);
+  const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
+
+  const cardText = formatConfirmationCard(tx, category, conn.display_name, isLarge);
+
+  const result = await sendMessage(cardText, {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Принять', callback_data: `bank_confirm:${tx.id}` },
+          { text: '✏️ Исправить', callback_data: `bank_edit:${tx.id}` },
+        ],
+      ],
+    },
+  });
+
+  if (result) {
+    database.bankTransactions.setTelegramMessageId(tx.id, result.message_id);
+  }
+}
+
+/** Returns account IDs excluded from sync for a given connection. */
+function getExcludedAccountIds(connectionId: number): Set<string> {
+  return new Set(
+    database.bankAccounts
+      .findByConnectionId(connectionId)
+      .filter((a) => a.is_excluded === 1)
+      .map((a) => a.account_id),
+  );
+}
+
+/** Returns unsent pending transactions for a connection, excluding excluded accounts. */
+function getUnsentPendingTxs(connectionId: number): BankTransaction[] {
+  const excludedIds = getExcludedAccountIds(connectionId);
+
+  return database.bankTransactions
+    .findPendingByConnectionId(connectionId)
+    .filter(
+      (tx) => tx.telegram_message_id === null && !(tx.account_id && excludedIds.has(tx.account_id)),
+    )
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+}
+
+/**
+ * Sends confirmation cards for all pending transactions without cards (old + today).
+ * Old transactions first (chronological), then today's.
+ * Called from callback handler when user clicks "Показать".
+ */
+export async function sendOldTransactionCards(connectionId: number): Promise<number> {
+  const conn = database.bankConnections.findById(connectionId);
+  if (!conn) return 0;
+
+  const group = database.groups.findById(conn.group_id);
+  if (!group) return 0;
+
+  const unsent = getUnsentPendingTxs(connectionId);
+
+  const cardThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
+  await withChatContext(group.telegram_group_id, cardThreadId, async () => {
+    for (const tx of unsent) {
+      const category = tx.prefill_category ?? '—';
+      await sendConfirmationCard(tx, category, conn).catch((err) =>
+        logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+      );
+    }
+  });
+
+  return unsent.length;
+}
+
+/**
+ * Skips old transactions, then sends cards for today's.
+ * Called from callback handler when user clicks "Пропустить".
+ * Returns count of skipped old transactions.
+ */
+export async function skipOldTransactions(connectionId: number): Promise<number> {
+  const conn = database.bankConnections.findById(connectionId);
+  if (!conn) return 0;
+
+  const group = database.groups.findById(conn.group_id);
+  if (!group) return 0;
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const unsent = getUnsentPendingTxs(connectionId);
+
+  let skippedCount = 0;
+  const skipThreadId = conn.panel_message_thread_id ?? group.active_topic_id;
+  await withChatContext(group.telegram_group_id, skipThreadId, async () => {
+    for (const tx of unsent) {
+      if (tx.date !== todayStr) {
+        database.bankTransactions.updateStatus(tx.id, conn.group_id, 'skipped');
+        skippedCount++;
+      } else {
+        const category = tx.prefill_category ?? '—';
+        await sendConfirmationCard(tx, category, conn).catch((err) =>
+          logger.error({ err, txId: tx.id }, 'Failed to send confirmation card'),
+        );
+      }
+    }
+  });
+
+  return skippedCount;
 }

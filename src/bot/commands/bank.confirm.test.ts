@@ -1,8 +1,20 @@
 // Tests for the bank transaction confirm flow:
 // Принять → dedup check → (auto-merge | merge prompt | comment prompt)
 
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
+import type { TelegramMessage } from '@gramio/types';
 import type { BankTransaction, Expense, Group, User } from '../../database/types';
+import * as senderModule from '../../services/bank/telegram-sender';
 import { mockDatabase } from '../../test-utils/mocks/database';
 
 // ─── Mutable mock state ───────────────────────────────────────────────────────
@@ -59,15 +71,30 @@ const mockDb = {
 };
 
 const bankSent: string[] = [];
-const mockBankSendToChat = mock((text: string) => {
+const mockBankSendMessage = mock((text: string, _options?: Record<string, unknown>) => {
   bankSent.push(text);
-  return Promise.resolve({});
+  return Promise.resolve({ message_id: 1 } as TelegramMessage);
 });
 
-mock.module('../send', () => ({
-  sendToChat: mockBankSendToChat,
-  initSend: () => {},
-}));
+// Route senderModule calls through spyOn — no mock.module pollution.
+const spies: { mockRestore: () => void }[] = [];
+
+beforeAll(() => {
+  spies.push(
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockBankSendMessage),
+    spyOn(senderModule, 'sendDirect').mockResolvedValue(null),
+    spyOn(senderModule, 'editMessageText').mockResolvedValue(undefined),
+    spyOn(senderModule, 'deleteMessage').mockResolvedValue(undefined),
+    spyOn(senderModule, 'withChatContext').mockImplementation(
+      // @ts-expect-error — mock returns synchronous result, real withChatContext is async generic
+      (_c: number, _t: number | null, fn: () => unknown) => fn(),
+    ),
+  );
+});
+
+afterAll(() => {
+  for (const spy of spies) spy.mockRestore();
+});
 
 mock.module('../../database', () => ({
   database: {
@@ -85,7 +112,6 @@ mock.module('../../database', () => ({
   },
 }));
 
-import { afterEach } from 'bun:test';
 import {
   handleBankConfirmCallback,
   handleBankEditReply,
@@ -119,7 +145,7 @@ const allMocks = [
 afterEach(() => {
   for (const m of allMocks) m.mockReset();
   bankSent.length = 0;
-  mockBankSendToChat.mockClear();
+  mockBankSendMessage.mockClear();
 });
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -168,6 +194,8 @@ function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
     awaiting_comment: 0,
     prefill_category: 'Кафе',
     prefill_comment: null,
+    invoice_amount: null,
+    invoice_currency: null,
     status: 'pending',
     created_at: '2026-03-29T10:00:00Z',
     ...overrides,
@@ -233,22 +261,25 @@ describe('handleBankConfirmCallback', () => {
     const tx = makeTx();
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
-    const bot = makeBot({ message_id: 600 });
+    const bot = makeBot();
+    mockBankSendMessage.mockImplementation(() =>
+      Promise.resolve({ message_id: 600 } as TelegramMessage),
+    );
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledTimes(1);
-    expect(bot.api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mockBankSendMessage).toHaveBeenCalledTimes(1);
 
-    const params = bot.api.sendMessage.mock.calls[0]?.[0] as {
-      chat_id: number;
-      text: string;
-      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+    const text = mockBankSendMessage.mock.calls[0]?.[0] as string;
+    const opts = mockBankSendMessage.mock.calls[0]?.[1] as {
+      reply_markup: {
+        inline_keyboard: { text: string; callback_data: string }[][];
+      };
     };
-    expect(params['chat_id']).toBe(100);
-    expect(params['text'].toLowerCase()).toContain('комментарий');
+    expect(text.toLowerCase()).toContain('комментарий');
 
-    const keyboard = params['reply_markup']['inline_keyboard'];
+    const keyboard = opts['reply_markup']['inline_keyboard'];
     expect(keyboard[0]).toHaveLength(1);
     expect(keyboard[0]?.[0]?.['callback_data']).toBe(`bank_nocomment:${tx.id}`);
   });
@@ -269,7 +300,10 @@ describe('handleBankConfirmCallback', () => {
     const tx = makeTx({ telegram_message_id: null });
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
-    const bot = makeBot({ message_id: 777 });
+    const bot = makeBot();
+    mockBankSendMessage.mockImplementation(() =>
+      Promise.resolve({ message_id: 777 } as TelegramMessage),
+    );
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
@@ -356,13 +390,15 @@ describe('handleBankConfirmCallback', () => {
 
     await handleBankConfirmCallback(ctx as never, bot as never, tx.id, 100);
 
-    expect(bot.api.sendMessage).toHaveBeenCalledTimes(1);
-    const params = bot.api.sendMessage.mock.calls[0]?.[0] as {
-      text: string;
-      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+    expect(mockBankSendMessage).toHaveBeenCalledTimes(1);
+    const text = mockBankSendMessage.mock.calls[0]?.[0] as string;
+    const opts = mockBankSendMessage.mock.calls[0]?.[1] as {
+      reply_markup: {
+        inline_keyboard: { text: string; callback_data: string }[][];
+      };
     };
-    expect(params['text']).toContain('похожий расход');
-    const keyboard = params['reply_markup']['inline_keyboard'];
+    expect(text).toContain('похожий расход');
+    const keyboard = opts['reply_markup']['inline_keyboard'];
     expect(keyboard[0]?.[0]?.['callback_data']).toBe(`bank_merge:${tx.id}:${nearby.id}`);
     expect(keyboard[0]?.[1]?.['callback_data']).toBe(`bank_new:${tx.id}`);
     expect(mockExpenses.create).not.toHaveBeenCalled();
@@ -469,14 +505,16 @@ describe('handleBankNewCallback', () => {
     const tx = makeTx({ edit_in_progress: 1 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
-    const bot = makeBot({ message_id: 700 });
+    mockBankSendMessage.mockImplementation(() =>
+      Promise.resolve({ message_id: 700 } as TelegramMessage),
+    );
 
-    await handleBankNewCallback(ctx as never, bot as never, tx.id, 100);
+    await handleBankNewCallback(ctx as never, tx.id, 100);
 
     expect(mockBankTransactions.setAwaitingComment).toHaveBeenCalledWith(tx.id, true);
-    expect(bot.api.sendMessage).toHaveBeenCalledTimes(1);
-    const params = bot.api.sendMessage.mock.calls[0]?.[0] as { text: string };
-    expect(params['text'].toLowerCase()).toContain('комментарий');
+    expect(mockBankSendMessage).toHaveBeenCalledTimes(1);
+    const text = mockBankSendMessage.mock.calls[0]?.[0] as string;
+    expect(text.toLowerCase()).toContain('комментарий');
     expect(mockBankTransactions.setTelegramMessageId).toHaveBeenCalledWith(tx.id, 700);
   });
 
@@ -484,11 +522,10 @@ describe('handleBankNewCallback', () => {
     const tx = makeTx({ edit_in_progress: 0 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     const ctx = makeCallbackCtx();
-    const bot = makeBot();
 
-    await handleBankNewCallback(ctx as never, bot as never, tx.id, 100);
+    await handleBankNewCallback(ctx as never, tx.id, 100);
 
-    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+    expect(mockBankSendMessage).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('обработана') }),
     );
@@ -547,8 +584,8 @@ describe('handleBankEditReply with awaiting_comment=1', () => {
     const ctx = makeMsgCtx();
     await handleBankEditReply(ctx as never, 100, 'Coffee', promptMsgId);
 
-    expect(mockBankSendToChat).toHaveBeenCalledTimes(1);
-    const msg = (mockBankSendToChat.mock.calls[0]?.[0] ?? '') as string;
+    expect(mockBankSendMessage).toHaveBeenCalledTimes(1);
+    const msg = (mockBankSendMessage.mock.calls[0]?.[0] ?? '') as string;
     expect(msg).toContain('Кафе');
     expect(msg).toContain('Coffee');
   });

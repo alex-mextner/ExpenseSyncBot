@@ -20,29 +20,6 @@ afterEach(() => {
   mock.restore();
 });
 
-// ── Mock bot factory ────────────────────────────────────────────────────────────
-
-function makeMockBot(opts: { sendFails?: boolean; failOnGroupId?: number } = {}) {
-  const sendMessage = mock(
-    (params: {
-      chat_id: number;
-      text: string;
-      parse_mode?: string;
-      message_thread_id?: number;
-    }) => {
-      if (opts.sendFails || opts.failOnGroupId === params.chat_id) {
-        return Promise.reject(new Error(`Failed to send to ${params.chat_id}`));
-      }
-      return Promise.resolve({ ok: true, message_id: 1 });
-    },
-  );
-
-  return {
-    api: { sendMessage },
-    _sendMessage: sendMessage,
-  };
-}
-
 type MockGroup = { telegram_group_id: number; active_topic_id?: number | null };
 
 function makeGroups(...ids: number[]): MockGroup[] {
