@@ -479,6 +479,12 @@ Follow this framework for ANY technical issue:
 - **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
+- **Never use `mock.module()` for project modules.** It replaces modules in Bun's global cache and poisons unrelated test files that import the same module. Use `spyOn` on the imported module namespace instead:
+  ```ts
+  import * as converterModule from '../services/currency/converter.ts';
+  spyOn(converterModule, 'convertCurrency').mockReturnValue(100);
+  ```
+  `spyOn` + `mock.restore()` is scoped and doesn't leak. `mock.module` is only acceptable for npm packages with no project tests (e.g., `sharp`).
 - NEVER write tests that "test" mocked behavior instead of real logic
 - **NEVER ignore test/system output** — logs and messages often contain CRITICAL information.
   Read test output, don't just check pass/fail. Warnings in logs point to real bugs.
