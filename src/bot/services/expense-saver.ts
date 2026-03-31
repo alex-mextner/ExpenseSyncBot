@@ -1,8 +1,10 @@
 /** Saving expenses (manual and receipt) to Google Sheets and local DB */
 import { format } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
+import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { createLogger } from '../../utils/logger.ts';
 import { silentSyncBudgets } from '../commands/budget';
 import type { BotInstance } from '../types';
@@ -136,26 +138,28 @@ async function checkBudgetLimit(
     return;
   }
 
-  // Calculate total spending in category for current month (SQL SUM)
-  const categorySpending = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
+  // sumByCategory returns EUR amounts — convert to budget currency for comparison and display
+  const spentEur = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
+  const budgetCurrency = budget.currency as CurrencyCode;
+  const spentInCurrency = convertCurrency(spentEur, 'EUR', budgetCurrency);
 
   const percentage =
-    budget.limit_amount > 0 ? Math.round((categorySpending / budget.limit_amount) * 100) : 0;
+    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
 
-  // Check if warning or exceeded
-  const isExceeded = categorySpending > budget.limit_amount;
+  const isExceeded = spentInCurrency > budget.limit_amount;
   const isWarning = percentage >= 90 && !isExceeded;
 
   if (isExceeded || isWarning) {
     const emoji = getCategoryEmoji(category);
+    const progress = `${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${percentage}%)`;
     let message = '';
 
     if (isExceeded) {
       message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
+      message += `${emoji} ${category}: ${progress}`;
     } else if (isWarning) {
       message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: €${categorySpending.toFixed(2)} / €${budget.limit_amount.toFixed(2)} (${percentage}%)`;
+      message += `${emoji} ${category}: ${progress}`;
     }
 
     try {
