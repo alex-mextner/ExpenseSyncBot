@@ -49,19 +49,21 @@ expense-sync-bot.invntrm.ru {
 }
 
 expense-sync-bot-app.invntrm.ru {
-	# Mini App frontend (Vite build)
-	root * /var/www/ExpenseSyncBot/miniapp/dist
-	file_server
-
-	# SPA fallback — serve index.html for client-side routing
-	try_files {path} /index.html
-
 	# API requests proxied to the Bun server — retry during PM2 reload
+	# Must be in a separate handle block BEFORE the SPA catch-all,
+	# otherwise try_files rewrites /api/* to /index.html → 405
 	handle /api/* {
 		reverse_proxy localhost:3311 {
 			lb_try_duration 10s
 			lb_try_interval 500ms
 		}
+	}
+
+	# Mini App frontend (Vite build) — SPA with client-side routing
+	handle {
+		root * /var/www/ExpenseSyncBot/miniapp/dist
+		try_files {path} /index.html
+		file_server
 	}
 
 	log {
