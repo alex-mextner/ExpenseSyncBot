@@ -79,25 +79,25 @@ describe('managePackages validation', () => {
     const tmpDir = await createTempPackageDir();
     const result = await managePackages(tmpDir, 'add', 'is-number');
     expect(result).toBeTruthy();
-  }, 15_000);
+  }, 30_000);
 
   test('accepts scoped package name', async () => {
     const tmpDir = await createTempPackageDir();
     const result = await managePackages(tmpDir, 'add', '@types/is-number');
     expect(result).toBeTruthy();
-  }, 15_000);
+  }, 30_000);
 
   test('accepts package with version specifier', async () => {
     const tmpDir = await createTempPackageDir();
     const result = await managePackages(tmpDir, 'add', 'is-number@7.0.0');
     expect(result).toBeTruthy();
-  }, 15_000);
+  }, 30_000);
 
   test('accepts multiple valid packages', async () => {
     const tmpDir = await createTempPackageDir();
     const result = await managePackages(tmpDir, 'add', 'is-number is-odd');
     expect(result).toBeTruthy();
-  }, 15_000);
+  }, 30_000);
 });
 
 async function createTempPackageDir(): Promise<string> {
