@@ -1597,7 +1597,7 @@ async function handleBudgetSyncMoreCallback(
     return;
   }
 
-  const { getBudgetSyncCachedResult } = await import('../commands/budget');
+  const { getBudgetSyncCachedResult } = await import('../services/budget-sync');
   const result = getBudgetSyncCachedResult(cacheKey);
   if (!result) {
     await ctx.answerCallbackQuery({ text: 'Данные устарели. Перезапусти бота.' });

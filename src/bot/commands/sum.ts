@@ -10,9 +10,9 @@ import { convertCurrency, formatAmount } from '../../services/currency/converter
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
+import { silentSyncBudgets } from '../services/budget-sync';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
-import { silentSyncBudgets } from './budget';
 
 const logger = createLogger('sum');
 

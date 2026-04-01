@@ -37,7 +37,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - name: Run tests
-        run: bun test
+        run: bun run test
 
   stage-bot:
     runs-on: ubuntu-latest
@@ -101,7 +101,23 @@ jobs:
                  --cwd "$WORKTREE" \
                  -- --env-file $ENV_FILE
 
-            echo "✅ Stage bot deployed"
+            # Wait for bot to start and verify it's alive
+            sleep 3
+            STATUS=$($PM2 jlist | $BUN -e "
+              const procs = JSON.parse(await Bun.stdin.text());
+              const p = procs.find(p => p.name === 'expensesyncbot-stage');
+              console.log(p?.pm2_env?.status ?? 'not_found');
+            ")
+
+            if [ "$STATUS" != "online" ]; then
+              echo "❌ Stage bot failed to start (status: $STATUS)"
+              echo ""
+              echo "=== Last 80 lines of logs ==="
+              $PM2 logs expensesyncbot-stage --lines 80 --nostream 2>&1 || true
+              exit 1
+            fi
+
+            echo "✅ Stage bot deployed and running"
             $PM2 list
 
       - name: Comment on PR with stage bot link
