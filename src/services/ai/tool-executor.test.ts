@@ -216,6 +216,7 @@ describe('executeTool routing', () => {
       amount: 15,
       currency: 'EUR',
       eur_amount: 15,
+      receipt_id: null,
       created_at: '',
     });
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
@@ -239,6 +240,7 @@ describe('executeGetExpenses', () => {
         amount: 15,
         currency: 'EUR',
         eur_amount: 15,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -251,6 +253,7 @@ describe('executeGetExpenses', () => {
         amount: 5,
         currency: 'EUR',
         eur_amount: 5,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -276,6 +279,7 @@ describe('executeGetExpenses', () => {
         amount: 1149.47,
         currency: 'EUR',
         eur_amount: 1149.47,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -297,6 +301,7 @@ describe('executeGetExpenses', () => {
         amount: 94.37,
         currency: 'EUR',
         eur_amount: 94.37,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -317,6 +322,7 @@ describe('executeGetExpenses', () => {
         amount: 25,
         currency: 'EUR',
         eur_amount: 25,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -338,6 +344,7 @@ describe('executeGetExpenses', () => {
         amount: 10,
         currency: 'EUR',
         eur_amount: 10,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -350,6 +357,7 @@ describe('executeGetExpenses', () => {
         amount: 20,
         currency: 'EUR',
         eur_amount: 20,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -380,6 +388,7 @@ describe('executeGetExpenses', () => {
       amount: 10,
       currency: 'EUR' as const,
       eur_amount: 10,
+      receipt_id: null,
       created_at: '',
     }));
     mockExpenses.findByDateRange.mockReturnValue(expenses);
@@ -410,6 +419,7 @@ describe('executeGetExpenses', () => {
       amount: 10,
       currency: 'EUR' as const,
       eur_amount: 10,
+      receipt_id: null,
       created_at: '',
     }));
     mockExpenses.findByDateRange.mockReturnValue(expenses);
@@ -450,6 +460,7 @@ describe('executeGetBudgets', () => {
         amount: 100,
         currency: 'EUR',
         eur_amount: 100,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -534,6 +545,7 @@ describe('executeDeleteExpense', () => {
       amount: 12,
       currency: 'EUR',
       eur_amount: 12,
+      receipt_id: null,
       created_at: '',
     });
 
@@ -554,6 +566,7 @@ describe('executeDeleteExpense', () => {
       amount: 12,
       currency: 'EUR',
       eur_amount: 12,
+      receipt_id: null,
       created_at: '',
     });
 

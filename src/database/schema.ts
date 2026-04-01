@@ -1194,6 +1194,41 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '045_create_receipts_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            photo_queue_id INTEGER REFERENCES photo_processing_queue(id) ON DELETE SET NULL,
+            image_path TEXT NOT NULL,
+            total_amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipts_group_date
+          ON receipts(group_id, date)
+        `);
+        logger.info('✓ Created receipts table');
+
+        // Add receipt_id FK to expenses
+        const hasReceiptId = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('expenses') WHERE name = 'receipt_id'`,
+          )
+          .get();
+        if (hasReceiptId?.count === 0) {
+          db.exec(
+            `ALTER TABLE expenses ADD COLUMN receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL`,
+          );
+          logger.info('✓ Added receipt_id to expenses');
+        }
+      },
+    },
   ];
 
   // Check and run migrations

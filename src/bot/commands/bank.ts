@@ -402,20 +402,20 @@ export async function handleBankConfirmCallback(
   );
 
   if (exact.length > 0) {
-    // Auto-merge: link the bank transaction to the existing expense silently.
+    // Auto-link: bind the bank transaction to the existing expense silently.
     const existing = exact[0];
     if (!existing) return; // length > 0 guarantees this, but TypeScript needs it
     mergeTransactionWithExpense(claimed, group.id, existing.id);
     database.bankTransactions.setEditInProgress(txId, false);
 
-    await ctx.answerCallbackQuery({ text: '✅ Объединено с существующим расходом' });
+    await ctx.answerCallbackQuery({ text: '✅ Связано с существующим расходом' });
     const messageId = ctx.message?.id;
     if (messageId) {
       try {
         await bot.api.editMessageText({
           chat_id: chatId,
           message_id: messageId,
-          text: `✅ Объединено: ${existing.category} (${existing.amount} ${existing.currency})`,
+          text: `✅ Связано: ${existing.category} (${existing.amount} ${existing.currency})`,
         });
       } catch {
         // message may be too old to edit
@@ -425,7 +425,7 @@ export async function handleBankConfirmCallback(
   }
 
   if (fuzzy.length > 0) {
-    // Show merge-or-new prompt — let the user decide.
+    // Show link-or-new prompt — let the user decide.
     const match = fuzzy[0];
     if (!match) return; // length > 0 guarantees this, but TypeScript needs it
     const commentPart = match.comment ? ` — ${match.comment}` : '';
@@ -433,13 +433,47 @@ export async function handleBankConfirmCallback(
 
     const replyToMsgId = claimed.telegram_message_id ?? undefined;
     await sendMessage(
-      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nОбъединить или создать новый?`,
+      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nСвязать или создать новый?`,
       {
         ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '🔗 Объединить', callback_data: `bank_merge:${txId}:${match.id}` },
+              { text: '🔗 Связать', callback_data: `bank_merge:${txId}:${match.id}` },
+              { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
+            ],
+          ],
+        },
+      },
+    );
+    return;
+  }
+
+  // Check for matching receipts (same amount ±5%, date, currency)
+  const receiptMatches = database.receipts.findPotentialMatches(
+    group.id,
+    claimed.date,
+    claimed.amount,
+    claimed.currency,
+  );
+  const receiptMatch = receiptMatches.exact[0] ?? receiptMatches.fuzzy[0];
+  if (receiptMatch) {
+    const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptMatch.id);
+    const categorySummary = receiptExpenses.map((e) => e.category).join(', ') || 'без категорий';
+    await ctx.answerCallbackQuery();
+
+    const replyToMsgId = claimed.telegram_message_id ?? undefined;
+    await sendMessage(
+      `🧾 Найден чек на ${receiptMatch.total_amount} ${receiptMatch.currency} от ${receiptMatch.date}\n📋 Категории: ${categorySummary}\n\nСвязать транзакцию с чеком или создать новый расход?`,
+      {
+        ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: '🧾 Связать с чеком',
+                callback_data: `bank_receipt:${txId}:${receiptMatch.id}`,
+              },
               { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
             ],
           ],
@@ -520,14 +554,80 @@ export async function handleBankMergeCallback(
 
   const expense = mergeResult;
 
-  await ctx.answerCallbackQuery({ text: '✅ Объединено' });
+  await ctx.answerCallbackQuery({ text: '✅ Связано' });
   const messageId = ctx.message?.id;
   if (messageId) {
     try {
       await bot.api.editMessageText({
         chat_id: chatId,
         message_id: messageId,
-        text: `✅ Объединено: ${expense.category} (${expense.amount} ${expense.currency})`,
+        text: `✅ Связано: ${expense.category} (${expense.amount} ${expense.currency})`,
+      });
+    } catch {
+      // message may be too old to edit
+    }
+  }
+}
+
+/**
+ * Handles "Связать с чеком" button — links bank transaction to all expenses from a receipt.
+ */
+export async function handleBankReceiptCallback(
+  ctx: Ctx['CallbackQuery'],
+  bot: BotInstance,
+  txId: number,
+  receiptId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const linkResult = database.transaction(() => {
+    const tx = database.bankTransactions.findById(txId, group.id);
+    if (!tx || tx.status !== 'pending') return 'tx_done' as const;
+
+    const receipt = database.receipts.findById(receiptId);
+    if (!receipt || receipt.group_id !== group.id) return 'receipt_missing' as const;
+
+    // Find the first expense linked to this receipt and merge with it
+    const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptId);
+    if (receiptExpenses.length === 0) return 'no_expenses' as const;
+
+    const firstExpense = receiptExpenses[0];
+    if (!firstExpense) return 'no_expenses' as const;
+
+    mergeTransactionWithExpense(tx, group.id, firstExpense.id);
+    database.bankTransactions.setEditInProgress(txId, false);
+    return { receipt, expenses: receiptExpenses };
+  });
+
+  if (linkResult === 'tx_done') {
+    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
+    return;
+  }
+  if (linkResult === 'receipt_missing') {
+    await ctx.answerCallbackQuery({ text: 'Чек не найден' });
+    return;
+  }
+  if (linkResult === 'no_expenses') {
+    await ctx.answerCallbackQuery({ text: 'У чека нет связанных расходов' });
+    return;
+  }
+
+  const { receipt, expenses } = linkResult;
+  const categorySummary = expenses.map((e) => e.category).join(', ');
+
+  await ctx.answerCallbackQuery({ text: '✅ Связано с чеком' });
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    try {
+      await bot.api.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: `✅ Связано с чеком: ${receipt.total_amount} ${receipt.currency} (${categorySummary})`,
       });
     } catch {
       // message may be too old to edit

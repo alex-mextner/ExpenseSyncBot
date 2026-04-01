@@ -129,30 +129,30 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Download photo from Telegram
     const photoBuffer = await downloadPhoto(bot, queueItem.file_id);
 
-    // Save processed image to disk for debugging
+    // Save compressed receipt image to data/receipts/ for storage and dedup
+    let savedReceiptPath: string | null = null;
     try {
       const sharp = (await import('sharp')).default;
       const fs = await import('node:fs/promises');
       const path = await import('node:path');
 
-      const processedBuffer = await sharp(photoBuffer)
-        .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 90 })
+      const compressedBuffer = await sharp(photoBuffer)
+        .resize(800, undefined, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
         .toBuffer();
 
-      // Create debug directory if doesn't exist
-      const debugDir = path.join(process.cwd(), 'debug-images');
-      await fs.mkdir(debugDir, { recursive: true });
+      const receiptsDir = path.join(process.cwd(), 'data', 'receipts');
+      await fs.mkdir(receiptsDir, { recursive: true });
 
-      // Save with timestamp
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `qr-${queueItemId}-${timestamp}.jpg`;
-      const filepath = path.join(debugDir, filename);
+      const filename = `receipt-${queueItemId}-${timestamp}.jpg`;
+      const filepath = path.join(receiptsDir, filename);
 
-      await fs.writeFile(filepath, processedBuffer);
-      logger.info(`[PHOTO_PROCESSOR] 🔍 Debug image saved: ${filepath}`);
-    } catch (debugError) {
-      logger.error({ err: debugError }, '[PHOTO_PROCESSOR] Failed to save debug image');
+      await fs.writeFile(filepath, compressedBuffer);
+      savedReceiptPath = filepath;
+      logger.info(`[PHOTO_PROCESSOR] Receipt image saved: ${filepath}`);
+    } catch (saveError) {
+      logger.error({ err: saveError }, '[PHOTO_PROCESSOR] Failed to save receipt image');
     }
 
     // Scan QR code
@@ -282,6 +282,23 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
     // Save receipt items to database
     saveExtractedItems(queueItemId, extractionResult.items, currency);
+
+    // Create receipt record with compressed image and total amount
+    if (savedReceiptPath) {
+      const totalAmount = extractionResult.items.reduce((sum, item) => sum + item.total, 0);
+      const currentDate = new Date().toISOString().split('T')[0] ?? '';
+      database.receipts.create({
+        group_id: queueItem.group_id,
+        photo_queue_id: queueItemId,
+        image_path: savedReceiptPath,
+        total_amount: totalAmount,
+        currency,
+        date: currentDate,
+      });
+      logger.info(
+        `[PHOTO_PROCESSOR] Receipt record created: ${totalAmount} ${currency} for queue #${queueItemId}`,
+      );
+    }
 
     // Show confirmation options (summary for >5 items, item-by-item otherwise)
     await showReceiptConfirmationOptions(queueItem.group_id, queueItemId);

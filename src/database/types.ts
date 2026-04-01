@@ -115,6 +115,7 @@ export interface Expense {
   amount: number;
   currency: CurrencyCode;
   eur_amount: number;
+  receipt_id: number | null;
   created_at: string;
 }
 
@@ -127,6 +128,7 @@ export interface CreateExpenseData {
   amount: number;
   currency: CurrencyCode;
   eur_amount: number;
+  receipt_id?: number | null;
 }
 
 /**
@@ -520,4 +522,29 @@ export interface CreateRecurringPatternData {
   tolerance_days?: number;
   last_seen_date?: string;
   next_expected_date?: string;
+}
+
+// ─── Receipt Types ─────────────────────────────────────────────────────────
+
+/**
+ * Stored receipt — compressed image + total for dedup matching with bank transactions
+ */
+export interface Receipt {
+  id: number;
+  group_id: number;
+  photo_queue_id: number | null;
+  image_path: string;
+  total_amount: number;
+  currency: string;
+  date: string;
+  created_at: string;
+}
+
+export interface CreateReceiptData {
+  group_id: number;
+  photo_queue_id?: number | null;
+  image_path: string;
+  total_amount: number;
+  currency: string;
+  date: string;
 }

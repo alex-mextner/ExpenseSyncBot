@@ -21,6 +21,7 @@ import {
   handleBankMergeCallback,
   handleBankNewCallback,
   handleBankNoCommentCallback,
+  handleBankReceiptCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
   handleBankSettingsCallback,
@@ -215,6 +216,17 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankNewCallback(ctx, txId, chatId);
+        break;
+      }
+
+      case 'bank_receipt': {
+        const txId = Number(params[0]);
+        const receiptId = Number(params[1]);
+        if (!chatId || !txId || !receiptId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankReceiptCallback(ctx, bot, txId, receiptId, chatId);
         break;
       }
 

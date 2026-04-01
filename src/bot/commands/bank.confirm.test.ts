@@ -57,6 +57,17 @@ const mockExpenses = {
   ),
 };
 
+const mockReceipts = {
+  findPotentialMatches: mock(
+    (
+      _groupId: number,
+      _date: string,
+      _amount: number,
+      _currency: string,
+    ): { exact: never[]; fuzzy: never[] } => ({ exact: [], fuzzy: [] }),
+  ),
+};
+
 const mockMerchantRules = {
   insertRuleRequest: mock((_data: unknown): void => {}),
 };
@@ -104,6 +115,7 @@ mock.module('../../database', () => ({
       bankTransactions: mockBankTransactions,
       bankConnections: mockBankConnections,
       expenses: mockExpenses,
+      receipts: mockReceipts,
       merchantRules: mockMerchantRules,
     }),
     db: mockDb,
@@ -135,6 +147,7 @@ const allMocks = [
   mockExpenses.create,
   mockExpenses.findById,
   mockExpenses.findPotentialDuplicates,
+  mockReceipts.findPotentialMatches,
   mockMerchantRules.insertRuleRequest,
   mockTransaction,
   mockQueryOne,
@@ -146,6 +159,9 @@ afterEach(() => {
   for (const m of allMocks) m.mockReset();
   bankSent.length = 0;
   mockBankSendMessage.mockClear();
+  // Restore defaults cleared by mockReset — these must return structured objects, not undefined
+  mockExpenses.findPotentialDuplicates.mockImplementation(() => ({ exact: [], fuzzy: [] }));
+  mockReceipts.findPotentialMatches.mockImplementation(() => ({ exact: [], fuzzy: [] }));
 });
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -230,6 +246,7 @@ function makeExpense(overrides: Partial<Expense> = {}): Expense {
     amount: 25.5,
     currency: 'EUR',
     eur_amount: 25.5,
+    receipt_id: null,
     created_at: '2026-03-29T09:00:00Z',
     ...overrides,
   };
@@ -373,7 +390,7 @@ describe('handleBankConfirmCallback', () => {
     expect(mockExpenses.create).not.toHaveBeenCalled();
     expect(bot.api.sendMessage).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('Объединено') }),
+      expect.objectContaining({ text: expect.stringContaining('Связано') }),
     );
   });
 
@@ -437,7 +454,7 @@ describe('handleBankMergeCallback', () => {
     expect(mockBankTransactions.setEditInProgress).toHaveBeenCalledWith(tx.id, false);
     expect(mockExpenses.create).not.toHaveBeenCalled();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('Объединено') }),
+      expect.objectContaining({ text: expect.stringContaining('Связано') }),
     );
   });
 

@@ -16,6 +16,7 @@ import { GroupSpreadsheetRepository } from './repositories/group-spreadsheet.rep
 import { MerchantRulesRepository } from './repositories/merchant-rules.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
+import { ReceiptRepository } from './repositories/receipt.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
 import { RecurringPatternRepository } from './repositories/recurring-pattern.repository';
 import { SyncSnapshotRepository } from './repositories/sync-snapshot.repository';
@@ -36,6 +37,7 @@ export class DatabaseService {
   public budgets: BudgetRepository;
   public chatMessages: ChatMessageRepository;
   public photoQueue: PhotoQueueRepository;
+  public receipts: ReceiptRepository;
   public receiptItems: ReceiptItemsRepository;
   public expenseItems: ExpenseItemsRepository;
   public adviceLogs: AdviceLogRepository;
@@ -59,6 +61,7 @@ export class DatabaseService {
     this.budgets = new BudgetRepository(this.db);
     this.chatMessages = new ChatMessageRepository(this.db);
     this.photoQueue = new PhotoQueueRepository(this.db);
+    this.receipts = new ReceiptRepository(this.db);
     this.receiptItems = new ReceiptItemsRepository(this.db);
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);
