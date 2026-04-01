@@ -2,6 +2,7 @@
 import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import type { Budget } from '../../database/types';
 import { convertCurrency } from '../currency/converter';
 import {
   buildCategoryProfiles,
@@ -20,6 +21,7 @@ import type {
   CategoryChange,
   CategoryProfile,
   CategoryProjection,
+  CategoryTotal,
   DayOfWeekPattern,
   FinancialSnapshot,
   IntervalProfile,
@@ -59,6 +61,10 @@ export class SpendingAnalytics {
     const profiles = this.getCategoryProfiles(groupId, now);
     const projectionCtx = this.getProjectionContext(groupId, now, currentMonthStart, today);
 
+    // Pre-fetch shared data to avoid redundant queries
+    const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonthStr);
+    const categoryTotals = database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
+
     return {
       burnRates: this.computeBurnRates(
         groupId,
@@ -68,10 +74,12 @@ export class SpendingAnalytics {
         today,
         profiles,
         projectionCtx,
+        budgets,
+        categoryTotals,
       ),
       weekTrend: this.computeWeekOverWeek(groupId, today),
       monthTrend: this.computeMonthOverMonth(groupId, now, currentMonthStart, today),
-      anomalies: this.computeAnomalies(groupId, now, currentMonthStart, today),
+      anomalies: this.computeAnomalies(groupId, now, currentMonthStart, today, categoryTotals),
       dayOfWeekPatterns: this.computeDayPatterns(groupId, today),
       velocity: this.computeVelocity(groupId, today),
       budgetUtilization: this.computeBudgetUtilization(
@@ -79,6 +87,7 @@ export class SpendingAnalytics {
         currentMonthStr,
         currentMonthStart,
         today,
+        budgets,
       ),
       streak: this.computeStreak(groupId, today),
       projection: this.computeProjection(
@@ -89,6 +98,8 @@ export class SpendingAnalytics {
         today,
         profiles,
         projectionCtx,
+        budgets,
+        categoryTotals,
       ),
       technicalAnalysis: this.computeTechnicalAnalysis(groupId, now, currentMonthStart, today),
     };
@@ -109,11 +120,15 @@ export class SpendingAnalytics {
       lastTxByCategory: Record<string, number>;
       intervalProfiles: Map<string, IntervalProfile>;
     },
+    prefetchedBudgets?: Budget[],
+    prefetchedCategoryTotals?: CategoryTotal[],
   ): BudgetBurnRate[] {
-    const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+    const budgets =
+      prefetchedBudgets ?? database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     if (budgets.length === 0) return [];
 
-    const categoryTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
+    const categoryTotals =
+      prefetchedCategoryTotals ?? database.expenses.getCategoryTotals(groupId, monthStart, today);
     const categorySpentEur: Record<string, number> = {};
     const categoryTxCount: Record<string, number> = {};
     for (const ct of categoryTotals) {
@@ -394,9 +409,12 @@ export class SpendingAnalytics {
     now: Date,
     currentMonthStart: string,
     today: string,
+    prefetchedCategoryTotals?: CategoryTotal[],
   ): CategoryAnomaly[] {
     // Get current month category totals
-    const currentTotals = database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
+    const currentTotals =
+      prefetchedCategoryTotals ??
+      database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
     const currentMap: Record<string, number> = {};
     for (const ct of currentTotals) {
       currentMap[ct.category] = ct.total;
@@ -557,8 +575,10 @@ export class SpendingAnalytics {
     currentMonth: string,
     monthStart: string,
     today: string,
+    prefetchedBudgets?: Budget[],
   ): BudgetUtilization | null {
-    const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+    const budgets =
+      prefetchedBudgets ?? database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     if (budgets.length === 0) return null;
 
     // Sum all budgets in EUR
@@ -678,6 +698,8 @@ export class SpendingAnalytics {
       lastTxByCategory: Record<string, number>;
       intervalProfiles: Map<string, IntervalProfile>;
     },
+    prefetchedBudgets?: Budget[],
+    prefetchedCategoryTotals?: CategoryTotal[],
   ): MonthlyProjection | null {
     const daysElapsed = now.getDate();
     const daysInMonth = getDaysInMonth(now);
@@ -734,8 +756,10 @@ export class SpendingAnalytics {
     }
 
     // Category projections — with stall detection and interval-based projection
-    const currentCatTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
-    const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+    const currentCatTotals =
+      prefetchedCategoryTotals ?? database.expenses.getCategoryTotals(groupId, monthStart, today);
+    const budgets =
+      prefetchedBudgets ?? database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     const budgetMap: Record<string, { limit: number; currency: string }> = {};
     for (const b of budgets) {
       budgetMap[b.category] = { limit: b.limit_amount, currency: b.currency };
