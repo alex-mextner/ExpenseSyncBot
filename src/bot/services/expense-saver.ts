@@ -4,6 +4,7 @@ import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import { computeBudgetProgress } from '../../database/repositories/budget.repository';
 import type { Group, PendingExpense } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import {
@@ -194,28 +195,24 @@ async function checkBudgetLimit(
   const budgetCurrency = budget.currency as CurrencyCode;
   const spentInCurrency = convertCurrency(spentEur, 'EUR', budgetCurrency);
 
-  const percentage =
-    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+  const progress = computeBudgetProgress(budget, spentInCurrency);
 
-  const isExceeded = spentInCurrency > budget.limit_amount;
-  const isWarning = percentage >= 90 && !isExceeded;
-
-  if (isExceeded || isWarning) {
+  if (progress.is_exceeded || progress.is_warning) {
     const emoji = getCategoryEmoji(category);
-    const progress = `${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${percentage}%)`;
+    const progressText = `${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${progress.percentage}%)`;
     let message = '';
 
-    if (isExceeded) {
+    if (progress.is_exceeded) {
       message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: ${progress}`;
-    } else if (isWarning) {
+      message += `${emoji} ${category}: ${progressText}`;
+    } else if (progress.is_warning) {
       message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: ${progress}`;
+      message += `${emoji} ${category}: ${progressText}`;
     }
 
     try {
       await sendMessage(message);
-      logger.info(`[BUDGET] Sent warning for category "${category}": ${percentage}%`);
+      logger.info(`[BUDGET] Sent warning for category "${category}": ${progress.percentage}%`);
     } catch (error) {
       logger.error({ err: error }, '[BUDGET] Failed to send warning');
     }

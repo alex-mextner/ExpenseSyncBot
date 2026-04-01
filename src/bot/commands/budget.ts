@@ -9,6 +9,7 @@ import {
   getCurrencySymbol,
 } from '../../config/constants';
 import { database } from '../../database';
+import { computeBudgetProgress } from '../../database/repositories/budget.repository';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -223,15 +224,8 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
   const budgetProgress = budgets.map((budget) => {
     const spentEur = categorySpending[budget.category] || 0;
     const spent = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
-    const percentage =
-      budget.limit_amount > 0 ? Math.round((spent / budget.limit_amount) * 100) : 0;
-    return {
-      budget,
-      spent,
-      percentage,
-      is_exceeded: spent > budget.limit_amount,
-      is_warning: percentage >= 90,
-    };
+    const progress = computeBudgetProgress(budget, spent);
+    return { budget, spent, ...progress };
   });
 
   budgetProgress.sort((a, b) => b.percentage - a.percentage);

@@ -4,6 +4,7 @@ import { InlineKeyboard } from 'gramio';
 import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import { computeBudgetProgress } from '../../database/repositories/budget.repository';
 import type { Group } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -303,16 +304,15 @@ export function buildBudgetProgressEntry(
 } {
   const currency = budget.currency as CurrencyCode;
   const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
-  const percentage =
-    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+  const progress = computeBudgetProgress(budget, spentInCurrency);
   return {
     category: budget.category,
     spentInCurrency,
     limit: budget.limit_amount,
     currency,
-    percentage,
-    is_exceeded: spentInCurrency > budget.limit_amount,
-    is_warning: percentage >= 90 && spentInCurrency <= budget.limit_amount,
+    percentage: progress.percentage,
+    is_exceeded: progress.is_exceeded,
+    is_warning: progress.is_warning,
   };
 }
 

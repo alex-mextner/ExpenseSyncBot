@@ -1,6 +1,28 @@
 /** Budget repository — CRUD and progress tracking for per-category spending budgets */
 import type { Database } from 'bun:sqlite';
+import type { CurrencyCode } from '../../config/constants';
 import type { Budget, BudgetProgress, CreateBudgetData } from '../types';
+
+/**
+ * Pure computation of budget progress from a budget object and spent amount.
+ * No DB queries — safe to call in loops.
+ */
+export function computeBudgetProgress(
+  budget: { category: string; limit_amount: number; currency: string },
+  spentAmount: number,
+): BudgetProgress {
+  const percentage =
+    budget.limit_amount > 0 ? Math.round((spentAmount / budget.limit_amount) * 100) : 0;
+  return {
+    category: budget.category,
+    limit_amount: budget.limit_amount,
+    spent_amount: spentAmount,
+    currency: budget.currency as CurrencyCode,
+    percentage,
+    is_exceeded: spentAmount > budget.limit_amount,
+    is_warning: percentage >= 90 && spentAmount <= budget.limit_amount,
+  };
+}
 
 /**
  * Read-only budget operations.
@@ -137,18 +159,7 @@ export class BudgetRepository implements BudgetReadRepository {
     const budget = this.findByGroupCategoryMonth(groupId, category, month);
     if (!budget) return null;
 
-    const percentage =
-      budget.limit_amount > 0 ? Math.round((spentAmount / budget.limit_amount) * 100) : 0;
-
-    return {
-      category,
-      limit_amount: budget.limit_amount,
-      spent_amount: spentAmount,
-      currency: budget.currency,
-      percentage,
-      is_exceeded: spentAmount > budget.limit_amount,
-      is_warning: percentage >= 90,
-    };
+    return computeBudgetProgress(budget, spentAmount);
   }
 
   /** Check if category exists in any budget for group */

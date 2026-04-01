@@ -2,6 +2,7 @@
 import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import { computeBudgetProgress } from '../../database/repositories/budget.repository';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
 import { createInviteLink, sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -748,12 +749,21 @@ async function handleBulkCorrectionInput(
  */
 export function buildBudgetAlertStatus(
   spentEur: number,
-  budget: { limit_amount: number; currency: string },
+  budget: { limit_amount: number; currency: string; category?: string },
 ): { spentInCurrency: number; percentage: number; isExceeded: boolean; isWarning: boolean } {
   const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency as CurrencyCode);
-  const percentage =
-    budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
-  const isExceeded = spentInCurrency > budget.limit_amount;
-  const isWarning = percentage >= 90 && !isExceeded;
-  return { spentInCurrency, percentage, isExceeded, isWarning };
+  const progress = computeBudgetProgress(
+    {
+      category: budget.category ?? '',
+      limit_amount: budget.limit_amount,
+      currency: budget.currency,
+    },
+    spentInCurrency,
+  );
+  return {
+    spentInCurrency,
+    percentage: progress.percentage,
+    isExceeded: progress.is_exceeded,
+    isWarning: progress.is_warning,
+  };
 }
