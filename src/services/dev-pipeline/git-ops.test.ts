@@ -1,4 +1,16 @@
-import { describe, expect, test } from 'bun:test';
+// Tests for git-ops — branch naming and package validation
+import { describe, expect, mock, test } from 'bun:test';
+
+// Mock logger to suppress output
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => ({
+    info: mock(),
+    warn: mock(),
+    error: mock(),
+    debug: mock(),
+  }),
+}));
+
 import { generateBranchName, managePackages } from './git-ops';
 
 describe('generateBranchName', () => {
@@ -9,8 +21,6 @@ describe('generateBranchName', () => {
 
   test('special characters are stripped or replaced with hyphens', () => {
     const result = generateBranchName(7, 'Fix bug: crash on $pecial chars!');
-    // Only a-z, 0-9, spaces, and hyphens survive the regex
-    // Spaces become hyphens, specials vanish
     expect(result).toBe('dev/fix-bug-crash-on-pecial-chars-7');
   });
 
@@ -19,21 +29,15 @@ describe('generateBranchName', () => {
       'Implement the very long feature that nobody asked for but we build it anyway';
     const result = generateBranchName(99, longTitle);
 
-    // The slug part (before -99) should be at most 40 chars,
-    // and trailing hyphens should be removed
     const slug = result.replace('dev/', '').replace(/-99$/, '');
     expect(slug.length).toBeLessThanOrEqual(40);
-
-    // Full branch starts with dev/ and ends with -<id>
     expect(result.startsWith('dev/')).toBe(true);
     expect(result.endsWith('-99')).toBe(true);
   });
 
   test('trailing hyphens on slug are removed before appending id', () => {
-    // "hello world---" → after regex: "hello-world---" → slice might leave trailing hyphens
     const result = generateBranchName(1, 'hello world   ');
     expect(result).toBe('dev/hello-world-1');
-    // No double hyphens between slug and id
     expect(result).not.toMatch(/--/);
   });
 });
@@ -69,23 +73,38 @@ describe('managePackages validation', () => {
     );
   });
 
+  // Tests below actually run `bun add` via Bun.$ shell — they need a real
+  // working directory with package.json. Use a temp dir with a minimal setup.
   test('accepts valid simple package name', async () => {
-    const result = await managePackages('/tmp', 'add', 'lodash');
+    const tmpDir = await createTempPackageDir();
+    const result = await managePackages(tmpDir, 'add', 'is-number');
     expect(result).toBeTruthy();
-  });
+  }, 15_000);
 
   test('accepts scoped package name', async () => {
-    const result = await managePackages('/tmp', 'add', '@types/lodash');
+    const tmpDir = await createTempPackageDir();
+    const result = await managePackages(tmpDir, 'add', '@types/is-number');
     expect(result).toBeTruthy();
-  });
+  }, 15_000);
 
   test('accepts package with version specifier', async () => {
-    const result = await managePackages('/tmp', 'add', 'lodash@4.17.21');
+    const tmpDir = await createTempPackageDir();
+    const result = await managePackages(tmpDir, 'add', 'is-number@7.0.0');
     expect(result).toBeTruthy();
-  });
+  }, 15_000);
 
   test('accepts multiple valid packages', async () => {
-    const result = await managePackages('/tmp', 'add', 'lodash zod');
+    const tmpDir = await createTempPackageDir();
+    const result = await managePackages(tmpDir, 'add', 'is-number is-odd');
     expect(result).toBeTruthy();
-  });
+  }, 15_000);
 });
+
+async function createTempPackageDir(): Promise<string> {
+  const { mkdtemp, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'git-ops-test-'));
+  await writeFile(join(dir, 'package.json'), '{"name":"test","version":"0.0.0"}');
+  return dir;
+}
