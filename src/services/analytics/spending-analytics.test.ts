@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
 import { createTestDb } from '../../test-utils/db';
 import { seedGroupAndUser } from '../../test-utils/fixtures';
@@ -690,5 +690,45 @@ describe('getFinancialSnapshot', () => {
   test('monthTrend period is month', () => {
     const snapshot = analytics.getFinancialSnapshot(GROUP_ID);
     expect(snapshot.monthTrend.period).toBe('month');
+  });
+
+  test('getAllBudgetsForMonth is called only once per snapshot', () => {
+    const spy = spyOn(budgetRepo, 'getAllBudgetsForMonth');
+    analytics.getFinancialSnapshot(GROUP_ID);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  test('getCategoryTotals is called only once per snapshot', () => {
+    const spy = spyOn(expenseRepo, 'getCategoryTotals');
+    analytics.getFinancialSnapshot(GROUP_ID);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+});
+
+describe('getAllBudgetsForMonth with multiple categories', () => {
+  test('returns all 5 categories in a single call', () => {
+    const multiGroupId = 10;
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [multiGroupId, 101010, 'EUR', '["EUR"]'],
+    );
+
+    const categories = ['Entertainment', 'Food', 'Health', 'Shopping', 'Transport'];
+    for (const cat of categories) {
+      db.run(
+        `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+        [multiGroupId, cat, currentMonth, 200, 'EUR'],
+      );
+    }
+
+    const spy = spyOn(budgetRepo, 'getAllBudgetsForMonth');
+    const budgets = budgetRepo.getAllBudgetsForMonth(multiGroupId, currentMonth);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(budgets).toHaveLength(5);
+    expect(budgets.map((b: { category: string }) => b.category)).toEqual(categories);
+    spy.mockRestore();
   });
 });
