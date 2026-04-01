@@ -56,7 +56,7 @@ export class ExpenseRepository {
 
   /**
    * Find expenses that may be duplicates of a bank transaction.
-   * Returns exact matches (same date, ±1% amount, same currency) and fuzzy matches (±1 day).
+   * Returns exact matches (same date, ±5% amount, same currency) and fuzzy matches (±1 day).
    * Only considers expenses not already linked to a bank transaction.
    */
   findPotentialDuplicates(
@@ -70,7 +70,7 @@ export class ExpenseRepository {
         SELECT 1 FROM bank_transactions bt WHERE bt.matched_expense_id = e.id
       )
     `;
-    const amountTolerance = amount * 0.01;
+    const amountTolerance = amount * 0.05;
 
     const exact = this.db
       .query<Expense, [number, string, string, number, number]>(`
