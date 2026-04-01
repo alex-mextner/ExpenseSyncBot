@@ -342,6 +342,15 @@ describe('syncBudgetsDiff', () => {
     expect(result.deleted).toHaveLength(0);
   });
 
+  it('wraps DB operations in a transaction', async () => {
+    mockReadMonthBudget.mockResolvedValue([
+      { category: 'Еда', limit: 500, currency: 'EUR' as CurrencyCode },
+    ]);
+
+    await syncBudgetsDiff(TEST_GROUP_ID);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+  });
+
   it('creates missing categories', async () => {
     mockReadMonthBudget.mockResolvedValue([
       { category: 'НоваяКатегория', limit: 100, currency: 'EUR' as CurrencyCode },

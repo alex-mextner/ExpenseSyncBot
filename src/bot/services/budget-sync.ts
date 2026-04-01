@@ -14,6 +14,14 @@ import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('budget-sync');
 
+const EMPTY_SYNC_RESULT: BudgetSyncResult = {
+  unchanged: 0,
+  added: [],
+  updated: [],
+  deleted: [],
+  createdCategories: [],
+};
+
 // ── Auto-sync budgets with cooldown ──
 
 const lastBudgetSyncByGroup = new Map<number, number>();
@@ -24,6 +32,7 @@ const BUDGET_SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 const BUDGET_NOTIFY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const budgetNotifyCache = new Map<string, { result: BudgetSyncResult; expires: number }>();
 const BUDGET_PAGE_SIZE = 10;
+let cacheKeyCounter = 0;
 
 function cleanBudgetCache(): void {
   const now = Date.now();
@@ -141,20 +150,20 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
 
   const spreadsheetId = database.groupSpreadsheets.getByYear(groupId, currentYear);
   if (!spreadsheetId) {
-    return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
+    return { ...EMPTY_SYNC_RESULT };
   }
 
   const conn = googleConn(group);
 
   const tabExists = await monthTabExists(conn, spreadsheetId, currentMonthAbbr);
   if (!tabExists) {
-    return { unchanged: 0, added: [], updated: [], deleted: [], createdCategories: [] };
+    return { ...EMPTY_SYNC_RESULT };
   }
 
   const sheetBudgets = await readMonthBudget(conn, spreadsheetId, currentMonthAbbr);
 
   const result: BudgetSyncResult = {
-    unchanged: 0,
+    ...EMPTY_SYNC_RESULT,
     added: [],
     updated: [],
     deleted: [],
@@ -163,60 +172,63 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
 
   const sheetCategories = new Set<string>(sheetBudgets.map((b) => b.category));
 
-  for (const b of sheetBudgets) {
-    if (!database.categories.exists(groupId, b.category)) {
-      database.categories.create({ group_id: groupId, name: b.category });
-      result.createdCategories.push(b.category);
+  // Wrap all DB reads+writes in a transaction for atomicity
+  database.transaction(() => {
+    for (const b of sheetBudgets) {
+      if (!database.categories.exists(groupId, b.category)) {
+        database.categories.create({ group_id: groupId, name: b.category });
+        result.createdCategories.push(b.category);
+      }
+
+      const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
+
+      if (!existing) {
+        database.budgets.setBudget({
+          group_id: groupId,
+          category: b.category,
+          month: currentMonth,
+          limit_amount: b.limit,
+          currency: b.currency,
+        });
+        result.added.push({
+          month: currentMonth,
+          category: b.category,
+          limit: b.limit,
+          currency: b.currency,
+        });
+      } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
+        database.budgets.setBudget({
+          group_id: groupId,
+          category: b.category,
+          month: currentMonth,
+          limit_amount: b.limit,
+          currency: b.currency,
+        });
+        result.updated.push({
+          month: currentMonth,
+          category: b.category,
+          limit: b.limit,
+          currency: b.currency,
+          oldLimit: existing.limit_amount,
+        });
+      } else {
+        result.unchanged++;
+      }
     }
 
-    const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
-
-    if (!existing) {
-      database.budgets.setBudget({
-        group_id: groupId,
-        category: b.category,
-        month: currentMonth,
-        limit_amount: b.limit,
-        currency: b.currency,
-      });
-      result.added.push({
-        month: currentMonth,
-        category: b.category,
-        limit: b.limit,
-        currency: b.currency,
-      });
-    } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
-      database.budgets.setBudget({
-        group_id: groupId,
-        category: b.category,
-        month: currentMonth,
-        limit_amount: b.limit,
-        currency: b.currency,
-      });
-      result.updated.push({
-        month: currentMonth,
-        category: b.category,
-        limit: b.limit,
-        currency: b.currency,
-        oldLimit: existing.limit_amount,
-      });
-    } else {
-      result.unchanged++;
+    const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+    for (const db of dbBudgets) {
+      if (!sheetCategories.has(db.category)) {
+        database.budgets.delete(db.id);
+        result.deleted.push({
+          month: db.month,
+          category: db.category,
+          limit: db.limit_amount,
+          currency: db.currency,
+        });
+      }
     }
-  }
-
-  const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
-  for (const db of dbBudgets) {
-    if (!sheetCategories.has(db.category)) {
-      database.budgets.delete(db.id);
-      result.deleted.push({
-        month: db.month,
-        category: db.category,
-        limit: db.limit_amount,
-        currency: db.currency,
-      });
-    }
-  }
+  });
 
   logger.info(
     `[BUDGET-SYNC] +${result.added.length} -${result.deleted.length} ~${result.updated.length} =${result.unchanged}`,
@@ -240,7 +252,7 @@ export async function ensureFreshBudgets(groupId: number, telegramGroupId?: numb
 
     if (hasChanges && telegramGroupId) {
       cleanBudgetCache();
-      const cacheKey = Math.random().toString(36).slice(2, 10);
+      const cacheKey = `bs_${Date.now()}_${cacheKeyCounter++}`;
       budgetNotifyCache.set(cacheKey, { result, expires: Date.now() + BUDGET_NOTIFY_CACHE_TTL_MS });
       const msgData = buildAutoSyncBudgetsMessage(result, cacheKey);
       const group = database.groups.findById(groupId);
