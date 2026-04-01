@@ -5,7 +5,7 @@ import { format, subDays } from 'date-fns';
 import cron from 'node-cron';
 import { env } from '../../config/env';
 import { database } from '../../database';
-import type { BankConnection, BankTransaction } from '../../database/types';
+import type { BankConnection, BankTransaction, Group } from '../../database/types';
 import { decryptData } from '../../utils/crypto';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
@@ -18,6 +18,7 @@ import type { ScrapeResult, ZenAccount, ZenTransaction } from './registry';
 import { BANK_REGISTRY } from './registry';
 import { createZenMoneyShim } from './runtime';
 import { editMessageText, sendMessage, withChatContext } from './telegram-sender';
+import { buildOldTxSummaryText } from './transaction-summary';
 import type {
   AccountReferenceByData,
   Merchant,
@@ -416,6 +417,14 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       }
     }
 
+    // Notify about old (non-today) transactions that were inserted this cycle
+    const oldTxsWithPrefill = newPendingTxs
+      .map((tx, i) => ({ tx, category: prefillResults[i]?.category ?? tx.prefill_category ?? '—' }))
+      .filter(({ tx }) => tx.date !== today);
+    if (oldTxsWithPrefill.length > 0) {
+      await notifyOldTransactions(oldTxsWithPrefill, conn, group);
+    }
+
     // Success: reset failures
     database.bankConnections.update(connectionId, {
       consecutive_failures: 0,
@@ -723,6 +732,34 @@ function getUnsentPendingTxs(connectionId: number): BankTransaction[] {
       (tx) => tx.telegram_message_id === null && !(tx.account_id && excludedIds.has(tx.account_id)),
     )
     .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+}
+
+/**
+ * Sends a summary of newly inserted old (non-today) transactions with show/skip buttons.
+ * Called from runSyncCycle after Phase 3 when old pending txs are detected.
+ */
+export async function notifyOldTransactions(
+  txsWithPrefill: { tx: BankTransaction; category: string }[],
+  conn: BankConnection,
+  group: Group,
+): Promise<void> {
+  if (txsWithPrefill.length === 0) return;
+
+  const text = buildOldTxSummaryText(txsWithPrefill, conn.display_name);
+  const threadId = conn.panel_message_thread_id ?? group.active_topic_id;
+
+  await withChatContext(group.telegram_group_id, threadId, () =>
+    sendMessage(text, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📋 Показать', callback_data: `bank_show_old:${conn.id}` },
+            { text: '🗑 Пропустить', callback_data: `bank_skip_old:${conn.id}` },
+          ],
+        ],
+      },
+    }),
+  );
 }
 
 /**

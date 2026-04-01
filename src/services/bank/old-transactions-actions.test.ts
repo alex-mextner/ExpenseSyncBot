@@ -28,7 +28,11 @@ mock.module('../../database', () => ({
 mock.module('node-cron', () => ({ default: { schedule: () => {} } }));
 
 import * as prefillModule from './prefill';
-import { sendOldTransactionCards, skipOldTransactions } from './sync-service';
+import {
+  notifyOldTransactions,
+  sendOldTransactionCards,
+  skipOldTransactions,
+} from './sync-service';
 import * as senderModule from './telegram-sender';
 
 const CONN: BankConnection = {
@@ -234,6 +238,58 @@ describe('sendOldTransactionCards', () => {
     findPendingByConnectionIdSpy.mockReturnValue([]);
 
     await sendOldTransactionCards(10);
+
+    expect(withChatContextSpy).toHaveBeenCalledWith(
+      GROUP.telegram_group_id,
+      GROUP.active_topic_id,
+      expect.any(Function),
+    );
+  });
+});
+
+describe('notifyOldTransactions', () => {
+  test('does nothing when txs list is empty', async () => {
+    await notifyOldTransactions([], CONN, GROUP);
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  test('sends summary message with show/skip buttons', async () => {
+    const txs = [
+      { tx: makeTx({ id: 1, date: '2026-03-28', merchant: 'METRO' }), category: 'food' },
+      { tx: makeTx({ id: 2, date: '2026-03-29', merchant: 'Bolt' }), category: 'transport' },
+    ];
+
+    await notifyOldTransactions(txs, CONN, GROUP);
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    const [text, options] = sendMessageSpy.mock.calls[0] as [
+      string,
+      { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } },
+    ];
+    expect(text).toContain('METRO');
+    expect(text).toContain('Bolt');
+    const buttons = options.reply_markup.inline_keyboard[0];
+    expect(buttons?.some((b) => b.callback_data === `bank_show_old:${CONN.id}`)).toBe(true);
+    expect(buttons?.some((b) => b.callback_data === `bank_skip_old:${CONN.id}`)).toBe(true);
+  });
+
+  test('uses conn panel thread for chat context', async () => {
+    const txs = [{ tx: makeTx({ id: 1 }), category: 'food' }];
+
+    await notifyOldTransactions(txs, CONN, GROUP);
+
+    expect(withChatContextSpy).toHaveBeenCalledWith(
+      GROUP.telegram_group_id,
+      CONN.panel_message_thread_id,
+      expect.any(Function),
+    );
+  });
+
+  test('falls back to active_topic_id when no panel thread', async () => {
+    const connNoPanel = { ...CONN, panel_message_thread_id: null };
+    const txs = [{ tx: makeTx({ id: 1 }), category: 'food' }];
+
+    await notifyOldTransactions(txs, connNoPanel, GROUP);
 
     expect(withChatContextSpy).toHaveBeenCalledWith(
       GROUP.telegram_group_id,

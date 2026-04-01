@@ -36,14 +36,21 @@ export async function sendMessage(
   options?: SendOptions,
 ): Promise<TelegramMessage | null> {
   const { chatId } = getContext();
+  const call = () =>
+    getBot().api.sendMessage({ chat_id: chatId, text, parse_mode: 'HTML', ...options });
   try {
-    return await getBot().api.sendMessage({
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      ...options,
-    });
+    return await call();
   } catch (error) {
+    if ((error as { code?: number }).code === 429) {
+      // rateLimitOnResponseError hook already set the global backoff;
+      // rateLimitPreRequest on the retry call will wait it out.
+      try {
+        return await call();
+      } catch (retryError) {
+        logger.warn({ err: retryError }, 'sendMessage retry failed');
+        return null;
+      }
+    }
     logger.warn({ err: error }, 'sendMessage failed');
     return null;
   }
