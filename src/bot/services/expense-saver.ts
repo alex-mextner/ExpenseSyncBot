@@ -8,7 +8,7 @@ import { convertCurrency, formatAmount, getExchangeRate } from '../../services/c
 import { googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
-import { silentSyncBudgets } from '../commands/budget';
+import { silentSyncBudgets } from './budget-sync';
 
 const logger = createLogger('expense-saver');
 

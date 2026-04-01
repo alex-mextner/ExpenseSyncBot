@@ -81,7 +81,7 @@ export function createBot(): Bot {
             await ensureFreshExpenses(grp.id, chatId);
           }
           if (opts.budgets) {
-            const { ensureFreshBudgets } = await import('./commands/budget');
+            const { ensureFreshBudgets } = await import('./services/budget-sync');
             await ensureFreshBudgets(grp.id, chatId);
           }
         }

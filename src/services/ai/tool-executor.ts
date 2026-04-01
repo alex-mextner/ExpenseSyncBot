@@ -37,7 +37,7 @@ export async function executeTool(
       await ensureFreshExpenses(ctx.groupId);
     }
     if (needsBudgetSync) {
-      const { ensureFreshBudgets } = await import('../../bot/commands/budget');
+      const { ensureFreshBudgets } = await import('../../bot/services/budget-sync');
       await ensureFreshBudgets(ctx.groupId);
     }
 
@@ -511,7 +511,7 @@ async function executeSyncBudgets(ctx: AgentContext): Promise<ToolResult> {
   }
 
   try {
-    const { silentSyncBudgets } = await import('../../bot/commands/budget');
+    const { silentSyncBudgets } = await import('../../bot/services/budget-sync');
     await silentSyncBudgets(googleConn(group), ctx.groupId);
     return { success: true, output: 'Budgets synced to Google Sheets.' };
   } catch (err) {
