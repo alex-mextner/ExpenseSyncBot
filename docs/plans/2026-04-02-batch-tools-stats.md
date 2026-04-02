@@ -1317,18 +1317,35 @@ Update `tools.ts` to document array support in parameter descriptions.
 **Files:**
 - Modify: `src/services/ai/tools.ts`
 
+JSON Schema note: Anthropic tool schemas support `oneOf` for union types (verified in hypercalendarbot `get_timezone_info` tool). Use this pattern for all array-capable params:
+
+```ts
+// Pattern for string | string[] params:
+paramName: {
+  oneOf: [
+    { type: 'string', description: 'Single value' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of values' },
+  ],
+  description: 'Overall description',
+},
+```
+
 - [ ] **Step 1: Update get_expenses schema**
 
 ```ts
 period: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single period' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of periods for multi-period breakdown' },
+  ],
   description:
     'Time period: "current_month", "last_month", "last_3_months", "last_6_months", "all", or specific "YYYY-MM". Pass an ARRAY of periods to get per-period breakdown with stats, diff (2 periods), or trend (3+). Example: ["2025-11", "2025-12", "2026-01"]',
 },
 category: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single category' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of categories (OR match)' },
+  ],
   description: 'Filter by category name(s). Pass an array to filter by multiple categories (OR match). Case-insensitive.',
 },
 ```
@@ -1347,13 +1364,17 @@ summary_only: {
 
 ```ts
 month: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single month' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of months for multi-month comparison' },
+  ],
   description: 'Month in "YYYY-MM" format. Pass an array for multi-month comparison. Default: current month.',
 },
 category: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single category' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of categories (OR filter)' },
+  ],
   description: 'Filter by specific category or categories (array for multi-category filter).',
 },
 ```
@@ -1362,18 +1383,24 @@ category: {
 
 ```ts
 period: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single period' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of periods' },
+  ],
   description: '"current_month" | "last_month" | "YYYY-MM". Pass an array for multiple periods.',
 },
 bank_name: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single bank' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of bank names' },
+  ],
   description: 'Bank name(s): "all" for all banks, or bank registry key(s). Pass an array for multiple banks.',
 },
 status: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single status' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of statuses' },
+  ],
   description: '"pending" | "confirmed" | "skipped". Pass an array for multiple statuses. Omit for all.',
 },
 ```
@@ -1382,8 +1409,10 @@ status: {
 
 ```ts
 period: {
-  type: ['string', 'array'],
-  items: { type: 'string' },
+  oneOf: [
+    { type: 'string', description: 'Single period' },
+    { type: 'array', items: { type: 'string' }, description: 'Array of periods' },
+  ],
   description: '"current_month" | "last_month" | "YYYY-MM". Pass an array for multi-period search.',
 },
 ```
