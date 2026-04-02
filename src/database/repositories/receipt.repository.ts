@@ -47,7 +47,7 @@ export class ReceiptRepository {
   /**
    * Find receipts that may match a bank transaction by total amount, currency, and date.
    * Uses ±5% tolerance on amount and ±1 day on date (fuzzy).
-   * Only returns receipts not already fully linked to a confirmed bank transaction.
+   * Excludes receipts already linked to a confirmed bank transaction.
    */
   findPotentialMatches(
     groupId: number,
@@ -57,6 +57,13 @@ export class ReceiptRepository {
   ): { exact: Receipt[]; fuzzy: Receipt[] } {
     const amountTolerance = amount * 0.05;
 
+    const linkedFilter = `
+      AND NOT EXISTS (
+        SELECT 1 FROM expenses e2
+        JOIN bank_transactions bt ON bt.matched_expense_id = e2.id
+        WHERE e2.receipt_id = r.id AND bt.status = 'confirmed'
+      )`;
+
     const exact = this.db
       .query<Receipt, [number, string, string, number, number]>(
         `SELECT r.* FROM receipts r
@@ -64,6 +71,7 @@ export class ReceiptRepository {
            AND r.date = ?
            AND r.currency = ?
            AND ABS(r.total_amount - ?) <= ?
+           ${linkedFilter}
          ORDER BY r.created_at DESC
          LIMIT 5`,
       )
@@ -80,6 +88,7 @@ export class ReceiptRepository {
            AND r.date != ?
            AND r.currency = ?
            AND ABS(r.total_amount - ?) <= ?
+           ${linkedFilter}
          ORDER BY ABS(julianday(r.date) - julianday(?)) ASC, r.created_at DESC
          LIMIT 5`,
       )

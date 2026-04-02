@@ -1229,6 +1229,13 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '046_add_expenses_receipt_id_index',
+      up: () => {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_receipt_id ON expenses(receipt_id)');
+        logger.info('✓ Created index on expenses.receipt_id');
+      },
+    },
   ];
 
   // Check and run migrations

@@ -175,6 +175,65 @@ describe('ReceiptRepository', () => {
       expect(result.fuzzy).toHaveLength(0);
     });
 
+    test('excludes receipt already linked to a confirmed bank transaction', () => {
+      const receipt = receiptRepo.create(makeReceipt({ total_amount: 2500, date: '2024-06-15' }));
+
+      // Create an expense linked to this receipt
+      const expense = expenseRepo.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-06-15',
+        category: 'Food',
+        comment: 'Grocery',
+        amount: 2500,
+        currency: 'RSD',
+        eur_amount: 21.3,
+        receipt_id: receipt.id,
+      });
+
+      // Create a bank_connection + confirmed bank_transaction matched to that expense
+      db.exec(
+        `INSERT INTO bank_connections (group_id, bank_name, display_name, status) VALUES (${groupId}, 'test', 'Test Bank', 'active')`,
+      );
+      const connId = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get();
+      db.exec(
+        `INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, status, matched_expense_id)
+         VALUES (${connId?.id ?? 0}, 'ext-1', '2024-06-15', 2500, 'RSD', '{}', 'confirmed', ${expense.id})`,
+      );
+
+      const result = receiptRepo.findPotentialMatches(groupId, '2024-06-15', 2500, 'RSD');
+      expect(result.exact).toHaveLength(0);
+      expect(result.fuzzy).toHaveLength(0);
+    });
+
+    test('includes receipt when bank transaction is still pending', () => {
+      const receipt = receiptRepo.create(makeReceipt({ total_amount: 2500, date: '2024-06-15' }));
+
+      const expense = expenseRepo.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-06-15',
+        category: 'Food',
+        comment: 'Grocery',
+        amount: 2500,
+        currency: 'RSD',
+        eur_amount: 21.3,
+        receipt_id: receipt.id,
+      });
+
+      db.exec(
+        `INSERT INTO bank_connections (group_id, bank_name, display_name, status) VALUES (${groupId}, 'test', 'Test Bank', 'active')`,
+      );
+      const connId = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get();
+      db.exec(
+        `INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, status, matched_expense_id)
+         VALUES (${connId?.id ?? 0}, 'ext-2', '2024-06-15', 2500, 'RSD', '{}', 'pending', ${expense.id})`,
+      );
+
+      const result = receiptRepo.findPotentialMatches(groupId, '2024-06-15', 2500, 'RSD');
+      expect(result.exact).toHaveLength(1);
+    });
+
     test('exact and fuzzy are separated — no duplicates', () => {
       // Exact: same date
       receiptRepo.create(makeReceipt({ total_amount: 2500, date: '2024-06-15' }));

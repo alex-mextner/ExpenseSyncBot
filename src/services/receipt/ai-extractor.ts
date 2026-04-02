@@ -42,6 +42,8 @@ export interface AIReceiptItem {
 export interface AIExtractionResult {
   items: AIReceiptItem[];
   currency?: CurrencyCode;
+  /** Receipt date in YYYY-MM-DD format, extracted from the receipt text */
+  date?: string;
 }
 
 /** Category example from expense history, used to improve AI categorization */
@@ -167,6 +169,12 @@ export async function extractExpensesFromReceipt(
         // Validate result
         if (!result.items || !Array.isArray(result.items) || result.items.length === 0) {
           throw new Error('Invalid result: items array is missing or empty');
+        }
+
+        // Validate date format if present
+        if (result.date && !/^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
+          logger.warn(`[AI_EXTRACTOR] Invalid date format "${result.date}", discarding`);
+          delete result.date;
         }
 
         // Validate and normalize each item
@@ -338,7 +346,8 @@ function buildExtractionPrompt(
       "possible_categories": ["Альтернатива1", "Альтернатива2"]
     }
   ],
-  "currency": "RSD"
+  "currency": "RSD",
+  "date": "2024-06-15"
 }
 
 CRITICAL INSTRUCTIONS:
@@ -346,6 +355,7 @@ CRITICAL INSTRUCTIONS:
 2. Keep original names in name_original if they are in a different language
 3. Extract quantity, price per unit, and total amount for each item
 4. ALWAYS provide "possible_categories" array with 2-3 alternative category names - this field is REQUIRED
+6. Extract the receipt date and return it as "date" in YYYY-MM-DD format. If the date is not visible, omit the field
 5. Detect the currency used in the receipt (e.g., RSD, EUR, USD)
 
 CATEGORY SELECTION (MOST IMPORTANT):

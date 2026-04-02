@@ -174,6 +174,7 @@ afterEach(() => {
   for (const m of allMocks) m.mockReset();
   bankSent.length = 0;
   mockBankSendMessage.mockClear();
+  (senderModule.editMessageText as ReturnType<typeof mock>).mockClear();
   // Restore defaults cleared by mockReset — these must return structured objects, not undefined
   mockExpenses.findPotentialDuplicates.mockImplementation(() => ({ exact: [], fuzzy: [] }));
   mockReceipts.findPotentialMatches.mockImplementation(() => ({ exact: [], fuzzy: [] }));
@@ -832,9 +833,8 @@ describe('handleBankReceiptCallback', () => {
     mockReceipts.findExpensesByReceiptId.mockImplementation(() => receiptExpenses);
 
     const ctx = makeCallbackCtx({ message: { id: 300 } });
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, receipt.id, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
     expect(mockBankTransactions.updateStatus).toHaveBeenCalledWith(tx.id, group.id, 'confirmed');
     expect(mockBankTransactions.setMatchedExpense).toHaveBeenCalledWith(tx.id, group.id, 50);
@@ -842,19 +842,17 @@ describe('handleBankReceiptCallback', () => {
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: '✅ Связано с чеком' }),
     );
-    expect(bot.api.editMessageText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining('Продукты, Дом'),
-      }),
+    expect(senderModule.editMessageText).toHaveBeenCalledWith(
+      300,
+      expect.stringContaining('Продукты, Дом'),
     );
   });
 
   test('rejects when group not found', async () => {
     mockGroups.findByTelegramGroupId.mockImplementation(() => null);
     const ctx = makeCallbackCtx();
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, 7, 10, 100);
+    await handleBankReceiptCallback(ctx as never, 7, 10, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Группа не найдена' }),
@@ -867,9 +865,8 @@ describe('handleBankReceiptCallback', () => {
     mockBankTransactions.findById.mockImplementation(() => tx);
 
     const ctx = makeCallbackCtx();
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, receipt.id, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Транзакция уже обработана' }),
@@ -883,9 +880,8 @@ describe('handleBankReceiptCallback', () => {
     mockReceipts.findById.mockImplementation(() => null);
 
     const ctx = makeCallbackCtx();
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, 999, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, 999, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Чек не найден' }),
@@ -899,9 +895,8 @@ describe('handleBankReceiptCallback', () => {
     mockReceipts.findById.mockImplementation(() => ({ ...receipt, group_id: 999 }));
 
     const ctx = makeCallbackCtx();
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, receipt.id, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Чек не найден' }),
@@ -916,9 +911,8 @@ describe('handleBankReceiptCallback', () => {
     mockReceipts.findExpensesByReceiptId.mockImplementation(() => []);
 
     const ctx = makeCallbackCtx();
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, receipt.id, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'У чека нет связанных расходов' }),
@@ -933,14 +927,13 @@ describe('handleBankReceiptCallback', () => {
     mockReceipts.findExpensesByReceiptId.mockImplementation(() => receiptExpenses);
 
     const ctx = makeCallbackCtx({ message: undefined });
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, receipt.id, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: '✅ Связано с чеком' }),
     );
-    expect(bot.api.editMessageText).not.toHaveBeenCalled();
+    expect(senderModule.editMessageText).not.toHaveBeenCalled();
   });
 
   test('edits message with receipt amount, currency, and categories', async () => {
@@ -952,16 +945,12 @@ describe('handleBankReceiptCallback', () => {
     ]);
 
     const ctx = makeCallbackCtx({ message: { id: 300 } });
-    const bot = makeBot();
 
-    await handleBankReceiptCallback(ctx as never, bot as never, tx.id, receipt.id, 100);
+    await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
-    expect(bot.api.editMessageText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: '✅ Связано с чеком: 2500 RSD (Кафе)',
-        chat_id: 100,
-        message_id: 300,
-      }),
+    expect(senderModule.editMessageText).toHaveBeenCalledWith(
+      300,
+      expect.stringContaining('Связано с чеком: 2500.00 RSD (Кафе)'),
     );
   });
 });

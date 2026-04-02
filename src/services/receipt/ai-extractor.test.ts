@@ -149,6 +149,57 @@ describe('extractExpensesFromReceipt', () => {
       expect(result.items.length).toBeGreaterThan(0);
     });
 
+    it('extracts date from AI response when present', async () => {
+      const withDate = JSON.stringify({
+        items: [
+          {
+            name_ru: 'Молоко',
+            name_original: 'Milk',
+            quantity: 1,
+            price: 100,
+            total: 100,
+            category: 'Еда',
+            possible_categories: ['Напитки'],
+          },
+        ],
+        currency: 'RSD',
+        date: '2024-06-15',
+      });
+      mockFetchWithContent(withDate);
+
+      const result = await extractExpensesFromReceipt('Receipt text', [], undefined, 1);
+      expect(result.date).toBe('2024-06-15');
+    });
+
+    it('returns undefined date when AI does not include it', async () => {
+      mockFetchWithContent(VALID_ITEMS_JSON);
+
+      const result = await extractExpensesFromReceipt('Receipt text', [], undefined, 1);
+      expect(result.date).toBeUndefined();
+    });
+
+    it('discards date with invalid format', async () => {
+      const badDate = JSON.stringify({
+        items: [
+          {
+            name_ru: 'Молоко',
+            name_original: 'Milk',
+            quantity: 1,
+            price: 100,
+            total: 100,
+            category: 'Еда',
+            possible_categories: ['Напитки'],
+          },
+        ],
+        currency: 'RSD',
+        date: '15.06.2024',
+      });
+      mockFetchWithContent(badDate);
+
+      const result = await extractExpensesFromReceipt('Receipt text', [], undefined, 1);
+      expect(result.date).toBeUndefined();
+    });
+
     it('detects HTML and strips tags before sending', async () => {
       mockFetchWithContent(VALID_ITEMS_JSON);
 

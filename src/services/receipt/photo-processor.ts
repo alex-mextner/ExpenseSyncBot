@@ -286,7 +286,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Create receipt record with compressed image and total amount
     if (savedReceiptPath) {
       const totalAmount = extractionResult.items.reduce((sum, item) => sum + item.total, 0);
-      const currentDate = new Date().toISOString().split('T')[0] ?? '';
+      const currentDate = extractionResult.date || new Date().toISOString().split('T')[0] || '';
       database.receipts.create({
         group_id: queueItem.group_id,
         photo_queue_id: queueItemId,

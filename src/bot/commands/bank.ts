@@ -11,8 +11,8 @@ import {
 import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
-import { sendMessage } from '../../services/bank/telegram-sender';
-import { convertAnyToEUR } from '../../services/currency/converter';
+import { editMessageText, sendMessage } from '../../services/bank/telegram-sender';
+import { convertAnyToEUR, formatAmount } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
@@ -464,7 +464,7 @@ export async function handleBankConfirmCallback(
 
     const replyToMsgId = claimed.telegram_message_id ?? undefined;
     await sendMessage(
-      `🧾 Найден чек на ${receiptMatch.total_amount} ${receiptMatch.currency} от ${receiptMatch.date}\n📋 Категории: ${categorySummary}\n\nСвязать транзакцию с чеком или создать новый расход?`,
+      `🧾 Найден чек на ${formatAmount(receiptMatch.total_amount, receiptMatch.currency)} от ${receiptMatch.date}\n📋 Категории: ${categorySummary}\n\nСвязать транзакцию с чеком или создать новый расход?`,
       {
         ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
         reply_markup: {
@@ -505,7 +505,7 @@ export async function handleBankConfirmCallback(
 }
 
 /**
- * Handles "Объединить" button — links bank transaction to an existing expense.
+ * Handles "Связать" button — links bank transaction to an existing expense.
  */
 export async function handleBankMergeCallback(
   ctx: Ctx['CallbackQuery'],
@@ -574,7 +574,6 @@ export async function handleBankMergeCallback(
  */
 export async function handleBankReceiptCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   receiptId: number,
   chatId: number,
@@ -623,15 +622,10 @@ export async function handleBankReceiptCallback(
   await ctx.answerCallbackQuery({ text: '✅ Связано с чеком' });
   const messageId = ctx.message?.id;
   if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `✅ Связано с чеком: ${receipt.total_amount} ${receipt.currency} (${categorySummary})`,
-      });
-    } catch {
-      // message may be too old to edit
-    }
+    await editMessageText(
+      messageId,
+      `✅ Связано с чеком: ${formatAmount(receipt.total_amount, receipt.currency)} (${categorySummary})`,
+    );
   }
 }
 

@@ -226,7 +226,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankReceiptCallback(ctx, bot, txId, receiptId, chatId);
+        await handleBankReceiptCallback(ctx, txId, receiptId, chatId);
         break;
       }
 
