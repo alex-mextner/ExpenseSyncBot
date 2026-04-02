@@ -1,6 +1,6 @@
 // Bank transaction storage — all read queries require group_id for isolation.
 import type { Database } from 'bun:sqlite';
-import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
+import { resolvePeriodDates } from '../../utils/period';
 import type { BankTransaction, BankTransactionFilters, CreateBankTransactionData } from '../types';
 
 export class BankTransactionsRepository {
@@ -91,19 +91,43 @@ export class BankTransactionsRepository {
     const values: (string | number)[] = [groupId];
 
     if (filters.bank_name) {
-      conditions.push('bc.bank_name = ?');
-      values.push(filters.bank_name);
+      if (Array.isArray(filters.bank_name)) {
+        const placeholders = filters.bank_name.map(() => '?').join(', ');
+        conditions.push(`bc.bank_name IN (${placeholders})`);
+        values.push(...filters.bank_name);
+      } else {
+        conditions.push('bc.bank_name = ?');
+        values.push(filters.bank_name);
+      }
     }
 
     if (filters.status) {
-      conditions.push('bt.status = ?');
-      values.push(filters.status);
+      if (Array.isArray(filters.status)) {
+        const placeholders = filters.status.map(() => '?').join(', ');
+        conditions.push(`bt.status IN (${placeholders})`);
+        values.push(...filters.status);
+      } else {
+        conditions.push('bt.status = ?');
+        values.push(filters.status);
+      }
     }
 
     if (filters.period) {
-      const { startDate, endDate } = resolvePeriod(filters.period);
-      conditions.push('bt.date >= ?', 'bt.date <= ?');
-      values.push(startDate, endDate);
+      const periods = Array.isArray(filters.period) ? filters.period : [filters.period];
+      const [firstPeriod] = periods;
+      if (periods.length === 1 && firstPeriod) {
+        const { startDate, endDate } = resolvePeriodDates(firstPeriod);
+        conditions.push('bt.date >= ?', 'bt.date <= ?');
+        values.push(startDate, endDate);
+      } else {
+        // Multiple periods: OR of date ranges
+        const dateConditions = periods.map((p) => {
+          const { startDate, endDate } = resolvePeriodDates(p);
+          values.push(startDate, endDate);
+          return '(bt.date >= ? AND bt.date <= ?)';
+        });
+        conditions.push(`(${dateConditions.join(' OR ')})`);
+      }
     }
 
     return this.db
@@ -196,31 +220,4 @@ export class BankTransactionsRepository {
       `)
       .all(groupId, startDate, endDate);
   }
-}
-
-function resolvePeriod(period: string): { startDate: string; endDate: string } {
-  const now = new Date();
-  if (period === 'current_month') {
-    return {
-      startDate: format(startOfMonth(now), 'yyyy-MM-dd'),
-      endDate: format(endOfMonth(now), 'yyyy-MM-dd'),
-    };
-  }
-  if (period === 'last_month') {
-    const last = subMonths(now, 1);
-    return {
-      startDate: format(startOfMonth(last), 'yyyy-MM-dd'),
-      endDate: format(endOfMonth(last), 'yyyy-MM-dd'),
-    };
-  }
-  // YYYY-MM
-  const [year, month] = period.split('-').map(Number);
-  if (year && month) {
-    const d = new Date(year, month - 1, 1);
-    return {
-      startDate: format(startOfMonth(d), 'yyyy-MM-dd'),
-      endDate: format(endOfMonth(d), 'yyyy-MM-dd'),
-    };
-  }
-  return { startDate: '2000-01-01', endDate: '2099-12-31' };
 }

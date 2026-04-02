@@ -13,13 +13,28 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         period: {
-          type: 'string',
+          oneOf: [
+            { type: 'string', description: 'Single period' },
+            {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of periods for multi-period breakdown',
+            },
+          ],
           description:
-            'Time period: "current_month", "last_month", "last_3_months", "last_6_months", "all", or specific "YYYY-MM"',
+            'Time period: "current_month", "last_month", "last_3_months", "last_6_months", "all", or specific "YYYY-MM". Pass an ARRAY of periods to get per-period breakdown with stats, diff (2 periods), or trend (3+). Example: ["2025-11", "2025-12", "2026-01"]',
         },
         category: {
-          type: 'string',
-          description: 'Filter by category name (case-insensitive)',
+          oneOf: [
+            { type: 'string', description: 'Single category' },
+            {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of categories (OR match)',
+            },
+          ],
+          description:
+            'Filter by category name(s). Pass an array to filter by multiple categories (OR match). Case-insensitive.',
         },
         page: {
           type: 'number',
@@ -34,7 +49,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         summary_only: {
           type: 'boolean',
           description:
-            'If true, return pre-calculated totals by category (count, total in display currency, breakdown by original currency). Use for any aggregation question — totals for a period, category breakdown, "what did X spend", "how much in total". Always prefer this over fetching individual records when you need a summary.',
+            'If true, return pre-calculated totals by category with stats (count, total, avg, median, min, max). For multi-period arrays, includes per-period breakdown + diff/trend. ALWAYS prefer this for aggregation questions.',
         },
       },
     },
@@ -47,12 +62,28 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         month: {
-          type: 'string',
-          description: 'Month in "YYYY-MM" format. Default: current month.',
+          oneOf: [
+            { type: 'string', description: 'Single month' },
+            {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of months for multi-month comparison',
+            },
+          ],
+          description:
+            'Month in "YYYY-MM" format. Pass an array for multi-month comparison. Default: current month.',
         },
         category: {
-          type: 'string',
-          description: 'Filter by specific category',
+          oneOf: [
+            { type: 'string', description: 'Single category' },
+            {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of categories (OR filter)',
+            },
+          ],
+          description:
+            'Filter by specific category or categories (array for multi-category filter).',
         },
       },
     },
@@ -271,17 +302,28 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         period: {
-          type: 'string',
-          description: '"current_month" | "last_month" | "YYYY-MM"',
+          oneOf: [
+            { type: 'string', description: 'Single period' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of periods' },
+          ],
+          description:
+            '"current_month" | "last_month" | "YYYY-MM". Pass an array for multiple periods.',
         },
         bank_name: {
-          type: 'string',
+          oneOf: [
+            { type: 'string', description: 'Single bank' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of bank names' },
+          ],
           description:
-            'Which bank to show: "all" for all banks, or a bank registry key for a specific one (case-insensitive substring match). Always specify explicitly.',
+            'Bank name(s): "all" for all banks, or bank registry key(s). Pass an array for multiple banks.',
         },
         status: {
-          type: 'string',
-          description: '"pending" | "confirmed" | "skipped" — omit for all statuses.',
+          oneOf: [
+            { type: 'string', description: 'Single status' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of statuses' },
+          ],
+          description:
+            '"pending" | "confirmed" | "skipped". Pass an array for multiple statuses. Omit for all.',
         },
       },
       required: ['bank_name'],
@@ -382,8 +424,12 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
       type: 'object' as const,
       properties: {
         period: {
-          type: 'string',
-          description: '"current_month" | "last_month" | "YYYY-MM"',
+          oneOf: [
+            { type: 'string', description: 'Single period' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of periods' },
+          ],
+          description:
+            '"current_month" | "last_month" | "YYYY-MM". Pass an array for multi-period search.',
         },
       },
     },

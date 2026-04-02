@@ -3,18 +3,27 @@
  * Maps tool calls to database operations and services
  */
 import type Big from 'big.js';
-import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
+import { endOfMonth, format } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
-import type { BankTransaction, BankTransactionFilters } from '../../database/types';
+import type { BankTransaction, BankTransactionFilters, Expense } from '../../database/types';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
+import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
+import {
+  computeExpenseStats,
+  type ExpenseStats,
+  formatStats,
+  formatStatsDiff,
+  formatStatsTrend,
+  type TrendEntry,
+} from './stats';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
@@ -102,69 +111,66 @@ async function executeGetExpenses(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const period = (input['period'] as string) || 'current_month';
-  const category = input['category'] as string | undefined;
+  const periods = normalizeArrayParam(input['period'], 'current_month');
+  const categories = normalizeArrayParam(input['category']);
   const pageSize = Math.min(Math.max((input['page_size'] as number) || 100, 1), 500);
   const page = Math.max((input['page'] as number) || 1, 1);
   const summaryOnly = (input['summary_only'] as boolean) || false;
 
-  const now = new Date();
-  let startDate: string;
-  let endDate: string = format(now, 'yyyy-MM-dd');
+  const group = database.groups.findById(ctx.groupId);
+  const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
 
-  switch (period) {
-    case 'current_month':
-      startDate = format(startOfMonth(now), 'yyyy-MM-dd');
-      endDate = format(endOfMonth(now), 'yyyy-MM-dd');
-      break;
-    case 'last_month': {
-      const lastMonth = subMonths(now, 1);
-      startDate = format(startOfMonth(lastMonth), 'yyyy-MM-dd');
-      endDate = format(endOfMonth(lastMonth), 'yyyy-MM-dd');
-      break;
+  // Resolve all periods and fetch expenses
+  const periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[] =
+    [];
+
+  for (const period of periods) {
+    const { startDate, endDate } = resolvePeriodDates(period);
+    let expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+
+    if (categories.length > 0) {
+      const lowerCategories = categories.map((c) => c.toLowerCase());
+      expenses = expenses.filter((e) => lowerCategories.includes(e.category.toLowerCase()));
     }
-    case 'last_3_months':
-      startDate = format(startOfMonth(subMonths(now, 2)), 'yyyy-MM-dd');
-      break;
-    case 'last_6_months':
-      startDate = format(startOfMonth(subMonths(now, 5)), 'yyyy-MM-dd');
-      break;
-    case 'all':
-      startDate = '2000-01-01';
-      break;
-    default:
-      // Specific month "YYYY-MM"
-      if (/^\d{4}-\d{2}$/.test(period)) {
-        startDate = `${period}-01`;
-        const monthDate = new Date(`${period}-01`);
-        endDate = format(endOfMonth(monthDate), 'yyyy-MM-dd');
-      } else {
-        startDate = format(startOfMonth(now), 'yyyy-MM-dd');
-        endDate = format(endOfMonth(now), 'yyyy-MM-dd');
-      }
+
+    periodData.push({ label: period, startDate, endDate, expenses });
   }
 
-  let expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
-
-  // Filter by category (case-insensitive)
-  if (category) {
-    const categoryLower = category.toLowerCase();
-    expenses = expenses.filter((e) => e.category.toLowerCase() === categoryLower);
-  }
-
-  const totalPages = summaryOnly ? 1 : Math.max(1, Math.ceil(expenses.length / pageSize));
-
-  logger.info(
-    `[TOOL] get_expenses: period=${period} (${startDate}–${endDate}), category=${category || 'all'}, found=${expenses.length}, page=${page}/${totalPages}, page_size=${pageSize}, summary=${summaryOnly}`,
-  );
+  const isBatch = periods.length > 1;
+  const allExpenses = periodData.flatMap((p) => p.expenses);
 
   if (summaryOnly) {
-    // Aggregate by category
+    return buildSummaryOutput(periodData, allExpenses, displayCurrency, isBatch);
+  }
+
+  return buildDetailOutput(periodData, allExpenses, displayCurrency, isBatch, page, pageSize);
+}
+
+function buildSummaryOutput(
+  periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
+  allExpenses: Expense[],
+  displayCurrency: CurrencyCode,
+  isBatch: boolean,
+): ToolResult {
+  const lines: string[] = [];
+  const perPeriodStats: ExpenseStats[] = [];
+
+  for (const pd of periodData) {
+    if (isBatch) lines.push(`=== ${pd.label} ===`);
+    lines.push(`Period: ${pd.startDate} to ${pd.endDate}`);
+
+    if (pd.expenses.length === 0) {
+      perPeriodStats.push({ count: 0, total: 0, avg: 0, median: 0, min: null, max: null });
+      lines.push('No expenses', '');
+      continue;
+    }
+
+    // Category aggregation
     const totals: Record<
       string,
       { count: number; eur_total: number; amounts: Record<string, number> }
     > = {};
-    for (const e of expenses) {
+    for (const e of pd.expenses) {
       const existing = totals[e.category];
       const cat = existing ?? { count: 0, eur_total: 0, amounts: {} };
       totals[e.category] = cat;
@@ -174,15 +180,9 @@ async function executeGetExpenses(
     }
 
     const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
-    const group = database.groups.findById(ctx.groupId);
-    const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
     const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+    lines.push(`Total: ${formatAmount(totalDisplay, displayCurrency, true)}`, '');
 
-    const lines = [
-      `Period: ${startDate} to ${endDate}`,
-      `Total: ${formatAmount(totalDisplay, displayCurrency, true)}`,
-      '',
-    ];
     const sorted = Object.entries(totals).sort((a, b) => b[1].eur_total - a[1].eur_total);
     for (const [cat, data] of sorted) {
       const amountParts = Object.entries(data.amounts)
@@ -194,23 +194,109 @@ async function executeGetExpenses(
       );
     }
 
-    const output = lines.join('\n');
-    logger.info(`[TOOL] get_expenses summary output:\n${output}`);
-    return { success: true, output };
+    // Per-period stats
+    const stats = computeExpenseStats(pd.expenses, displayCurrency);
+    perPeriodStats.push(stats);
+    lines.push('', `=== Stats${isBatch ? ` (${pd.label})` : ''} ===`);
+    lines.push(formatStats(stats, displayCurrency));
+    lines.push('');
   }
 
-  // Return individual expenses (paginated)
+  // Overall stats for batch
+  if (isBatch && allExpenses.length > 0) {
+    const overallStats = computeExpenseStats(allExpenses, displayCurrency);
+    const overallEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
+    const overallDisplay = convertCurrency(overallEur, BASE_CURRENCY, displayCurrency);
+    lines.push('=== Overall ===');
+    lines.push(`Total: ${formatAmount(overallDisplay, displayCurrency, true)}`);
+    lines.push(formatStats(overallStats, displayCurrency));
+    lines.push('');
+
+    // Diff for exactly 2 periods
+    if (
+      periodData.length === 2 &&
+      perPeriodStats[0] &&
+      perPeriodStats[1] &&
+      periodData[0] &&
+      periodData[1]
+    ) {
+      lines.push(
+        formatStatsDiff(
+          perPeriodStats[0],
+          perPeriodStats[1],
+          periodData[0].label,
+          periodData[1].label,
+          displayCurrency,
+          periodData[0].expenses,
+          periodData[1].expenses,
+        ),
+      );
+    }
+
+    // Trend for 3+ periods
+    if (periodData.length >= 3) {
+      const entries: TrendEntry[] = [];
+      for (let i = 0; i < periodData.length; i++) {
+        const pd = periodData[i];
+        const stats = perPeriodStats[i];
+        if (pd && stats) entries.push({ label: pd.label, stats });
+      }
+      lines.push(formatStatsTrend(entries, displayCurrency));
+    }
+  }
+
+  const output = lines.join('\n');
+  logger.info(
+    `[TOOL] get_expenses summary output (${allExpenses.length} expenses, ${periodData.length} periods)`,
+  );
+  return { success: true, output };
+}
+
+function buildDetailOutput(
+  periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
+  allExpenses: Expense[],
+  displayCurrency: CurrencyCode,
+  isBatch: boolean,
+  page: number,
+  pageSize: number,
+): ToolResult {
+  // Sort all expenses by date desc
+  allExpenses.sort((a, b) => b.date.localeCompare(a.date));
+
+  const totalPages = Math.max(1, Math.ceil(allExpenses.length / pageSize));
   const offset = (page - 1) * pageSize;
-  const pageItems = expenses.slice(offset, offset + pageSize);
-  const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
-  const totalEur = expenses.reduce((s, e) => s + e.eur_amount, 0);
+  const pageItems = allExpenses.slice(offset, offset + pageSize);
+
+  const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
   const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+
+  const firstPeriod = periodData[0];
+  const lastPeriod = periodData[periodData.length - 1];
+  const dateRange =
+    isBatch && firstPeriod && lastPeriod
+      ? `${firstPeriod.startDate} to ${lastPeriod.endDate}`
+      : `${firstPeriod?.startDate ?? '?'} to ${firstPeriod?.endDate ?? '?'}`;
+
   const lines = [
-    `Period: ${startDate} to ${endDate}`,
-    `Total: ${expenses.length} expenses | Grand total: ${formatAmount(totalDisplay, displayCurrency, true)} | Page ${page}/${totalPages}`,
+    `Period: ${dateRange}`,
+    `Total: ${allExpenses.length} expenses | Grand total: ${formatAmount(totalDisplay, displayCurrency, true)} | Page ${page}/${totalPages}`,
     '',
   ];
+
+  // Stats for ALL expenses (not just page)
+  const allStats = computeExpenseStats(allExpenses, displayCurrency);
+  lines.push('=== Stats (all) ===');
+  lines.push(formatStats(allStats, displayCurrency));
+  lines.push('');
+
+  // Stats for current page
+  if (totalPages > 1) {
+    const pageStats = computeExpenseStats(pageItems, displayCurrency);
+    lines.push(`=== Stats (page ${page}) ===`);
+    lines.push(formatStats(pageStats, displayCurrency));
+    lines.push('');
+  }
+
   for (const e of pageItems) {
     lines.push(
       `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${e.comment.trim() || '(no comment)'}`,
@@ -218,7 +304,9 @@ async function executeGetExpenses(
   }
 
   const output = lines.join('\n');
-  logger.info(`[TOOL] get_expenses output (first 5 lines):\n${lines.slice(0, 5).join('\n')}`);
+  logger.info(
+    `[TOOL] get_expenses detail output (page ${page}/${totalPages}, ${allExpenses.length} total)`,
+  );
   return { success: true, output };
 }
 
@@ -226,79 +314,66 @@ async function executeGetBudgets(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
-  const categoryFilter = input['category'] as string | undefined;
+  const months = normalizeArrayParam(input['month'], format(new Date(), 'yyyy-MM'));
+  const categories = normalizeArrayParam(input['category']);
+  const isBatch = months.length > 1;
 
-  let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
-
-  if (categoryFilter) {
-    const filterLower = categoryFilter.toLowerCase();
-    budgets = budgets.filter((b) => b.category.toLowerCase() === filterLower);
-  }
-
-  if (budgets.length === 0) {
-    return { success: true, output: `No budgets set for ${month}.` };
-  }
-
-  // Calculate spending for each budget category
-  const monthStart = `${month}-01`;
-  const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
-  const expenses = database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
-
-  const spendingByCategory: Record<string, number> = {};
-  for (const e of expenses) {
-    spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
-  }
-
-  const lines = [`Budgets for ${month}:`, ''];
-  const totalsByCurrency: Record<string, { spent: number; limit: number }> = {};
-
-  for (const budget of budgets) {
-    const spentEur = spendingByCategory[budget.category] || 0;
-    const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
-    const remaining = budget.limit_amount - spentInCurrency;
-    const percent =
-      budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
-    const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
-
-    lines.push(
-      `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${percent}%) [${status}]`,
-    );
-
-    const existing = totalsByCurrency[budget.currency];
-    if (existing) {
-      existing.spent += spentInCurrency;
-      existing.limit += budget.limit_amount;
-    } else {
-      totalsByCurrency[budget.currency] = { spent: spentInCurrency, limit: budget.limit_amount };
-    }
-  }
-
-  // Grand total in display currency
   const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
-  let grandSpentEur = 0;
-  let grandLimitEur = 0;
-  for (const budget of budgets) {
-    const spentEur = spendingByCategory[budget.category] || 0;
-    grandSpentEur += spentEur;
-    grandLimitEur += convertCurrency(
-      budget.limit_amount,
-      budget.currency as CurrencyCode,
-      BASE_CURRENCY,
-    );
+  const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
+
+  const allLines: string[] = [];
+  let grandTotalEur = 0;
+
+  for (const month of months) {
+    let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
+
+    if (categories.length > 0) {
+      const lowerCategories = categories.map((c) => c.toLowerCase());
+      budgets = budgets.filter((b) => lowerCategories.includes(b.category.toLowerCase()));
+    }
+
+    if (budgets.length === 0) {
+      if (isBatch) allLines.push(`=== ${month} ===`, 'No budgets set.', '');
+      else allLines.push(`No budgets set for ${month}.`);
+      continue;
+    }
+
+    const monthStart = `${month}-01`;
+    const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
+    const expenses = database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
+
+    const spendingByCategory: Record<string, number> = {};
+    for (const e of expenses) {
+      spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
+      grandTotalEur += e.eur_amount;
+    }
+
+    if (isBatch) allLines.push(`=== ${month} ===`);
+    else allLines.push(`Budgets for ${month}:`, '');
+
+    for (const budget of budgets) {
+      const spentEur = spendingByCategory[budget.category] || 0;
+      const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
+      const remaining = budget.limit_amount - spentInCurrency;
+      const percent =
+        budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+      const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
+
+      allLines.push(
+        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${percent}%) [${status}]`,
+      );
+    }
+    allLines.push('');
   }
-  const grandSpentDisplay = convertCurrency(grandSpentEur, BASE_CURRENCY, displayCurrency);
-  const grandLimitDisplay = convertCurrency(grandLimitEur, BASE_CURRENCY, displayCurrency);
-  const grandPct =
-    grandLimitDisplay > 0 ? Math.round((grandSpentDisplay / grandLimitDisplay) * 100) : 0;
 
-  lines.push('');
-  lines.push(
-    `Grand Total: ${formatAmount(grandSpentDisplay, displayCurrency, true)}/${formatAmount(grandLimitDisplay, displayCurrency, true)} (${grandPct}%)`,
-  );
+  // Grand total across all months for batch (uses accumulated EUR total)
+  if (isBatch && grandTotalEur > 0) {
+    const totalDisplay = convertCurrency(grandTotalEur, BASE_CURRENCY, displayCurrency);
+    allLines.push(`=== Grand Total (${months.length} months) ===`);
+    allLines.push(`${formatAmount(totalDisplay, displayCurrency, true)}`);
+  }
 
-  return { success: true, output: lines.join('\n') };
+  return { success: true, output: allLines.join('\n') };
 }
 
 function executeGetCategories(ctx: AgentContext): ToolResult {
@@ -640,13 +715,19 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
 
 function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const filters: BankTransactionFilters = {};
-  if (typeof input['period'] === 'string') filters.period = input['period'];
-  if (typeof input['bank_name'] === 'string' && input['bank_name'].toLowerCase() !== 'all') {
-    filters.bank_name = input['bank_name'];
-  }
-  if (typeof input['status'] === 'string') {
-    filters.status = input['status'] as BankTransaction['status'];
-  }
+
+  const periods = normalizeArrayParam(input['period']);
+  if (periods.length === 1 && periods[0]) filters.period = periods[0];
+  else if (periods.length > 1) filters.period = periods;
+
+  const bankNames = normalizeArrayParam(input['bank_name']);
+  const nonAllBanks = bankNames.filter((b) => b.toLowerCase() !== 'all');
+  if (nonAllBanks.length === 1 && nonAllBanks[0]) filters.bank_name = nonAllBanks[0];
+  else if (nonAllBanks.length > 1) filters.bank_name = nonAllBanks;
+
+  const statuses = normalizeArrayParam(input['status']);
+  if (statuses.length === 1) filters.status = statuses[0] as BankTransaction['status'];
+  else if (statuses.length > 1) filters.status = statuses as BankTransaction['status'][];
 
   const transactions = database.bankTransactions.findByGroupId(ctx.groupId, filters);
 
@@ -730,50 +811,70 @@ async function executeFindMissingExpenses(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const period = typeof input['period'] === 'string' ? input['period'] : 'current_month';
-  const { startDate, endDate } = resolvePeriodDates(period);
+  const periods = normalizeArrayParam(input['period'], 'current_month');
+  const isBatch = periods.length > 1;
 
-  const unmatched = database.bankTransactions.findUnmatched(ctx.groupId, startDate, endDate);
-  const expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+  const allMissing: Array<{
+    tx_id: number;
+    date: string;
+    amount: number;
+    currency: string;
+    merchant: string;
+    status: string;
+    probable_expense_id: number | null;
+  }> = [];
+  const summaryParts: string[] = [];
 
-  const results = unmatched.map((tx) => {
-    // Try exact match: same amount, currency, and within 2 days
-    const exactMatch = expenses.find(
-      (e) =>
-        Math.abs(e.amount - tx.amount) < 0.01 &&
-        e.currency === tx.currency &&
-        Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 2 * 86400 * 1000,
+  for (const period of periods) {
+    const { startDate, endDate } = resolvePeriodDates(period);
+    const unmatched = database.bankTransactions.findUnmatched(ctx.groupId, startDate, endDate);
+    const expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+
+    const results = unmatched.map((tx) => {
+      // Try exact match: same amount, currency, and within 2 days
+      const exactMatch = expenses.find(
+        (e) =>
+          Math.abs(e.amount - tx.amount) < 0.01 &&
+          e.currency === tx.currency &&
+          Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 2 * 86400 * 1000,
+      );
+
+      if (exactMatch) return null;
+
+      // Try probable match: same amount, currency, within 5 days
+      const probableMatch = expenses.find(
+        (e) =>
+          Math.abs(e.amount - tx.amount) < 0.01 &&
+          e.currency === tx.currency &&
+          Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 5 * 86400 * 1000,
+      );
+
+      return {
+        tx_id: tx.id,
+        date: tx.date,
+        amount: tx.amount,
+        currency: tx.currency,
+        merchant: tx.merchant_normalized ?? tx.merchant,
+        status: probableMatch ? 'probable_match' : 'missing',
+        probable_expense_id: probableMatch?.id ?? null,
+      };
+    });
+
+    const missing = results.filter(Boolean);
+    allMissing.push(...(missing as typeof allMissing));
+
+    const label = isBatch ? `${period} (${startDate}–${endDate})` : `${startDate}–${endDate}`;
+    summaryParts.push(
+      `${label}: ${missing.length} ${pluralize(missing.length, 'транзакция', 'транзакции', 'транзакций')}`,
     );
-
-    if (exactMatch) {
-      return null; // matched
-    }
-
-    // Try probable match: same amount, currency, within 5 days
-    const probableMatch = expenses.find(
-      (e) =>
-        Math.abs(e.amount - tx.amount) < 0.01 &&
-        e.currency === tx.currency &&
-        Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 5 * 86400 * 1000,
-    );
-
-    return {
-      tx_id: tx.id,
-      date: tx.date,
-      amount: tx.amount,
-      currency: tx.currency,
-      merchant: tx.merchant_normalized ?? tx.merchant,
-      status: probableMatch ? 'probable_match' : 'missing',
-      probable_expense_id: probableMatch?.id ?? null,
-    };
-  });
-
-  const missing = results.filter(Boolean);
+  }
 
   return {
     success: true,
-    data: missing,
-    summary: `${missing.length} ${pluralize(missing.length, 'транзакция', 'транзакции', 'транзакций')} без записи в расходах за период ${startDate}–${endDate}`,
+    data: allMissing,
+    summary: isBatch
+      ? `${allMissing.length} ${pluralize(allMissing.length, 'транзакция', 'транзакции', 'транзакций')} без записи:\n${summaryParts.join('\n')}`
+      : (summaryParts[0] ?? '0 транзакций без записи'),
   };
 }
 
@@ -836,33 +937,6 @@ function executeManageRecurringPattern(
         error: `Unknown action: ${action}. Use "pause", "resume", "dismiss", or "delete".`,
       };
   }
-}
-
-function resolvePeriodDates(period: string): { startDate: string; endDate: string } {
-  const now = new Date();
-  if (period === 'current_month') {
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
-    return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${lastDay}` };
-  }
-  if (period === 'last_month') {
-    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const lastDay = new Date(y, d.getMonth() + 1, 0).getDate();
-    return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${lastDay}` };
-  }
-  // Specific month "YYYY-MM"
-  const [year, month] = period.split('-').map(Number);
-  if (year && month) {
-    const lastDay = new Date(year, month, 0).getDate();
-    return {
-      startDate: `${year}-${String(month).padStart(2, '0')}-01`,
-      endDate: `${year}-${String(month).padStart(2, '0')}-${lastDay}`,
-    };
-  }
-  return { startDate: '2000-01-01', endDate: '2099-12-31' };
 }
 
 // === Render tools ===
