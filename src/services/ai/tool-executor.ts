@@ -322,6 +322,7 @@ async function executeGetBudgets(
   const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
 
   const allLines: string[] = [];
+  let grandTotalEur = 0;
 
   for (const month of months) {
     let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
@@ -344,6 +345,7 @@ async function executeGetBudgets(
     const spendingByCategory: Record<string, number> = {};
     for (const e of expenses) {
       spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
+      grandTotalEur += e.eur_amount;
     }
 
     if (isBatch) allLines.push(`=== ${month} ===`);
@@ -364,20 +366,11 @@ async function executeGetBudgets(
     allLines.push('');
   }
 
-  // Grand total across all months for batch
-  if (isBatch) {
-    const allMonthExpenses = months.flatMap((month) => {
-      const monthStart = `${month}-01`;
-      const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
-      return database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
-    });
-
-    if (allMonthExpenses.length > 0) {
-      const totalEur = allMonthExpenses.reduce((s, e) => s + e.eur_amount, 0);
-      const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
-      allLines.push(`=== Grand Total (${months.length} months) ===`);
-      allLines.push(`${formatAmount(totalDisplay, displayCurrency, true)}`);
-    }
+  // Grand total across all months for batch (uses accumulated EUR total)
+  if (isBatch && grandTotalEur > 0) {
+    const totalDisplay = convertCurrency(grandTotalEur, BASE_CURRENCY, displayCurrency);
+    allLines.push(`=== Grand Total (${months.length} months) ===`);
+    allLines.push(`${formatAmount(totalDisplay, displayCurrency, true)}`);
   }
 
   return { success: true, output: allLines.join('\n') };

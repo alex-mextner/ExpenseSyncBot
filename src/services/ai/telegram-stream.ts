@@ -61,6 +61,12 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
       return [formatParam(input['category']), formatParam(input['month'])]
         .filter(Boolean)
         .join(', ');
+    case 'get_bank_transactions':
+      return [formatParam(input['bank_name']), formatParam(input['period']), formatParam(input['status'])]
+        .filter(Boolean)
+        .join(', ');
+    case 'find_missing_expenses':
+      return formatParam(input['period']) || '';
     case 'manage_category':
       return [input['action'], input['name']].filter(Boolean).join(' ');
     case 'set_custom_prompt':

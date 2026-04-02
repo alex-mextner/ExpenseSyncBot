@@ -1315,38 +1315,50 @@ describe('error handling', () => {
 describe('get_bank_transactions batch', () => {
   beforeEach(resetAllMocks);
 
-  test('multiple periods concatenates transactions', async () => {
+  test('multiple periods passes array filter to repository', async () => {
     const result = await executeTool(
       'get_bank_transactions',
       { period: ['2026-01', '2026-02'], bank_name: 'all' },
       ctx,
     );
     expect(result.success).toBe(true);
+    expect(mockBankTransactions.findByGroupId).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ period: ['2026-01', '2026-02'] }),
+    );
   });
 
-  test('multiple bank_names filters by OR', async () => {
+  test('multiple bank_names passes array filter (excluding "all")', async () => {
     const result = await executeTool(
       'get_bank_transactions',
       { bank_name: ['tbc', 'kaspi'], period: 'current_month' },
       ctx,
     );
     expect(result.success).toBe(true);
+    expect(mockBankTransactions.findByGroupId).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ bank_name: ['tbc', 'kaspi'] }),
+    );
   });
 
-  test('multiple statuses filters by OR', async () => {
+  test('multiple statuses passes array filter', async () => {
     const result = await executeTool(
       'get_bank_transactions',
       { status: ['pending', 'confirmed'], bank_name: 'all' },
       ctx,
     );
     expect(result.success).toBe(true);
+    expect(mockBankTransactions.findByGroupId).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: ['pending', 'confirmed'] }),
+    );
   });
 });
 
 describe('find_missing_expenses batch', () => {
   beforeEach(resetAllMocks);
 
-  test('multiple periods finds missing across all', async () => {
+  test('multiple periods calls findUnmatched per period', async () => {
     const result = await executeTool(
       'find_missing_expenses',
       { period: ['2026-01', '2026-02'] },
@@ -1354,5 +1366,8 @@ describe('find_missing_expenses batch', () => {
     );
     expect(result.success).toBe(true);
     expect(result.summary).toContain('2026-01');
+    expect(mockBankTransactions.findUnmatched).toHaveBeenCalledTimes(2);
+    expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-01-01', '2026-01-31');
+    expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-02-01', '2026-02-28');
   });
 });
