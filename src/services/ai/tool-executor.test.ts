@@ -14,7 +14,7 @@ const mockExpenses = {
 };
 
 const mockBudgets = {
-  getAllBudgetsForMonth: mock((): Budget[] => []),
+  getAllBudgetsForMonth: mock((_groupId: number, _month: string): Budget[] => []),
   setBudget: mock(() => ({})),
   deleteByGroupCategoryMonth: mock(() => true),
   findByGroupCategoryMonth: mock((): Budget | null => null),
@@ -586,7 +586,11 @@ describe('get_budgets batch', () => {
   });
 
   test('multiple months shows per-month breakdown', async () => {
-    const result = await executeTool('get_budgets', { month: ['2026-01', '2026-02', '2026-03'] }, ctx);
+    const result = await executeTool(
+      'get_budgets',
+      { month: ['2026-01', '2026-02', '2026-03'] },
+      ctx,
+    );
     expect(result.success).toBe(true);
     expect(result.output).toContain('=== 2026-01 ===');
     expect(result.output).toContain('=== 2026-02 ===');
@@ -594,7 +598,11 @@ describe('get_budgets batch', () => {
   });
 
   test('category array filters multiple categories', async () => {
-    const result = await executeTool('get_budgets', { month: '2026-01', category: ['Еда', 'Развлечения'] }, ctx);
+    const result = await executeTool(
+      'get_budgets',
+      { month: '2026-01', category: ['Еда', 'Развлечения'] },
+      ctx,
+    );
     expect(result.success).toBe(true);
   });
 });

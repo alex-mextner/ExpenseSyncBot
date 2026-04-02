@@ -4,7 +4,7 @@ import { BASE_CURRENCY } from '../../config/constants';
 import type { Expense } from '../../database/types';
 import { convertCurrency, formatAmount } from '../currency/converter';
 
-export type ExpenseRecord = Pick<
+type ExpenseRecord = Pick<
   Expense,
   'amount' | 'currency' | 'eur_amount' | 'category' | 'comment' | 'date'
 >;

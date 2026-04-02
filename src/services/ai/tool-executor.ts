@@ -881,7 +881,7 @@ async function executeFindMissingExpenses(
     data: allMissing,
     summary: isBatch
       ? `${allMissing.length} ${pluralize(allMissing.length, 'транзакция', 'транзакции', 'транзакций')} без записи:\n${summaryParts.join('\n')}`
-      : summaryParts[0],
+      : (summaryParts[0] ?? '0 транзакций без записи'),
   };
 }
 

@@ -3,7 +3,7 @@
  */
 import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
 
-export interface DateRange {
+interface DateRange {
   startDate: string;
   endDate: string;
 }
