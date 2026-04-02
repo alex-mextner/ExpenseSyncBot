@@ -76,6 +76,19 @@ const mockBankTransactions = {
       connection_id: 1,
     },
   ]),
+  findUnmatched: mock(() => [
+    {
+      id: 10,
+      date: '2026-01-12',
+      amount: 350,
+      currency: 'RSD',
+      merchant: 'Unknown Shop',
+      merchant_normalized: null,
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]),
 };
 
 mock.module('../../database', () => ({
@@ -200,6 +213,21 @@ function resetAllMocks() {
       currency: 'RSD',
       merchant: 'Lidl',
       merchant_normalized: 'Lidl',
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]);
+
+  mockBankTransactions.findUnmatched.mockReset();
+  mockBankTransactions.findUnmatched.mockReturnValue([
+    {
+      id: 10,
+      date: '2026-01-12',
+      amount: 350,
+      currency: 'RSD',
+      merchant: 'Unknown Shop',
+      merchant_normalized: null,
       status: 'pending',
       sign_type: 'debit',
       connection_id: 1,
@@ -1304,5 +1332,19 @@ describe('get_bank_transactions batch', () => {
       ctx,
     );
     expect(result.success).toBe(true);
+  });
+});
+
+describe('find_missing_expenses batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('multiple periods finds missing across all', async () => {
+    const result = await executeTool(
+      'find_missing_expenses',
+      { period: ['2026-01', '2026-02'] },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('2026-01');
   });
 });

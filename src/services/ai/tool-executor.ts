@@ -818,50 +818,70 @@ async function executeFindMissingExpenses(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const period = typeof input['period'] === 'string' ? input['period'] : 'current_month';
-  const { startDate, endDate } = resolvePeriodDates(period);
+  const periods = normalizeArrayParam(input['period'], 'current_month');
+  const isBatch = periods.length > 1;
 
-  const unmatched = database.bankTransactions.findUnmatched(ctx.groupId, startDate, endDate);
-  const expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+  const allMissing: Array<{
+    tx_id: number;
+    date: string;
+    amount: number;
+    currency: string;
+    merchant: string;
+    status: string;
+    probable_expense_id: number | null;
+  }> = [];
+  const summaryParts: string[] = [];
 
-  const results = unmatched.map((tx) => {
-    // Try exact match: same amount, currency, and within 2 days
-    const exactMatch = expenses.find(
-      (e) =>
-        Math.abs(e.amount - tx.amount) < 0.01 &&
-        e.currency === tx.currency &&
-        Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 2 * 86400 * 1000,
+  for (const period of periods) {
+    const { startDate, endDate } = resolvePeriodDates(period);
+    const unmatched = database.bankTransactions.findUnmatched(ctx.groupId, startDate, endDate);
+    const expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+
+    const results = unmatched.map((tx) => {
+      // Try exact match: same amount, currency, and within 2 days
+      const exactMatch = expenses.find(
+        (e) =>
+          Math.abs(e.amount - tx.amount) < 0.01 &&
+          e.currency === tx.currency &&
+          Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 2 * 86400 * 1000,
+      );
+
+      if (exactMatch) return null;
+
+      // Try probable match: same amount, currency, within 5 days
+      const probableMatch = expenses.find(
+        (e) =>
+          Math.abs(e.amount - tx.amount) < 0.01 &&
+          e.currency === tx.currency &&
+          Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 5 * 86400 * 1000,
+      );
+
+      return {
+        tx_id: tx.id,
+        date: tx.date,
+        amount: tx.amount,
+        currency: tx.currency,
+        merchant: tx.merchant_normalized ?? tx.merchant,
+        status: probableMatch ? 'probable_match' : 'missing',
+        probable_expense_id: probableMatch?.id ?? null,
+      };
+    });
+
+    const missing = results.filter(Boolean);
+    allMissing.push(...(missing as typeof allMissing));
+
+    const label = isBatch ? `${period} (${startDate}–${endDate})` : `${startDate}–${endDate}`;
+    summaryParts.push(
+      `${label}: ${missing.length} ${pluralize(missing.length, 'транзакция', 'транзакции', 'транзакций')}`,
     );
-
-    if (exactMatch) {
-      return null; // matched
-    }
-
-    // Try probable match: same amount, currency, within 5 days
-    const probableMatch = expenses.find(
-      (e) =>
-        Math.abs(e.amount - tx.amount) < 0.01 &&
-        e.currency === tx.currency &&
-        Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 5 * 86400 * 1000,
-    );
-
-    return {
-      tx_id: tx.id,
-      date: tx.date,
-      amount: tx.amount,
-      currency: tx.currency,
-      merchant: tx.merchant_normalized ?? tx.merchant,
-      status: probableMatch ? 'probable_match' : 'missing',
-      probable_expense_id: probableMatch?.id ?? null,
-    };
-  });
-
-  const missing = results.filter(Boolean);
+  }
 
   return {
     success: true,
-    data: missing,
-    summary: `${missing.length} ${pluralize(missing.length, 'транзакция', 'транзакции', 'транзакций')} без записи в расходах за период ${startDate}–${endDate}`,
+    data: allMissing,
+    summary: isBatch
+      ? `${allMissing.length} ${pluralize(allMissing.length, 'транзакция', 'транзакции', 'транзакций')} без записи:\n${summaryParts.join('\n')}`
+      : summaryParts[0],
   };
 }
 
