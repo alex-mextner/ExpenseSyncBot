@@ -1,9 +1,66 @@
 // Scanner tab: native Telegram QR scan, manual URL input, OCR fallback, confirmation card
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ApiError } from '../api/client';
 import { confirmExpenses, scanQR, uploadOCR } from '../api/receipt';
 import type { ReceiptItem } from '../api/receipt';
 
-/** Russian numeral declension — picks correct noun form for a given count */
+// ── Session recovery: save/restore state across page reloads ──────────────────
+
+const STORAGE_KEY = 'scanner_saved_state';
+
+interface SavedState {
+	phase: Phase;
+	items: ReceiptItem[];
+	fileId: string | null;
+	currency: string;
+	urlInput: string;
+	scrollY: number;
+	/** Prevents infinite reload loop when reload doesn't refresh initData */
+	reloadAttempted: boolean;
+}
+
+function saveAndReload(state: Omit<SavedState, 'scrollY' | 'reloadAttempted'>): void {
+	const saved: SavedState = { ...state, scrollY: window.scrollY, reloadAttempted: true };
+	sessionStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+	location.reload();
+}
+
+function loadSavedState(): SavedState | null {
+	const raw = sessionStorage.getItem(STORAGE_KEY);
+	sessionStorage.removeItem(STORAGE_KEY);
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as SavedState;
+	} catch {
+		return null;
+	}
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Check if error is an expired session that we should try to recover from */
+function isExpiredSession(err: unknown): boolean {
+	return err instanceof ApiError && err.code === 'INIT_DATA_EXPIRED';
+}
+
+/** Map API error codes to user-friendly messages */
+function friendlyErrorMessage(err: unknown): string {
+	if (err instanceof ApiError) {
+		if (err.code === 'INIT_DATA_EXPIRED') return 'Сессия истекла. Закрой и открой Mini App заново.';
+		if (err.code === 'INVALID_INIT_DATA') return 'Ошибка авторизации. Закрой и открой Mini App заново.';
+		if (err.code === 'FORBIDDEN_GROUP') return 'Нет доступа к этой группе.';
+		if (err.code === 'SCAN_FAILED') return 'Не удалось распознать чек. Попробуй ещё раз.';
+		if (err.code === 'OCR_FAILED') return 'Не удалось распознать фото. Попробуй другое фото.';
+		if (err.code === 'CONFIRM_FAILED') return 'Не удалось сохранить расходы. Попробуй ещё раз.';
+		if (err.code === 'PAYLOAD_TOO_LARGE') return 'Фото слишком большое (макс. 2 МБ).';
+		if (err.code === 'UNSUPPORTED_MEDIA_TYPE') return 'Поддерживается только JPEG.';
+		return err.message;
+	}
+	if (err instanceof Error) return err.message;
+	return 'Неизвестная ошибка';
+}
+
+/** Russian numeral declension — local copy because miniapp is a separate Vite build, cannot import from src/utils/ */
 function pluralize(n: number, one: string, few: string, many: string): string {
 	const abs = Math.abs(n);
 	const mod10 = abs % 10;
@@ -27,6 +84,36 @@ export function Scanner({ groupId }: Props) {
 	const [currency, setCurrency] = useState<string>('');
 	const [error, setError] = useState<string>('');
 	const [urlInput, setUrlInput] = useState('');
+	/** true after a reload attempt — prevents infinite reload loop */
+	const [reloadAttempted, setReloadAttempted] = useState(false);
+
+	// Restore state from sessionStorage after a session-recovery reload
+	useEffect(() => {
+		const saved = loadSavedState();
+		if (!saved) return;
+		setItems(saved.items);
+		setFileId(saved.fileId);
+		setCurrency(saved.currency);
+		setUrlInput(saved.urlInput);
+		setReloadAttempted(saved.reloadAttempted);
+		// Restore to the phase before the failed request (not 'loading')
+		setPhase(saved.phase);
+		requestAnimationFrame(() => window.scrollTo(0, saved.scrollY));
+	}, []);
+
+	/** Try reload to get fresh initData, or show error if already tried */
+	const handleExpiredSession = useCallback(
+		(currentPhase: Phase) => {
+			if (reloadAttempted) {
+				// Reload didn't help — initData is still stale, show manual instruction
+				setError('Сессия истекла. Закрой и открой Mini App заново.');
+				setPhase('error');
+				return;
+			}
+			saveAndReload({ phase: currentPhase, items, fileId, currency, urlInput });
+		},
+		[reloadAttempted, items, fileId, currency, urlInput],
+	);
 
 	const handleQRDetected = useCallback(
 		async (qrData: string) => {
@@ -38,11 +125,15 @@ export function Scanner({ groupId }: Props) {
 				setCurrency(result.currency ?? '');
 				setPhase('confirm');
 			} catch (e) {
-				setError(e instanceof Error ? e.message : 'Ошибка сканирования');
+				if (isExpiredSession(e)) {
+					handleExpiredSession('idle');
+					return;
+				}
+				setError(friendlyErrorMessage(e));
 				setPhase('error');
 			}
 		},
-		[groupId],
+		[groupId, handleExpiredSession],
 	);
 
 	const openNativeQRScanner = useCallback(() => {
@@ -55,7 +146,7 @@ export function Scanner({ groupId }: Props) {
 
 		tg.showScanQrPopup({ text: 'Наведи на QR-код чека' }, (text: string) => {
 			handleQRDetected(text).catch((err: unknown) => {
-				setError(err instanceof Error ? err.message : 'Ошибка сканирования');
+				setError(friendlyErrorMessage(err));
 				setPhase('error');
 			});
 			return true;
@@ -89,11 +180,15 @@ export function Scanner({ groupId }: Props) {
 				setCurrency(result.currency ?? '');
 				setPhase('confirm');
 			} catch (uploadErr) {
-				setError(uploadErr instanceof Error ? uploadErr.message : 'Ошибка OCR');
+				if (isExpiredSession(uploadErr)) {
+					handleExpiredSession('ocr-input');
+					return;
+				}
+				setError(friendlyErrorMessage(uploadErr));
 				setPhase('error');
 			}
 		},
-		[groupId],
+		[groupId, handleExpiredSession],
 	);
 
 	const handleConfirm = useCallback(async () => {
@@ -113,10 +208,14 @@ export function Scanner({ groupId }: Props) {
 			);
 			setPhase('done');
 		} catch (confirmErr) {
-			setError(confirmErr instanceof Error ? confirmErr.message : 'Ошибка сохранения');
+			if (isExpiredSession(confirmErr)) {
+				handleExpiredSession('confirm');
+				return;
+			}
+			setError(friendlyErrorMessage(confirmErr));
 			setPhase('error');
 		}
-	}, [groupId, items, fileId, currency]);
+	}, [groupId, items, fileId, currency, handleExpiredSession]);
 
 	const handleItemChange = (i: number, field: keyof ReceiptItem, value: string | number) => {
 		setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));

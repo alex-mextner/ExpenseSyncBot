@@ -304,7 +304,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
   });
 
   test('expired auth_date → 401 INIT_DATA_EXPIRED', async () => {
-    const initData = buildInitData(42, 400); // 400 seconds ago > 300 limit
+    const initData = buildInitData(42, 3700); // 3700 seconds ago > 3600 limit
     const req = makeRequest('/api/test', 'GET', initData);
     const result = await validateAndResolveContext(req, CORS_ORIGIN, -1001234567);
     expect(result.ok).toBe(false);
