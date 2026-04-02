@@ -151,7 +151,10 @@ export async function validateAndResolveContext(
   if (authDate) {
     const age = Math.floor(Date.now() / 1000) - parseInt(authDate, 10);
     if (age > INIT_DATA_TTL_SECONDS) {
-      logger.warn({ telegramGroupId, ageSec: age, ttl: INIT_DATA_TTL_SECONDS }, 'Auth rejected: initData expired');
+      logger.warn(
+        { telegramGroupId, ageSec: age, ttl: INIT_DATA_TTL_SECONDS },
+        'Auth rejected: initData expired',
+      );
       return {
         ok: false,
         response: errorResponse(401, 'initData expired', 'INIT_DATA_EXPIRED', corsHeaders),
@@ -161,7 +164,10 @@ export async function validateAndResolveContext(
 
   const userId = validateInitData(rawInitData);
   if (userId === null) {
-    logger.warn({ telegramGroupId }, 'Auth rejected: invalid initData (HMAC mismatch or malformed)');
+    logger.warn(
+      { telegramGroupId },
+      'Auth rejected: invalid initData (HMAC mismatch or malformed)',
+    );
     return {
       ok: false,
       response: errorResponse(401, 'Invalid initData', 'INVALID_INIT_DATA', corsHeaders),
@@ -245,7 +251,10 @@ export async function handleMiniAppRequest(
     const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
     if (!ctx.ok) return ctx.response;
 
-    logger.info({ userId: ctx.userId, groupId: telegramGroupId, qrLength: qr.length }, 'Receipt QR scan started');
+    logger.info(
+      { userId: ctx.userId, groupId: telegramGroupId, qrLength: qr.length },
+      'Receipt QR scan started',
+    );
 
     try {
       const html = await fetchReceiptData(qr);
@@ -463,7 +472,10 @@ export async function handleMiniAppRequest(
 
     const fileId = typeof body.fileId === 'string' ? body.fileId : null;
 
-    logger.info({ userId: ctx.userId, groupId: telegramGroupId, expenseCount: expenseInputs.length }, 'Receipt confirm started');
+    logger.info(
+      { userId: ctx.userId, groupId: telegramGroupId, expenseCount: expenseInputs.length },
+      'Receipt confirm started',
+    );
 
     try {
       const recorder = getExpenseRecorder();
@@ -794,7 +806,10 @@ export async function handleMiniAppRequest(
     if (groupsAuthDate) {
       const age = Math.floor(Date.now() / 1000) - parseInt(groupsAuthDate, 10);
       if (age > INIT_DATA_TTL_SECONDS) {
-        logger.warn({ ageSec: age, ttl: INIT_DATA_TTL_SECONDS }, 'Auth rejected: initData expired (user/groups)');
+        logger.warn(
+          { ageSec: age, ttl: INIT_DATA_TTL_SECONDS },
+          'Auth rejected: initData expired (user/groups)',
+        );
         return errorResponse(401, 'initData expired', 'INIT_DATA_EXPIRED', corsHeaders);
       }
     }
