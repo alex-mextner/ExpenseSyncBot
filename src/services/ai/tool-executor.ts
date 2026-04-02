@@ -3,18 +3,27 @@
  * Maps tool calls to database operations and services
  */
 import type Big from 'big.js';
-import { endOfMonth, format, startOfMonth, subMonths } from 'date-fns';
+import { endOfMonth, format } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
-import type { BankTransaction, BankTransactionFilters } from '../../database/types';
+import type { BankTransaction, BankTransactionFilters, Expense } from '../../database/types';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
+import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
+import {
+  computeExpenseStats,
+  type ExpenseStats,
+  formatStats,
+  formatStatsDiff,
+  formatStatsTrend,
+  type TrendEntry,
+} from './stats';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
@@ -102,69 +111,66 @@ async function executeGetExpenses(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const period = (input['period'] as string) || 'current_month';
-  const category = input['category'] as string | undefined;
+  const periods = normalizeArrayParam(input['period'], 'current_month');
+  const categories = normalizeArrayParam(input['category']);
   const pageSize = Math.min(Math.max((input['page_size'] as number) || 100, 1), 500);
   const page = Math.max((input['page'] as number) || 1, 1);
   const summaryOnly = (input['summary_only'] as boolean) || false;
 
-  const now = new Date();
-  let startDate: string;
-  let endDate: string = format(now, 'yyyy-MM-dd');
+  const group = database.groups.findById(ctx.groupId);
+  const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
 
-  switch (period) {
-    case 'current_month':
-      startDate = format(startOfMonth(now), 'yyyy-MM-dd');
-      endDate = format(endOfMonth(now), 'yyyy-MM-dd');
-      break;
-    case 'last_month': {
-      const lastMonth = subMonths(now, 1);
-      startDate = format(startOfMonth(lastMonth), 'yyyy-MM-dd');
-      endDate = format(endOfMonth(lastMonth), 'yyyy-MM-dd');
-      break;
+  // Resolve all periods and fetch expenses
+  const periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[] =
+    [];
+
+  for (const period of periods) {
+    const { startDate, endDate } = resolvePeriodDates(period);
+    let expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
+
+    if (categories.length > 0) {
+      const lowerCategories = categories.map((c) => c.toLowerCase());
+      expenses = expenses.filter((e) => lowerCategories.includes(e.category.toLowerCase()));
     }
-    case 'last_3_months':
-      startDate = format(startOfMonth(subMonths(now, 2)), 'yyyy-MM-dd');
-      break;
-    case 'last_6_months':
-      startDate = format(startOfMonth(subMonths(now, 5)), 'yyyy-MM-dd');
-      break;
-    case 'all':
-      startDate = '2000-01-01';
-      break;
-    default:
-      // Specific month "YYYY-MM"
-      if (/^\d{4}-\d{2}$/.test(period)) {
-        startDate = `${period}-01`;
-        const monthDate = new Date(`${period}-01`);
-        endDate = format(endOfMonth(monthDate), 'yyyy-MM-dd');
-      } else {
-        startDate = format(startOfMonth(now), 'yyyy-MM-dd');
-        endDate = format(endOfMonth(now), 'yyyy-MM-dd');
-      }
+
+    periodData.push({ label: period, startDate, endDate, expenses });
   }
 
-  let expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
-
-  // Filter by category (case-insensitive)
-  if (category) {
-    const categoryLower = category.toLowerCase();
-    expenses = expenses.filter((e) => e.category.toLowerCase() === categoryLower);
-  }
-
-  const totalPages = summaryOnly ? 1 : Math.max(1, Math.ceil(expenses.length / pageSize));
-
-  logger.info(
-    `[TOOL] get_expenses: period=${period} (${startDate}–${endDate}), category=${category || 'all'}, found=${expenses.length}, page=${page}/${totalPages}, page_size=${pageSize}, summary=${summaryOnly}`,
-  );
+  const isBatch = periods.length > 1;
+  const allExpenses = periodData.flatMap((p) => p.expenses);
 
   if (summaryOnly) {
-    // Aggregate by category
+    return buildSummaryOutput(periodData, allExpenses, displayCurrency, isBatch);
+  }
+
+  return buildDetailOutput(periodData, allExpenses, displayCurrency, isBatch, page, pageSize);
+}
+
+function buildSummaryOutput(
+  periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
+  allExpenses: Expense[],
+  displayCurrency: CurrencyCode,
+  isBatch: boolean,
+): ToolResult {
+  const lines: string[] = [];
+  const perPeriodStats: ExpenseStats[] = [];
+
+  for (const pd of periodData) {
+    if (isBatch) lines.push(`=== ${pd.label} ===`);
+    lines.push(`Period: ${pd.startDate} to ${pd.endDate}`);
+
+    if (pd.expenses.length === 0) {
+      perPeriodStats.push({ count: 0, total: 0, avg: 0, median: 0, min: null, max: null });
+      lines.push('No expenses', '');
+      continue;
+    }
+
+    // Category aggregation
     const totals: Record<
       string,
       { count: number; eur_total: number; amounts: Record<string, number> }
     > = {};
-    for (const e of expenses) {
+    for (const e of pd.expenses) {
       const existing = totals[e.category];
       const cat = existing ?? { count: 0, eur_total: 0, amounts: {} };
       totals[e.category] = cat;
@@ -174,15 +180,9 @@ async function executeGetExpenses(
     }
 
     const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
-    const group = database.groups.findById(ctx.groupId);
-    const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
     const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+    lines.push(`Total: ${formatAmount(totalDisplay, displayCurrency, true)}`, '');
 
-    const lines = [
-      `Period: ${startDate} to ${endDate}`,
-      `Total: ${formatAmount(totalDisplay, displayCurrency, true)}`,
-      '',
-    ];
     const sorted = Object.entries(totals).sort((a, b) => b[1].eur_total - a[1].eur_total);
     for (const [cat, data] of sorted) {
       const amountParts = Object.entries(data.amounts)
@@ -194,23 +194,109 @@ async function executeGetExpenses(
       );
     }
 
-    const output = lines.join('\n');
-    logger.info(`[TOOL] get_expenses summary output:\n${output}`);
-    return { success: true, output };
+    // Per-period stats
+    const stats = computeExpenseStats(pd.expenses, displayCurrency);
+    perPeriodStats.push(stats);
+    lines.push('', `=== Stats${isBatch ? ` (${pd.label})` : ''} ===`);
+    lines.push(formatStats(stats, displayCurrency));
+    lines.push('');
   }
 
-  // Return individual expenses (paginated)
+  // Overall stats for batch
+  if (isBatch && allExpenses.length > 0) {
+    const overallStats = computeExpenseStats(allExpenses, displayCurrency);
+    const overallEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
+    const overallDisplay = convertCurrency(overallEur, BASE_CURRENCY, displayCurrency);
+    lines.push('=== Overall ===');
+    lines.push(`Total: ${formatAmount(overallDisplay, displayCurrency, true)}`);
+    lines.push(formatStats(overallStats, displayCurrency));
+    lines.push('');
+
+    // Diff for exactly 2 periods
+    if (
+      periodData.length === 2 &&
+      perPeriodStats[0] &&
+      perPeriodStats[1] &&
+      periodData[0] &&
+      periodData[1]
+    ) {
+      lines.push(
+        formatStatsDiff(
+          perPeriodStats[0],
+          perPeriodStats[1],
+          periodData[0].label,
+          periodData[1].label,
+          displayCurrency,
+          periodData[0].expenses,
+          periodData[1].expenses,
+        ),
+      );
+    }
+
+    // Trend for 3+ periods
+    if (periodData.length >= 3) {
+      const entries: TrendEntry[] = [];
+      for (let i = 0; i < periodData.length; i++) {
+        const pd = periodData[i];
+        const stats = perPeriodStats[i];
+        if (pd && stats) entries.push({ label: pd.label, stats });
+      }
+      lines.push(formatStatsTrend(entries, displayCurrency));
+    }
+  }
+
+  const output = lines.join('\n');
+  logger.info(
+    `[TOOL] get_expenses summary output (${allExpenses.length} expenses, ${periodData.length} periods)`,
+  );
+  return { success: true, output };
+}
+
+function buildDetailOutput(
+  periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
+  allExpenses: Expense[],
+  displayCurrency: CurrencyCode,
+  isBatch: boolean,
+  page: number,
+  pageSize: number,
+): ToolResult {
+  // Sort all expenses by date desc
+  allExpenses.sort((a, b) => b.date.localeCompare(a.date));
+
+  const totalPages = Math.max(1, Math.ceil(allExpenses.length / pageSize));
   const offset = (page - 1) * pageSize;
-  const pageItems = expenses.slice(offset, offset + pageSize);
-  const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
-  const totalEur = expenses.reduce((s, e) => s + e.eur_amount, 0);
+  const pageItems = allExpenses.slice(offset, offset + pageSize);
+
+  const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
   const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+
+  const firstPeriod = periodData[0];
+  const lastPeriod = periodData[periodData.length - 1];
+  const dateRange =
+    isBatch && firstPeriod && lastPeriod
+      ? `${firstPeriod.startDate} to ${lastPeriod.endDate}`
+      : `${firstPeriod?.startDate ?? '?'} to ${firstPeriod?.endDate ?? '?'}`;
+
   const lines = [
-    `Period: ${startDate} to ${endDate}`,
-    `Total: ${expenses.length} expenses | Grand total: ${formatAmount(totalDisplay, displayCurrency, true)} | Page ${page}/${totalPages}`,
+    `Period: ${dateRange}`,
+    `Total: ${allExpenses.length} expenses | Grand total: ${formatAmount(totalDisplay, displayCurrency, true)} | Page ${page}/${totalPages}`,
     '',
   ];
+
+  // Stats for ALL expenses (not just page)
+  const allStats = computeExpenseStats(allExpenses, displayCurrency);
+  lines.push('=== Stats (all) ===');
+  lines.push(formatStats(allStats, displayCurrency));
+  lines.push('');
+
+  // Stats for current page
+  if (totalPages > 1) {
+    const pageStats = computeExpenseStats(pageItems, displayCurrency);
+    lines.push(`=== Stats (page ${page}) ===`);
+    lines.push(formatStats(pageStats, displayCurrency));
+    lines.push('');
+  }
+
   for (const e of pageItems) {
     lines.push(
       `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${e.comment.trim() || '(no comment)'}`,
@@ -218,7 +304,9 @@ async function executeGetExpenses(
   }
 
   const output = lines.join('\n');
-  logger.info(`[TOOL] get_expenses output (first 5 lines):\n${lines.slice(0, 5).join('\n')}`);
+  logger.info(
+    `[TOOL] get_expenses detail output (page ${page}/${totalPages}, ${allExpenses.length} total)`,
+  );
   return { success: true, output };
 }
 
@@ -836,33 +924,6 @@ function executeManageRecurringPattern(
         error: `Unknown action: ${action}. Use "pause", "resume", "dismiss", or "delete".`,
       };
   }
-}
-
-function resolvePeriodDates(period: string): { startDate: string; endDate: string } {
-  const now = new Date();
-  if (period === 'current_month') {
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
-    return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${lastDay}` };
-  }
-  if (period === 'last_month') {
-    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const lastDay = new Date(y, d.getMonth() + 1, 0).getDate();
-    return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${lastDay}` };
-  }
-  // Specific month "YYYY-MM"
-  const [year, month] = period.split('-').map(Number);
-  if (year && month) {
-    const lastDay = new Date(year, month, 0).getDate();
-    return {
-      startDate: `${year}-${String(month).padStart(2, '0')}-01`,
-      endDate: `${year}-${String(month).padStart(2, '0')}-${lastDay}`,
-    };
-  }
-  return { startDate: '2000-01-01', endDate: '2099-12-31' };
 }
 
 // === Render tools ===

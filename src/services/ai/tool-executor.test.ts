@@ -839,6 +839,328 @@ describe('calculate tool', () => {
   });
 });
 
+describe('executeGetExpenses — batch periods and stats', () => {
+  beforeEach(resetAllMocks);
+
+  test('summary_only includes stats block', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-10',
+        category: 'Еда',
+        comment: 'Молоко',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 2.13,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Stats ===');
+    expect(result.output).toContain('count: 3');
+    expect(result.output).toContain('median:');
+    expect(result.output).toContain('min:');
+    expect(result.output).toContain('max:');
+    expect(result.output).toContain('Хлеб');
+    expect(result.output).toContain('Кино');
+  });
+
+  test('empty period array falls back to current_month', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([]);
+    const result = await executeTool('get_expenses', { period: [], summary_only: true }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toBeDefined();
+  });
+
+  test('batch periods returns per-period stats and diff', async () => {
+    const januaryExpenses: Expense[] = [
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-10',
+        category: 'Еда',
+        comment: 'Молоко',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 2.13,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+    ];
+    const februaryExpenses: Expense[] = [
+      {
+        id: 4,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-02-03',
+        category: 'Еда',
+        comment: 'Сыр',
+        amount: 800,
+        currency: 'EUR',
+        eur_amount: 6.88,
+        created_at: '',
+      },
+      {
+        id: 5,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-02-14',
+        category: 'Развлечения',
+        comment: 'Ресторан',
+        amount: 5000,
+        currency: 'EUR',
+        eur_amount: 42.5,
+        created_at: '',
+      },
+    ];
+
+    let callCount = 0;
+    mockExpenses.findByDateRange.mockImplementation(() => {
+      callCount++;
+      // First call: January, second call: February
+      if (callCount === 1) return januaryExpenses;
+      if (callCount === 2) return februaryExpenses;
+      return [];
+    });
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: ['2026-01', '2026-02'], summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== 2026-01 ===');
+    expect(result.output).toContain('=== 2026-02 ===');
+    expect(result.output).toContain('count: 3');
+    expect(result.output).toContain('count: 2');
+    expect(result.output).toContain('=== Diff:');
+    expect(result.output).toContain('=== Overall ===');
+  });
+
+  test('category array filters multiple categories', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-20',
+        category: 'Транспорт',
+        comment: 'Такси',
+        amount: 700,
+        currency: 'EUR',
+        eur_amount: 5.95,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', category: ['Еда', 'Развлечения'], summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Еда');
+    expect(result.output).toContain('Развлечения');
+    expect(result.output).not.toContain('Транспорт');
+  });
+
+  test('detail output includes stats for all expenses', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-10',
+        category: 'Еда',
+        comment: 'Молоко',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 2.13,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', summary_only: false },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Stats (all) ===');
+    expect(result.output).toContain('count: 3');
+    expect(result.output).toContain('[id:1]');
+    expect(result.output).toContain('[id:3]');
+  });
+
+  test('3+ periods returns trend instead of diff', async () => {
+    const janExpenses: Expense[] = [
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+    ];
+    const febExpenses: Expense[] = [
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-02-03',
+        category: 'Еда',
+        comment: 'Сыр',
+        amount: 800,
+        currency: 'EUR',
+        eur_amount: 6.88,
+        created_at: '',
+      },
+    ];
+    const marExpenses: Expense[] = [
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Транспорт',
+        comment: 'Такси',
+        amount: 700,
+        currency: 'EUR',
+        eur_amount: 5.95,
+        created_at: '',
+      },
+    ];
+
+    let trendCallCount = 0;
+    mockExpenses.findByDateRange.mockImplementation(() => {
+      trendCallCount++;
+      if (trendCallCount === 1) return janExpenses;
+      if (trendCallCount === 2) return febExpenses;
+      if (trendCallCount === 3) return marExpenses;
+      return [];
+    });
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: ['2026-01', '2026-02', '2026-03'], summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Trend');
+    expect(result.output).not.toContain('=== Diff:');
+    expect(result.output).toContain('=== Overall ===');
+  });
+});
+
 describe('error handling', () => {
   beforeEach(resetAllMocks);
 
