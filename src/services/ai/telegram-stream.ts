@@ -62,7 +62,11 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
         .filter(Boolean)
         .join(', ');
     case 'get_bank_transactions':
-      return [formatParam(input['bank_name']), formatParam(input['period']), formatParam(input['status'])]
+      return [
+        formatParam(input['bank_name']),
+        formatParam(input['period']),
+        formatParam(input['status']),
+      ]
         .filter(Boolean)
         .join(', ');
     case 'find_missing_expenses':
