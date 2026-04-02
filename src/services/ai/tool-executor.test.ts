@@ -470,6 +470,53 @@ describe('executeGetBudgets', () => {
   });
 });
 
+describe('get_budgets batch', () => {
+  beforeEach(() => {
+    resetAllMocks();
+    mockBudgets.getAllBudgetsForMonth.mockImplementation((_groupId: number, month: string) => [
+      {
+        id: 1,
+        group_id: 1,
+        category: 'Еда',
+        month,
+        limit_amount: 50000,
+        currency: 'RSD',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        category: 'Развлечения',
+        month,
+        limit_amount: 30000,
+        currency: 'RSD',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+  });
+
+  test('single month works as before', async () => {
+    const result = await executeTool('get_budgets', { month: '2026-01' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Budgets for 2026-01');
+  });
+
+  test('multiple months shows per-month breakdown', async () => {
+    const result = await executeTool('get_budgets', { month: ['2026-01', '2026-02', '2026-03'] }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== 2026-01 ===');
+    expect(result.output).toContain('=== 2026-02 ===');
+    expect(result.output).toContain('=== 2026-03 ===');
+  });
+
+  test('category array filters multiple categories', async () => {
+    const result = await executeTool('get_budgets', { month: '2026-01', category: ['Еда', 'Развлечения'] }, ctx);
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('executeAddExpense', () => {
   beforeEach(resetAllMocks);
 

@@ -314,79 +314,73 @@ async function executeGetBudgets(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
-  const categoryFilter = input['category'] as string | undefined;
+  const months = normalizeArrayParam(input['month'], format(new Date(), 'yyyy-MM'));
+  const categories = normalizeArrayParam(input['category']);
+  const isBatch = months.length > 1;
 
-  let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
+  const group = database.groups.findById(ctx.groupId);
+  const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
 
-  if (categoryFilter) {
-    const filterLower = categoryFilter.toLowerCase();
-    budgets = budgets.filter((b) => b.category.toLowerCase() === filterLower);
+  const allLines: string[] = [];
+
+  for (const month of months) {
+    let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
+
+    if (categories.length > 0) {
+      const lowerCategories = categories.map((c) => c.toLowerCase());
+      budgets = budgets.filter((b) => lowerCategories.includes(b.category.toLowerCase()));
+    }
+
+    if (budgets.length === 0) {
+      if (isBatch) allLines.push(`=== ${month} ===`, 'No budgets set.', '');
+      else allLines.push(`No budgets set for ${month}.`);
+      continue;
+    }
+
+    const monthStart = `${month}-01`;
+    const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
+    const expenses = database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
+
+    const spendingByCategory: Record<string, number> = {};
+    for (const e of expenses) {
+      spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
+    }
+
+    if (isBatch) allLines.push(`=== ${month} ===`);
+    else allLines.push(`Budgets for ${month}:`, '');
+
+    for (const budget of budgets) {
+      const spentEur = spendingByCategory[budget.category] || 0;
+      const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
+      const remaining = budget.limit_amount - spentInCurrency;
+      const percent =
+        budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
+      const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
+
+      allLines.push(
+        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${percent}%) [${status}]`,
+      );
+    }
+    allLines.push('');
   }
 
-  if (budgets.length === 0) {
-    return { success: true, output: `No budgets set for ${month}.` };
-  }
+  // Grand total across all months for batch
+  if (isBatch) {
+    const allMonthExpenses = months.flatMap((month) => {
+      const monthStart = `${month}-01`;
+      const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
+      return database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
+    });
 
-  // Calculate spending for each budget category
-  const monthStart = `${month}-01`;
-  const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
-  const expenses = database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
-
-  const spendingByCategory: Record<string, number> = {};
-  for (const e of expenses) {
-    spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
-  }
-
-  const lines = [`Budgets for ${month}:`, ''];
-  const totalsByCurrency: Record<string, { spent: number; limit: number }> = {};
-
-  for (const budget of budgets) {
-    const spentEur = spendingByCategory[budget.category] || 0;
-    const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
-    const remaining = budget.limit_amount - spentInCurrency;
-    const percent =
-      budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
-    const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
-
-    lines.push(
-      `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${percent}%) [${status}]`,
-    );
-
-    const existing = totalsByCurrency[budget.currency];
-    if (existing) {
-      existing.spent += spentInCurrency;
-      existing.limit += budget.limit_amount;
-    } else {
-      totalsByCurrency[budget.currency] = { spent: spentInCurrency, limit: budget.limit_amount };
+    if (allMonthExpenses.length > 0) {
+      const totalEur = allMonthExpenses.reduce((s, e) => s + e.eur_amount, 0);
+      const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+      allLines.push(`=== Grand Total (${months.length} months) ===`);
+      allLines.push(`${formatAmount(totalDisplay, displayCurrency, true)}`);
     }
   }
 
-  // Grand total in display currency
-  const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
-  let grandSpentEur = 0;
-  let grandLimitEur = 0;
-  for (const budget of budgets) {
-    const spentEur = spendingByCategory[budget.category] || 0;
-    grandSpentEur += spentEur;
-    grandLimitEur += convertCurrency(
-      budget.limit_amount,
-      budget.currency as CurrencyCode,
-      BASE_CURRENCY,
-    );
-  }
-  const grandSpentDisplay = convertCurrency(grandSpentEur, BASE_CURRENCY, displayCurrency);
-  const grandLimitDisplay = convertCurrency(grandLimitEur, BASE_CURRENCY, displayCurrency);
-  const grandPct =
-    grandLimitDisplay > 0 ? Math.round((grandSpentDisplay / grandLimitDisplay) * 100) : 0;
-
-  lines.push('');
-  lines.push(
-    `Grand Total: ${formatAmount(grandSpentDisplay, displayCurrency, true)}/${formatAmount(grandLimitDisplay, displayCurrency, true)} (${grandPct}%)`,
-  );
-
-  return { success: true, output: lines.join('\n') };
+  return { success: true, output: allLines.join('\n') };
 }
 
 function executeGetCategories(ctx: AgentContext): ToolResult {
