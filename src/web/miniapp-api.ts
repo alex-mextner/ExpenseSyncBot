@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import { type CurrencyCode, isValidCurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
+import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
 import { convertCurrency } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
 import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
@@ -265,6 +266,9 @@ export async function handleMiniAppRequest(
       );
     } catch (err) {
       logger.error({ err }, 'Receipt scan failed');
+      notifyScanFailure('QR scan', qr, err).catch((e) =>
+        logger.warn({ err: e }, 'notifyScanFailure failed'),
+      );
       return errorResponse(500, 'Receipt scan failed', 'SCAN_FAILED', corsHeaders);
     }
   }
@@ -375,6 +379,9 @@ export async function handleMiniAppRequest(
       );
     } catch (err) {
       logger.error({ err }, 'OCR processing failed');
+      notifyScanFailure('OCR', '[image upload]', err).catch((e) =>
+        logger.warn({ err: e }, 'notifyScanFailure failed'),
+      );
       return errorResponse(500, 'OCR processing failed', 'OCR_FAILED', corsHeaders);
     } finally {
       rawBuffer = null;
@@ -785,4 +792,33 @@ export async function handleMiniAppRequest(
   }
 
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
+}
+
+/** Send scan failure report to admin with detailed log file */
+async function notifyScanFailure(source: string, input: string, error: unknown): Promise<void> {
+  const adminChatId = env.BOT_ADMIN_CHAT_ID;
+  if (!adminChatId) return;
+
+  const err = error instanceof Error ? error : new Error(String(error));
+  const timestamp = new Date().toISOString();
+
+  const report = [
+    `=== Receipt Scan Failure Report ===`,
+    `Timestamp: ${timestamp}`,
+    `Source: ${source}`,
+    ``,
+    `--- Input ---`,
+    input.length > 5000
+      ? `${input.substring(0, 5000)}\n... (truncated, ${input.length} chars total)`
+      : input,
+    ``,
+    `--- Error ---`,
+    `Message: ${err.message}`,
+    `Stack: ${err.stack ?? 'N/A'}`,
+  ].join('\n');
+
+  const filename = `scan-failure-${timestamp.replace(/[:.]/g, '-')}.log`;
+  const file = new File([report], filename, { type: 'text/plain' });
+
+  await sendDocumentDirect(adminChatId, file, `⚠️ <b>${source} failed</b>`);
 }
