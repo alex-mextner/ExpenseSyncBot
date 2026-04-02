@@ -51,6 +51,33 @@ const mockUsers = {
   findByGroupId: mock(() => []),
 };
 
+const mockBankTransactions = {
+  findByGroupId: mock(() => [
+    {
+      id: 1,
+      date: '2026-01-05',
+      amount: 500,
+      currency: 'RSD',
+      merchant: 'Maxi',
+      merchant_normalized: 'Maxi',
+      status: 'confirmed',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+    {
+      id: 2,
+      date: '2026-01-10',
+      amount: 1200,
+      currency: 'RSD',
+      merchant: 'Lidl',
+      merchant_normalized: 'Lidl',
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]),
+};
+
 mock.module('../../database', () => ({
   database: mockDatabase({
     expenses: mockExpenses,
@@ -58,6 +85,7 @@ mock.module('../../database', () => ({
     categories: mockCategories,
     groups: mockGroups,
     users: mockUsers,
+    bankTransactions: mockBankTransactions,
   }),
 }));
 
@@ -151,6 +179,32 @@ function resetAllMocks() {
 
   mockUsers.findByGroupId.mockReset();
   mockUsers.findByGroupId.mockReturnValue([]);
+
+  mockBankTransactions.findByGroupId.mockReset();
+  mockBankTransactions.findByGroupId.mockReturnValue([
+    {
+      id: 1,
+      date: '2026-01-05',
+      amount: 500,
+      currency: 'RSD',
+      merchant: 'Maxi',
+      merchant_normalized: 'Maxi',
+      status: 'confirmed',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+    {
+      id: 2,
+      date: '2026-01-10',
+      amount: 1200,
+      currency: 'RSD',
+      merchant: 'Lidl',
+      merchant_normalized: 'Lidl',
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -1219,5 +1273,36 @@ describe('error handling', () => {
     const result = await executeTool('get_expenses', {}, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('DB connection lost');
+  });
+});
+
+describe('get_bank_transactions batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('multiple periods concatenates transactions', async () => {
+    const result = await executeTool(
+      'get_bank_transactions',
+      { period: ['2026-01', '2026-02'], bank_name: 'all' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+  });
+
+  test('multiple bank_names filters by OR', async () => {
+    const result = await executeTool(
+      'get_bank_transactions',
+      { bank_name: ['tbc', 'kaspi'], period: 'current_month' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+  });
+
+  test('multiple statuses filters by OR', async () => {
+    const result = await executeTool(
+      'get_bank_transactions',
+      { status: ['pending', 'confirmed'], bank_name: 'all' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
   });
 });

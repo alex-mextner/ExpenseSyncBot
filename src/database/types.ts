@@ -404,9 +404,9 @@ export interface CreateBankTransactionData {
 }
 
 export interface BankTransactionFilters {
-  period?: string;
-  bank_name?: string;
-  status?: BankTransaction['status'];
+  period?: string | string[];
+  bank_name?: string | string[];
+  status?: BankTransaction['status'] | BankTransaction['status'][];
 }
 
 export interface MerchantRule {

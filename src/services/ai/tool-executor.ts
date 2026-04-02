@@ -722,13 +722,19 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
 
 function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const filters: BankTransactionFilters = {};
-  if (typeof input['period'] === 'string') filters.period = input['period'];
-  if (typeof input['bank_name'] === 'string' && input['bank_name'].toLowerCase() !== 'all') {
-    filters.bank_name = input['bank_name'];
-  }
-  if (typeof input['status'] === 'string') {
-    filters.status = input['status'] as BankTransaction['status'];
-  }
+
+  const periods = normalizeArrayParam(input['period']);
+  if (periods.length === 1 && periods[0]) filters.period = periods[0];
+  else if (periods.length > 1) filters.period = periods;
+
+  const bankNames = normalizeArrayParam(input['bank_name']);
+  const nonAllBanks = bankNames.filter((b) => b.toLowerCase() !== 'all');
+  if (nonAllBanks.length === 1 && nonAllBanks[0]) filters.bank_name = nonAllBanks[0];
+  else if (nonAllBanks.length > 1) filters.bank_name = nonAllBanks;
+
+  const statuses = normalizeArrayParam(input['status']);
+  if (statuses.length === 1) filters.status = statuses[0] as BankTransaction['status'];
+  else if (statuses.length > 1) filters.status = statuses as BankTransaction['status'][];
 
   const transactions = database.bankTransactions.findByGroupId(ctx.groupId, filters);
 
