@@ -18,14 +18,16 @@
 |------|---------------|
 | `src/services/ai/stats.ts` (create) | Pure functions: `computeExpenseStats`, `formatStats`, `formatStatsDiff`, `formatStatsTrend` |
 | `src/services/ai/stats.test.ts` (create) | Unit tests for stats module |
-| `src/services/ai/period.ts` (create) | Unified `resolvePeriodDates(period)` extracted from tool-executor.ts |
-| `src/services/ai/period.test.ts` (create) | Tests for period resolution |
+| `src/utils/period.ts` (create) | Unified `resolvePeriodDates(period)` extracted from tool-executor.ts |
+| `src/utils/period.test.ts` (create) | Tests for period resolution |
 | `src/services/ai/tool-executor.ts` (modify) | Update handlers: `executeGetExpenses`, `executeGetBudgets`, `executeGetBankTransactions`, `executeFindMissingExpenses` |
 | `src/services/ai/tool-executor.test.ts` (create) | Integration tests for batch tool behavior |
 | `src/services/ai/tools.ts` (modify) | Update schema descriptions for array-capable params |
 | `src/services/ai/agent.ts` (modify) | Update system prompt rules 6, 7; add median guidance |
 | `src/services/ai/response-validator.ts` (modify) | Allow pre-calculated stats without calculator |
 | `src/database/types.ts` (modify) | Extend `BankTransactionFilters` for array filters |
+| `src/database/repositories/bank-transactions.repository.ts` (modify) | Replace local `resolvePeriod` with import from `src/utils/period.ts`; handle array filters |
+| `src/services/ai/telegram-stream.ts` (modify) | Update tool indicator rendering for array params |
 
 ---
 
@@ -39,7 +41,18 @@
 
 ```ts
 // src/services/ai/stats.test.ts
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
+
+// Mock convertCurrency — use simple 1:100 EUR→RSD rate for predictable tests
+mock.module('../currency/converter', () => ({
+  convertCurrency: (amount: number, _from: string, to: string) => {
+    if (to === 'RSD') return amount * 100; // 1 EUR = 100 RSD (test rate)
+    if (to === 'EUR') return amount / 100;
+    return amount;
+  },
+  formatAmount: (amount: number, currency: string) => `${Math.round(amount)} ${currency}`,
+}));
+
 import { computeExpenseStats, formatStats, formatStatsDiff, formatStatsTrend } from './stats';
 
 describe('computeExpenseStats', () => {
@@ -55,26 +68,28 @@ describe('computeExpenseStats', () => {
 
   test('computes correct stats for single expense', () => {
     const expenses = [
-      { amount: 1000, currency: 'RSD', eur_amount: 8.5, category: 'Еда', comment: 'Хлеб', date: '2026-01-15' },
+      { amount: 1000, currency: 'RSD' as const, eur_amount: 8.5, category: 'Еда', comment: 'Хлеб', date: '2026-01-15' },
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.count).toBe(1);
-    expect(stats.total).toBeCloseTo(1000, 0);
-    expect(stats.avg).toBeCloseTo(1000, 0);
-    expect(stats.median).toBeCloseTo(1000, 0);
+    // 8.5 EUR * 100 = 850 RSD (via mock rate)
+    expect(stats.total).toBeCloseTo(850, 0);
+    expect(stats.avg).toBeCloseTo(850, 0);
+    expect(stats.median).toBeCloseTo(850, 0);
     expect(stats.min?.comment).toBe('Хлеб');
     expect(stats.max?.comment).toBe('Хлеб');
   });
 
   test('computes median for even number of items', () => {
     const expenses = [
-      { amount: 100, currency: 'RSD', eur_amount: 0.85, category: 'A', comment: 'a', date: '2026-01-01' },
-      { amount: 200, currency: 'RSD', eur_amount: 1.7, category: 'B', comment: 'b', date: '2026-01-02' },
-      { amount: 300, currency: 'RSD', eur_amount: 2.55, category: 'C', comment: 'c', date: '2026-01-03' },
-      { amount: 400, currency: 'RSD', eur_amount: 3.4, category: 'D', comment: 'd', date: '2026-01-04' },
+      { amount: 100, currency: 'RSD' as const, eur_amount: 1, category: 'A', comment: 'a', date: '2026-01-01' },
+      { amount: 200, currency: 'RSD' as const, eur_amount: 2, category: 'B', comment: 'b', date: '2026-01-02' },
+      { amount: 300, currency: 'RSD' as const, eur_amount: 3, category: 'C', comment: 'c', date: '2026-01-03' },
+      { amount: 400, currency: 'RSD' as const, eur_amount: 4, category: 'D', comment: 'd', date: '2026-01-04' },
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.count).toBe(4);
+    // converted amounts: 100, 200, 300, 400 (EUR * 100)
     // median of [100, 200, 300, 400] = (200+300)/2 = 250
     expect(stats.median).toBeCloseTo(250, 0);
     expect(stats.min?.amount).toBeCloseTo(100, 0);
@@ -83,19 +98,20 @@ describe('computeExpenseStats', () => {
 
   test('computes median for odd number of items', () => {
     const expenses = [
-      { amount: 100, currency: 'RSD', eur_amount: 0.85, category: 'A', comment: 'a', date: '2026-01-01' },
-      { amount: 300, currency: 'RSD', eur_amount: 2.55, category: 'B', comment: 'b', date: '2026-01-02' },
-      { amount: 500, currency: 'RSD', eur_amount: 4.25, category: 'C', comment: 'c', date: '2026-01-03' },
+      { amount: 100, currency: 'RSD' as const, eur_amount: 1, category: 'A', comment: 'a', date: '2026-01-01' },
+      { amount: 300, currency: 'RSD' as const, eur_amount: 3, category: 'B', comment: 'b', date: '2026-01-02' },
+      { amount: 500, currency: 'RSD' as const, eur_amount: 5, category: 'C', comment: 'c', date: '2026-01-03' },
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
+    // converted: 100, 300, 500 → median = 300
     expect(stats.median).toBeCloseTo(300, 0);
   });
 
   test('min/max reference correct expense', () => {
     const expenses = [
-      { amount: 5000, currency: 'RSD', eur_amount: 42.5, category: 'Развлечения', comment: 'Кино', date: '2026-01-10' },
-      { amount: 120, currency: 'RSD', eur_amount: 1.02, category: 'Еда', comment: 'Хлеб', date: '2026-01-05' },
-      { amount: 45000, currency: 'RSD', eur_amount: 382.5, category: 'Ресторан', comment: 'НГ ужин', date: '2025-12-31' },
+      { amount: 5000, currency: 'RSD' as const, eur_amount: 42.5, category: 'Развлечения', comment: 'Кино', date: '2026-01-10' },
+      { amount: 120, currency: 'RSD' as const, eur_amount: 1.02, category: 'Еда', comment: 'Хлеб', date: '2026-01-05' },
+      { amount: 45000, currency: 'RSD' as const, eur_amount: 382.5, category: 'Ресторан', comment: 'НГ ужин', date: '2025-12-31' },
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.min?.comment).toBe('Хлеб');
@@ -106,18 +122,21 @@ describe('computeExpenseStats', () => {
   });
 
   test('handles multi-currency by converting via eur_amount', () => {
-    // 100 EUR = ~11750 RSD, 1000 RSD = 1000 RSD
-    // Comparison should be in display currency (RSD)
+    // Mock rate: 1 EUR = 100 RSD
+    // 100 EUR → eur_amount=100 → 100*100 = 10000 RSD
+    // 1000 RSD → eur_amount=8.5 → 8.5*100 = 850 RSD
     const expenses = [
-      { amount: 100, currency: 'EUR', eur_amount: 100, category: 'A', comment: 'euros', date: '2026-01-01' },
-      { amount: 1000, currency: 'RSD', eur_amount: 8.5, category: 'B', comment: 'dinars', date: '2026-01-02' },
+      { amount: 100, currency: 'EUR' as const, eur_amount: 100, category: 'A', comment: 'euros', date: '2026-01-01' },
+      { amount: 1000, currency: 'RSD' as const, eur_amount: 8.5, category: 'B', comment: 'dinars', date: '2026-01-02' },
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.count).toBe(2);
-    // max should be the EUR expense (worth ~11750 RSD)
+    // max should be the EUR expense (10000 RSD via mock)
     expect(stats.max?.comment).toBe('euros');
-    // min should be the RSD expense (1000 RSD)
+    expect(stats.max?.amount).toBeCloseTo(10000, 0);
+    // min should be the RSD expense (850 RSD via mock)
     expect(stats.min?.comment).toBe('dinars');
+    expect(stats.min?.amount).toBeCloseTo(850, 0);
   });
 });
 ```
@@ -136,16 +155,10 @@ Expected: FAIL — module `./stats` not found
  */
 import type { CurrencyCode } from '../../config/constants';
 import { BASE_CURRENCY } from '../../config/constants';
+import type { Expense } from '../../database/types';
 import { convertCurrency } from '../currency/converter';
 
-export interface ExpenseRecord {
-  amount: number;
-  currency: string;
-  eur_amount: number;
-  category: string;
-  comment: string;
-  date: string;
-}
+export type ExpenseRecord = Pick<Expense, 'amount' | 'currency' | 'eur_amount' | 'category' | 'comment' | 'date'>;
 
 export interface ExpenseStats {
   count: number;
@@ -262,10 +275,23 @@ describe('formatStatsDiff', () => {
       min: { amount: 80, comment: 'c', category: 'C', date: '2026-02-01' },
       max: { amount: 60000, comment: 'd', category: 'D', date: '2026-02-20' },
     };
-    const result = formatStatsDiff(a, b, '2026-01', '2026-02', 'RSD');
+    const expA = [
+      { amount: 200000, currency: 'RSD' as const, eur_amount: 2000, category: 'Еда', comment: '', date: '2026-01-01' },
+      { amount: 100000, currency: 'RSD' as const, eur_amount: 1000, category: 'Жилье', comment: '', date: '2026-01-01' },
+    ];
+    const expB = [
+      { amount: 245000, currency: 'RSD' as const, eur_amount: 2450, category: 'Еда', comment: '', date: '2026-02-01' },
+      { amount: 18000, currency: 'RSD' as const, eur_amount: 180, category: 'Жилье', comment: '', date: '2026-02-01' },
+    ];
+    const result = formatStatsDiff(a, b, '2026-01', '2026-02', 'RSD', expA, expB);
     expect(result).toContain('+46.0%'); // (438000-300000)/300000 = 46%
     expect(result).toContain('2026-01');
     expect(result).toContain('2026-02');
+    // Per-category biggest growth/drop (from spec)
+    expect(result).toContain('Biggest growth');
+    expect(result).toContain('Еда');
+    expect(result).toContain('Biggest drop');
+    expect(result).toContain('Жилье');
   });
 
   test('handles zero-base stats gracefully', () => {
@@ -282,6 +308,13 @@ describe('formatStatsDiff', () => {
     expect(result).not.toContain('NaN');
     expect(result).not.toContain('Infinity');
   });
+
+  test('omits per-category diff when no expenses provided', () => {
+    const a: ExpenseStats = { count: 10, total: 5000, avg: 500, median: 400, min: null, max: null };
+    const b: ExpenseStats = { count: 15, total: 8000, avg: 533, median: 450, min: null, max: null };
+    const result = formatStatsDiff(a, b, '2026-01', '2026-02', 'RSD');
+    expect(result).not.toContain('Biggest');
+  });
 });
 
 describe('formatStatsTrend', () => {
@@ -296,6 +329,38 @@ describe('formatStatsTrend', () => {
     // Ranking should show max and min markers
     expect(result).toContain('max');
     expect(result).toContain('min');
+  });
+
+  test('handles single entry without max/min markers', () => {
+    const entries = [
+      { label: '2026-01', stats: { count: 10, total: 50000, avg: 5000, median: 4000, min: null, max: null } },
+    ];
+    const result = formatStatsTrend(entries, 'RSD');
+    expect(result).toContain('2026-01');
+    expect(result).not.toContain('max');
+    expect(result).not.toContain('min');
+  });
+
+  test('handles entries with equal totals', () => {
+    const entries = [
+      { label: '2026-01', stats: { count: 10, total: 50000, avg: 5000, median: 4000, min: null, max: null } },
+      { label: '2026-02', stats: { count: 12, total: 50000, avg: 4167, median: 3800, min: null, max: null } },
+    ];
+    const result = formatStatsTrend(entries, 'RSD');
+    // Equal totals → no max/min distinction
+    expect(result).not.toContain('max');
+    expect(result).not.toContain('min');
+  });
+
+  test('handles entries with zero totals', () => {
+    const entries = [
+      { label: '2026-01', stats: { count: 0, total: 0, avg: 0, median: 0, min: null, max: null } },
+      { label: '2026-02', stats: { count: 0, total: 0, avg: 0, median: 0, min: null, max: null } },
+      { label: '2026-03', stats: { count: 0, total: 0, avg: 0, median: 0, min: null, max: null } },
+    ];
+    const result = formatStatsTrend(entries, 'RSD');
+    expect(result).not.toContain('NaN');
+    expect(result).not.toContain('Infinity');
   });
 });
 ```
@@ -360,12 +425,30 @@ function formatCountDelta(current: number, previous: number): string {
   return `${sign}${delta} (${sign}${pct}%)`;
 }
 
+/**
+ * Aggregate expenses by category in display currency.
+ * Returns Record<category, totalInDisplayCurrency>.
+ */
+function aggregateByCategory(
+  expenses: ExpenseRecord[],
+  displayCurrency: CurrencyCode,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const e of expenses) {
+    const displayAmount = convertCurrency(e.eur_amount, BASE_CURRENCY, displayCurrency);
+    result[e.category] = (result[e.category] || 0) + displayAmount;
+  }
+  return result;
+}
+
 export function formatStatsDiff(
   a: ExpenseStats,
   b: ExpenseStats,
   labelA: string,
   labelB: string,
   currency: CurrencyCode,
+  expensesA?: ExpenseRecord[],
+  expensesB?: ExpenseRecord[],
 ): string {
   const lines = [
     `=== Diff: ${labelA} → ${labelB} ===`,
@@ -374,6 +457,30 @@ export function formatStatsDiff(
     `median: ${formatDelta(b.median, a.median, currency)}`,
     `avg: ${formatDelta(b.avg, a.avg, currency)}`,
   ];
+
+  // Per-category biggest growth/drop (requires raw expenses)
+  if (expensesA && expensesB && expensesA.length > 0 && expensesB.length > 0) {
+    const catA = aggregateByCategory(expensesA, currency);
+    const catB = aggregateByCategory(expensesB, currency);
+    const allCategories = new Set([...Object.keys(catA), ...Object.keys(catB)]);
+
+    let biggestGrowth = { category: '', delta: 0 };
+    let biggestDrop = { category: '', delta: 0 };
+
+    for (const cat of allCategories) {
+      const delta = (catB[cat] || 0) - (catA[cat] || 0);
+      if (delta > biggestGrowth.delta) biggestGrowth = { category: cat, delta };
+      if (delta < biggestDrop.delta) biggestDrop = { category: cat, delta };
+    }
+
+    if (biggestGrowth.delta > 0) {
+      lines.push(`Biggest growth: ${biggestGrowth.category} +${formatAmount(biggestGrowth.delta, currency, true)}`);
+    }
+    if (biggestDrop.delta < 0) {
+      lines.push(`Biggest drop: ${biggestDrop.category} −${formatAmount(Math.abs(biggestDrop.delta), currency, true)}`);
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -421,16 +528,16 @@ git commit -m "feat(ai): add formatStats, formatStatsDiff, formatStatsTrend"
 
 ### Task 3: Period Resolution Utility
 
-Currently `resolvePeriodDates` is duplicated in `tool-executor.ts` (lines 841-866) and `bank-transactions.repository.ts` (lines 201+). The version in tool-executor.ts also has a duplicate inline switch in `executeGetExpenses` (lines 115-145). Unify into one module.
+Currently `resolvePeriodDates` is duplicated in `tool-executor.ts` (lines 841-866) and `bank-transactions.repository.ts` (lines 201+, named `resolvePeriod`). The version in tool-executor.ts also has a duplicate inline switch in `executeGetExpenses` (lines 115-145). Unify into one shared module in `src/utils/` (not `src/services/ai/`) to avoid inverted dependency — database layer must not import from AI service layer.
 
 **Files:**
-- Create: `src/services/ai/period.ts`
-- Create: `src/services/ai/period.test.ts`
+- Create: `src/utils/period.ts`
+- Create: `src/utils/period.test.ts`
 
 - [ ] **Step 1: Write failing tests for resolvePeriodDates**
 
 ```ts
-// src/services/ai/period.test.ts
+// src/utils/period.test.ts
 import { describe, expect, test } from 'bun:test';
 import { normalizeArrayParam, resolvePeriodDates } from './period';
 
@@ -505,18 +612,26 @@ describe('normalizeArrayParam', () => {
   test('converts non-string array elements to strings', () => {
     expect(normalizeArrayParam([1, 2, 3])).toEqual(['1', '2', '3']);
   });
+
+  test('falls back to default for empty array', () => {
+    expect(normalizeArrayParam([], 'default')).toEqual(['default']);
+  });
+
+  test('returns empty array for empty array with no default', () => {
+    expect(normalizeArrayParam([])).toEqual([]);
+  });
 });
 ```
 
 - [ ] **Step 2: Run tests — verify they fail**
 
-Run: `bun test src/services/ai/period.test.ts`
+Run: `bun test src/utils/period.test.ts`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: Implement resolvePeriodDates and normalizeArrayParam**
 
 ```ts
-// src/services/ai/period.ts
+// src/utils/period.ts
 /**
  * Period date resolution and array param normalization for AI tools
  */
@@ -580,7 +695,7 @@ export function resolvePeriodDates(period: string): DateRange {
  * Accepts string, string[], or undefined (with optional default).
  */
 export function normalizeArrayParam(value: unknown, defaultValue?: string): string[] {
-  if (Array.isArray(value)) return value.map(String);
+  if (Array.isArray(value) && value.length > 0) return value.map(String);
   if (typeof value === 'string') return [value];
   if (defaultValue !== undefined) return [defaultValue];
   return [];
@@ -589,14 +704,14 @@ export function normalizeArrayParam(value: unknown, defaultValue?: string): stri
 
 - [ ] **Step 4: Run tests — verify they pass**
 
-Run: `bun test src/services/ai/period.test.ts`
+Run: `bun test src/utils/period.test.ts`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/services/ai/period.ts src/services/ai/period.test.ts
-git commit -m "feat(ai): extract resolvePeriodDates and normalizeArrayParam utilities"
+git add src/utils/period.ts src/utils/period.test.ts
+git commit -m "feat: extract resolvePeriodDates and normalizeArrayParam into src/utils/period"
 ```
 
 ---
@@ -615,15 +730,26 @@ The biggest change. `executeGetExpenses` now handles `period: string | string[]`
 // src/services/ai/tool-executor.test.ts
 import { describe, expect, mock, test } from 'bun:test';
 
+const januaryExpenses = [
+  { id: 1, group_id: 1, user_id: 1, date: '2026-01-05', category: 'Еда', comment: 'Хлеб', amount: 120, currency: 'RSD', eur_amount: 1.02, created_at: '' },
+  { id: 2, group_id: 1, user_id: 1, date: '2026-01-10', category: 'Еда', comment: 'Молоко', amount: 250, currency: 'RSD', eur_amount: 2.13, created_at: '' },
+  { id: 3, group_id: 1, user_id: 1, date: '2026-01-15', category: 'Развлечения', comment: 'Кино', amount: 1500, currency: 'RSD', eur_amount: 12.77, created_at: '' },
+];
+
+const februaryExpenses = [
+  { id: 4, group_id: 1, user_id: 1, date: '2026-02-03', category: 'Еда', comment: 'Сыр', amount: 800, currency: 'RSD', eur_amount: 6.88, created_at: '' },
+  { id: 5, group_id: 1, user_id: 1, date: '2026-02-14', category: 'Развлечения', comment: 'Ресторан', amount: 5000, currency: 'RSD', eur_amount: 42.5, created_at: '' },
+];
+
 // Mock database and dependencies before importing
 mock.module('../../database', () => ({
   database: {
     expenses: {
-      findByDateRange: (_groupId: number, _start: string, _end: string) => [
-        { id: 1, group_id: 1, user_id: 1, date: '2026-01-05', category: 'Еда', comment: 'Хлеб', amount: 120, currency: 'RSD', eur_amount: 1.02, created_at: '' },
-        { id: 2, group_id: 1, user_id: 1, date: '2026-01-10', category: 'Еда', comment: 'Молоко', amount: 250, currency: 'RSD', eur_amount: 2.13, created_at: '' },
-        { id: 3, group_id: 1, user_id: 1, date: '2026-01-15', category: 'Развлечения', comment: 'Кино', amount: 1500, currency: 'RSD', eur_amount: 12.77, created_at: '' },
-      ],
+      findByDateRange: (_groupId: number, start: string, _end: string) => {
+        if (start.startsWith('2026-01')) return januaryExpenses;
+        if (start.startsWith('2026-02')) return februaryExpenses;
+        return [];
+      },
     },
     groups: {
       findById: (_id: number) => ({ default_currency: 'RSD', enabled_currencies: ['RSD', 'EUR'] }),
@@ -649,6 +775,7 @@ import type { AgentContext } from './types';
 const ctx: AgentContext = {
   groupId: 1,
   userId: 1,
+  chatId: 123,
   telegramGroupId: 123,
   userName: 'test',
   userFullName: 'Test User',
@@ -668,6 +795,13 @@ describe('get_expenses with stats', () => {
     expect(result.output).toContain('Хлеб');
     expect(result.output).toContain('Кино');
   });
+
+  test('empty period array falls back to current_month', async () => {
+    const result = await executeTool('get_expenses', { period: [], summary_only: true }, ctx);
+    expect(result.success).toBe(true);
+    // normalizeArrayParam([], 'current_month') → ['current_month'] via default
+    expect(result.output).toBeDefined();
+  });
 });
 ```
 
@@ -683,8 +817,8 @@ Replace the inline switch (lines 115-145) with `resolvePeriodDates` from `period
 In `tool-executor.ts`, update the imports:
 
 ```ts
-import { normalizeArrayParam, resolvePeriodDates } from './period';
-import { computeExpenseStats, formatStats, formatStatsDiff, formatStatsTrend, type TrendEntry } from './stats';
+import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
+import { computeExpenseStats, formatStats, formatStatsDiff, formatStatsTrend, type ExpenseRecord, type TrendEntry } from './stats';
 ```
 
 Replace `executeGetExpenses` function body. Key changes:
@@ -748,12 +882,15 @@ function buildSummaryOutput(
   isBatch: boolean,
 ): ToolResult {
   const lines: string[] = [];
+  // Cache per-period stats to avoid recomputation for diff/trend
+  const perPeriodStats: ExpenseStats[] = [];
 
   for (const pd of periodData) {
     if (isBatch) lines.push(`=== ${pd.label} ===`);
     lines.push(`Period: ${pd.startDate} to ${pd.endDate}`);
 
     if (pd.expenses.length === 0) {
+      perPeriodStats.push({ count: 0, total: 0, avg: 0, median: 0, min: null, max: null });
       lines.push('No expenses', '');
       continue;
     }
@@ -780,8 +917,9 @@ function buildSummaryOutput(
       lines.push(`${cat}: ${formatAmount(catDisplay, displayCurrency, true)} (${data.count} ops) [${amountParts}]`);
     }
 
-    // Per-period stats
+    // Per-period stats (computed once, cached for diff/trend below)
     const stats = computeExpenseStats(pd.expenses, displayCurrency);
+    perPeriodStats.push(stats);
     lines.push('', `=== Stats${isBatch ? ` (${pd.label})` : ''} ===`);
     lines.push(formatStats(stats, displayCurrency));
     lines.push('');
@@ -797,18 +935,21 @@ function buildSummaryOutput(
     lines.push(formatStats(overallStats, displayCurrency));
     lines.push('');
 
-    // Diff for exactly 2 periods
+    // Diff for exactly 2 periods — reuse cached stats, pass expenses for per-category diff
     if (periodData.length === 2) {
-      const statsA = computeExpenseStats(periodData[0].expenses, displayCurrency);
-      const statsB = computeExpenseStats(periodData[1].expenses, displayCurrency);
-      lines.push(formatStatsDiff(statsA, statsB, periodData[0].label, periodData[1].label, displayCurrency));
+      lines.push(formatStatsDiff(
+        perPeriodStats[0], perPeriodStats[1],
+        periodData[0].label, periodData[1].label,
+        displayCurrency,
+        periodData[0].expenses, periodData[1].expenses,
+      ));
     }
 
-    // Trend for 3+ periods
+    // Trend for 3+ periods — reuse cached stats
     if (periodData.length >= 3) {
-      const entries: TrendEntry[] = periodData.map((pd) => ({
+      const entries: TrendEntry[] = periodData.map((pd, i) => ({
         label: pd.label,
-        stats: computeExpenseStats(pd.expenses, displayCurrency),
+        stats: perPeriodStats[i],
       }));
       lines.push(formatStatsTrend(entries, displayCurrency));
     }
@@ -883,18 +1024,23 @@ Expected: PASS
 Add to `tool-executor.test.ts`:
 
 ```ts
-test('batch periods returns per-period stats and trend', async () => {
-  // Need to update mock to return different data per date range
-  // For now, test that batch doesn't crash and returns structured output
+test('batch periods returns per-period stats and diff', async () => {
   const result = await executeTool(
     'get_expenses',
     { period: ['2026-01', '2026-02'], summary_only: true },
     ctx,
   );
   expect(result.success).toBe(true);
+  // Per-period sections (data-aware mock returns different expenses per period)
   expect(result.output).toContain('=== 2026-01 ===');
   expect(result.output).toContain('=== 2026-02 ===');
+  // Jan has 3 expenses, Feb has 2
+  expect(result.output).toContain('count: 3');
+  expect(result.output).toContain('count: 2');
+  // Diff for exactly 2 periods
   expect(result.output).toContain('=== Diff:');
+  // Overall stats across both periods
+  expect(result.output).toContain('=== Overall ===');
 });
 ```
 
@@ -923,7 +1069,9 @@ Run: `bun test src/services/ai/tool-executor.test.ts`
 
 - [ ] **Step 9: Remove old duplicate resolvePeriodDates from tool-executor.ts**
 
-Delete the `resolvePeriodDates` function at lines 841-866 in `tool-executor.ts`. It's replaced by the import from `period.ts`. Update `executeFindMissingExpenses` to use the imported version.
+Delete the `resolvePeriodDates` function at lines 841-866 in `tool-executor.ts`. It's replaced by the import from `src/utils/period.ts`. Update `executeFindMissingExpenses` to use the imported version.
+
+Note: the duplicate `resolvePeriod` in `bank-transactions.repository.ts` is removed later in Task 6 Step 4.
 
 - [ ] **Step 10: Run full test suite**
 
@@ -1039,8 +1187,21 @@ async function executeGetBudgets(
     allLines.push('');
   }
 
-  // Grand total (same logic as current)
-  // ... keep existing grand total logic, applied across all months for batch
+  // Grand total across all months for batch
+  if (isBatch) {
+    const allMonthExpenses = months.flatMap((month) => {
+      const monthStart = `${month}-01`;
+      const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
+      return database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
+    });
+
+    if (allMonthExpenses.length > 0) {
+      const totalEur = allMonthExpenses.reduce((s, e) => s + e.eur_amount, 0);
+      const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+      allLines.push(`=== Grand Total (${months.length} months) ===`);
+      allLines.push(`${formatAmount(totalDisplay, displayCurrency, true)}`);
+    }
+  }
 
   return { success: true, output: allLines.join('\n') };
 }
@@ -1114,9 +1275,19 @@ export interface BankTransactionFilters {
 }
 ```
 
-- [ ] **Step 4: Update bank-transactions.repository.ts findByGroupId**
+- [ ] **Step 4: Replace local `resolvePeriod` with imported `resolvePeriodDates`**
 
-Update the filter logic to handle arrays:
+In `bank-transactions.repository.ts`, remove the local `resolvePeriod` function and import from `src/utils/period.ts`:
+
+```ts
+import { resolvePeriodDates } from '../../utils/period';
+```
+
+Delete the local `resolvePeriod(period: string)` function (it duplicates the logic now in `src/utils/period.ts`).
+
+- [ ] **Step 5: Update bank-transactions.repository.ts findByGroupId**
+
+Update the filter logic to handle arrays, using `resolvePeriodDates`:
 
 ```ts
 if (filters.bank_name) {
@@ -1144,13 +1315,13 @@ if (filters.status) {
 if (filters.period) {
   const periods = Array.isArray(filters.period) ? filters.period : [filters.period];
   if (periods.length === 1) {
-    const { startDate, endDate } = resolvePeriod(periods[0]);
+    const { startDate, endDate } = resolvePeriodDates(periods[0]);
     conditions.push('bt.date >= ?', 'bt.date <= ?');
     values.push(startDate, endDate);
   } else {
     // Multiple periods: OR of date ranges
     const dateConditions = periods.map((p) => {
-      const { startDate, endDate } = resolvePeriod(p);
+      const { startDate, endDate } = resolvePeriodDates(p);
       values.push(startDate, endDate);
       return '(bt.date >= ? AND bt.date <= ?)';
     });
@@ -1159,7 +1330,9 @@ if (filters.period) {
 }
 ```
 
-- [ ] **Step 5: Update executeGetBankTransactions in tool-executor.ts**
+- [ ] **Step 6: Update executeGetBankTransactions in tool-executor.ts**
+
+Uses `normalizeArrayParam` from `../../utils/period` (already imported in Task 4).
 
 ```ts
 function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
@@ -1194,11 +1367,11 @@ function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentCo
 }
 ```
 
-- [ ] **Step 6: Run tests — verify they pass**
+- [ ] **Step 7: Run tests — verify they pass**
 
 Run: `bun run test`
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/services/ai/tool-executor.ts src/database/types.ts src/database/repositories/bank-transactions.repository.ts src/services/ai/tool-executor.test.ts
@@ -1246,6 +1419,7 @@ async function executeFindMissingExpenses(
   }> = [];
   const summaryParts: string[] = [];
 
+  // Uses resolvePeriodDates from '../../utils/period' + normalizeArrayParam (already imported in Task 4)
   for (const period of periods) {
     const { startDate, endDate } = resolvePeriodDates(period);
     const unmatched = database.bankTransactions.findUnmatched(ctx.groupId, startDate, endDate);
@@ -1484,11 +1658,12 @@ git commit -m "feat(ai): update system prompt for batch params, median preferenc
 Currently the tool indicator shows a generic label. For batch calls, show which values were requested.
 
 **Files:**
-- Modify: `src/services/ai/agent.ts` (tool indicator rendering)
+- Modify: `src/services/ai/tools.ts` (TOOL_LABELS constant)
+- Modify: `src/services/ai/telegram-stream.ts` (tool indicator rendering)
 
 - [ ] **Step 1: Find where TOOL_LABELS are used for indicators**
 
-Search for the code that formats tool call indicators (the `⚙️ Инструменты` message). It likely uses `TOOL_LABELS[name]` + input params.
+`TOOL_LABELS` is defined in `src/services/ai/tools.ts` (line ~396). The rendering happens in `src/services/ai/telegram-stream.ts` (line ~189) where `this.toolLabel` is set to `<i>${labelText}...</i>`.
 
 - [ ] **Step 2: Update indicator to show batch params**
 
@@ -1500,7 +1675,7 @@ The indicator already shows details like `period: all, сводка` (visible in
 // e.g. "Загружаю расходы: 2025-11, 2025-12, 2026-01, сводка"
 ```
 
-The exact location depends on where indicators are rendered. Likely in `agent.ts` where tool calls are processed. Check for `TOOL_LABELS` usage and update the detail formatting to handle arrays.
+In `telegram-stream.ts`, update the detail formatting to handle arrays — when an input param is an array, join with `", "` for display.
 
 - [ ] **Step 3: Run full test suite**
 
@@ -1510,7 +1685,7 @@ Expected: all PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/services/ai/agent.ts
+git add src/services/ai/tools.ts src/services/ai/telegram-stream.ts
 git commit -m "feat(ai): batch-aware tool indicator labels"
 ```
 
