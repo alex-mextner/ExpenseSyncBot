@@ -54,6 +54,23 @@ export interface CategoryExample {
   currency: string;
 }
 
+/** Structured OCR item from vision model (defined by ocr-extractor, duplicated here until Task 1 lands) */
+interface OcrReceiptItem {
+  name: string;
+  quantity: number;
+  price: number;
+  total: number;
+}
+
+/** Structured OCR result from vision model (defined by ocr-extractor, duplicated here until Task 1 lands) */
+interface OcrExtractionResult {
+  items: OcrReceiptItem[];
+  store?: string;
+  date?: string;
+  currency?: string;
+  total?: number;
+}
+
 /** Map AIReceiptItem to ScanReceiptItem (client-facing field names) */
 export function mapAiToScanItem(aiItem: AIReceiptItem): ScanReceiptItem {
   return {
@@ -585,4 +602,162 @@ export async function streamExtractExpenses(
   throw new Error(
     `Failed to stream extract receipt data after trying all models: ${lastError?.message}`,
   );
+}
+
+// ── Enrichment ──────────────────────────────────────────────────────────────
+
+/** Build a lightweight prompt for categorizing pre-extracted OCR items */
+function buildEnrichmentPrompt(
+  ocrResult: OcrExtractionResult,
+  existingCategories: string[],
+  categoryExamples?: Map<string, CategoryExample[]>,
+): string {
+  const itemsList = ocrResult.items
+    .map(
+      (item, i) =>
+        `${i + 1}. "${item.name}" — qty: ${item.quantity}, price: ${item.price}, total: ${item.total}`,
+    )
+    .join('\n');
+
+  let categorySection = `Available categories: ${existingCategories.join(', ')}`;
+  if (categoryExamples && categoryExamples.size > 0) {
+    const examples: string[] = [];
+    for (const [cat, items] of categoryExamples) {
+      const exList = items
+        .slice(0, 3)
+        .map((e) => e.comment)
+        .join(', ');
+      examples.push(`  ${cat}: ${exList}`);
+    }
+    categorySection += `\n\nCategory examples:\n${examples.join('\n')}`;
+  }
+
+  return `You have pre-extracted receipt items. Your tasks:
+1. Translate each item name to Russian (name_ru)
+2. Keep the original name (name_original)
+3. Assign a category from the list below
+4. Suggest 1-3 alternative categories (possible_categories)
+
+${categorySection}
+
+Receipt items:
+${itemsList}
+${ocrResult.store ? `\nStore: ${ocrResult.store}` : ''}${ocrResult.currency ? `\nCurrency: ${ocrResult.currency}` : ''}
+
+Return ONLY valid JSON:
+{"items": [{"name_ru": "Russian name", "name_original": "original", "category": "Category", "possible_categories": ["Alt1"]}]}
+
+Rules:
+- name_ru: Russian translation of the item name
+- name_original: exact original name from receipt
+- category: MUST be from the available categories list
+- possible_categories: other fitting categories from the list (max 3, empty array if none)
+- Return exactly ${ocrResult.items.length} items in the same order as input`;
+}
+
+/** Parse DeepSeek enrichment response and merge with OCR data */
+function parseEnrichmentResponse(
+  content: string,
+  ocrResult: OcrExtractionResult,
+  existingCategories: string[],
+): AIExtractionResult {
+  let cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  cleaned = cleaned.replace(/```(?:json)?\s*/g, '').replace(/\s*```/g, '');
+
+  const parsed = JSON.parse(cleaned);
+  const enrichedItems: Array<Record<string, unknown>> = parsed.items || [];
+
+  const items: AIReceiptItem[] = ocrResult.items.map((ocrItem, i) => {
+    const enriched = enrichedItems[i] || {};
+    const item: AIReceiptItem = {
+      name_ru: typeof enriched['name_ru'] === 'string' ? enriched['name_ru'] : ocrItem.name,
+      name_original:
+        typeof enriched['name_original'] === 'string' ? enriched['name_original'] : ocrItem.name,
+      quantity: ocrItem.quantity,
+      price: ocrItem.price,
+      total: ocrItem.total,
+      category: typeof enriched['category'] === 'string' ? enriched['category'] : 'Разное',
+      possible_categories: Array.isArray(enriched['possible_categories'])
+        ? enriched['possible_categories'].filter((c): c is string => typeof c === 'string')
+        : [],
+    };
+
+    validateItemCategory(item, existingCategories);
+    return item;
+  });
+
+  const currency = ocrResult.currency as CurrencyCode | undefined;
+  const result: AIExtractionResult = { items };
+  if (currency) result.currency = currency;
+  return result;
+}
+
+/**
+ * Enrich pre-extracted OCR items with Russian translations and categories.
+ * Uses DeepSeek models. If all fail, returns OCR items with default category "Разное".
+ */
+export async function enrichExtractedItems(
+  ocrResult: OcrExtractionResult,
+  existingCategories: string[],
+  categoryExamples?: Map<string, CategoryExample[]>,
+): Promise<AIExtractionResult> {
+  const maxRetries = 3;
+  const prompt = buildEnrichmentPrompt(ocrResult, existingCategories, categoryExamples);
+
+  for (const modelConfig of MODELS) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`[AI_ENRICH] Trying ${modelConfig.name} (attempt ${attempt}/${maxRetries})`);
+
+        const response = await client.chatCompletion({
+          provider: modelConfig.provider,
+          model: modelConfig.model,
+          messages: [
+            {
+              role: 'system',
+              content: 'You categorize and translate receipt items. Return valid JSON only.',
+            },
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: 4096,
+          temperature: 0.3,
+        });
+
+        const content = response.choices[0]?.message?.content?.trim();
+        if (!content) throw new Error('Empty enrichment response');
+
+        const result = parseEnrichmentResponse(content, ocrResult, existingCategories);
+        logger.info(
+          `[AI_ENRICH] Successfully enriched ${result.items.length} items using ${modelConfig.name}`,
+        );
+        return result;
+      } catch (error) {
+        logger.error(
+          `[AI_ENRICH] Attempt ${attempt}/${maxRetries} failed (${modelConfig.name}): ${error instanceof Error ? error.message : error}`,
+        );
+        if (attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+  }
+
+  // Graceful fallback: OCR items with default category
+  logger.warn('[AI_ENRICH] All models failed, using raw OCR items with default category');
+  const fallbackCategory =
+    existingCategories.find((c) => c === 'Разное') || existingCategories[0] || 'Разное';
+  const fallbackCurrency = ocrResult.currency as CurrencyCode | undefined;
+  const fallbackResult: AIExtractionResult = {
+    items: ocrResult.items.map((item) => ({
+      name_ru: item.name,
+      name_original: item.name,
+      quantity: item.quantity,
+      price: item.price,
+      total: item.total,
+      category: fallbackCategory,
+      possible_categories: [],
+    })),
+  };
+  if (fallbackCurrency) fallbackResult.currency = fallbackCurrency;
+  return fallbackResult;
 }
