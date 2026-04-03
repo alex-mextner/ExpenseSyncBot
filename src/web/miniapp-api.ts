@@ -7,10 +7,12 @@ import { database } from '../database/index.ts';
 import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
 import { convertCurrency } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
-import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
+import { streamExtractExpenses } from '../services/receipt/ai-extractor.ts';
 import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
+import { shortenReceiptUrl } from '../services/receipt/url-shortener.ts';
 import { createLogger } from '../utils/logger.ts';
+import { createScan, emitEvent, getScan, subscribe, updateScan } from './scan-store.ts';
 import { emitForGroup, subscribeGroup } from './sse-emitter.ts';
 
 const logger = createLogger('miniapp-api');
@@ -251,45 +253,22 @@ export async function handleMiniAppRequest(
     const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
     if (!ctx.ok) return ctx.response;
 
+    const scanId = createScan(ctx.internalGroupId, telegramGroupId);
+    const categoryNames = database.categories.findByGroupId(ctx.internalGroupId).map((c) => c.name);
+
     logger.info(
-      { userId: ctx.userId, groupId: telegramGroupId, qrLength: qr.length },
-      'Receipt QR scan started',
+      { userId: ctx.userId, groupId: telegramGroupId, scanId },
+      'Async receipt scan started',
     );
 
-    try {
-      const html = await fetchReceiptData(qr);
-      const categoryNames = database.categories
-        .findByGroupId(ctx.internalGroupId)
-        .map((c) => c.name);
-      const result = await extractExpensesFromReceipt(html, categoryNames);
+    processScanInBackground(scanId, qr, categoryNames).catch((e) =>
+      logger.error({ err: e, scanId }, 'Background scan processing crashed'),
+    );
 
-      const items = result.items.map((item) => ({
-        name: item.name_ru,
-        qty: item.quantity,
-        price: item.price,
-        total: item.total,
-        category: item.category,
-      }));
-
-      logger.info({ userId: ctx.userId, itemCount: items.length }, 'Receipt QR scan completed');
-
-      return new Response(
-        JSON.stringify({
-          items,
-          ...(result.currency !== undefined ? { currency: result.currency } : {}),
-        }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
-        },
-      );
-    } catch (err) {
-      logger.error({ err, userId: ctx.userId, groupId: telegramGroupId }, 'Receipt scan failed');
-      notifyScanFailure('QR scan', qr, err).catch((e) =>
-        logger.warn({ err: e }, 'notifyScanFailure failed'),
-      );
-      return errorResponse(500, 'Receipt scan failed', 'SCAN_FAILED', corsHeaders);
-    }
+    return new Response(JSON.stringify({ scanId }), {
+      status: 202,
+      headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+    });
   }
 
   if (url.pathname === '/api/receipt/ocr' && req.method === 'POST') {
@@ -337,79 +316,28 @@ export async function handleMiniAppRequest(
       return errorResponse(413, 'Image exceeds 2 MB limit', 'PAYLOAD_TOO_LARGE', ctx.corsHeaders);
     }
 
-    let rawBuffer: Buffer | null = null;
-    let compressedBuffer: Buffer | null = null;
+    // Read buffer before going async — Request body can only be consumed once
+    let imageBuffer: Buffer;
     try {
-      rawBuffer = Buffer.from(await imageBlob.arrayBuffer());
-      compressedBuffer = await sharp(rawBuffer)
-        .resize(1800, 1800, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 85 })
-        .toBuffer();
-
-      const ocrText = await extractTextFromImageBuffer(compressedBuffer);
-
-      const categoryNames = database.categories
-        .findByGroupId(ctx.internalGroupId)
-        .map((c) => c.name);
-      const result = await extractExpensesFromReceipt(ocrText, categoryNames);
-
-      // Upload image to Telegram to get a file_id for later use in the confirm step
-      const tgFormData = new FormData();
-      tgFormData.append(
-        'document',
-        new File([compressedBuffer], 'receipt.jpg', { type: 'image/jpeg' }),
-      );
-      tgFormData.append('chat_id', String(ctx.groupId));
-
-      let fileId: string | null = null;
-      try {
-        const telegramResp = await fetch(
-          `https://api.telegram.org/bot${env.BOT_TOKEN}/sendDocument`,
-          { method: 'POST', body: tgFormData },
-        );
-        const tgResult = (await telegramResp.json()) as {
-          ok: boolean;
-          result?: { document?: { file_id: string } };
-        };
-        fileId = tgResult.result?.document?.file_id ?? null;
-      } catch (tgError) {
-        logger.warn(
-          { err: tgError },
-          '[OCR] Failed to upload receipt to Telegram, continuing without file_id',
-        );
-      }
-
-      const items = result.items.map((item) => ({
-        name: item.name_ru,
-        qty: item.quantity,
-        price: item.price,
-        total: item.total,
-        category: item.category,
-      }));
-
-      logger.info({ userId: ctx.userId, itemCount: items.length }, 'Receipt OCR completed');
-
-      return new Response(
-        JSON.stringify({
-          items,
-          ...(result.currency !== undefined ? { currency: result.currency } : {}),
-          file_id: fileId,
-        }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
-        },
-      );
-    } catch (err) {
-      logger.error({ err, userId: ctx.userId, groupId: telegramGroupId }, 'OCR processing failed');
-      notifyScanFailure('OCR', '[image upload]', err).catch((e) =>
-        logger.warn({ err: e }, 'notifyScanFailure failed'),
-      );
-      return errorResponse(500, 'OCR processing failed', 'OCR_FAILED', corsHeaders);
-    } finally {
-      rawBuffer = null;
-      compressedBuffer = null;
+      imageBuffer = Buffer.from(await imageBlob.arrayBuffer());
+    } catch (bufErr) {
+      logger.error({ err: bufErr }, 'Failed to read image buffer');
+      return errorResponse(500, 'Failed to read image', 'OCR_FAILED', ctx.corsHeaders);
     }
+
+    const scanId = createScan(ctx.internalGroupId, telegramGroupId);
+    const categoryNames = database.categories.findByGroupId(ctx.internalGroupId).map((c) => c.name);
+
+    logger.info({ userId: ctx.userId, groupId: telegramGroupId, scanId }, 'Async OCR scan started');
+
+    processOcrInBackground(scanId, imageBuffer, categoryNames, telegramGroupId).catch((e) =>
+      logger.error({ err: e, scanId }, 'Background OCR processing crashed'),
+    );
+
+    return new Response(JSON.stringify({ scanId }), {
+      status: 202,
+      headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+    });
   }
 
   // ── POST /api/receipt/confirm ──────────────────────────────────────────────
@@ -837,7 +765,287 @@ export async function handleMiniAppRequest(
     });
   }
 
+  // ── GET /api/receipt/scan/:scanId/stream (SSE) ────────────────────────────
+
+  const streamMatch = url.pathname.match(/^\/api\/receipt\/scan\/([^/]+)\/stream$/);
+  if (streamMatch?.[1] && req.method === 'GET') {
+    const scanId = streamMatch[1];
+    const state = getScan(scanId);
+    if (!state) return errorResponse(404, 'Scan not found', 'NOT_FOUND', corsHeaders);
+
+    // Auth via initData query param (EventSource doesn't support custom headers)
+    const initData = url.searchParams.get('initData') ?? '';
+    const syntheticReq = new Request(req.url, {
+      headers: { ...Object.fromEntries(req.headers), 'X-Telegram-Init-Data': initData },
+    });
+
+    const ctx = await validateAndResolveContext(syntheticReq, corsOrigin, state.telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+    if (ctx.internalGroupId !== state.groupId) {
+      return errorResponse(403, 'Forbidden', 'FORBIDDEN_GROUP', corsHeaders);
+    }
+
+    const sseHeaders = {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      ...ctx.corsHeaders,
+    };
+
+    let unsub: (() => void) | null = null;
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const send = (msg: string) => {
+          try {
+            controller.enqueue(encoder.encode(msg));
+          } catch {
+            // controller may be closed already — ignore
+          }
+        };
+
+        unsub = subscribe(scanId, send);
+        if (!unsub) {
+          send(
+            'event: error\ndata: {"message":"Too many connections","code":"TOO_MANY_SUBSCRIBERS"}\n\n',
+          );
+          controller.close();
+          return;
+        }
+
+        // Replay current state so late-joining clients catch up
+        if (state.url) {
+          send(`event: url\ndata: ${JSON.stringify({ url: state.url, raw: state.rawUrl })}\n\n`);
+        }
+        for (const item of state.items) {
+          send(`event: item\ndata: ${JSON.stringify(item)}\n\n`);
+        }
+        if (state.phase === 'done') {
+          send(
+            `event: done\ndata: ${JSON.stringify({ items: state.items, currency: state.currency, fileId: state.fileId })}\n\n`,
+          );
+        }
+        if (state.phase === 'error') {
+          send(
+            `event: error\ndata: ${JSON.stringify({ message: state.error, code: state.errorCode })}\n\n`,
+          );
+        }
+
+        pingInterval = setInterval(() => send('event: ping\ndata: {}\n\n'), 15_000);
+      },
+      cancel() {
+        if (unsub) unsub();
+        if (pingInterval) clearInterval(pingInterval);
+      },
+    });
+
+    return new Response(stream, { status: 200, headers: sseHeaders });
+  }
+
+  // ── GET /api/receipt/scan/:scanId (poll) ──────────────────────────────────
+
+  const pollMatch = url.pathname.match(/^\/api\/receipt\/scan\/([^/]+)$/);
+  if (pollMatch?.[1] && req.method === 'GET') {
+    const scanId = pollMatch[1];
+    const state = getScan(scanId);
+    if (!state) return errorResponse(404, 'Scan not found or expired', 'NOT_FOUND', corsHeaders);
+
+    // Auth via initData query param (for consistency with SSE endpoint)
+    const initData = url.searchParams.get('initData') ?? '';
+    const syntheticReq = new Request(req.url, {
+      headers: { ...Object.fromEntries(req.headers), 'X-Telegram-Init-Data': initData },
+    });
+
+    const ctx = await validateAndResolveContext(syntheticReq, corsOrigin, state.telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+    if (ctx.internalGroupId !== state.groupId) {
+      return errorResponse(403, 'Forbidden', 'FORBIDDEN_GROUP', corsHeaders);
+    }
+
+    return new Response(
+      JSON.stringify({
+        phase: state.phase,
+        url: state.url ?? null,
+        items: state.items,
+        currency: state.currency ?? null,
+        fileId: state.fileId ?? null,
+        error: state.error ?? null,
+        errorCode: state.errorCode ?? null,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders } },
+    );
+  }
+
+  // ── GET /api/categories ─────────────────────────────────────────────────
+
+  if (url.pathname === '/api/categories' && req.method === 'GET') {
+    const groupIdParam = url.searchParams.get('groupId');
+    const telegramGroupId = groupIdParam ? Number.parseInt(groupIdParam, 10) : Number.NaN;
+    if (Number.isNaN(telegramGroupId)) {
+      return errorResponse(400, 'Missing or invalid groupId', 'BAD_REQUEST', corsHeaders);
+    }
+
+    const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
+    if (!ctx.ok) return ctx.response;
+
+    const categories = database.categories.findByGroupId(ctx.internalGroupId).map((c) => c.name);
+
+    return new Response(JSON.stringify({ categories }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
+    });
+  }
+
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
+}
+
+/** Detect error code from error type */
+function classifyScanError(err: unknown, source: 'fetch' | 'extract'): string {
+  const msg = err instanceof Error ? err.message.toLowerCase() : '';
+  if (source === 'fetch') return 'FETCH_FAILED';
+  if (
+    msg.includes('402') ||
+    msg.includes('credit') ||
+    msg.includes('billing') ||
+    msg.includes('payment')
+  ) {
+    return 'CREDITS_EXHAUSTED';
+  }
+  return 'SCAN_FAILED';
+}
+
+/** Background processing for QR receipt scans */
+async function processScanInBackground(
+  scanId: string,
+  qr: string,
+  categoryNames: string[],
+): Promise<void> {
+  try {
+    updateScan(scanId, { phase: 'fetching' });
+
+    let html: string;
+    try {
+      html = await fetchReceiptData(qr);
+    } catch (fetchErr) {
+      const message = fetchErr instanceof Error ? fetchErr.message : 'Failed to fetch receipt';
+      updateScan(scanId, { phase: 'error', error: message, errorCode: 'FETCH_FAILED' });
+      emitEvent(scanId, 'error', { message, code: 'FETCH_FAILED' });
+      notifyScanFailure('QR scan (fetch)', qr, fetchErr).catch((e) =>
+        logger.warn({ err: e }, 'notifyScanFailure failed'),
+      );
+      return;
+    }
+
+    const shortUrl = shortenReceiptUrl(qr);
+    updateScan(scanId, { phase: 'extracting', url: shortUrl, rawUrl: qr });
+    emitEvent(scanId, 'url', { url: shortUrl, raw: qr });
+
+    const result = await streamExtractExpenses(html, categoryNames, (item) => {
+      const state = getScan(scanId);
+      if (state) state.items.push(item);
+      emitEvent(scanId, 'item', item);
+    });
+
+    const state = getScan(scanId);
+    const allItems = state?.items ?? [];
+    const donePatch: Partial<import('./scan-store').ScanState> = { phase: 'done', items: allItems };
+    if (result.currency) donePatch.currency = result.currency;
+    updateScan(scanId, donePatch);
+    emitEvent(scanId, 'done', { items: allItems, currency: result.currency });
+
+    logger.info({ scanId, itemCount: allItems.length }, 'Scan completed');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    const errorCode = classifyScanError(err, 'extract');
+    updateScan(scanId, { phase: 'error', error: message, errorCode });
+    emitEvent(scanId, 'error', { message, code: errorCode });
+
+    notifyScanFailure('QR scan (streaming)', qr, err).catch((e) =>
+      logger.warn({ err: e }, 'notifyScanFailure failed'),
+    );
+  }
+}
+
+/** Background processing for OCR receipt scans */
+async function processOcrInBackground(
+  scanId: string,
+  imageBuffer: Buffer,
+  categoryNames: string[],
+  telegramGroupId: number,
+): Promise<void> {
+  try {
+    updateScan(scanId, { phase: 'processing' });
+
+    // Compress image before OCR
+    const compressedBuffer = await sharp(imageBuffer)
+      .resize(1800, 1800, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    const ocrText = await extractTextFromImageBuffer(compressedBuffer);
+
+    // Upload image to Telegram to get a file_id for later use in the confirm step
+    let telegramFileId: string | null = null;
+    try {
+      const tgFormData = new FormData();
+      tgFormData.append(
+        'document',
+        new File([compressedBuffer], 'receipt.jpg', { type: 'image/jpeg' }),
+      );
+      tgFormData.append('chat_id', String(telegramGroupId));
+
+      const telegramResp = await fetch(
+        `https://api.telegram.org/bot${env.BOT_TOKEN}/sendDocument`,
+        { method: 'POST', body: tgFormData },
+      );
+      const tgResult = (await telegramResp.json()) as {
+        ok: boolean;
+        result?: { document?: { file_id: string } };
+      };
+      telegramFileId = tgResult.result?.document?.file_id ?? null;
+    } catch (tgError) {
+      logger.warn(
+        { err: tgError },
+        '[OCR] Failed to upload receipt to Telegram, continuing without file_id',
+      );
+    }
+
+    updateScan(scanId, { phase: 'extracting', fileId: telegramFileId });
+
+    const result = await streamExtractExpenses(ocrText, categoryNames, (item) => {
+      const state = getScan(scanId);
+      if (state) state.items.push(item);
+      emitEvent(scanId, 'item', item);
+    });
+
+    const state = getScan(scanId);
+    const allItems = state?.items ?? [];
+    const ocrDonePatch: Partial<import('./scan-store').ScanState> = {
+      phase: 'done',
+      items: allItems,
+      fileId: telegramFileId,
+    };
+    if (result.currency) ocrDonePatch.currency = result.currency;
+    updateScan(scanId, ocrDonePatch);
+    emitEvent(scanId, 'done', {
+      items: allItems,
+      currency: result.currency,
+      fileId: telegramFileId,
+    });
+
+    logger.info({ scanId, itemCount: allItems.length }, 'OCR scan completed');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    const errorCode = classifyScanError(err, 'extract');
+    updateScan(scanId, { phase: 'error', error: message, errorCode });
+    emitEvent(scanId, 'error', { message, code: errorCode });
+
+    notifyScanFailure('OCR (streaming)', '[image]', err).catch((e) =>
+      logger.warn({ err: e }, 'notifyScanFailure failed'),
+    );
+  }
 }
 
 /** Send scan failure report to admin with detailed log file */

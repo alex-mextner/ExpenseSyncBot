@@ -17,8 +17,11 @@ import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
 import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
 import type { BrowserLike } from '../services/receipt/receipt-fetcher.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
+import * as urlShortenerModule from '../services/receipt/url-shortener.ts';
 import { createMockLogger } from '../test-utils/mocks/logger';
 import * as loggerModule from '../utils/logger.ts';
+import type { ScanReceiptItem, ScanState } from './scan-store.ts';
+import * as scanStoreModule from './scan-store.ts';
 import type { SseEventType } from './sse-emitter.ts';
 import * as sseEmitterModule from './sse-emitter.ts';
 
@@ -121,6 +124,29 @@ const mockSubscribeGroup = mock(
     () => {},
 );
 
+// scan-store mocks
+const mockCreateScan = mock((_groupId: number, _telegramGroupId: number): string => 'test-scan-id');
+const mockGetScan = mock((_id: string): ScanState | undefined => undefined);
+const mockUpdateScan = mock((_id: string, _patch: Partial<ScanState>): void => {});
+const mockEmitEvent = mock((_id: string, _event: string, _data: unknown): void => {});
+const mockSubscribe = mock(
+  (_id: string, _send: (event: string) => void): (() => void) | null =>
+    () => {},
+);
+
+// streamExtractExpenses mock
+const mockStreamExtractExpenses = mock(
+  (
+    _data: string,
+    _categories: string[],
+    _onItem: (item: ScanReceiptItem) => void,
+    _options?: { maxRetries?: number; categoryExamples?: Map<string, CategoryExample[]> },
+  ): Promise<AIExtractionResult> => Promise.resolve({ items: [] }),
+);
+
+// url-shortener mock
+const mockShortenReceiptUrl = mock((_url: string): string => 'short.url');
+
 // sharp mock: returns an object with chainable .resize().jpeg().toBuffer()
 const mockSharpToBuffer = mock(() => Promise.resolve(Buffer.from('compressed')));
 const mockSharpJpeg = mock(() => ({ toBuffer: mockSharpToBuffer }));
@@ -167,6 +193,13 @@ spyOn(ocrExtractorModule, 'extractTextFromImageBuffer').mockImplementation(
 spyOn(expenseRecorderModule, 'getExpenseRecorder').mockImplementation(mockGetExpenseRecorder);
 spyOn(sseEmitterModule, 'emitForGroup').mockImplementation(mockEmitForGroup);
 spyOn(sseEmitterModule, 'subscribeGroup').mockImplementation(mockSubscribeGroup);
+spyOn(scanStoreModule, 'createScan').mockImplementation(mockCreateScan);
+spyOn(scanStoreModule, 'getScan').mockImplementation(mockGetScan);
+spyOn(scanStoreModule, 'updateScan').mockImplementation(mockUpdateScan);
+spyOn(scanStoreModule, 'emitEvent').mockImplementation(mockEmitEvent);
+spyOn(scanStoreModule, 'subscribe').mockImplementation(mockSubscribe);
+spyOn(aiExtractorModule, 'streamExtractExpenses').mockImplementation(mockStreamExtractExpenses);
+spyOn(urlShortenerModule, 'shortenReceiptUrl').mockImplementation(mockShortenReceiptUrl);
 const logMock = createMockLogger();
 spyOn(loggerModule, 'createLogger').mockImplementation(
   (_module: string) => logMock as unknown as ReturnType<typeof loggerModule.createLogger>,
@@ -369,6 +402,11 @@ describe('POST /api/receipt/scan', () => {
     mockExtractExpensesFromReceipt.mockReset();
     mockExtractTextFromImageBuffer.mockReset();
     mockFetch.mockReset();
+    mockCreateScan.mockReset();
+    mockCreateScan.mockImplementation(() => 'test-scan-id');
+    mockStreamExtractExpenses.mockReset();
+    mockShortenReceiptUrl.mockReset();
+    mockShortenReceiptUrl.mockImplementation(() => 'short.url');
   });
 
   test('missing qr → 400 BAD_REQUEST', async () => {
@@ -417,7 +455,7 @@ describe('POST /api/receipt/scan', () => {
     expect(res.status).toBe(401);
   });
 
-  test('fetchReceiptData failure → 500 SCAN_FAILED', async () => {
+  test('returns 202 with scanId (errors handled in background)', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
@@ -427,133 +465,38 @@ describe('POST /api/receipt/scan', () => {
     const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(500);
-    const body = (await res.json()) as { code: string; error: string };
-    expect(body.code).toBe('SCAN_FAILED');
-    expect(body.error).toBe('Receipt scan failed');
+    // Async endpoint always returns 202 — errors are reported via SSE/polling
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { scanId: string };
+    expect(body.scanId).toBe('test-scan-id');
   });
 
-  test('extractExpensesFromReceipt failure → 500 SCAN_FAILED', async () => {
-    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockCategoriesFindByGroupId.mockImplementation(() => []);
-    mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.reject(new Error('AI extraction failed')),
-    );
-
-    const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
-    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
-    if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(500);
-    const body = (await res.json()) as { code: string };
-    expect(body.code).toBe('SCAN_FAILED');
-  });
-
-  test('successful scan → 200 with mapped items and currency', async () => {
+  test('successful scan → 202 with scanId and CORS headers', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [
       stubCategory('Продукты'),
       stubCategory('Разное'),
     ]);
-    mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Молоко 3.2%',
-            quantity: 2,
-            price: 85.5,
-            total: 171.0,
-            category: 'Продукты',
-            possible_categories: ['Разное'],
-          },
-        ],
-        currency: 'RSD',
-      }),
-    );
 
     const initData = buildInitData(42);
     const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(CORS_ORIGIN);
 
-    const body = (await res.json()) as {
-      items: { name: string; qty: number; price: number; total: number; category: string }[];
-      currency?: string;
-    };
-    expect(body.currency).toBe('RSD');
-    expect(body.items).toHaveLength(1);
-    const item = body.items[0];
-    expect(item).toBeDefined();
-    if (item) {
-      expect(item.name).toBe('Молоко 3.2%');
-      expect(item.qty).toBe(2);
-      expect(item.price).toBe(85.5);
-      expect(item.total).toBe(171.0);
-      expect(item.category).toBe('Продукты');
-      // possible_categories must not be present in the response
-      expect(Object.keys(item)).not.toContain('possible_categories');
-    }
+    const body = (await res.json()) as { scanId: string };
+    expect(body.scanId).toBe('test-scan-id');
   });
 
-  test('successful scan without currency → 200 without currency field', async () => {
-    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockCategoriesFindByGroupId.mockImplementation(() => []);
-    mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Хлеб',
-            quantity: 1,
-            price: 50.0,
-            total: 50.0,
-            category: 'Разное',
-            possible_categories: [],
-          },
-        ],
-      }),
-    );
-
-    const initData = buildInitData(42);
-    const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
-    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
-    if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { items: unknown[]; currency?: string };
-    expect(body.currency).toBeUndefined();
-    expect(body.items).toHaveLength(1);
-  });
-
-  test('categories are loaded from DB and passed to extractor', async () => {
+  test('categories are loaded from DB and passed to createScan', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [
       stubCategory('Еда'),
       stubCategory('Транспорт'),
     ]);
-    mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Товар',
-            quantity: 1,
-            price: 10,
-            total: 10,
-            category: 'Еда',
-            possible_categories: [],
-          },
-        ],
-        currency: 'EUR',
-      }),
-    );
 
     const initData = buildInitData(42);
     const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
@@ -561,7 +504,8 @@ describe('POST /api/receipt/scan', () => {
 
     expect(mockCategoriesFindByGroupId.mock.calls.length).toBe(1);
     expect(mockCategoriesFindByGroupId.mock.calls[0]?.[0]).toBe(7); // internalGroupId
-    expect(mockExtractExpensesFromReceipt.mock.calls[0]?.[1]).toEqual(['Еда', 'Транспорт']);
+    expect(mockCreateScan.mock.calls.length).toBe(1);
+    expect(mockCreateScan.mock.calls[0]?.[0]).toBe(7); // internalGroupId
   });
 });
 
@@ -596,6 +540,9 @@ describe('POST /api/receipt/ocr', () => {
     mockExtractTextFromImageBuffer.mockReset();
     mockSharpToBuffer.mockReset();
     mockFetch.mockReset();
+    mockCreateScan.mockReset();
+    mockCreateScan.mockImplementation(() => 'test-scan-id');
+    mockStreamExtractExpenses.mockReset();
 
     // Default sharp chain returns compressed buffer
     mockSharpToBuffer.mockImplementation(() => Promise.resolve(Buffer.from('compressed')));
@@ -665,108 +612,36 @@ describe('POST /api/receipt/ocr', () => {
     expect(body.code).toBe('PAYLOAD_TOO_LARGE');
   });
 
-  test('OCR failure → 500 OCR_FAILED', async () => {
+  test('returns 202 with scanId (errors handled in background)', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
-    mockExtractTextFromImageBuffer.mockImplementation(() =>
-      Promise.reject(new Error('Qwen API down')),
-    );
 
     const initData = buildInitData(42);
     const req = makeOcrRequest(OCR_PATH, true, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(500);
-    const body = (await res.json()) as { code: string; error: string };
-    expect(body.code).toBe('OCR_FAILED');
-    expect(body.error).toBe('OCR processing failed');
+    // Async endpoint always returns 202 — errors are reported via SSE/polling
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { scanId: string };
+    expect(body.scanId).toBe('test-scan-id');
   });
 
-  test('success → 200 with items and file_id', async () => {
+  test('success → 202 with scanId and CORS headers', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => [stubCategory('Продукты')]);
-    mockExtractTextFromImageBuffer.mockImplementation(() =>
-      Promise.resolve('Store: TestMart\nMilk 2x85.50'),
-    );
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Молоко',
-            quantity: 2,
-            price: 85.5,
-            total: 171.0,
-            category: 'Продукты',
-            possible_categories: [],
-          },
-        ],
-        currency: 'RSD',
-      }),
-    );
-    mockFetch.mockImplementation(() =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({ ok: true, result: { document: { file_id: 'tg_file_abc' } } }),
-        ),
-      ),
-    );
 
     const initData = buildInitData(42);
     const req = makeOcrRequest(OCR_PATH, true, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(CORS_ORIGIN);
 
-    const body = (await res.json()) as {
-      items: { name: string; qty: number; price: number; total: number; category: string }[];
-      currency?: string;
-      file_id: string | null;
-    };
-    expect(body.file_id).toBe('tg_file_abc');
-    expect(body.currency).toBe('RSD');
-    expect(body.items).toHaveLength(1);
-    const item = body.items[0];
-    if (item) {
-      expect(item.name).toBe('Молоко');
-      expect(item.qty).toBe(2);
-      expect(item.price).toBe(85.5);
-      expect(item.total).toBe(171.0);
-      expect(item.category).toBe('Продукты');
-    }
-  });
-
-  test('success with Telegram upload failure → 200 with file_id: null', async () => {
-    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockCategoriesFindByGroupId.mockImplementation(() => []);
-    mockExtractTextFromImageBuffer.mockImplementation(() => Promise.resolve('some receipt text'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Товар',
-            quantity: 1,
-            price: 10,
-            total: 10,
-            category: 'Разное',
-            possible_categories: [],
-          },
-        ],
-      }),
-    );
-    mockFetch.mockImplementation(() => Promise.reject(new Error('network error')));
-
-    const initData = buildInitData(42);
-    const req = makeOcrRequest(OCR_PATH, true, initData);
-    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
-    if (!res) throw new Error('expected Response, got null');
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { file_id: string | null; items: unknown[] };
-    expect(body.file_id).toBeNull();
-    expect(body.items).toHaveLength(1);
+    const body = (await res.json()) as { scanId: string };
+    expect(body.scanId).toBe('test-scan-id');
+    expect(mockCreateScan.mock.calls.length).toBe(1);
   });
 });
 
