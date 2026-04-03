@@ -175,12 +175,9 @@ export async function handleBudgetCommand(
 }
 
 /**
- * Show budget progress for current month
- */
-/**
  * Format budget progress text for a group (reusable by cron and /budget command)
  */
-export function formatBudgetProgressText(groupId: number): string {
+export function formatBudgetProgressText(groupId: number): { text: string; hasBudgets: boolean } {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
@@ -198,7 +195,7 @@ export function formatBudgetProgressText(groupId: number): string {
   const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
 
   if (budgets.length === 0) {
-    return `Бюджет на ${currentMonthName}\n\nБюджеты не установлены.`;
+    return { text: `Бюджет на ${currentMonthName}\n\nБюджеты не установлены.`, hasBudgets: false };
   }
 
   const budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }> =
@@ -245,7 +242,7 @@ export function formatBudgetProgressText(groupId: number): string {
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  return message.trim();
+  return { text: message.trim(), hasBudgets: true };
 }
 
 async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
@@ -254,11 +251,9 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
   const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
   const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
-  const text = formatBudgetProgressText(group.id);
-  const noBudgets =
-    database.budgets.getAllBudgetsForMonth(group.id, format(new Date(), 'yyyy-MM')).length === 0;
+  const { text, hasBudgets } = formatBudgetProgressText(group.id);
 
-  if (noBudgets) {
+  if (!hasBudgets) {
     await sendMessage(
       `${text}\n\n` +
         `Используй:\n` +

@@ -129,7 +129,7 @@ export function registerMonthlyCron(): void {
         await silentSyncBudgets(conn, group.id);
 
         const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
-        const budgetText = formatBudgetProgressText(group.id);
+        const { text: budgetText } = formatBudgetProgressText(group.id);
 
         let notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
 
