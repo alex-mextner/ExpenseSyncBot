@@ -10,12 +10,15 @@ import {
   cloneMonthTab,
   createEmptyMonthTab,
   createExpenseSpreadsheet,
+  getSpreadsheetUrl,
   googleConn,
   monthTabExists,
   sortExpensesTab,
 } from '../services/google/sheets';
 import { createLogger } from '../utils/logger.ts';
+import { formatBudgetProgressText } from './commands/budget';
 import { importExpensesFromSheet } from './commands/sync';
+import { silentSyncBudgets } from './services/budget-sync';
 
 const logger = createLogger('cron');
 
@@ -114,20 +117,31 @@ export function registerMonthlyCron(): void {
         const { year: prevYear, month: prevMonth } = prevMonthAbbr(year, month);
         const prevSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, prevYear);
 
-        let notifyText: string;
         if (prevSpreadsheetId && (await monthTabExists(conn, prevSpreadsheetId, prevMonth))) {
           await cloneMonthTab(conn, prevSpreadsheetId, prevMonth, spreadsheetId, month);
-          notifyText = `Создана вкладка ${month} — скопирована из ${prevMonth}`;
           logger.info(`[CRON] Cloned ${prevMonth} → ${month} for group ${group.id}`);
         } else {
           await createEmptyMonthTab(conn, spreadsheetId, month);
-          notifyText = `Создана вкладка ${month}`;
           logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
         }
 
+        // Sync budgets from the newly created/cloned tab
+        await silentSyncBudgets(conn, group.id);
+
+        const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
+        const budgetText = formatBudgetProgressText(group.id);
+
+        let notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+
         if (newYearUrl) {
-          notifyText += `\n\nНовая таблица ${year}: ${newYearUrl}`;
+          notifyText += ` (${year})`;
         }
+
+        notifyText += `\n\n${budgetText}`;
+        notifyText +=
+          '\n\nРедактировать бюджет можно через ИИ или командами:\n' +
+          '<code>/budget set Категория Сумма</code>\n' +
+          '<code>/budget sync</code>';
 
         await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
           sendMessage(notifyText),
