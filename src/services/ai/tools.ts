@@ -118,7 +118,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'set_budget',
     description:
-      'Set or update budget limit for a category in the current month. Also syncs to Google Sheets.',
+      'Set or update budget limit for a category. Saves to DB and syncs to Google Sheets.',
     input_schema: {
       type: 'object' as const,
       properties: {

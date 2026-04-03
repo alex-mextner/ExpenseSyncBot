@@ -72,6 +72,7 @@ mock.module('../../database', () => ({
     groupSpreadsheets: mockGroupSpreadsheets,
     categories: mockCategories,
     budgets: mockBudgets,
+    budgetWriter: mockBudgets,
     transaction: mockTransaction,
   },
 }));

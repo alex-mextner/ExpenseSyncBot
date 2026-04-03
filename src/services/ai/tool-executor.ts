@@ -12,6 +12,7 @@ import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
+import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
@@ -64,7 +65,7 @@ export async function executeTool(
       case 'set_budget':
         return await executeSetBudget(input, ctx);
       case 'delete_budget':
-        return executeDeleteBudget(input, ctx);
+        return await executeDeleteBudget(input, ctx);
       case 'add_expense':
         return await executeAddExpense(input, ctx);
       case 'delete_expense':
@@ -443,22 +444,25 @@ async function executeSetBudget(
     database.categories.create({ group_id: ctx.groupId, name: category });
   }
 
-  // Save budget
-  database.budgets.setBudget({
-    group_id: ctx.groupId,
+  const result = await getBudgetManager().set({
+    groupId: ctx.groupId,
     category,
     month,
-    limit_amount: amount,
+    amount,
     currency,
   });
 
+  const sheetsNote = result.sheetsSynced ? ' (synced to Sheets)' : '';
   return {
     success: true,
-    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}`,
+    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}${sheetsNote}`,
   };
 }
 
-function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+async function executeDeleteBudget(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const category = input['category'] as string;
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
@@ -466,7 +470,7 @@ function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext):
     return { success: false, error: 'category is required' };
   }
 
-  database.budgets.deleteByGroupCategoryMonth(ctx.groupId, category, month);
+  await getBudgetManager().delete({ groupId: ctx.groupId, category, month });
 
   return {
     success: true,

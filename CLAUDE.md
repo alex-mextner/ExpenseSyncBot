@@ -217,6 +217,36 @@ Check chat type: `ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'`
 
 ## Important Patterns & Conventions
 
+### Budget Operations — BudgetManager is the ONLY entry point
+
+**ALL budget writes go through `BudgetManager` from [src/services/budget-manager.ts](src/services/budget-manager.ts).** No exceptions.
+
+```ts
+import { getBudgetManager } from '../../services/budget-manager';
+
+// User sets a budget (DB + Sheets sync):
+await getBudgetManager().set({ groupId, category, month, amount, currency });
+
+// User deletes a budget (DB + Sheets zero-out):
+await getBudgetManager().delete({ groupId, category, month });
+
+// Sync FROM Sheets → DB only (no write-back to Sheets):
+getBudgetManager().importFromSheet({ groupId, category, month, amount, currency });
+
+// Sync deletes a budget row removed from Sheets:
+getBudgetManager().deleteLocal(budgetId);
+```
+
+**Banned:** `database.budgets.setBudget()`, `database.budgets.delete()`, `database.budgets.deleteByGroupCategoryMonth()` — these are internal to BudgetManager. Calling them directly skips Google Sheets sync and creates data inconsistency.
+
+**When to use which method:**
+| Method | When | Sheets sync? |
+|--------|------|-------------|
+| `set()` | User/AI sets a budget | Yes |
+| `delete()` | User/AI deletes a budget | Yes (zeros out) |
+| `importFromSheet()` | Sync/reconnect/rollback imports from Sheets | No (data came from Sheets) |
+| `deleteLocal()` | Sync detects removed row in Sheets | No |
+
 ### Error Handling
 
 - Display user-friendly errors in Telegram
