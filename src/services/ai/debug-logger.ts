@@ -116,6 +116,25 @@ export class AiDebugRunContext {
     this.parts.push('='.repeat(80));
   }
 
+  logError(error: unknown): void {
+    this.parts.push('');
+    this.parts.push('## ERROR');
+    if (error instanceof Error) {
+      this.parts.push(`${error.name}: ${error.message}`);
+      if (error.stack) this.parts.push(error.stack);
+      const status = (error as { status?: number }).status;
+      if (status !== undefined) this.parts.push(`HTTP status: ${status}`);
+    } else {
+      this.parts.push(String(error));
+    }
+    this.parts.push('='.repeat(80));
+  }
+
+  /** Returns accumulated log content (for sending as a document). */
+  getContent(): string {
+    return this.parts.join('\n');
+  }
+
   flush(): void {
     try {
       appendFileSync(this.file, `${this.parts.join('\n')}\n`);

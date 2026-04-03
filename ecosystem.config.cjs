@@ -7,6 +7,9 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
+      max_restarts: 15,
+      min_uptime: 5000,
+      exp_backoff_restart_delay: 500,
       watch: false,
       max_memory_restart: '500M',
       env: {

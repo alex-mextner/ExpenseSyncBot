@@ -11,6 +11,8 @@ import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
 import { AgentError } from '../../errors';
+import { sendDirect, sendDocumentDirect, sendMessage } from '../../services/bank/telegram-sender';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
@@ -68,6 +70,7 @@ export class ExpenseBotAgent {
     this.anthropic = new Anthropic({
       apiKey,
       baseURL: AI_BASE_URL || undefined,
+      maxRetries: 0, // Retries are handled by our own runWithRetry layer
     });
     this.apiKey = apiKey;
     this.ctx = ctx;
@@ -178,34 +181,36 @@ export class ExpenseBotAgent {
       await writer.sendRemainingChunks();
       return finalText;
     } catch (error) {
+      // Flush debug log on error — otherwise the session log is lost
+      debugCtx?.logError(error);
+      debugCtx?.flush();
+
       // Always clean up: stop typing indicator and remove placeholder message
       await writer.deleteSentMessage();
 
+      let userMsg: string | undefined;
+
       if (error instanceof Error && error.name === 'AbortError') {
-        const timeoutMsg = '\u23f3 Время ожидания истекло. Попробуйте ещё раз.';
-        await this.sendErrorToUser(bot, timeoutMsg);
-        throw new AgentError(timeoutMsg);
+        userMsg = '\u23f3 Время ожидания истекло. Попробуйте ещё раз.';
+      } else if (error instanceof Anthropic.APIError) {
+        userMsg = this.formatApiError(error);
+      } else {
+        const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
+        const errCode = (error as NodeJS.ErrnoException).code;
+        if (errCode && networkCodes.includes(errCode)) {
+          userMsg = '\u274c Ошибка сети. Попробуйте позже.';
+        } else {
+          const errStatus = (error as { status?: number }).status;
+          if (typeof errStatus === 'number') {
+            userMsg = '\u274c Ошибка AI. Попробуйте позже.';
+          }
+        }
       }
 
-      if (error instanceof Anthropic.APIError) {
-        const errorMsg = this.formatApiError(error);
-        await this.sendErrorToUser(bot, errorMsg);
-        throw new AgentError(errorMsg);
-      }
-
-      // Network and unknown HTTP errors: notify user, then wrap for callers
-      const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
-      const errCode = (error as NodeJS.ErrnoException).code;
-      if (errCode && networkCodes.includes(errCode)) {
-        const msg = '\u274c Ошибка сети. Попробуйте позже.';
-        await this.sendErrorToUser(bot, msg);
-        throw new AgentError(msg);
-      }
-      const errStatus = (error as { status?: number }).status;
-      if (typeof errStatus === 'number') {
-        const msg = '\u274c Ошибка AI. Попробуйте позже.';
-        await this.sendErrorToUser(bot, msg);
-        throw new AgentError(msg);
+      if (userMsg) {
+        await this.sendErrorToUser(userMsg);
+        await this.notifyAdmin(error, debugCtx);
+        throw new AgentError(userMsg);
       }
       throw error;
     }
@@ -274,11 +279,45 @@ export class ExpenseBotAgent {
     return '\u274c Ошибка AI. Попробуйте позже.';
   }
 
-  private async sendErrorToUser(bot: Bot, message: string): Promise<void> {
+  private async sendErrorToUser(message: string): Promise<void> {
     try {
-      await bot.api.sendMessage({ chat_id: this.ctx.chatId, text: message });
+      await sendMessage(message);
     } catch {
-      // Best-effort error notification
+      // Best-effort error notification — context may be missing in edge cases
+    }
+  }
+
+  /** Send error details + debug log file to admin via Telegram. */
+  private async notifyAdmin(error: unknown, debugCtx: AiDebugRunContext | null): Promise<void> {
+    const adminChatId = env.BOT_ADMIN_CHAT_ID;
+    if (!adminChatId) return;
+
+    const errName = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const status = (error as { status?: number }).status;
+
+    const lines = [
+      '\u26a0\ufe0f <b>AI Agent Error</b>',
+      '',
+      `Chat: <code>${this.ctx.chatId}</code>`,
+      `User: @${this.ctx.userName} (${this.ctx.userFullName})`,
+      `Error: <code>${escapeHtml(errName.slice(0, 200))}</code>`,
+      ...(status !== undefined ? [`Status: <code>${status}</code>`] : []),
+    ];
+
+    try {
+      await sendDirect(adminChatId, lines.join('\n'));
+
+      if (debugCtx) {
+        const content = debugCtx.getContent();
+        if (content.length > 0) {
+          const file = new File([content], `ai-error-${this.ctx.chatId}-${Date.now()}.txt`, {
+            type: 'text/plain',
+          });
+          await sendDocumentDirect(adminChatId, file);
+        }
+      }
+    } catch {
+      // Best-effort admin notification
     }
   }
 

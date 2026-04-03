@@ -4,8 +4,39 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import Anthropic from '@anthropic-ai/sdk';
 
+const mockSendMessage = mock(() => Promise.resolve(null));
+const mockSendDirect = mock(() => Promise.resolve(null));
+const mockSendDocumentDirect = mock(() => Promise.resolve());
+
 mock.module('./response-validator', () => ({
   validateResponse: mock(async () => ({ approved: true })),
+}));
+
+mock.module('../../services/bank/telegram-sender', () => ({
+  sendMessage: mockSendMessage,
+  sendDirect: mockSendDirect,
+  sendDocumentDirect: mockSendDocumentDirect,
+}));
+
+mock.module('../../config/env', () => ({
+  env: {
+    BOT_TOKEN: 'test',
+    AI_MODEL: 'test-model',
+    AI_BASE_URL: '',
+    AI_DEBUG_LOGS: false,
+    AI_VALIDATION_MODEL: 'test-val',
+    BOT_ADMIN_CHAT_ID: 999,
+    NODE_ENV: 'test',
+  },
+}));
+
+mock.module('../../utils/logger.ts', () => ({
+  createLogger: () => ({
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  }),
 }));
 
 import { ExpenseBotAgent } from './agent';
@@ -116,6 +147,9 @@ describe('ExpenseBotAgent', () => {
   beforeEach(() => {
     agent = new ExpenseBotAgent('test-api-key', makeCtx());
     mockBot = makeMockBot();
+    mockSendMessage.mockClear();
+    mockSendDirect.mockClear();
+    mockSendDocumentDirect.mockClear();
   });
 
   afterEach(() => {
@@ -560,7 +594,7 @@ describe('ExpenseBotAgent', () => {
       expect(callCount).toBe(2);
     });
 
-    it('sends error message to user via bot.api.sendMessage on failure', async () => {
+    it('sends error message to user via sendMessage on failure', async () => {
       const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
       spyOn(anthropic.messages, 'stream').mockImplementation(() => {
         throw new Anthropic.InternalServerError(
@@ -576,11 +610,8 @@ describe('ExpenseBotAgent', () => {
       } catch {
         // expected
       }
-      // Should have sent error message (beyond just the placeholder)
-      const sendCalls = mockBot.api.sendMessage.mock.calls;
-      const errorCall = sendCalls.find(
-        (c: unknown[]) =>
-          typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка AI'),
+      const errorCall = mockSendMessage.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('Ошибка AI'),
       );
       expect(errorCall).toBeTruthy();
     });
@@ -696,12 +727,33 @@ describe('ExpenseBotAgent', () => {
       } catch {
         // expected
       }
-      const sendCalls = mockBot.api.sendMessage.mock.calls;
-      const errorCall = sendCalls.find(
-        (c: unknown[]) =>
-          typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка сети'),
+      const errorCall = mockSendMessage.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('Ошибка сети'),
       );
       expect(errorCall).toBeTruthy();
+    });
+
+    it('notifies admin on AI error when BOT_ADMIN_CHAT_ID is set', async () => {
+      const anthropic = (agent as unknown as { anthropic: Anthropic }).anthropic;
+      spyOn(anthropic.messages, 'stream').mockImplementation(() => {
+        throw new Anthropic.InternalServerError(
+          500,
+          { error: { type: 'api_error', message: 'Server error' } },
+          'Server error',
+          new Headers(),
+        );
+      });
+
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      // sendDirect should have been called for admin notification
+      expect(mockSendDirect).toHaveBeenCalled();
+      const call = mockSendDirect.mock.calls[0] as unknown[];
+      expect(typeof call[0]).toBe('number'); // adminChatId
+      expect(call[1] as string).toContain('AI Agent Error');
     });
 
     it('rethrows unknown error without wrapping', async () => {
