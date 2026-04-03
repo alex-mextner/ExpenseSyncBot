@@ -2,6 +2,7 @@
 
 import type { CurrencyCode } from '../config/constants';
 import { database } from '../database';
+import type { Group } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
 import { monthAbbrFromYYYYMM } from './google/month-abbr';
 import { googleConn, writeMonthBudgetRow } from './google/sheets';
@@ -50,7 +51,8 @@ export class BudgetManager {
     });
 
     // 2. Best-effort sync to Sheets
-    const sheetsSynced = await this.syncToSheets(groupId, month, {
+    const group = database.groups.findById(groupId);
+    const sheetsSynced = await this.syncToSheets(group, month, {
       category,
       limit: amount,
       currency,
@@ -70,7 +72,7 @@ export class BudgetManager {
     const group = database.groups.findById(groupId);
     const currency = group?.default_currency ?? ('EUR' as CurrencyCode);
 
-    const sheetsSynced = await this.syncToSheets(groupId, month, {
+    const sheetsSynced = await this.syncToSheets(group, month, {
       category,
       limit: 0,
       currency,
@@ -107,16 +109,15 @@ export class BudgetManager {
    * Returns true if synced, false if skipped or failed.
    */
   private async syncToSheets(
-    groupId: number,
+    group: Group | null,
     month: string,
     row: { category: string; limit: number; currency: CurrencyCode },
   ): Promise<boolean> {
-    const group = database.groups.findById(groupId);
     if (!group?.google_refresh_token) return false;
 
     const year = Number.parseInt(month.slice(0, 4), 10);
     const spreadsheetId =
-      database.groupSpreadsheets.getByYear(groupId, year) ?? group.spreadsheet_id;
+      database.groupSpreadsheets.getByYear(group.id, year) ?? group.spreadsheet_id;
     if (!spreadsheetId) return false;
 
     try {
