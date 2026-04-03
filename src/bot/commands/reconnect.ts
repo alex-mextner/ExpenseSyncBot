@@ -5,6 +5,7 @@ import { google } from 'googleapis';
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
+import { getBudgetManager } from '../../services/budget-manager';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
 import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
@@ -322,11 +323,11 @@ async function importBudgetsFromSheet(group: Group): Promise<number> {
         !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
 
       if (hasChanged) {
-        database.budgets.setBudget({
-          group_id: group.id,
+        getBudgetManager().importFromSheet({
+          groupId: group.id,
           category: b.category,
           month: monthStr,
-          limit_amount: b.limit,
+          amount: b.limit,
           currency: b.currency,
         });
         imported++;

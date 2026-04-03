@@ -67,5 +67,12 @@ export function mockDatabase(
       },
     }) as unknown as MockRepo;
   }
+
+  // budgetWriter mirrors budgets — BudgetManager uses this for write access
+  const budgets = db['budgets'];
+  if (!db['budgetWriter'] && budgets) {
+    db['budgetWriter'] = budgets;
+  }
+
   return db;
 }

@@ -3,6 +3,7 @@ import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
 import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
+import { getBudgetManager } from '../../services/budget-manager';
 import {
   type GoogleConn,
   googleConn,
@@ -566,13 +567,14 @@ async function handleSyncRollback(groupId: number): Promise<void> {
         });
       }
 
+      const mgr = getBudgetManager();
       for (const budget of budgets) {
-        database.budgets.setBudget({
-          group_id: budget.group_id,
+        mgr.importFromSheet({
+          groupId: budget.group_id,
           category: budget.category,
           month: budget.month,
-          limit_amount: budget.limit_amount,
-          currency: budget.currency,
+          amount: budget.limit_amount,
+          currency: budget.currency as CurrencyCode,
         });
       }
     });

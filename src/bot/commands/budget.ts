@@ -10,6 +10,7 @@ import {
 } from '../../config/constants';
 import { database } from '../../database';
 import { sendMessage } from '../../services/bank/telegram-sender';
+import { getBudgetManager } from '../../services/budget-manager';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
@@ -17,7 +18,6 @@ import {
   googleConn,
   monthTabExists,
   readMonthBudget,
-  writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
@@ -272,7 +272,6 @@ async function setBudget(
   void ctx;
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
-  const currentMonthAbbr = monthAbbrFromDate(now);
 
   const normalizedCategory =
     categoryName.charAt(0).toUpperCase() + categoryName.slice(1).toLowerCase();
@@ -293,45 +292,28 @@ async function setBudget(
     return;
   }
 
-  database.budgets.setBudget({
-    group_id: group.id,
+  const result = await getBudgetManager().set({
+    groupId: group.id,
     category: normalizedCategory,
     month: currentMonth,
-    limit_amount: amount,
+    amount,
     currency,
   });
 
-  if (!group.google_refresh_token || !group.spreadsheet_id) {
-    const emoji = getCategoryEmoji(normalizedCategory);
+  const emoji = getCategoryEmoji(normalizedCategory);
+  if (!result.sheetsSynced && group.google_refresh_token) {
+    await sendMessage(
+      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
+        'Не удалось записать в Google Sheets. Используй /budget sync позже.',
+    );
+  } else if (!result.sheetsSynced) {
     await sendMessage(
       `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
         'Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
     );
-    return;
-  }
-
-  try {
-    const conn = googleConn(group);
-    const tabExists = await monthTabExists(conn, group.spreadsheet_id, currentMonthAbbr);
-    if (!tabExists) {
-      await createEmptyMonthTab(conn, group.spreadsheet_id, currentMonthAbbr);
-    }
-
-    await writeMonthBudgetRow(conn, group.spreadsheet_id, currentMonthAbbr, {
-      category: normalizedCategory,
-      limit: amount,
-      currency,
-    });
-
-    const emoji = getCategoryEmoji(normalizedCategory);
+  } else {
     await sendMessage(
       `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
-    );
-  } catch (err) {
-    logger.error({ err }, '[BUDGET] Failed to write to Google Sheets');
-    await sendMessage(
-      `Бюджет сохранен в базу данных, но не удалось записать в Google Sheets.\n` +
-        `Проверь доступ к таблице или используй /budget sync позже.`,
     );
   }
 
@@ -375,11 +357,11 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
         database.categories.create({ group_id: group.id, name: b.category });
         createdCategoriesCount++;
       }
-      database.budgets.setBudget({
-        group_id: group.id,
+      getBudgetManager().importFromSheet({
+        groupId: group.id,
         category: b.category,
         month: currentMonth,
-        limit_amount: b.limit,
+        amount: b.limit,
         currency: b.currency,
       });
       syncedCount++;

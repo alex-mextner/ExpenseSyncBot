@@ -5,7 +5,7 @@ import { BankAccountsRepository } from './repositories/bank-accounts.repository'
 import { BankConnectionsRepository } from './repositories/bank-connections.repository';
 import { BankCredentialsRepository } from './repositories/bank-credentials.repository';
 import { BankTransactionsRepository } from './repositories/bank-transactions.repository';
-import { BudgetRepository } from './repositories/budget.repository';
+import { type BudgetReadRepository, BudgetRepository } from './repositories/budget.repository';
 import { CategoryRepository } from './repositories/category.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
 import { DevTaskRepository } from './repositories/dev-task.repository';
@@ -33,7 +33,8 @@ export class DatabaseService {
   public categories: CategoryRepository;
   public pendingExpenses: PendingExpenseRepository;
   public expenses: ExpenseRepository;
-  public budgets: BudgetRepository;
+  public budgets: BudgetReadRepository;
+  private _budgetWriter: BudgetRepository;
   public chatMessages: ChatMessageRepository;
   public photoQueue: PhotoQueueRepository;
   public receiptItems: ReceiptItemsRepository;
@@ -56,7 +57,8 @@ export class DatabaseService {
     this.categories = new CategoryRepository(this.db);
     this.pendingExpenses = new PendingExpenseRepository(this.db);
     this.expenses = new ExpenseRepository(this.db);
-    this.budgets = new BudgetRepository(this.db);
+    this._budgetWriter = new BudgetRepository(this.db);
+    this.budgets = this._budgetWriter;
     this.chatMessages = new ChatMessageRepository(this.db);
     this.photoQueue = new PhotoQueueRepository(this.db);
     this.receiptItems = new ReceiptItemsRepository(this.db);
@@ -70,6 +72,14 @@ export class DatabaseService {
     this.bankTransactions = new BankTransactionsRepository(this.db);
     this.merchantRules = new MerchantRulesRepository(this.db);
     this.recurringPatterns = new RecurringPatternRepository(this.db);
+  }
+
+  /**
+   * Full BudgetRepository with write access — only for BudgetManager.
+   * Feature code should use database.budgets (read-only).
+   */
+  get budgetWriter(): BudgetRepository {
+    return this._budgetWriter;
   }
 
   /**

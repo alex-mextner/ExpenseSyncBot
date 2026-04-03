@@ -118,6 +118,16 @@ mock.module('../expense-recorder', () => ({
   getExpenseRecorder: () => ({ record: mockRecord }),
 }));
 
+// Mock BudgetManager (used by set_budget and delete_budget tools)
+const mockBudgetManagerSet = mock(() => Promise.resolve({ sheetsSynced: false }));
+const mockBudgetManagerDelete = mock(() => Promise.resolve({ sheetsSynced: false }));
+mock.module('../budget-manager', () => ({
+  getBudgetManager: () => ({
+    set: mockBudgetManagerSet,
+    delete: mockBudgetManagerDelete,
+  }),
+}));
+
 // Mock budget sync — prevents dynamic import from pulling in sheets
 mock.module('../../bot/services/budget-sync', () => ({
   ensureFreshBudgets: mock(() => Promise.resolve()),
@@ -159,6 +169,11 @@ function resetAllMocks() {
   mockBudgets.deleteByGroupCategoryMonth.mockReset();
   mockBudgets.findByGroupCategoryMonth.mockReset();
   mockBudgets.findByGroupCategoryMonth.mockReturnValue(null);
+
+  mockBudgetManagerSet.mockReset();
+  mockBudgetManagerSet.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
+  mockBudgetManagerDelete.mockReset();
+  mockBudgetManagerDelete.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
 
   mockCategories.findByGroupId.mockReset();
   mockCategories.findByGroupId.mockReturnValue([]);
@@ -284,7 +299,7 @@ describe('executeTool routing', () => {
   test('routes set_budget to correct handler', async () => {
     const result = await executeTool('set_budget', { category: 'Food', amount: 500 }, ctx);
     expect(result.success).toBe(true);
-    expect(mockBudgets.setBudget).toHaveBeenCalled();
+    expect(mockBudgetManagerSet).toHaveBeenCalled();
   });
 
   test('routes delete_expense to correct handler', async () => {
@@ -723,12 +738,12 @@ describe('executeSetBudget', () => {
     expect(result.output).toContain('Food');
     expect(result.output).toContain('500.00 USD');
     expect(result.output).toContain('2026-03');
-    expect(mockBudgets.setBudget).toHaveBeenCalledWith(
+    expect(mockBudgetManagerSet).toHaveBeenCalledWith(
       expect.objectContaining({
-        group_id: 1,
+        groupId: 1,
         category: 'Food',
         month: '2026-03',
-        limit_amount: 500,
+        amount: 500,
         currency: 'USD',
       }),
     );
@@ -858,7 +873,11 @@ describe('executeDeleteBudget', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Budget deleted');
     expect(result.output).toContain('Food');
-    expect(mockBudgets.deleteByGroupCategoryMonth).toHaveBeenCalledWith(1, 'Food', '2026-03');
+    expect(mockBudgetManagerDelete).toHaveBeenCalledWith({
+      groupId: 1,
+      category: 'Food',
+      month: '2026-03',
+    });
   });
 
   test('rejects missing category', async () => {

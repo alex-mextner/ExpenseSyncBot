@@ -443,22 +443,26 @@ async function executeSetBudget(
     database.categories.create({ group_id: ctx.groupId, name: category });
   }
 
-  // Save budget
-  database.budgets.setBudget({
-    group_id: ctx.groupId,
+  const { getBudgetManager } = require('../budget-manager');
+  const result = await getBudgetManager().set({
+    groupId: ctx.groupId,
     category,
     month,
-    limit_amount: amount,
+    amount,
     currency,
   });
 
+  const sheetsNote = result.sheetsSynced ? ' (synced to Sheets)' : '';
   return {
     success: true,
-    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}`,
+    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}${sheetsNote}`,
   };
 }
 
-function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+async function executeDeleteBudget(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const category = input['category'] as string;
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
@@ -466,7 +470,8 @@ function executeDeleteBudget(input: Record<string, unknown>, ctx: AgentContext):
     return { success: false, error: 'category is required' };
   }
 
-  database.budgets.deleteByGroupCategoryMonth(ctx.groupId, category, month);
+  const { getBudgetManager } = require('../budget-manager');
+  await getBudgetManager().delete({ groupId: ctx.groupId, category, month });
 
   return {
     success: true,
