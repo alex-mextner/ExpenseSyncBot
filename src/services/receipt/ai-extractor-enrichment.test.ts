@@ -1,5 +1,5 @@
 /** Tests for enrichExtractedItems — lightweight categorization of pre-extracted OCR items */
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 
 // OcrExtractionResult may not exist yet (Task 1 in parallel) — define locally
 interface OcrReceiptItem {
@@ -60,11 +60,25 @@ const sampleOcr: OcrExtractionResult = {
   store: 'Maxi',
 };
 
+const originalSetTimeout = globalThis.setTimeout;
+
 beforeEach(() => {
+  // Make retry backoff instant but preserve large timeouts (e.g. 30s abort controller)
+  globalThis.setTimeout = ((fn: (...a: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== undefined && ms < 10_000) {
+      fn();
+      return 0;
+    }
+    return originalSetTimeout(fn as Parameters<typeof originalSetTimeout>[0], ms, ...args);
+  }) as unknown as typeof setTimeout;
   chatCompletionCalls = [];
   logMock.info.mockClear();
   logMock.warn.mockClear();
   logMock.error.mockClear();
+});
+
+afterEach(() => {
+  globalThis.setTimeout = originalSetTimeout;
 });
 
 describe('enrichExtractedItems', () => {
@@ -144,7 +158,7 @@ describe('enrichExtractedItems', () => {
     expect(result.items[1]?.name_ru).toBe('Hleb beli');
     expect(result.currency).toBe('RSD');
     expect(logMock.warn).toHaveBeenCalled();
-  }, 15_000);
+  });
 
   it('falls back to first category when "Разное" not in list', async () => {
     chatCompletionMock = () => {
@@ -153,7 +167,7 @@ describe('enrichExtractedItems', () => {
 
     const result = await enrichExtractedItems(sampleOcr, ['Еда', 'Транспорт']);
     expect(result.items[0]?.category).toBe('Еда');
-  }, 15_000);
+  });
 
   it('validates categories against existing list', async () => {
     chatCompletionMock = () =>

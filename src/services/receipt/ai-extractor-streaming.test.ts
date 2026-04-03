@@ -1,5 +1,5 @@
 /** Tests for streamExtractExpenses — streaming AI extraction with incremental item emission */
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 import type { ScanReceiptItem } from '../../web/scan-store';
 
@@ -44,8 +44,22 @@ mock.module('@huggingface/inference', () => ({
 // Import AFTER mocks are set up
 const { streamExtractExpenses } = await import('./ai-extractor');
 
+const originalSetTimeout = globalThis.setTimeout;
+
 beforeEach(() => {
+  // Make retry backoff instant but preserve large timeouts (e.g. 30s abort controller)
+  globalThis.setTimeout = ((fn: (...a: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== undefined && ms < 10_000) {
+      fn();
+      return 0;
+    }
+    return originalSetTimeout(fn as Parameters<typeof originalSetTimeout>[0], ms, ...args);
+  }) as unknown as typeof setTimeout;
   streamCalls = [];
+});
+
+afterEach(() => {
+  globalThis.setTimeout = originalSetTimeout;
 });
 
 describe('streamExtractExpenses', () => {
