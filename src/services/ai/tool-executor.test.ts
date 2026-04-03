@@ -1004,6 +1004,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 120,
         currency: 'EUR',
         eur_amount: 1.02,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1016,6 +1017,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 250,
         currency: 'EUR',
         eur_amount: 2.13,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1028,6 +1030,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 1500,
         currency: 'EUR',
         eur_amount: 12.77,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -1066,6 +1069,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 120,
         currency: 'EUR',
         eur_amount: 1.02,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1078,6 +1082,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 250,
         currency: 'EUR',
         eur_amount: 2.13,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1090,6 +1095,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 1500,
         currency: 'EUR',
         eur_amount: 12.77,
+        receipt_id: null,
         created_at: '',
       },
     ];
@@ -1104,6 +1110,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 800,
         currency: 'EUR',
         eur_amount: 6.88,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1116,6 +1123,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 5000,
         currency: 'EUR',
         eur_amount: 42.5,
+        receipt_id: null,
         created_at: '',
       },
     ];
@@ -1155,6 +1163,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 120,
         currency: 'EUR',
         eur_amount: 1.02,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1167,6 +1176,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 1500,
         currency: 'EUR',
         eur_amount: 12.77,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1179,6 +1189,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 700,
         currency: 'EUR',
         eur_amount: 5.95,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -1206,6 +1217,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 120,
         currency: 'EUR',
         eur_amount: 1.02,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1218,6 +1230,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 250,
         currency: 'EUR',
         eur_amount: 2.13,
+        receipt_id: null,
         created_at: '',
       },
       {
@@ -1230,6 +1243,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 1500,
         currency: 'EUR',
         eur_amount: 12.77,
+        receipt_id: null,
         created_at: '',
       },
     ]);
@@ -1258,6 +1272,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 120,
         currency: 'EUR',
         eur_amount: 1.02,
+        receipt_id: null,
         created_at: '',
       },
     ];
@@ -1272,6 +1287,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 800,
         currency: 'EUR',
         eur_amount: 6.88,
+        receipt_id: null,
         created_at: '',
       },
     ];
@@ -1286,6 +1302,7 @@ describe('executeGetExpenses — batch periods and stats', () => {
         amount: 700,
         currency: 'EUR',
         eur_amount: 5.95,
+        receipt_id: null,
         created_at: '',
       },
     ];
