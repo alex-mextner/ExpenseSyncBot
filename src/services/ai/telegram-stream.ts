@@ -11,6 +11,15 @@ import { TOOL_LABELS } from './tools';
 const logger = createLogger('telegram-stream');
 
 /**
+ * Format a tool input param for display — join arrays with ", "
+ */
+function formatParam(value: unknown): string | false {
+  if (Array.isArray(value)) return value.join(', ');
+  if (typeof value === 'string') return value;
+  return false;
+}
+
+/**
  * Extract key parameters from tool input for display in the indicator
  */
 function formatToolInput(name: string, input?: Record<string, unknown>): string {
@@ -37,7 +46,11 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
     case 'delete_expense':
       return input['expense_id'] ? `#${input['expense_id']}` : '';
     case 'get_expenses': {
-      const parts = [input['category'], input['period'], input['summary_only'] && 'сводка'];
+      const parts = [
+        formatParam(input['category']),
+        formatParam(input['period']),
+        input['summary_only'] && 'сводка',
+      ];
       const page = input['page'] as number | undefined;
       if (page && page > 1) parts.push(`стр. ${page}`);
       const pageSize = input['page_size'] as number | undefined;
@@ -45,7 +58,19 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
       return parts.filter(Boolean).join(', ');
     }
     case 'get_budgets':
-      return [input['category'], input['month']].filter(Boolean).join(', ');
+      return [formatParam(input['category']), formatParam(input['month'])]
+        .filter(Boolean)
+        .join(', ');
+    case 'get_bank_transactions':
+      return [
+        formatParam(input['bank_name']),
+        formatParam(input['period']),
+        formatParam(input['status']),
+      ]
+        .filter(Boolean)
+        .join(', ');
+    case 'find_missing_expenses':
+      return formatParam(input['period']) || '';
     case 'manage_category':
       return [input['action'], input['name']].filter(Boolean).join(' ');
     case 'set_custom_prompt':

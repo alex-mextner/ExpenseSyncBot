@@ -14,7 +14,7 @@ const mockExpenses = {
 };
 
 const mockBudgets = {
-  getAllBudgetsForMonth: mock((): Budget[] => []),
+  getAllBudgetsForMonth: mock((_groupId: number, _month: string): Budget[] => []),
   setBudget: mock(() => ({})),
   deleteByGroupCategoryMonth: mock(() => true),
   findByGroupCategoryMonth: mock((): Budget | null => null),
@@ -51,6 +51,46 @@ const mockUsers = {
   findByGroupId: mock(() => []),
 };
 
+const mockBankTransactions = {
+  findByGroupId: mock(() => [
+    {
+      id: 1,
+      date: '2026-01-05',
+      amount: 500,
+      currency: 'RSD',
+      merchant: 'Maxi',
+      merchant_normalized: 'Maxi',
+      status: 'confirmed',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+    {
+      id: 2,
+      date: '2026-01-10',
+      amount: 1200,
+      currency: 'RSD',
+      merchant: 'Lidl',
+      merchant_normalized: 'Lidl',
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]),
+  findUnmatched: mock(() => [
+    {
+      id: 10,
+      date: '2026-01-12',
+      amount: 350,
+      currency: 'RSD',
+      merchant: 'Unknown Shop',
+      merchant_normalized: null,
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]),
+};
+
 mock.module('../../database', () => ({
   database: mockDatabase({
     expenses: mockExpenses,
@@ -58,6 +98,7 @@ mock.module('../../database', () => ({
     categories: mockCategories,
     groups: mockGroups,
     users: mockUsers,
+    bankTransactions: mockBankTransactions,
   }),
 }));
 
@@ -151,6 +192,47 @@ function resetAllMocks() {
 
   mockUsers.findByGroupId.mockReset();
   mockUsers.findByGroupId.mockReturnValue([]);
+
+  mockBankTransactions.findByGroupId.mockReset();
+  mockBankTransactions.findByGroupId.mockReturnValue([
+    {
+      id: 1,
+      date: '2026-01-05',
+      amount: 500,
+      currency: 'RSD',
+      merchant: 'Maxi',
+      merchant_normalized: 'Maxi',
+      status: 'confirmed',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+    {
+      id: 2,
+      date: '2026-01-10',
+      amount: 1200,
+      currency: 'RSD',
+      merchant: 'Lidl',
+      merchant_normalized: 'Lidl',
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]);
+
+  mockBankTransactions.findUnmatched.mockReset();
+  mockBankTransactions.findUnmatched.mockReturnValue([
+    {
+      id: 10,
+      date: '2026-01-12',
+      amount: 350,
+      currency: 'RSD',
+      merchant: 'Unknown Shop',
+      merchant_normalized: null,
+      status: 'pending',
+      sign_type: 'debit',
+      connection_id: 1,
+    },
+  ]);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -478,6 +560,61 @@ describe('executeGetBudgets', () => {
     const result = await executeTool('get_budgets', {}, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('No budgets set');
+  });
+});
+
+describe('get_budgets batch', () => {
+  beforeEach(() => {
+    resetAllMocks();
+    mockBudgets.getAllBudgetsForMonth.mockImplementation((_groupId: number, month: string) => [
+      {
+        id: 1,
+        group_id: 1,
+        category: 'Еда',
+        month,
+        limit_amount: 50000,
+        currency: 'RSD',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        category: 'Развлечения',
+        month,
+        limit_amount: 30000,
+        currency: 'RSD',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+  });
+
+  test('single month works as before', async () => {
+    const result = await executeTool('get_budgets', { month: '2026-01' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Budgets for 2026-01');
+  });
+
+  test('multiple months shows per-month breakdown', async () => {
+    const result = await executeTool(
+      'get_budgets',
+      { month: ['2026-01', '2026-02', '2026-03'] },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== 2026-01 ===');
+    expect(result.output).toContain('=== 2026-02 ===');
+    expect(result.output).toContain('=== 2026-03 ===');
+  });
+
+  test('category array filters multiple categories', async () => {
+    const result = await executeTool(
+      'get_budgets',
+      { month: '2026-01', category: ['Еда', 'Развлечения'] },
+      ctx,
+    );
+    expect(result.success).toBe(true);
   });
 });
 
@@ -852,6 +989,328 @@ describe('calculate tool', () => {
   });
 });
 
+describe('executeGetExpenses — batch periods and stats', () => {
+  beforeEach(resetAllMocks);
+
+  test('summary_only includes stats block', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-10',
+        category: 'Еда',
+        comment: 'Молоко',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 2.13,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Stats ===');
+    expect(result.output).toContain('count: 3');
+    expect(result.output).toContain('median:');
+    expect(result.output).toContain('min:');
+    expect(result.output).toContain('max:');
+    expect(result.output).toContain('Хлеб');
+    expect(result.output).toContain('Кино');
+  });
+
+  test('empty period array falls back to current_month', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([]);
+    const result = await executeTool('get_expenses', { period: [], summary_only: true }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toBeDefined();
+  });
+
+  test('batch periods returns per-period stats and diff', async () => {
+    const januaryExpenses: Expense[] = [
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-10',
+        category: 'Еда',
+        comment: 'Молоко',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 2.13,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+    ];
+    const februaryExpenses: Expense[] = [
+      {
+        id: 4,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-02-03',
+        category: 'Еда',
+        comment: 'Сыр',
+        amount: 800,
+        currency: 'EUR',
+        eur_amount: 6.88,
+        created_at: '',
+      },
+      {
+        id: 5,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-02-14',
+        category: 'Развлечения',
+        comment: 'Ресторан',
+        amount: 5000,
+        currency: 'EUR',
+        eur_amount: 42.5,
+        created_at: '',
+      },
+    ];
+
+    let callCount = 0;
+    mockExpenses.findByDateRange.mockImplementation(() => {
+      callCount++;
+      // First call: January, second call: February
+      if (callCount === 1) return januaryExpenses;
+      if (callCount === 2) return februaryExpenses;
+      return [];
+    });
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: ['2026-01', '2026-02'], summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== 2026-01 ===');
+    expect(result.output).toContain('=== 2026-02 ===');
+    expect(result.output).toContain('count: 3');
+    expect(result.output).toContain('count: 2');
+    expect(result.output).toContain('=== Diff:');
+    expect(result.output).toContain('=== Overall ===');
+  });
+
+  test('category array filters multiple categories', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-20',
+        category: 'Транспорт',
+        comment: 'Такси',
+        amount: 700,
+        currency: 'EUR',
+        eur_amount: 5.95,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', category: ['Еда', 'Развлечения'], summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Еда');
+    expect(result.output).toContain('Развлечения');
+    expect(result.output).not.toContain('Транспорт');
+  });
+
+  test('detail output includes stats for all expenses', async () => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-10',
+        category: 'Еда',
+        comment: 'Молоко',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 2.13,
+        created_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-15',
+        category: 'Развлечения',
+        comment: 'Кино',
+        amount: 1500,
+        currency: 'EUR',
+        eur_amount: 12.77,
+        created_at: '',
+      },
+    ]);
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', summary_only: false },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Stats (all) ===');
+    expect(result.output).toContain('count: 3');
+    expect(result.output).toContain('[id:1]');
+    expect(result.output).toContain('[id:3]');
+  });
+
+  test('3+ periods returns trend instead of diff', async () => {
+    const janExpenses: Expense[] = [
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-01-05',
+        category: 'Еда',
+        comment: 'Хлеб',
+        amount: 120,
+        currency: 'EUR',
+        eur_amount: 1.02,
+        created_at: '',
+      },
+    ];
+    const febExpenses: Expense[] = [
+      {
+        id: 2,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-02-03',
+        category: 'Еда',
+        comment: 'Сыр',
+        amount: 800,
+        currency: 'EUR',
+        eur_amount: 6.88,
+        created_at: '',
+      },
+    ];
+    const marExpenses: Expense[] = [
+      {
+        id: 3,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Транспорт',
+        comment: 'Такси',
+        amount: 700,
+        currency: 'EUR',
+        eur_amount: 5.95,
+        created_at: '',
+      },
+    ];
+
+    let trendCallCount = 0;
+    mockExpenses.findByDateRange.mockImplementation(() => {
+      trendCallCount++;
+      if (trendCallCount === 1) return janExpenses;
+      if (trendCallCount === 2) return febExpenses;
+      if (trendCallCount === 3) return marExpenses;
+      return [];
+    });
+
+    const result = await executeTool(
+      'get_expenses',
+      { period: ['2026-01', '2026-02', '2026-03'], summary_only: true },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Trend');
+    expect(result.output).not.toContain('=== Diff:');
+    expect(result.output).toContain('=== Overall ===');
+  });
+});
+
 describe('error handling', () => {
   beforeEach(resetAllMocks);
 
@@ -863,5 +1322,65 @@ describe('error handling', () => {
     const result = await executeTool('get_expenses', {}, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('DB connection lost');
+  });
+});
+
+describe('get_bank_transactions batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('multiple periods passes array filter to repository', async () => {
+    const result = await executeTool(
+      'get_bank_transactions',
+      { period: ['2026-01', '2026-02'], bank_name: 'all' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockBankTransactions.findByGroupId).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ period: ['2026-01', '2026-02'] }),
+    );
+  });
+
+  test('multiple bank_names passes array filter (excluding "all")', async () => {
+    const result = await executeTool(
+      'get_bank_transactions',
+      { bank_name: ['tbc', 'kaspi'], period: 'current_month' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockBankTransactions.findByGroupId).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ bank_name: ['tbc', 'kaspi'] }),
+    );
+  });
+
+  test('multiple statuses passes array filter', async () => {
+    const result = await executeTool(
+      'get_bank_transactions',
+      { status: ['pending', 'confirmed'], bank_name: 'all' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockBankTransactions.findByGroupId).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: ['pending', 'confirmed'] }),
+    );
+  });
+});
+
+describe('find_missing_expenses batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('multiple periods calls findUnmatched per period', async () => {
+    const result = await executeTool(
+      'find_missing_expenses',
+      { period: ['2026-01', '2026-02'] },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('2026-01');
+    expect(mockBankTransactions.findUnmatched).toHaveBeenCalledTimes(2);
+    expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-01-01', '2026-01-31');
+    expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-02-01', '2026-02-28');
   });
 });

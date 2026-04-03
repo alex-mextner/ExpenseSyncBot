@@ -98,3 +98,22 @@ export async function sendDirect(
 ): Promise<TelegramMessage | null> {
   return withChatContext(chatId, null, () => sendMessage(text, options));
 }
+
+/** Send a document (file) directly to a specific chatId via Telegram API.
+ * Used for admin notifications with log attachments. */
+export async function sendDocumentDirect(
+  chatId: number,
+  file: File,
+  caption?: string,
+): Promise<void> {
+  const bot = getBot();
+  try {
+    await bot.api.sendDocument({
+      chat_id: chatId,
+      document: file,
+      ...(caption ? { caption, parse_mode: 'HTML' as const } : {}),
+    });
+  } catch (error) {
+    logger.warn({ err: error }, 'sendDocumentDirect failed');
+  }
+}

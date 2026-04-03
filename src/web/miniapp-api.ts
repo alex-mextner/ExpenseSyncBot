@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import { type CurrencyCode, isValidCurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
+import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
 import { convertCurrency } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
 import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
@@ -14,8 +15,8 @@ import { emitForGroup, subscribeGroup } from './sse-emitter.ts';
 
 const logger = createLogger('miniapp-api');
 
-/** Five-minute window for initData freshness */
-const INIT_DATA_TTL_SECONDS = 5 * 60;
+/** One-hour window for initData freshness (HMAC still validates authenticity) */
+const INIT_DATA_TTL_SECONDS = 60 * 60;
 
 /** Compute HMAC-SHA256 and return hex digest */
 function hmacSha256(data: string, key: Buffer): string {
@@ -132,6 +133,7 @@ export async function validateAndResolveContext(
 
   const rawInitData = req.headers.get('X-Telegram-Init-Data') ?? undefined;
   if (!rawInitData) {
+    logger.warn({ telegramGroupId }, 'Auth rejected: missing X-Telegram-Init-Data header');
     return {
       ok: false,
       response: errorResponse(
@@ -149,6 +151,10 @@ export async function validateAndResolveContext(
   if (authDate) {
     const age = Math.floor(Date.now() / 1000) - parseInt(authDate, 10);
     if (age > INIT_DATA_TTL_SECONDS) {
+      logger.warn(
+        { telegramGroupId, ageSec: age, ttl: INIT_DATA_TTL_SECONDS },
+        'Auth rejected: initData expired',
+      );
       return {
         ok: false,
         response: errorResponse(401, 'initData expired', 'INIT_DATA_EXPIRED', corsHeaders),
@@ -158,6 +164,10 @@ export async function validateAndResolveContext(
 
   const userId = validateInitData(rawInitData);
   if (userId === null) {
+    logger.warn(
+      { telegramGroupId },
+      'Auth rejected: invalid initData (HMAC mismatch or malformed)',
+    );
     return {
       ok: false,
       response: errorResponse(401, 'Invalid initData', 'INVALID_INIT_DATA', corsHeaders),
@@ -166,7 +176,7 @@ export async function validateAndResolveContext(
 
   const user = database.users.findByTelegramId(userId);
   if (!user) {
-    logger.warn({ userId }, 'initData valid but user not found in DB');
+    logger.warn({ userId, telegramGroupId }, 'Auth rejected: user not found in DB');
     return {
       ok: false,
       response: errorResponse(401, 'User not found', 'INVALID_INIT_DATA', corsHeaders),
@@ -175,6 +185,7 @@ export async function validateAndResolveContext(
 
   const internalGroupId = resolveGroupMembership(telegramGroupId, userId);
   if (internalGroupId === null) {
+    logger.warn({ userId, telegramGroupId }, 'Auth rejected: user not a member of group');
     return {
       ok: false,
       response: errorResponse(403, 'Forbidden', 'FORBIDDEN_GROUP', corsHeaders),
@@ -210,6 +221,8 @@ export async function handleMiniAppRequest(
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
+  logger.info({ method: req.method, path: url.pathname, query: url.search }, 'API request');
+
   if (url.pathname === '/api/receipt/scan' && req.method === 'POST') {
     const groupIdParam = url.searchParams.get('groupId');
     const telegramGroupId = groupIdParam ? parseInt(groupIdParam, 10) : Number.NaN;
@@ -238,6 +251,11 @@ export async function handleMiniAppRequest(
     const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
     if (!ctx.ok) return ctx.response;
 
+    logger.info(
+      { userId: ctx.userId, groupId: telegramGroupId, qrLength: qr.length },
+      'Receipt QR scan started',
+    );
+
     try {
       const html = await fetchReceiptData(qr);
       const categoryNames = database.categories
@@ -253,6 +271,8 @@ export async function handleMiniAppRequest(
         category: item.category,
       }));
 
+      logger.info({ userId: ctx.userId, itemCount: items.length }, 'Receipt QR scan completed');
+
       return new Response(
         JSON.stringify({
           items,
@@ -264,7 +284,10 @@ export async function handleMiniAppRequest(
         },
       );
     } catch (err) {
-      logger.error({ err }, 'Receipt scan failed');
+      logger.error({ err, userId: ctx.userId, groupId: telegramGroupId }, 'Receipt scan failed');
+      notifyScanFailure('QR scan', qr, err).catch((e) =>
+        logger.warn({ err: e }, 'notifyScanFailure failed'),
+      );
       return errorResponse(500, 'Receipt scan failed', 'SCAN_FAILED', corsHeaders);
     }
   }
@@ -284,6 +307,8 @@ export async function handleMiniAppRequest(
     // Authenticate before consuming the request body to avoid processing untrusted uploads
     const ctx = await validateAndResolveContext(req, corsOrigin, telegramGroupId);
     if (!ctx.ok) return ctx.response;
+
+    logger.info({ userId: ctx.userId, groupId: telegramGroupId }, 'Receipt OCR upload started');
 
     let imageBlob: Blob | null = null;
     try {
@@ -362,6 +387,8 @@ export async function handleMiniAppRequest(
         category: item.category,
       }));
 
+      logger.info({ userId: ctx.userId, itemCount: items.length }, 'Receipt OCR completed');
+
       return new Response(
         JSON.stringify({
           items,
@@ -374,7 +401,10 @@ export async function handleMiniAppRequest(
         },
       );
     } catch (err) {
-      logger.error({ err }, 'OCR processing failed');
+      logger.error({ err, userId: ctx.userId, groupId: telegramGroupId }, 'OCR processing failed');
+      notifyScanFailure('OCR', '[image upload]', err).catch((e) =>
+        logger.warn({ err: e }, 'notifyScanFailure failed'),
+      );
       return errorResponse(500, 'OCR processing failed', 'OCR_FAILED', corsHeaders);
     } finally {
       rawBuffer = null;
@@ -442,6 +472,11 @@ export async function handleMiniAppRequest(
 
     const fileId = typeof body.fileId === 'string' ? body.fileId : null;
 
+    logger.info(
+      { userId: ctx.userId, groupId: telegramGroupId, expenseCount: expenseInputs.length },
+      'Receipt confirm started',
+    );
+
     try {
       const recorder = getExpenseRecorder();
       let created = 0;
@@ -478,12 +513,14 @@ export async function handleMiniAppRequest(
         logger.warn({ err: emitError }, 'SSE emit failed, continuing');
       }
 
+      logger.info({ userId: ctx.userId, created }, 'Receipt confirm completed');
+
       return new Response(JSON.stringify({ created }), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
       });
     } catch (err) {
-      logger.error({ err }, 'Receipt confirm failed');
+      logger.error({ err, userId: ctx.userId, groupId: telegramGroupId }, 'Receipt confirm failed');
       return errorResponse(500, 'Failed to save expenses', 'CONFIRM_FAILED', corsHeaders);
     }
   }
@@ -754,6 +791,7 @@ export async function handleMiniAppRequest(
   if (url.pathname === '/api/user/groups' && req.method === 'GET') {
     const rawInitData = req.headers.get('X-Telegram-Init-Data') ?? undefined;
     if (!rawInitData) {
+      logger.warn('Auth rejected: missing X-Telegram-Init-Data header (user/groups)');
       return errorResponse(
         401,
         'Missing X-Telegram-Init-Data header',
@@ -762,8 +800,23 @@ export async function handleMiniAppRequest(
       );
     }
 
+    // Early expiry check with specific code for frontend session recovery
+    const groupsParams = new URLSearchParams(rawInitData);
+    const groupsAuthDate = groupsParams.get('auth_date');
+    if (groupsAuthDate) {
+      const age = Math.floor(Date.now() / 1000) - parseInt(groupsAuthDate, 10);
+      if (age > INIT_DATA_TTL_SECONDS) {
+        logger.warn(
+          { ageSec: age, ttl: INIT_DATA_TTL_SECONDS },
+          'Auth rejected: initData expired (user/groups)',
+        );
+        return errorResponse(401, 'initData expired', 'INIT_DATA_EXPIRED', corsHeaders);
+      }
+    }
+
     const userId = validateInitData(rawInitData);
     if (userId === null) {
+      logger.warn('Auth rejected: invalid initData (user/groups)');
       return errorResponse(401, 'Invalid initData', 'INVALID_INIT_DATA', corsHeaders);
     }
 
@@ -785,4 +838,33 @@ export async function handleMiniAppRequest(
   }
 
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
+}
+
+/** Send scan failure report to admin with detailed log file */
+async function notifyScanFailure(source: string, input: string, error: unknown): Promise<void> {
+  const adminChatId = env.BOT_ADMIN_CHAT_ID;
+  if (!adminChatId) return;
+
+  const err = error instanceof Error ? error : new Error(String(error));
+  const timestamp = new Date().toISOString();
+
+  const report = [
+    `=== Receipt Scan Failure Report ===`,
+    `Timestamp: ${timestamp}`,
+    `Source: ${source}`,
+    ``,
+    `--- Input ---`,
+    input.length > 5000
+      ? `${input.substring(0, 5000)}\n... (truncated, ${input.length} chars total)`
+      : input,
+    ``,
+    `--- Error ---`,
+    `Message: ${err.message}`,
+    `Stack: ${err.stack ?? 'N/A'}`,
+  ].join('\n');
+
+  const filename = `scan-failure-${timestamp.replace(/[:.]/g, '-')}.log`;
+  const file = new File([report], filename, { type: 'text/plain' });
+
+  await sendDocumentDirect(adminChatId, file, `⚠️ <b>${source} failed</b>`);
 }

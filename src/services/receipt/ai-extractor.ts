@@ -12,7 +12,7 @@ const client = new InferenceClient(env.HF_TOKEN);
 // Models to try in order (reasoning model first, then fallback to non-reasoning)
 const MODELS = [
   {
-    provider: 'fireworks-ai',
+    provider: 'novita',
     model: 'deepseek-ai/DeepSeek-R1-0528',
     name: 'DeepSeek-R1',
   },
@@ -51,6 +51,96 @@ export interface CategoryExample {
   comment: string;
   amount: number;
   currency: string;
+}
+
+/**
+ * Attempt to repair truncated JSON by extracting complete items from a cut-off response.
+ * When AI output is truncated (finish_reason=length), the JSON ends mid-item.
+ * We find all complete item objects and reconstruct valid JSON.
+ */
+export function repairTruncatedJson(
+  jsonStr: string,
+  finishReason?: string | null,
+): AIExtractionResult {
+  logger.warn(
+    `[AI_EXTRACTOR] Attempting truncated JSON repair (finish_reason=${finishReason}, ${jsonStr.length} chars)`,
+  );
+
+  // Find the items array start
+  const itemsArrayStart = jsonStr.indexOf('"items"');
+  if (itemsArrayStart < 0) {
+    logger.error(
+      `[AI_EXTRACTOR] Cannot repair: no "items" key found. Response:\n${jsonStr.substring(0, 500)}`,
+    );
+    throw new Error('No valid JSON found in AI response');
+  }
+
+  const bracketStart = jsonStr.indexOf('[', itemsArrayStart);
+  if (bracketStart < 0) {
+    logger.error('[AI_EXTRACTOR] Cannot repair: no array bracket after "items"');
+    throw new Error('No valid JSON found in AI response');
+  }
+
+  // Extract complete item objects using brace matching
+  const items: AIReceiptItem[] = [];
+  let i = bracketStart + 1;
+  while (i < jsonStr.length) {
+    // Find next object start
+    const objStart = jsonStr.indexOf('{', i);
+    if (objStart < 0) break;
+
+    // Find matching closing brace by counting depth
+    let depth = 0;
+    let objEnd = -1;
+    for (let j = objStart; j < jsonStr.length; j++) {
+      if (jsonStr[j] === '{') depth++;
+      if (jsonStr[j] === '}') depth--;
+      if (depth === 0) {
+        objEnd = j;
+        break;
+      }
+    }
+
+    if (objEnd < 0) {
+      // Incomplete object — truncated here, stop
+      break;
+    }
+
+    const objStr = jsonStr.substring(objStart, objEnd + 1);
+    try {
+      // Fix decimal separator before parsing
+      const fixed = objStr.replace(/(\d),(\d)/g, '$1.$2');
+      const item = JSON.parse(fixed) as AIReceiptItem;
+      if (item.name_ru && typeof item.total === 'number') {
+        items.push(item);
+      }
+    } catch {
+      // Malformed object, skip
+    }
+
+    i = objEnd + 1;
+  }
+
+  if (items.length === 0) {
+    logger.error(
+      `[AI_EXTRACTOR] Repair failed: no complete items found. Response:\n${jsonStr.substring(0, 500)}`,
+    );
+    throw new Error('No valid JSON found in AI response');
+  }
+
+  // Try to extract currency from the response
+  const currencyMatch = jsonStr.match(/"currency"\s*:\s*"([A-Z]{3})"/);
+  const currency = currencyMatch?.[1] as AIExtractionResult['currency'];
+
+  logger.info(
+    `[AI_EXTRACTOR] Repaired truncated JSON: salvaged ${items.length} complete items${currency ? `, currency=${currency}` : ''}`,
+  );
+
+  const result: AIExtractionResult = { items };
+  if (currency) {
+    result.currency = currency;
+  }
+  return result;
 }
 
 /**
@@ -108,12 +198,18 @@ export async function extractExpensesFromReceipt(
               content: prompt,
             },
           ],
-          max_tokens: 4000,
+          max_tokens: 8192,
           temperature: 0.3,
         });
 
-        // Get response text
-        const responseText = response.choices[0]?.message?.content?.trim();
+        // Get response text and finish reason
+        const choice = response.choices[0];
+        const responseText = choice?.message?.content?.trim();
+        const finishReason = choice?.finish_reason;
+
+        logger.info(
+          `[AI_EXTRACTOR] Response from ${modelConfig.name}: finish_reason=${finishReason}, usage=${JSON.stringify(response.usage)}`,
+        );
 
         if (!responseText) {
           throw new Error('Empty response from AI');
@@ -141,26 +237,29 @@ export async function extractExpensesFromReceipt(
         // Step 2: Fix decimal separator (399,99 -> 399.99)
         jsonStr = jsonStr.replace(/(\d),(\d)/g, '$1.$2');
 
-        // Step 3: Try direct JSON.parse, fallback to finding {"items"...}
+        // Step 3: Try direct JSON.parse, fallback to finding {"items"...}, then truncated repair
         let result: AIExtractionResult;
         try {
           result = JSON.parse(jsonStr) as AIExtractionResult;
         } catch {
-          // Fallback: find last {"items"...} object in response
+          // Fallback 1: find last {"items"...} object in response
           const itemsPos = jsonStr.lastIndexOf('{"items"');
           const lastBrace = jsonStr.lastIndexOf('}');
 
           if (itemsPos >= 0 && lastBrace > itemsPos) {
-            jsonStr = jsonStr.substring(itemsPos, lastBrace + 1);
-            logger.info(
-              `[AI_EXTRACTOR] Fallback: extracted {"items"...} (${jsonStr.length} chars)`,
-            );
-            result = JSON.parse(jsonStr) as AIExtractionResult;
+            const extracted = jsonStr.substring(itemsPos, lastBrace + 1);
+            try {
+              result = JSON.parse(extracted) as AIExtractionResult;
+              logger.info(
+                `[AI_EXTRACTOR] Fallback: extracted {"items"...} (${extracted.length} chars)`,
+              );
+            } catch {
+              // Fallback 2: try repairing truncated JSON
+              result = repairTruncatedJson(jsonStr, finishReason);
+            }
           } else {
-            logger.error(
-              `[AI_EXTRACTOR] Failed to parse JSON. Cleaned response:\n${cleanedResponse.substring(0, 1000)}`,
-            );
-            throw new Error('No valid JSON found in AI response');
+            // Fallback 2: try repairing truncated JSON
+            result = repairTruncatedJson(jsonStr, finishReason);
           }
         }
 

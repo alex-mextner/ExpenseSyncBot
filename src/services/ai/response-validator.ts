@@ -20,7 +20,7 @@ Your job: check the assistant's response for problems. Be fast and decisive.
 2. **No tool calls for mutation requests** — if the user asked to remember, save, update, or set any instruction, theme, topic, preference, or group setting, the assistant MUST have called a tool (e.g. set_custom_prompt). Saying "got it", "noted", "remembered", or "I'll remember" WITHOUT calling a tool is NEVER acceptable.
 3. **Hallucinated data** — numbers, dates, categories, or comments that don't appear in tool results.
 4. **Invented links or sources** — any URL or reference not from tool output.
-5. **Math done manually** — sums, conversions, or arithmetic not performed by the calculate tool (small counts like "3 operations" are OK).
+5. **Math done manually** — sums, conversions, or arithmetic not performed by the calculate tool (small counts like "3 operations" are OK; pre-calculated stats from tool responses like total/avg/median/min/max are OK — they don't need recalculation).
 
 ## AUTOMATIC APPROVE:
 - Greeting, help, or non-data conversational responses (no tools needed).

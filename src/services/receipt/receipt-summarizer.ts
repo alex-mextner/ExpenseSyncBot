@@ -222,7 +222,8 @@ ${historyText}
   }
 
   // Remove thinking tags
-  const cleanedResponse = responseText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // Greedy * to capture until the LAST </think> (models may emit multiple think blocks)
+  const cleanedResponse = responseText.replace(/<think>[\s\S]*<\/think>/gi, '').trim();
 
   logger.info(`[RECEIPT_SUMMARIZER] AI response: ${cleanedResponse.substring(0, 200)}...`);
 
