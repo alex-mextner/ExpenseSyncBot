@@ -1,184 +1,242 @@
-// Tests for ocr-extractor.ts — temp cleanup logic and error handling
-// extractTextFromImage uses HuggingFace SDK directly (no DI), so we test:
-// 1. startTempImageCleanup (observable timer behavior)
-// 2. extractTextFromImage error paths via mocked global fetch
+/** Tests for extractFromImage — structured KIE extraction with model fallback chain */
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
-import { afterEach, describe, expect, it, mock } from 'bun:test';
-import path from 'node:path';
-import {
-  mockFetchError,
-  mockFetchJson,
-  mockFetchText,
-  restoreFetch,
-} from '../../test-utils/mocks/fetch';
-import { createMockLogger } from '../../test-utils/mocks/logger';
-
-const logMock = createMockLogger();
-mock.module('../../utils/logger.ts', () => ({
+const logMock = {
+  info: mock(() => {}),
+  warn: mock(() => {}),
+  error: mock(() => {}),
+  debug: mock(() => {}),
+};
+mock.module('../../utils/logger', () => ({
   createLogger: () => logMock,
-  logger: logMock,
 }));
 
-import { startTempImageCleanup } from './ocr-extractor';
+let chatCompletionMock: ReturnType<typeof mock>;
 
-describe('startTempImageCleanup', () => {
-  it('is a function', () => {
-    expect(typeof startTempImageCleanup).toBe('function');
-  });
-
-  it('does not throw when called', () => {
-    expect(() => startTempImageCleanup()).not.toThrow();
-  });
-
-  it('returns void (undefined)', () => {
-    const result = startTempImageCleanup();
-    expect(result).toBeUndefined();
-  });
-
-  it('can be called multiple times without throwing', () => {
-    expect(() => {
-      startTempImageCleanup();
-      startTempImageCleanup();
-    }).not.toThrow();
-  });
-});
-
-describe('extractTextFromImage', () => {
-  // These tests mock global fetch to avoid real HuggingFace API calls.
-  // The HuggingFace SDK uses fetch internally.
-
-  afterEach(() => {
-    restoreFetch();
-    // Clean up any temp images created during tests
-    const fs = require('node:fs/promises');
-    const tempDir = path.join(process.cwd(), 'temp-images');
-    fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-  });
-
-  it('is a function', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-    expect(typeof extractTextFromImage).toBe('function');
-  });
-
-  it('throws when HuggingFace API returns empty response', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    // Mock fetch to return a valid-looking but empty AI response
-    mockFetchJson({ choices: [{ message: { content: null, role: 'assistant' } }] });
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws when HuggingFace API returns 429 rate limit', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchJson({ error: 'Rate limit exceeded' }, 429);
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws when HuggingFace API returns 503 service unavailable', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchText('Service Unavailable', 503);
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws when network request fails entirely', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchError('network failure');
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws Error with descriptive message on failure', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchError('connection refused');
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    try {
-      await extractTextFromImage(fakeBuffer);
-      throw new Error('should have thrown');
-    } catch (err) {
-      expect(err instanceof Error).toBe(true);
-      if (err instanceof Error) {
-        expect(err.message.length).toBeGreaterThan(0);
-      }
+mock.module('@huggingface/inference', () => ({
+  InferenceClient: class {
+    chatCompletion(...args: unknown[]) {
+      return chatCompletionMock(...args);
     }
+  },
+}));
+
+const { extractFromImage } = await import('./ocr-extractor');
+
+describe('extractFromImage', () => {
+  beforeEach(() => {
+    logMock.info.mockClear();
+    logMock.warn.mockClear();
+    logMock.error.mockClear();
   });
 
-  it('accepts Buffer as input', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    // Mock a successful-looking response (content is non-null)
-    mockFetchJson({
-      choices: [
-        {
-          message: {
-            content: 'Store: Mega Mart\nItem 1: Milk 1L - 100 RSD\nTotal: 100 RSD',
-            role: 'assistant',
+  it('extracts structured items via GLM-OCR (primary model)', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                items: [{ name: 'Молоко', quantity: 1, price: 89.99, total: 89.99 }],
+                currency: 'RSD',
+                store: 'Maxi',
+              }),
+            },
           },
-        },
-      ],
+        ],
+      }),
+    );
+
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.name).toBe('Молоко');
+    expect(result.items[0]?.total).toBe(89.99);
+    expect(result.currency).toBe('RSD');
+    expect(result.store).toBe('Maxi');
+
+    expect(chatCompletionMock).toHaveBeenCalledTimes(1);
+    const callArgs = chatCompletionMock.mock.calls[0]?.[0] as { model: string; provider: string };
+    expect(callArgs.model).toBe('zai-org/GLM-OCR');
+    expect(callArgs.provider).toBe('zai-org');
+  });
+
+  it('falls back to Qwen when GLM-OCR fails', async () => {
+    let callCount = 0;
+    chatCompletionMock = mock(() => {
+      callCount++;
+      if (callCount === 1) throw new Error('GLM-OCR unavailable');
+      return Promise.resolve({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                items: [{ name: 'Хлеб', quantity: 2, price: 45, total: 90 }],
+                currency: 'RSD',
+              }),
+            },
+          },
+        ],
+      });
     });
 
-    const fakeBuffer = Buffer.from('fake-image-data');
-    // If it resolves, the result should be a string
-    try {
-      const result = await extractTextFromImage(fakeBuffer);
-      expect(typeof result).toBe('string');
-      expect(result.length).toBeGreaterThan(0);
-    } catch {
-      // If the mock doesn't match exactly how the SDK fetches, it will throw
-      // That's acceptable — the test verifies the interface accepts Buffer
-    }
-  });
-});
-
-describe('temp image file lifecycle', () => {
-  const fs = require('node:fs/promises') as typeof import('node:fs/promises');
-  const tempDir = path.join(process.cwd(), 'temp-images');
-
-  afterEach(async () => {
-    // Clean up temp directory after tests
-    try {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    } catch {
-      // Directory may not exist, that's fine
-    }
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.name).toBe('Хлеб');
+    expect(chatCompletionMock).toHaveBeenCalledTimes(2);
   });
 
-  it('temp-images directory path is under cwd', () => {
-    // Verify the path is sensible
-    expect(tempDir).toContain('temp-images');
-    expect(path.isAbsolute(tempDir)).toBe(true);
+  it('throws when all models fail', async () => {
+    chatCompletionMock = mock(() => {
+      throw new Error('Model failed');
+    });
+    await expect(extractFromImage(Buffer.from('fake-image'))).rejects.toThrow(
+      'All OCR models failed',
+    );
   });
 
-  it('can create and delete temp directory', async () => {
-    await fs.mkdir(tempDir, { recursive: true });
-    const stat = await fs.stat(tempDir);
-    expect(stat.isDirectory()).toBe(true);
+  it('strips <think> blocks and code fences from response', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content:
+                '<think>analyzing...</think>```json\n{"items": [{"name": "Сок", "quantity": 1, "price": 150, "total": 150}], "currency": "EUR"}\n```',
+            },
+          },
+        ],
+      }),
+    );
 
-    await fs.rm(tempDir, { recursive: true });
-    await expect(fs.access(tempDir)).rejects.toThrow();
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.name).toBe('Сок');
+    expect(result.currency).toBe('EUR');
   });
 
-  it('can write and read a temp image file', async () => {
-    await fs.mkdir(tempDir, { recursive: true });
-    const filepath = path.join(tempDir, 'test-ocr.jpg');
-    const buffer = Buffer.from('fake-image-bytes');
+  it('normalizes decimal commas (399,99 → 399.99)', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content:
+                '{"items": [{"name": "Сыр", "quantity": 1, "price": 399,99, "total": 399,99}], "currency": "RSD"}',
+            },
+          },
+        ],
+      }),
+    );
 
-    await fs.writeFile(filepath, buffer);
-    const read = await fs.readFile(filepath);
-    expect(read).toEqual(buffer);
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.items[0]?.price).toBe(399.99);
+    expect(result.items[0]?.total).toBe(399.99);
+  });
 
-    await fs.unlink(filepath);
+  it('skips items missing required fields (name, total)', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                items: [
+                  { quantity: 1, price: 100 },
+                  { name: 'Хлеб', quantity: 1, price: 45, total: 45 },
+                ],
+                currency: 'RSD',
+              }),
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.name).toBe('Хлеб');
+  });
+
+  it('defaults quantity to 1 when missing', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                items: [{ name: 'Вода', price: 50, total: 50 }],
+              }),
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.items[0]?.quantity).toBe(1);
+  });
+
+  it('extracts optional fields (store, date, total)', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                items: [{ name: 'Молоко', quantity: 1, price: 89.99, total: 89.99 }],
+                store: 'Maxi',
+                date: '03.04.2026',
+                currency: 'RSD',
+                total: 89.99,
+              }),
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await extractFromImage(Buffer.from('fake-image'));
+    expect(result.store).toBe('Maxi');
+    expect(result.date).toBe('03.04.2026');
+    expect(result.total).toBe(89.99);
+  });
+
+  it('throws when no items extracted (empty array)', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [{ message: { content: '{"items": []}' } }],
+      }),
+    );
+
+    await expect(extractFromImage(Buffer.from('fake-image'))).rejects.toThrow('No items extracted');
+  });
+
+  it('throws when response is empty', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [{ message: { content: '' } }],
+      }),
+    );
+
+    await expect(extractFromImage(Buffer.from('fake-image'))).rejects.toThrow();
+  });
+
+  it('does not log errors on success path', async () => {
+    chatCompletionMock = mock(() =>
+      Promise.resolve({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                items: [{ name: 'Вода', quantity: 1, price: 50, total: 50 }],
+              }),
+            },
+          },
+        ],
+      }),
+    );
+
+    await extractFromImage(Buffer.from('fake-image'));
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 });
