@@ -1000,49 +1000,7 @@ git commit -m "feat(ai): batch set_budget tool, report unmentioned categories"
 
 ---
 
-### Task 6: Remove pre-sync for write operations in tool-executor
-
-**Files:**
-- Modify: `src/services/ai/tool-executor.ts`
-
-Wait — per discussion, pre-sync STAYS for `set_budget` (user wants fresh data before writes). But it should NOT run for `delete_budget` (user is explicitly deleting, no need to sync first — and sync could interfere with the delete).
-
-- [ ] **Step 6.1: Remove delete_budget from pre-sync list**
-
-In `src/services/ai/tool-executor.ts` line 43:
-
-```ts
-// Before:
-const needsBudgetSync = ['get_budgets', 'set_budget', 'delete_budget'].includes(name);
-// After:
-const needsBudgetSync = ['get_budgets', 'set_budget'].includes(name);
-```
-
-Same for expenses — remove `delete_expense` from pre-sync:
-
-```ts
-// Before:
-const needsExpenseSync = ['get_expenses', 'add_expense', 'delete_expense'].includes(name);
-// After:
-const needsExpenseSync = ['get_expenses', 'add_expense'].includes(name);
-```
-
-- [ ] **Step 6.2: Run tests + typecheck**
-
-```bash
-bun run type-check && bun run test
-```
-
-- [ ] **Step 6.3: Commit**
-
-```bash
-git add src/services/ai/tool-executor.ts
-git commit -m "fix(ai): remove pre-sync before delete operations"
-```
-
----
-
-### Task 7: Final verification
+### Task 6: Final verification
 
 - [ ] **Step 7.1: Full test suite**
 
