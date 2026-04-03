@@ -10,8 +10,10 @@ import { sendMessage, withChatContext } from '../bank/telegram-sender';
 import {
   type AIExtractionResult,
   type AIReceiptItem,
+  enrichExtractedItems,
   extractExpensesFromReceipt,
 } from './ai-extractor';
+import type { OcrExtractionResult } from './ocr-extractor';
 import { scanQRFromImage } from './qr-scanner';
 import { fetchReceiptData } from './receipt-fetcher';
 import { buildSummaryFromItems, formatSummaryMessage } from './receipt-summarizer';
@@ -158,7 +160,8 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Scan QR code
     const qrData = await scanQRFromImage(photoBuffer);
 
-    let receiptData: string;
+    let receiptData = '';
+    let ocrResult: OcrExtractionResult | null = null;
 
     if (!qrData) {
       // No QR code found - try OCR fallback
@@ -167,9 +170,9 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       );
 
       try {
-        const { extractTextFromImage } = await import('./ocr-extractor');
-        receiptData = await extractTextFromImage(photoBuffer);
-        logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
+        const { extractFromImage } = await import('./ocr-extractor');
+        ocrResult = await extractFromImage(photoBuffer);
+        logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${ocrResult.items.length} items`);
       } catch (ocrError) {
         logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
 
@@ -208,8 +211,8 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
         // Try OCR as fallback when QR fetch fails
         try {
-          const { extractTextFromImage } = await import('./ocr-extractor');
-          receiptData = await extractTextFromImage(photoBuffer);
+          const { extractFromImage } = await import('./ocr-extractor');
+          ocrResult = await extractFromImage(photoBuffer);
           logger.info(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
         } catch (ocrError) {
           // Both QR fetch and OCR failed
@@ -239,11 +242,17 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Extract expenses using AI
     let extractionResult: AIExtractionResult;
     try {
-      extractionResult = await extractExpensesFromReceipt(
-        receiptData,
-        categoryNames,
-        categoryExamples,
-      );
+      if (ocrResult) {
+        // OCR path: items already structured, just enrich with categories
+        extractionResult = await enrichExtractedItems(ocrResult, categoryNames, categoryExamples);
+      } else {
+        // QR/HTML path: full text extraction needed
+        extractionResult = await extractExpensesFromReceipt(
+          receiptData,
+          categoryNames,
+          categoryExamples,
+        );
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to extract expenses');

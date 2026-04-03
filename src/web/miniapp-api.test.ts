@@ -3,6 +3,7 @@
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
+import type { CurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
 import type { Category, Group, User } from '../database/types.ts';
@@ -12,8 +13,13 @@ import type {
   RecorderApi,
 } from '../services/expense-recorder.ts';
 import * as expenseRecorderModule from '../services/expense-recorder.ts';
-import type { AIExtractionResult, CategoryExample } from '../services/receipt/ai-extractor.ts';
+import type {
+  AIExtractionResult,
+  AIReceiptItem,
+  CategoryExample,
+} from '../services/receipt/ai-extractor.ts';
 import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
+import type { OcrExtractionResult } from '../services/receipt/ocr-extractor.ts';
 import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
 import type { BrowserLike } from '../services/receipt/receipt-fetcher.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
@@ -104,8 +110,42 @@ const mockExtractExpensesFromReceipt = mock(
     _maxRetries?: number,
   ): Promise<AIExtractionResult> => Promise.resolve({ items: [] }),
 );
-const mockExtractTextFromImageBuffer = mock(
-  (_buf: Buffer): Promise<string> => Promise.resolve('OCR text'),
+const mockEnrichExtractedItems = mock(
+  (
+    _ocrResult: OcrExtractionResult,
+    _categories: string[],
+    _categoryExamples?: Map<string, CategoryExample[]>,
+  ): Promise<AIExtractionResult> =>
+    Promise.resolve({
+      items: [
+        {
+          name_ru: 'Тестовый товар',
+          name_original: 'Test item',
+          quantity: 1,
+          price: 100,
+          total: 100,
+          category: 'Разное',
+          possible_categories: [],
+        },
+      ],
+      currency: 'RSD' as CurrencyCode,
+    }),
+);
+const mockMapAiToScanItem = mock(
+  (aiItem: AIReceiptItem): ScanReceiptItem => ({
+    name: aiItem.name_ru,
+    qty: aiItem.quantity,
+    price: aiItem.price,
+    total: aiItem.total,
+    category: aiItem.category,
+  }),
+);
+const mockExtractFromImage = mock(
+  (_buf: Buffer): Promise<OcrExtractionResult> =>
+    Promise.resolve({
+      items: [{ name: 'Test item', quantity: 1, price: 100, total: 100 }],
+      currency: 'RSD',
+    }),
 );
 const mockExpenseRecorderRecord = mock(
   (_groupId: number, _userId: number, _data: RecordExpenseData): Promise<RecordExpenseResult> =>
@@ -187,9 +227,9 @@ spyOn(receiptFetcherModule, 'fetchReceiptData').mockImplementation(mockFetchRece
 spyOn(aiExtractorModule, 'extractExpensesFromReceipt').mockImplementation(
   mockExtractExpensesFromReceipt,
 );
-spyOn(ocrExtractorModule, 'extractTextFromImageBuffer').mockImplementation(
-  mockExtractTextFromImageBuffer,
-);
+spyOn(aiExtractorModule, 'enrichExtractedItems').mockImplementation(mockEnrichExtractedItems);
+spyOn(aiExtractorModule, 'mapAiToScanItem').mockImplementation(mockMapAiToScanItem);
+spyOn(ocrExtractorModule, 'extractFromImage').mockImplementation(mockExtractFromImage);
 spyOn(expenseRecorderModule, 'getExpenseRecorder').mockImplementation(mockGetExpenseRecorder);
 spyOn(sseEmitterModule, 'emitForGroup').mockImplementation(mockEmitForGroup);
 spyOn(sseEmitterModule, 'subscribeGroup').mockImplementation(mockSubscribeGroup);
@@ -306,7 +346,9 @@ describe('validateAndResolveContext — HMAC validation', () => {
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
-    mockExtractTextFromImageBuffer.mockReset();
+    mockExtractFromImage.mockReset();
+    mockEnrichExtractedItems.mockReset();
+    mockMapAiToScanItem.mockReset();
     mockFetch.mockReset();
   });
 
@@ -400,7 +442,9 @@ describe('POST /api/receipt/scan', () => {
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
-    mockExtractTextFromImageBuffer.mockReset();
+    mockExtractFromImage.mockReset();
+    mockEnrichExtractedItems.mockReset();
+    mockMapAiToScanItem.mockReset();
     mockFetch.mockReset();
     mockCreateScan.mockReset();
     mockCreateScan.mockImplementation(() => 'test-scan-id');
@@ -537,7 +581,9 @@ describe('POST /api/receipt/ocr', () => {
     mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
     mockExtractExpensesFromReceipt.mockReset();
-    mockExtractTextFromImageBuffer.mockReset();
+    mockExtractFromImage.mockReset();
+    mockEnrichExtractedItems.mockReset();
+    mockMapAiToScanItem.mockReset();
     mockSharpToBuffer.mockReset();
     mockFetch.mockReset();
     mockCreateScan.mockReset();

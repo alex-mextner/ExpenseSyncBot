@@ -102,32 +102,6 @@ export async function extractFromImage(imageBuffer: Buffer): Promise<OcrExtracti
   throw new Error(`All OCR models failed: ${lastError?.message}`);
 }
 
-// ── Backward-compatible shims (remove after Tasks 3–5 update callers) ───────
-
-/** @deprecated Use extractFromImage() instead. Kept temporarily for callers not yet migrated. */
-export async function extractTextFromImageBuffer(imageBuffer: Buffer): Promise<string> {
-  const result = await extractFromImage(imageBuffer);
-  return formatResultAsText(result);
-}
-
-/** @deprecated Use extractFromImage() instead. Kept temporarily for callers not yet migrated. */
-export async function extractTextFromImage(imageBuffer: Buffer): Promise<string> {
-  return extractTextFromImageBuffer(imageBuffer);
-}
-
-/** Format structured result as plain text for backward compatibility */
-function formatResultAsText(result: OcrExtractionResult): string {
-  const lines: string[] = [];
-  if (result.store) lines.push(`Store: ${result.store}`);
-  if (result.date) lines.push(`Date: ${result.date}`);
-  for (const item of result.items) {
-    lines.push(`${item.name} x${item.quantity} — ${item.price} = ${item.total}`);
-  }
-  if (result.total !== undefined) lines.push(`Total: ${result.total}`);
-  if (result.currency) lines.push(`Currency: ${result.currency}`);
-  return lines.join('\n');
-}
-
 // ── Response Parser ─────────────────────────────────────────────────────────
 
 /** Shape of a raw item from the vision model JSON response */

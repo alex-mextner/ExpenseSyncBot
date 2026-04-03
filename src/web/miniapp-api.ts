@@ -7,8 +7,12 @@ import { database } from '../database/index.ts';
 import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
 import { convertCurrency } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
-import { streamExtractExpenses } from '../services/receipt/ai-extractor.ts';
-import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
+import {
+  enrichExtractedItems,
+  mapAiToScanItem,
+  streamExtractExpenses,
+} from '../services/receipt/ai-extractor.ts';
+import { extractFromImage } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
 import { shortenReceiptUrl } from '../services/receipt/url-shortener.ts';
 import { createLogger } from '../utils/logger.ts';
@@ -984,9 +988,26 @@ async function processOcrInBackground(
       .jpeg({ quality: 85 })
       .toBuffer();
 
-    const ocrText = await extractTextFromImageBuffer(compressedBuffer);
+    // Structured OCR extraction
+    const ocrResult = await extractFromImage(compressedBuffer);
 
-    // Upload image to Telegram to get a file_id for later use in the confirm step
+    // Emit OCR items immediately (with temporary categories)
+    const fallbackCategory =
+      categoryNames.find((c) => c === 'Разное') || categoryNames[0] || 'Разное';
+    for (const ocrItem of ocrResult.items) {
+      const scanItem: import('./scan-store').ScanReceiptItem = {
+        name: ocrItem.name,
+        qty: ocrItem.quantity,
+        price: ocrItem.price,
+        total: ocrItem.total,
+        category: fallbackCategory,
+      };
+      const state = getScan(scanId);
+      if (state) state.items.push(scanItem);
+      emitEvent(scanId, 'item', scanItem);
+    }
+
+    // Upload image to Telegram to get file_id
     let telegramFileId: string | null = null;
     try {
       const tgFormData = new FormData();
@@ -1012,37 +1033,37 @@ async function processOcrInBackground(
       );
     }
 
+    // Enrich with categories via DeepSeek
     updateScan(scanId, { phase: 'extracting', fileId: telegramFileId });
 
-    const result = await streamExtractExpenses(ocrText, categoryNames, (item) => {
-      const state = getScan(scanId);
-      if (state) state.items.push(item);
-      emitEvent(scanId, 'item', item);
-    });
+    const enrichedResult = await enrichExtractedItems(ocrResult, categoryNames);
+    const enrichedItems = enrichedResult.items.map(mapAiToScanItem);
 
+    // Replace OCR items with enriched versions
     const state = getScan(scanId);
-    const allItems = state?.items ?? [];
+    if (state) state.items = enrichedItems;
+
     const ocrDonePatch: Partial<import('./scan-store').ScanState> = {
       phase: 'done',
-      items: allItems,
+      items: enrichedItems,
       fileId: telegramFileId,
     };
-    if (result.currency) ocrDonePatch.currency = result.currency;
+    if (enrichedResult.currency) ocrDonePatch.currency = enrichedResult.currency;
     updateScan(scanId, ocrDonePatch);
     emitEvent(scanId, 'done', {
-      items: allItems,
-      currency: result.currency,
+      items: enrichedItems,
+      currency: enrichedResult.currency,
       fileId: telegramFileId,
     });
 
-    logger.info({ scanId, itemCount: allItems.length }, 'OCR scan completed');
+    logger.info({ scanId, itemCount: enrichedItems.length }, 'OCR scan completed');
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     const errorCode = classifyScanError(err, 'extract');
     updateScan(scanId, { phase: 'error', error: message, errorCode });
     emitEvent(scanId, 'error', { message, code: errorCode });
 
-    notifyScanFailure('OCR (streaming)', '[image]', err).catch((e) =>
+    notifyScanFailure('OCR (KIE)', '[image]', err).catch((e) =>
       logger.warn({ err: e }, 'notifyScanFailure failed'),
     );
   }
