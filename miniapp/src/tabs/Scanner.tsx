@@ -95,6 +95,7 @@ export function Scanner({ groupId }: Props) {
 	const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 	const [isOcrMode, setIsOcrMode] = useState(false);
 	const [categories, setCategories] = useState<string[]>([]);
+	const [submitting, setSubmitting] = useState(false);
 	const cleanupRef = useRef<(() => void) | null>(null);
 
 	// Inject CSS keyframes for streaming animations
@@ -370,6 +371,7 @@ export function Scanner({ groupId }: Props) {
 	);
 
 	const handleConfirm = useCallback(async () => {
+		setSubmitting(true);
 		try {
 			await confirmExpenses(
 				groupId,
@@ -383,8 +385,10 @@ export function Scanner({ groupId }: Props) {
 				})),
 				fileId,
 			);
+			setSubmitting(false);
 			setPhase('done');
 		} catch (confirmErr) {
+			setSubmitting(false);
 			if (isExpiredSession(confirmErr)) {
 				handleExpiredSession('confirm');
 				return;
@@ -639,16 +643,19 @@ export function Scanner({ groupId }: Props) {
 					<button
 						type="button"
 						onClick={handleConfirm}
-						style={{ ...btnStyle, marginTop: 8 }}
+						disabled={submitting}
+						style={{ ...btnStyle, marginTop: 8, opacity: submitting ? 0.6 : 1 }}
 					>
-						Записать {items.length}{' '}
-						{pluralize(items.length, 'расход', 'расхода', 'расходов')}
+						{submitting
+							? 'Сохраняем...'
+							: `Записать ${items.length} ${pluralize(items.length, 'расход', 'расхода', 'расходов')}`}
 					</button>
 				)}
 				<button
 					type="button"
 					onClick={resetToIdle}
-					style={{ ...secondaryBtnStyle, marginTop: 8 }}
+					disabled={submitting}
+					style={{ ...secondaryBtnStyle, marginTop: 8, opacity: submitting ? 0.6 : 1 }}
 				>
 					Отмена
 				</button>
