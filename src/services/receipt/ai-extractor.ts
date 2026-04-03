@@ -54,22 +54,7 @@ export interface CategoryExample {
   currency: string;
 }
 
-/** Structured OCR item from vision model (defined by ocr-extractor, duplicated here until Task 1 lands) */
-interface OcrReceiptItem {
-  name: string;
-  quantity: number;
-  price: number;
-  total: number;
-}
-
-/** Structured OCR result from vision model (defined by ocr-extractor, duplicated here until Task 1 lands) */
-interface OcrExtractionResult {
-  items: OcrReceiptItem[];
-  store?: string;
-  date?: string;
-  currency?: string;
-  total?: number;
-}
+import type { OcrExtractionResult } from './ocr-extractor';
 
 /** Map AIReceiptItem to ScanReceiptItem (client-facing field names) */
 export function mapAiToScanItem(aiItem: AIReceiptItem): ScanReceiptItem {
