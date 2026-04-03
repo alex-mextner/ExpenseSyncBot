@@ -768,7 +768,7 @@ function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContex
   const filtered = bankNameFilter
     ? accounts.filter((a) => {
         const conn = database.bankConnections.findById(a.connection_id);
-        return conn?.bank_name.toLowerCase().includes(bankNameFilter);
+        return conn?.bank_name?.toLowerCase().includes(bankNameFilter) ?? false;
       })
     : accounts;
 

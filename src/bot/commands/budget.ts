@@ -175,17 +175,16 @@ export async function handleBudgetCommand(
 }
 
 /**
- * Show budget progress for current month
+ * Format budget progress text for a group (reusable by cron and /budget command)
  */
-async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
-  void ctx;
+export function formatBudgetProgressText(groupId: number): { text: string; hasBudgets: boolean } {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
   const currentMonthName = format(now, 'LLLL yyyy');
 
   const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
   const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-  const expenses = database.expenses.findByDateRange(group.id, currentMonthStart, currentMonthEnd);
+  const expenses = database.expenses.findByDateRange(groupId, currentMonthStart, currentMonthEnd);
 
   const categorySpending: Record<string, number> = {};
   for (const expense of expenses) {
@@ -193,22 +192,10 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
       (categorySpending[expense.category] || 0) + expense.eur_amount;
   }
 
-  const budgets = database.budgets.getAllBudgetsForMonth(group.id, currentMonth);
-
-  const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
-  const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
+  const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
 
   if (budgets.length === 0) {
-    await sendMessage(
-      `Бюджет на ${currentMonthName}\n\n` +
-        `Бюджеты не установлены.\n\n` +
-        `Используй:\n` +
-        `• /budget set <Категория> <Сумма>\n` +
-        `• /budget sync — синхронизировать с Google Sheets`,
-      keyboard ? { reply_markup: keyboard } : {},
-    );
-    await maybeSmartAdvice(group.id);
-    return;
+    return { text: `Бюджет на ${currentMonthName}\n\nБюджеты не установлены.`, hasBudgets: false };
   }
 
   const budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }> =
@@ -255,7 +242,30 @@ async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGro
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  await sendMessage(message.trim(), keyboard ? { reply_markup: keyboard } : {});
+  return { text: message.trim(), hasBudgets: true };
+}
+
+async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
+  void ctx;
+
+  const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
+  const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
+
+  const { text, hasBudgets } = formatBudgetProgressText(group.id);
+
+  if (!hasBudgets) {
+    await sendMessage(
+      `${text}\n\n` +
+        `Используй:\n` +
+        `• /budget set <Категория> <Сумма>\n` +
+        `• /budget sync — синхронизировать с Google Sheets`,
+      keyboard ? { reply_markup: keyboard } : {},
+    );
+    await maybeSmartAdvice(group.id);
+    return;
+  }
+
+  await sendMessage(text, keyboard ? { reply_markup: keyboard } : {});
   await maybeSmartAdvice(group.id);
 }
 

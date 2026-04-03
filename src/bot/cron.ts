@@ -10,12 +10,16 @@ import {
   cloneMonthTab,
   createEmptyMonthTab,
   createExpenseSpreadsheet,
+  getSpreadsheetUrl,
   googleConn,
   monthTabExists,
   sortExpensesTab,
 } from '../services/google/sheets';
+import { closeUnmatchedTags } from '../utils/html';
 import { createLogger } from '../utils/logger.ts';
+import { formatBudgetProgressText } from './commands/budget';
 import { importExpensesFromSheet } from './commands/sync';
+import { silentSyncBudgets } from './services/budget-sync';
 
 const logger = createLogger('cron');
 
@@ -114,19 +118,50 @@ export function registerMonthlyCron(): void {
         const { year: prevYear, month: prevMonth } = prevMonthAbbr(year, month);
         const prevSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, prevYear);
 
-        let notifyText: string;
         if (prevSpreadsheetId && (await monthTabExists(conn, prevSpreadsheetId, prevMonth))) {
           await cloneMonthTab(conn, prevSpreadsheetId, prevMonth, spreadsheetId, month);
-          notifyText = `Создана вкладка ${month} — скопирована из ${prevMonth}`;
           logger.info(`[CRON] Cloned ${prevMonth} → ${month} for group ${group.id}`);
         } else {
           await createEmptyMonthTab(conn, spreadsheetId, month);
-          notifyText = `Создана вкладка ${month}`;
           logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
         }
 
-        if (newYearUrl) {
-          notifyText += `\n\nНовая таблица ${year}: ${newYearUrl}`;
+        // Sync budgets from the newly created/cloned tab (silentSyncBudgets catches internally, never throws)
+        await silentSyncBudgets(conn, group.id);
+
+        const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
+        const { text: budgetText, hasBudgets } = formatBudgetProgressText(group.id);
+
+        let notifyText: string;
+
+        if (hasBudgets) {
+          notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+          if (newYearUrl) {
+            notifyText += ` (${year})`;
+          }
+          notifyText += `\n\n${budgetText}`;
+          notifyText +=
+            '\n\nРедактировать бюджет можно через ИИ или командами:\n' +
+            '<code>/budget set Категория Сумма</code>\n' +
+            '<code>/budget sync</code>';
+        } else {
+          notifyText = `Пора сформировать бюджет\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+          if (newYearUrl) {
+            notifyText += ` (${year})`;
+          }
+          notifyText +=
+            '\n\nЗаполни вкладку в таблице или используй команды:\n' +
+            '<code>/budget set Категория Сумма</code>\n' +
+            '<code>/budget sync</code>';
+        }
+
+        // Telegram message limit is 4096 chars — truncate at last newline boundary, close tags
+        if (notifyText.length > 4000) {
+          const cut = notifyText.lastIndexOf('\n', 3900);
+          const truncated = cut > 0 ? notifyText.slice(0, cut) : notifyText.slice(0, 3900);
+          notifyText = closeUnmatchedTags(
+            `${truncated}\n...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`,
+          );
         }
 
         await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
