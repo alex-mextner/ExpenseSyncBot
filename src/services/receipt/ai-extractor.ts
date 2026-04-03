@@ -2,8 +2,11 @@
 import { InferenceClient } from '@huggingface/inference';
 import type { CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
+import { findBestCategoryMatch } from '../../utils/fuzzy-search';
 import { createLogger } from '../../utils/logger.ts';
+import type { ScanReceiptItem } from '../../web/scan-store';
 import { extractTextFromHTML } from './receipt-fetcher';
+import { StreamJsonParser } from './stream-json-parser';
 
 const logger = createLogger('ai-extractor');
 
@@ -49,6 +52,34 @@ export interface CategoryExample {
   comment: string;
   amount: number;
   currency: string;
+}
+
+/** Map AIReceiptItem to ScanReceiptItem (client-facing field names) */
+export function mapAiToScanItem(aiItem: AIReceiptItem): ScanReceiptItem {
+  return {
+    name: aiItem.name_ru,
+    qty: aiItem.quantity,
+    price: aiItem.price,
+    total: aiItem.total,
+    category: aiItem.category,
+  };
+}
+
+/** Validate and fix a single item's category against existing categories. Mutates aiItem.category. */
+function validateItemCategory(aiItem: AIReceiptItem, existingCategories: string[]): void {
+  if (existingCategories.length === 0) return;
+
+  if (!existingCategories.includes(aiItem.category)) {
+    const match = findBestCategoryMatch(aiItem.category, existingCategories);
+    aiItem.category =
+      match || existingCategories.find((c) => c === 'Разное') || existingCategories[0] || 'Разное';
+  }
+
+  if (aiItem.possible_categories?.length) {
+    aiItem.possible_categories = aiItem.possible_categories.filter((cat) =>
+      existingCategories.includes(cat),
+    );
+  }
 }
 
 /**
@@ -288,49 +319,7 @@ export async function extractExpensesFromReceipt(
             item.possible_categories = [];
           }
 
-          // If existing categories provided, validate that AI used only those
-          if (existingCategories.length > 0) {
-            const { findBestCategoryMatch } = await import('../../utils/fuzzy-search');
-
-            // Check if suggested category exists
-            if (!existingCategories.includes(item.category)) {
-              logger.warn(
-                `[AI_EXTRACTOR] AI suggested non-existing category "${item.category}" for item "${item.name_ru}"`,
-              );
-
-              // Try to find closest match
-              const closestMatch = findBestCategoryMatch(item.category, existingCategories);
-
-              if (closestMatch) {
-                logger.info(`[AI_EXTRACTOR] Replacing with closest match: "${closestMatch}"`);
-                item.category = closestMatch;
-              } else {
-                // Fallback to first available category or "Разное"
-                const fallback =
-                  existingCategories.find((c) => c === 'Разное') ||
-                  existingCategories[0] ||
-                  'Разное';
-                logger.info(`[AI_EXTRACTOR] Using fallback category: "${fallback}"`);
-                item.category = fallback;
-              }
-            }
-
-            // Validate possible_categories - filter out non-existing ones
-            if (item.possible_categories.length > 0) {
-              const validAlternatives = item.possible_categories.filter((cat) =>
-                existingCategories.includes(cat),
-              );
-
-              if (validAlternatives.length < item.possible_categories.length) {
-                logger.warn(
-                  `[AI_EXTRACTOR] Filtered out ${
-                    item.possible_categories.length - validAlternatives.length
-                  } ` + `non-existing categories from possible_categories for "${item.name_ru}"`,
-                );
-                item.possible_categories = validAlternatives;
-              }
-            }
-          }
+          validateItemCategory(item, existingCategories);
         }
 
         logger.info(
@@ -480,4 +469,120 @@ Receipt text:
 ${receiptText}
 
 Return ONLY valid JSON, no additional text or explanations.`;
+}
+
+/**
+ * Streaming AI extraction — emits items via onItem as they parse from the stream.
+ * onItem receives client-facing ScanReceiptItem (name, qty — not name_ru, quantity).
+ * Returns full AIExtractionResult when done.
+ */
+export async function streamExtractExpenses(
+  receiptData: string,
+  existingCategories: string[],
+  onItem: (item: ScanReceiptItem) => void,
+  options?: { maxRetries?: number; categoryExamples?: Map<string, CategoryExample[]> },
+): Promise<AIExtractionResult> {
+  const maxRetries = options?.maxRetries ?? 3;
+  let lastError: Error | null = null;
+
+  const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
+  const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
+
+  if (isHTML) {
+    logger.info(
+      `[AI_STREAM] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`,
+    );
+  }
+
+  const prompt = buildExtractionPrompt(text, existingCategories, options?.categoryExamples);
+
+  for (const modelConfig of MODELS) {
+    logger.info(`[AI_STREAM] Trying model: ${modelConfig.name}`);
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(
+          `[AI_STREAM] Sending ${text.length} chars to ${modelConfig.name} (attempt ${attempt}/${maxRetries})`,
+        );
+
+        const parser = new StreamJsonParser();
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
+
+        try {
+          const stream = client.chatCompletionStream({
+            provider: modelConfig.provider,
+            model: modelConfig.model,
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'You are a receipt parser. Extract items from receipts and return valid JSON only.',
+              },
+              { role: 'user', content: prompt },
+            ],
+            max_tokens: 8192,
+            temperature: 0.3,
+          });
+
+          const iterateStream = async () => {
+            for await (const chunk of stream) {
+              if (controller.signal.aborted) throw new Error('Timeout: 30s exceeded');
+              const content = chunk.choices?.[0]?.delta?.content;
+              if (!content) continue;
+
+              const newItems = parser.push(content);
+              for (const aiItem of newItems) {
+                validateItemCategory(aiItem, existingCategories);
+                onItem(mapAiToScanItem(aiItem));
+              }
+            }
+          };
+
+          const abortPromise = new Promise<never>((_, reject) => {
+            controller.signal.addEventListener('abort', () =>
+              reject(new Error('Timeout: 30s exceeded')),
+            );
+          });
+
+          await Promise.race([iterateStream(), abortPromise]);
+        } finally {
+          clearTimeout(timeout);
+        }
+
+        const allAiItems = parser.getAllItems();
+        if (allAiItems.length === 0) {
+          throw new Error('Empty result: no items extracted from stream');
+        }
+
+        const currency = parser.getCurrency() as CurrencyCode | undefined;
+
+        logger.info(
+          `[AI_STREAM] Successfully extracted ${allAiItems.length} items using ${modelConfig.name}`,
+        );
+
+        const result: AIExtractionResult = { items: allAiItems };
+        if (currency) result.currency = currency;
+        return result;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Unknown streaming error');
+        logger.error(
+          `[AI_STREAM] Stream failed on attempt ${attempt}/${maxRetries} (${modelConfig.name}): ${lastError.message}`,
+        );
+
+        if (attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+
+    logger.info(
+      `[AI_STREAM] ${modelConfig.name} failed after ${maxRetries} attempts, trying next model...`,
+    );
+  }
+
+  throw new Error(
+    `Failed to stream extract receipt data after trying all models: ${lastError?.message}`,
+  );
 }
