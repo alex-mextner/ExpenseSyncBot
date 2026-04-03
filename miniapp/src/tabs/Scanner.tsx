@@ -1,8 +1,9 @@
 // Scanner tab: native Telegram QR scan, manual URL input, OCR fallback, confirmation card
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import { confirmExpenses, scanQR, uploadOCR } from '../api/receipt';
+import { confirmExpenses } from '../api/receipt';
 import type { ReceiptItem } from '../api/receipt';
+import { startScan, startOcr, streamScan, pollScan, fetchCategories } from '../api/receipt-stream';
 
 // ── Session recovery: save/restore state across page reloads ──────────────────
 
@@ -17,6 +18,9 @@ interface SavedState {
 	scrollY: number;
 	/** Prevents infinite reload loop when reload doesn't refresh initData */
 	reloadAttempted: boolean;
+	scanId?: string;
+	groupId?: number;
+	photoPreview?: string;
 }
 
 function saveAndReload(state: Omit<SavedState, 'scrollY' | 'reloadAttempted'>): void {
@@ -71,7 +75,7 @@ function pluralize(n: number, one: string, few: string, many: string): string {
 	return many;
 }
 
-type Phase = 'idle' | 'url-input' | 'ocr-input' | 'loading' | 'confirm' | 'done' | 'error';
+type Phase = 'idle' | 'url-input' | 'ocr-input' | 'streaming' | 'confirm' | 'done' | 'error';
 
 interface Props {
 	groupId: number;
@@ -86,19 +90,133 @@ export function Scanner({ groupId }: Props) {
 	const [urlInput, setUrlInput] = useState('');
 	/** true after a reload attempt — prevents infinite reload loop */
 	const [reloadAttempted, setReloadAttempted] = useState(false);
+	const [scanId, setScanId] = useState<string | null>(null);
+	const [streamUrl, setStreamUrl] = useState<string | null>(null);
+	const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+	const [isOcrMode, setIsOcrMode] = useState(false);
+	const [categories, setCategories] = useState<string[]>([]);
+	const cleanupRef = useRef<(() => void) | null>(null);
+
+	// Inject CSS keyframes for streaming animations
+	useEffect(() => {
+		const id = 'scanner-keyframes';
+		if (document.getElementById(id)) return;
+		const style = document.createElement('style');
+		style.id = id;
+		style.textContent = `
+			@keyframes scanMove {
+				0% { top: 5%; }
+				100% { top: 95%; }
+			}
+			@keyframes pulse {
+				0%, 100% { opacity: 1; }
+				50% { opacity: 0.4; }
+			}
+			@keyframes slideIn {
+				from { opacity: 0; transform: translateY(8px); }
+				to { opacity: 1; transform: translateY(0); }
+			}
+		`;
+		document.head.appendChild(style);
+		return () => {
+			document.getElementById(id)?.remove();
+		};
+	}, []);
+
+	// Fetch group categories for combobox
+	useEffect(() => {
+		fetchCategories(groupId).then(setCategories).catch(() => {});
+	}, [groupId]);
+
+	// Cleanup SSE on unmount
+	useEffect(() => {
+		return () => {
+			cleanupRef.current?.();
+		};
+	}, []);
+
+	// Reconnect to an in-progress scan (session recovery or orphaned scanId)
+	async function reconnectToScan(id: string, photo?: string) {
+		try {
+			const state = await pollScan(id);
+			setScanId(id);
+			if (photo) setPhotoPreview(photo);
+
+			if (state.phase === 'done') {
+				setItems(state.items);
+				setCurrency(state.currency ?? '');
+				setFileId(state.fileId ?? null);
+				setPhase('confirm');
+				sessionStorage.removeItem('scanner_scanId');
+				return;
+			}
+
+			if (state.phase === 'error') {
+				setError(state.error ?? 'Ошибка сканирования');
+				setPhase('error');
+				sessionStorage.removeItem('scanner_scanId');
+				return;
+			}
+
+			// Still processing — set known items, open SSE
+			setPhase('streaming');
+			setItems(state.items);
+			if (state.url) setStreamUrl(state.url);
+			setIsOcrMode(!!photo);
+
+			const knownCount = state.items.length;
+			let sseItemIndex = 0;
+
+			cleanupRef.current = streamScan(id, {
+				onUrl: (url) => setStreamUrl(url),
+				onItem: () => {
+					sseItemIndex++;
+					if (sseItemIndex <= knownCount) return;
+					// Items beyond knownCount are new — but we get full list in onDone
+				},
+				onDone: (result) => {
+					setItems(result.items);
+					setCurrency(result.currency ?? '');
+					setFileId(result.fileId ?? null);
+					setPhase('confirm');
+					setPhotoPreview(null);
+					sessionStorage.removeItem('scanner_scanId');
+				},
+				onError: (error) => {
+					setError(error.message);
+					setPhase('error');
+					sessionStorage.removeItem('scanner_scanId');
+				},
+			});
+		} catch {
+			sessionStorage.removeItem('scanner_scanId');
+			setPhase('idle');
+		}
+	}
 
 	// Restore state from sessionStorage after a session-recovery reload
 	useEffect(() => {
 		const saved = loadSavedState();
-		if (!saved) return;
-		setItems(saved.items);
-		setFileId(saved.fileId);
-		setCurrency(saved.currency);
-		setUrlInput(saved.urlInput);
+		if (!saved) {
+			const orphanedScanId = sessionStorage.getItem('scanner_scanId');
+			if (orphanedScanId) {
+				reconnectToScan(orphanedScanId);
+			}
+			return;
+		}
+
 		setReloadAttempted(saved.reloadAttempted);
-		// Restore to the phase before the failed request (not 'loading')
-		setPhase(saved.phase);
-		requestAnimationFrame(() => window.scrollTo(0, saved.scrollY));
+		setUrlInput(saved.urlInput);
+		setCurrency(saved.currency);
+		setFileId(saved.fileId);
+
+		if (saved.scanId) {
+			reconnectToScan(saved.scanId, saved.photoPreview);
+		} else {
+			setItems(saved.items);
+			setPhase(saved.phase);
+			requestAnimationFrame(() => window.scrollTo(0, saved.scrollY));
+		}
 	}, []);
 
 	/** Try reload to get fresh initData, or show error if already tried */
@@ -110,20 +228,54 @@ export function Scanner({ groupId }: Props) {
 				setPhase('error');
 				return;
 			}
-			saveAndReload({ phase: currentPhase, items, fileId, currency, urlInput });
+			cleanupRef.current?.();
+			saveAndReload({
+				phase: currentPhase,
+				items,
+				fileId,
+				currency,
+				urlInput,
+				scanId: scanId ?? undefined,
+				groupId,
+				photoPreview: photoPreview ?? undefined,
+			});
 		},
-		[reloadAttempted, items, fileId, currency, urlInput],
+		[reloadAttempted, items, fileId, currency, urlInput, scanId, photoPreview, groupId],
 	);
 
 	const handleQRDetected = useCallback(
 		async (qrData: string) => {
 			window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
-			setPhase('loading');
+			setPhase('streaming');
+			setIsOcrMode(false);
+			setItems([]);
+			setStreamUrl(null);
+
 			try {
-				const result = await scanQR(groupId, qrData);
-				setItems(result.items);
-				setCurrency(result.currency ?? '');
-				setPhase('confirm');
+				const id = await startScan(groupId, qrData);
+				setScanId(id);
+				sessionStorage.setItem('scanner_scanId', id);
+
+				cleanupRef.current = streamScan(id, {
+					onUrl: (url) => setStreamUrl(url),
+					onItem: (item) => setItems((prev) => [...prev, item]),
+					onDone: (result) => {
+						setItems(result.items);
+						setCurrency(result.currency ?? '');
+						setFileId(result.fileId ?? null);
+						setPhase('confirm');
+						sessionStorage.removeItem('scanner_scanId');
+					},
+					onError: (error) => {
+						if (error.code === 'INIT_DATA_EXPIRED') {
+							handleExpiredSession('streaming');
+							return;
+						}
+						setError(friendlyErrorMessage(new ApiError(0, error.message, error.code)));
+						setPhase('error');
+						sessionStorage.removeItem('scanner_scanId');
+					},
+				});
 			} catch (e) {
 				if (isExpiredSession(e)) {
 					handleExpiredSession('idle');
@@ -172,13 +324,39 @@ export function Scanner({ groupId }: Props) {
 		async (e: React.ChangeEvent<HTMLInputElement>) => {
 			const file = e.target.files?.[0];
 			if (!file) return;
-			setPhase('loading');
+			setPhase('streaming');
+			setIsOcrMode(true);
+			setItems([]);
+
+			const reader = new FileReader();
+			reader.onload = () => setPhotoPreview(reader.result as string);
+			reader.readAsDataURL(file);
+
 			try {
-				const result = await uploadOCR(groupId, file);
-				setItems(result.items);
-				setFileId(result.file_id);
-				setCurrency(result.currency ?? '');
-				setPhase('confirm');
+				const id = await startOcr(groupId, file);
+				setScanId(id);
+				sessionStorage.setItem('scanner_scanId', id);
+
+				cleanupRef.current = streamScan(id, {
+					onItem: (item) => setItems((prev) => [...prev, item]),
+					onDone: (result) => {
+						setItems(result.items);
+						setCurrency(result.currency ?? '');
+						setFileId(result.fileId ?? null);
+						setPhase('confirm');
+						setPhotoPreview(null);
+						sessionStorage.removeItem('scanner_scanId');
+					},
+					onError: (error) => {
+						if (error.code === 'INIT_DATA_EXPIRED') {
+							handleExpiredSession('streaming');
+							return;
+						}
+						setError(friendlyErrorMessage(new ApiError(0, error.message, error.code)));
+						setPhase('error');
+						sessionStorage.removeItem('scanner_scanId');
+					},
+				});
 			} catch (uploadErr) {
 				if (isExpiredSession(uploadErr)) {
 					handleExpiredSession('ocr-input');
@@ -192,7 +370,6 @@ export function Scanner({ groupId }: Props) {
 	);
 
 	const handleConfirm = useCallback(async () => {
-		setPhase('loading');
 		try {
 			await confirmExpenses(
 				groupId,
@@ -226,12 +403,19 @@ export function Scanner({ groupId }: Props) {
 	};
 
 	const resetToIdle = () => {
+		cleanupRef.current?.();
+		cleanupRef.current = null;
 		setItems([]);
 		setFileId(null);
 		setCurrency('');
 		setError('');
 		setUrlInput('');
+		setScanId(null);
+		setStreamUrl(null);
+		setPhotoPreview(null);
+		setIsOcrMode(false);
 		setPhase('idle');
+		sessionStorage.removeItem('scanner_scanId');
 	};
 
 	// --- Render phases ---
@@ -261,69 +445,211 @@ export function Scanner({ groupId }: Props) {
 		);
 	}
 
-	if (phase === 'loading') {
+	if (phase === 'streaming') {
 		return (
-			<div style={{ ...pageStyle, textAlign: 'center', paddingTop: 80 }}>
-				<div>Обрабатываем чек…</div>
+			<div style={pageStyle}>
+				{/* OCR: photo with scan line */}
+				{isOcrMode && photoPreview && (
+					<div style={scanOverlayStyle}>
+						<img
+							src={photoPreview}
+							alt="Receipt"
+							style={{
+								width: '100%',
+								borderRadius: 8,
+								maxHeight: items.length > 0 ? 120 : 240,
+								objectFit: 'cover',
+								transition: 'max-height 0.3s ease',
+							}}
+						/>
+						{items.length === 0 && <div style={scanLineStyle} />}
+					</div>
+				)}
+
+				{/* QR: shortened URL */}
+				{!isOcrMode && streamUrl && (
+					<div
+						style={{
+							fontSize: 13,
+							color: 'var(--tg-theme-hint-color, #999)',
+							marginBottom: 12,
+							wordBreak: 'break-all' as const,
+						}}
+					>
+						🔗 {streamUrl}
+					</div>
+				)}
+
+				{/* Status label with pulsing dot */}
+				<div
+					style={{
+						fontSize: 15,
+						marginBottom: 12,
+						display: 'flex',
+						alignItems: 'center',
+						gap: 8,
+					}}
+				>
+					<span style={pulsingDotStyle} />
+					{items.length === 0
+						? isOcrMode
+							? 'Сканируем чек...'
+							: 'Загружаем чек...'
+						: 'Распознаём позиции...'}
+				</div>
+
+				{/* Items appearing one by one */}
+				{items.map((item, i) => (
+					<div key={i} style={{ ...streamingItemStyle, animation: 'slideIn 0.3s ease' }}>
+						<div style={{ display: 'flex', justifyContent: 'space-between' }}>
+							<span
+								style={{
+									flex: 1,
+									minWidth: 0,
+									overflow: 'hidden',
+									textOverflow: 'ellipsis',
+									whiteSpace: 'nowrap' as const,
+								}}
+							>
+								{item.name}
+							</span>
+							<span
+								style={{ fontWeight: 600, whiteSpace: 'nowrap' as const, marginLeft: 8 }}
+							>
+								{item.total.toLocaleString('ru-RU')}
+							</span>
+						</div>
+						{item.qty > 1 && (
+							<div style={{ fontSize: 13, color: 'var(--tg-theme-hint-color, #999)' }}>
+								{item.qty} × {item.price.toLocaleString('ru-RU')}
+							</div>
+						)}
+					</div>
+				))}
+
+				{/* Skeleton placeholder */}
+				<div style={skeletonStyle}>
+					<div style={skeletonBarStyle} />
+				</div>
+
+				<button
+					type="button"
+					onClick={() => {
+						cleanupRef.current?.();
+						resetToIdle();
+					}}
+					style={{ ...secondaryBtnStyle, marginTop: 16 }}
+				>
+					Отмена
+				</button>
 			</div>
 		);
 	}
 
 	if (phase === 'confirm') {
+		const total = items.reduce((sum, it) => sum + it.total, 0);
+
 		return (
 			<div style={pageStyle}>
-				<h3 style={{ margin: '0 0 12px' }}>Подтверди расходы</h3>
+				<h3 style={{ margin: '0 0 4px' }}>Подтверди расходы</h3>
+				<div
+					style={{
+						fontSize: 14,
+						color: 'var(--tg-theme-hint-color, #999)',
+						marginBottom: 16,
+					}}
+				>
+					{items.length} {pluralize(items.length, 'позиция', 'позиции', 'позиций')} ·{' '}
+					{total.toLocaleString('ru-RU')} {currency}
+				</div>
+
+				<datalist id="category-options">
+					{categories.map((cat) => (
+						<option key={cat} value={cat} />
+					))}
+				</datalist>
+
 				{items.map((item, i) => (
 					<div
 						key={i}
 						style={{
-							border: '1px solid var(--tg-theme-hint-color, rgba(128,128,128,0.3))',
-							borderRadius: 8,
-							padding: 10,
+							border: '1px solid var(--tg-theme-hint-color, rgba(128,128,128,0.2))',
+							borderRadius: 10,
+							padding: '10px 12px',
 							marginBottom: 8,
 						}}
 					>
-						<div
-							style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-						>
+						<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
 							<input
 								value={item.name}
 								onChange={(e) => handleItemChange(i, 'name', e.target.value)}
-								style={inputStyle}
+								style={{ ...inputStyle, flex: 1, padding: '8px 10px', fontSize: 15 }}
 							/>
+							<span
+								style={{ fontWeight: 600, whiteSpace: 'nowrap' as const, fontSize: 15 }}
+							>
+								{item.total.toLocaleString('ru-RU')}
+							</span>
 							<button
 								type="button"
 								onClick={() => handleRemoveItem(i)}
 								style={{
 									background: 'none',
 									border: 'none',
-									color: '#F44336',
-									fontSize: 18,
+									color: 'var(--tg-theme-hint-color, #999)',
+									fontSize: 20,
 									cursor: 'pointer',
+									padding: '0 4px',
+									lineHeight: 1,
 								}}
 							>
 								×
 							</button>
 						</div>
-						<div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+						<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
 							<input
+								list="category-options"
 								value={item.category}
 								onChange={(e) => handleItemChange(i, 'category', e.target.value)}
 								placeholder="Категория"
-								style={{ ...inputStyle, flex: 1 }}
+								style={{
+									...inputStyle,
+									flex: 1,
+									padding: '6px 10px',
+									fontSize: 14,
+									color: 'var(--tg-theme-hint-color, #777)',
+								}}
 							/>
-							<span style={{ alignSelf: 'center', fontWeight: 600 }}>
-								{item.total.toLocaleString('ru-RU')} {currency}
-							</span>
+							{item.qty > 1 && (
+								<span
+									style={{
+										fontSize: 13,
+										color: 'var(--tg-theme-hint-color, #999)',
+										whiteSpace: 'nowrap' as const,
+									}}
+								>
+									{item.qty} × {item.price.toLocaleString('ru-RU')}
+								</span>
+							)}
 						</div>
 					</div>
 				))}
+
 				{items.length > 0 && (
-					<button type="button" onClick={handleConfirm} style={{ ...btnStyle, marginTop: 8 }}>
-						Записать {items.length} {pluralize(items.length, 'расход', 'расхода', 'расходов')}
+					<button
+						type="button"
+						onClick={handleConfirm}
+						style={{ ...btnStyle, marginTop: 8 }}
+					>
+						Записать {items.length}{' '}
+						{pluralize(items.length, 'расход', 'расхода', 'расходов')}
 					</button>
 				)}
-				<button type="button" onClick={resetToIdle} style={{ ...secondaryBtnStyle, marginTop: 8 }}>
+				<button
+					type="button"
+					onClick={resetToIdle}
+					style={{ ...secondaryBtnStyle, marginTop: 8 }}
+				>
 					Отмена
 				</button>
 			</div>
@@ -460,4 +786,54 @@ const inputStyle: React.CSSProperties = {
 	fontSize: 16,
 	background: 'var(--tg-theme-secondary-bg-color, rgba(128,128,128,0.08))',
 	color: 'var(--tg-theme-text-color, #000)',
+};
+
+const scanOverlayStyle: React.CSSProperties = {
+	position: 'relative',
+	overflow: 'hidden',
+	borderRadius: 8,
+	marginBottom: 16,
+};
+
+const scanLineStyle: React.CSSProperties = {
+	position: 'absolute',
+	left: 0,
+	right: 0,
+	height: 3,
+	background:
+		'linear-gradient(to right, transparent 0%, #4CAF50 30%, #4CAF50 70%, transparent 100%)',
+	boxShadow: '0 0 8px rgba(76, 175, 80, 0.6)',
+	animation: 'scanMove 2.5s ease-in-out infinite alternate',
+	top: '5%',
+};
+
+const pulsingDotStyle: React.CSSProperties = {
+	width: 8,
+	height: 8,
+	borderRadius: '50%',
+	background: 'var(--tg-theme-button-color, #2196F3)',
+	animation: 'pulse 1.5s ease-in-out infinite',
+	flexShrink: 0,
+};
+
+const streamingItemStyle: React.CSSProperties = {
+	border: '1px solid var(--tg-theme-hint-color, rgba(128,128,128,0.2))',
+	borderRadius: 8,
+	padding: 10,
+	marginBottom: 6,
+};
+
+const skeletonStyle: React.CSSProperties = {
+	border: '1px dashed var(--tg-theme-hint-color, rgba(128,128,128,0.2))',
+	borderRadius: 8,
+	padding: 14,
+	marginBottom: 6,
+};
+
+const skeletonBarStyle: React.CSSProperties = {
+	height: 14,
+	borderRadius: 4,
+	background: 'var(--tg-theme-hint-color, rgba(128,128,128,0.15))',
+	animation: 'pulse 1.5s ease-in-out infinite',
+	width: '60%',
 };
