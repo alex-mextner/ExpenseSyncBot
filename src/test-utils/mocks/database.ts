@@ -68,10 +68,10 @@ export function mockDatabase(
     }) as unknown as MockRepo;
   }
 
-  // budgetWriter mirrors budgets — BudgetManager uses this for write access
+  // _budgetWriter mirrors budgets — BudgetManager uses _budgetWriter() function
   const budgets = db['budgets'];
-  if (!db['budgetWriter'] && budgets) {
-    db['budgetWriter'] = budgets;
+  if (!db['_budgetWriter'] && budgets) {
+    db['_budgetWriter'] = budgets;
   }
 
   return db;

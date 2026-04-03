@@ -151,11 +151,6 @@ export interface CreateBudgetData {
   currency?: CurrencyCode;
 }
 
-export interface UpdateBudgetData {
-  limit_amount?: number;
-  currency?: CurrencyCode;
-}
-
 /**
  * Budget progress (for analytics and display)
  */
