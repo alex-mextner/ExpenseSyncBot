@@ -15,6 +15,7 @@ import {
   monthTabExists,
   sortExpensesTab,
 } from '../services/google/sheets';
+import { closeUnmatchedTags } from '../utils/html';
 import { createLogger } from '../utils/logger.ts';
 import { formatBudgetProgressText } from './commands/budget';
 import { importExpensesFromSheet } from './commands/sync';
@@ -154,9 +155,13 @@ export function registerMonthlyCron(): void {
             '<code>/budget sync</code>';
         }
 
-        // Telegram message limit is 4096 chars — truncate if needed
+        // Telegram message limit is 4096 chars — truncate at last newline boundary, close tags
         if (notifyText.length > 4000) {
-          notifyText = `${notifyText.slice(0, 3950)}...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+          const cut = notifyText.lastIndexOf('\n', 3900);
+          const truncated = cut > 0 ? notifyText.slice(0, cut) : notifyText.slice(0, 3900);
+          notifyText = closeUnmatchedTags(
+            `${truncated}\n...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`,
+          );
         }
 
         await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
