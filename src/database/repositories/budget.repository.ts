@@ -1,6 +1,6 @@
 /** Budget repository — CRUD and progress tracking for per-category spending budgets */
 import type { Database } from 'bun:sqlite';
-import type { Budget, BudgetProgress, CreateBudgetData, UpdateBudgetData } from '../types';
+import type { Budget, BudgetProgress, CreateBudgetData } from '../types';
 
 /**
  * Read-only budget operations.
@@ -125,41 +125,6 @@ export class BudgetRepository implements BudgetReadRepository {
 
     query.run(groupId, category, month);
     return true;
-  }
-
-  /**
-   * Update budget.
-   * INTERNAL — use BudgetManager methods instead.
-   */
-  update(id: number, data: UpdateBudgetData): Budget | null {
-    const fields: string[] = [];
-    const values: (number | string)[] = [];
-
-    if (data.limit_amount !== undefined) {
-      fields.push('limit_amount = ?');
-      values.push(data.limit_amount);
-    }
-
-    if (data.currency !== undefined) {
-      fields.push('currency = ?');
-      values.push(data.currency);
-    }
-
-    if (fields.length === 0) {
-      return this.findById(id);
-    }
-
-    fields.push('updated_at = CURRENT_TIMESTAMP');
-
-    const query = this.db.query<void, (number | string)[]>(`
-      UPDATE budgets
-      SET ${fields.join(', ')}
-      WHERE id = ?
-    `);
-
-    query.run(...values, id);
-
-    return this.findById(id);
   }
 
   /** Get budget progress with actual spending */

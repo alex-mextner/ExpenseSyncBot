@@ -31,19 +31,22 @@ const mockGetByYear = mock((): string | null => 'year-sheet-id');
 const mockWriteMonthBudgetRow = mock(() => Promise.resolve());
 const mockGoogleConn = mock(() => ({ fake: 'conn' }));
 
+const mockBudgetWriterRepo = {
+  setBudget: mockSetBudget,
+  delete: mockDeleteById,
+  deleteByGroupCategoryMonth: mockDeleteByGroupCategoryMonth,
+};
+
 mock.module('../database', () => ({
   database: {
     budgets: {
       findByGroupCategoryMonth: mockFindByGroupCategoryMonth,
     },
-    budgetWriter: {
-      setBudget: mockSetBudget,
-      delete: mockDeleteById,
-      deleteByGroupCategoryMonth: mockDeleteByGroupCategoryMonth,
-    },
+    _budgetWriter: mockBudgetWriterRepo,
     groups: { findById: mockFindGroupById },
     groupSpreadsheets: { getByYear: mockGetByYear },
   },
+  _budgetWriter: () => mockBudgetWriterRepo,
 }));
 
 mock.module('./google/sheets', () => ({

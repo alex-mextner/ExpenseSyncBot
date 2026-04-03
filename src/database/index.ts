@@ -59,6 +59,7 @@ export class DatabaseService {
     this.expenses = new ExpenseRepository(this.db);
     this._budgetWriter = new BudgetRepository(this.db);
     this.budgets = this._budgetWriter;
+    _budgetWriterRef = this._budgetWriter;
     this.chatMessages = new ChatMessageRepository(this.db);
     this.photoQueue = new PhotoQueueRepository(this.db);
     this.receiptItems = new ReceiptItemsRepository(this.db);
@@ -72,14 +73,6 @@ export class DatabaseService {
     this.bankTransactions = new BankTransactionsRepository(this.db);
     this.merchantRules = new MerchantRulesRepository(this.db);
     this.recurringPatterns = new RecurringPatternRepository(this.db);
-  }
-
-  /**
-   * Full BudgetRepository with write access — only for BudgetManager.
-   * Feature code should use database.budgets (read-only).
-   */
-  get budgetWriter(): BudgetRepository {
-    return this._budgetWriter;
   }
 
   /**
@@ -133,8 +126,17 @@ export class DatabaseService {
   }
 }
 
+// Module-level reference to full BudgetRepository (with write methods).
+// Populated during DatabaseService construction, before any consumer can call _budgetWriter().
+let _budgetWriterRef: BudgetRepository;
+
 // Export singleton instance
 export const database = new DatabaseService();
+
+/** @internal — only for BudgetManager. Write access to budgets. */
+export function _budgetWriter(): BudgetRepository {
+  return _budgetWriterRef;
+}
 
 // Re-export types
 export * from './types';

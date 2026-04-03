@@ -1,7 +1,7 @@
 // Single entry point for ALL budget write operations (DB + optional Google Sheets sync)
 
 import type { CurrencyCode } from '../config/constants';
-import { database } from '../database';
+import { _budgetWriter, database } from '../database';
 import type { Group } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
 import { monthAbbrFromYYYYMM } from './google/month-abbr';
@@ -34,7 +34,7 @@ export interface BudgetWriteResult {
  * Sync from Sheets: importFromSheet() / deleteLocal() — DB only (data came from Sheets)
  *
  * database.budgets exposes read-only interface. Write methods are only accessible
- * through database.budgetWriter, which this class uses internally.
+ * Write access via _budgetWriter() from database module (underscore = internal).
  */
 export class BudgetManager {
   /** Set or update a budget. Writes to DB, then syncs to Sheets. */
@@ -42,7 +42,7 @@ export class BudgetManager {
     const { groupId, category, month, amount, currency } = params;
 
     // 1. Always write to DB first (atomic, never fails silently)
-    database.budgetWriter.setBudget({
+    _budgetWriter().setBudget({
       group_id: groupId,
       category,
       month,
@@ -66,7 +66,7 @@ export class BudgetManager {
     const { groupId, category, month } = params;
 
     // 1. Delete from DB
-    database.budgetWriter.deleteByGroupCategoryMonth(groupId, category, month);
+    _budgetWriter().deleteByGroupCategoryMonth(groupId, category, month);
 
     // 2. Zero out in Sheets (row stays with amount=0)
     const group = database.groups.findById(groupId);
@@ -87,7 +87,7 @@ export class BudgetManager {
    */
   importFromSheet(params: SetBudgetParams): void {
     const { groupId, category, month, amount, currency } = params;
-    database.budgetWriter.setBudget({
+    _budgetWriter().setBudget({
       group_id: groupId,
       category,
       month,
@@ -101,7 +101,7 @@ export class BudgetManager {
    * Used when Sheets→DB sync detects a removed budget row.
    */
   deleteLocal(id: number): void {
-    database.budgetWriter.delete(id);
+    _budgetWriter().delete(id);
   }
 
   /**

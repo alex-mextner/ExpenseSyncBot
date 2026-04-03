@@ -453,9 +453,18 @@ async function executeSetBudget(
   });
 
   const sheetsNote = result.sheetsSynced ? ' (synced to Sheets)' : '';
+
+  // Include all other budgets for this month so AI can detect unmentioned categories
+  const allBudgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
+  const otherBudgets = allBudgets.filter((b) => b.category !== category);
+  const othersLine =
+    otherBudgets.length > 0
+      ? `\nOther budgets for ${month}: ${otherBudgets.map((b) => `${b.category}=${formatAmount(b.limit_amount, b.currency, true)}`).join(', ')}`
+      : '';
+
   return {
     success: true,
-    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}${sheetsNote}`,
+    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}${sheetsNote}${othersLine}`,
   };
 }
 

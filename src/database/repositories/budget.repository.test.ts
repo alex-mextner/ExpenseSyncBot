@@ -317,48 +317,6 @@ describe('BudgetRepository', () => {
     });
   });
 
-  describe('update', () => {
-    test('updates limit_amount', () => {
-      const budget = budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
-      const updated = budgetRepo.update(budget.id, { limit_amount: 450 });
-      expect(updated?.limit_amount).toBe(450);
-    });
-
-    test('updates currency', () => {
-      const budget = budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
-      const updated = budgetRepo.update(budget.id, { currency: 'USD' });
-      expect(updated?.currency).toBe('USD');
-    });
-
-    test('returns existing budget when no fields provided', () => {
-      const budget = budgetRepo.setBudget({
-        group_id: groupId,
-        category: 'Food',
-        month: '2024-01',
-        limit_amount: 300,
-      });
-      const result = budgetRepo.update(budget.id, {});
-      expect(result).not.toBeNull();
-      expect(result?.id).toBe(budget.id);
-      expect(result?.limit_amount).toBe(300);
-    });
-
-    test('returns null for non-existent id', () => {
-      const result = budgetRepo.update(999999, { limit_amount: 100 });
-      expect(result).toBeNull();
-    });
-  });
-
   describe('getBudgetProgress', () => {
     test('returns progress with correct percentage', () => {
       budgetRepo.setBudget({

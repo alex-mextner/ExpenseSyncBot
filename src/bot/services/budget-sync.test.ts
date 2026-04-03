@@ -72,9 +72,10 @@ mock.module('../../database', () => ({
     groupSpreadsheets: mockGroupSpreadsheets,
     categories: mockCategories,
     budgets: mockBudgets,
-    budgetWriter: mockBudgets,
+    _budgetWriter: mockBudgets,
     transaction: mockTransaction,
   },
+  _budgetWriter: () => mockBudgets,
 }));
 
 // ── Mock sheets ──
