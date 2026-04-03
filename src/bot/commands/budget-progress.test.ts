@@ -36,6 +36,11 @@ mock.module('../../database', () => ({
   },
 }));
 
+mock.module('../../services/currency/converter', () => ({
+  convertCurrency: mock((amount: number) => amount),
+  formatAmount: mock((amount: number, currency: string) => `${amount} ${currency}`),
+}));
+
 const logMock = createMockLogger();
 mock.module('../../utils/logger', () => ({
   createLogger: () => logMock,

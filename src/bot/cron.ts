@@ -125,23 +125,39 @@ export function registerMonthlyCron(): void {
           logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
         }
 
-        // Sync budgets from the newly created/cloned tab
+        // Sync budgets from the newly created/cloned tab (silentSyncBudgets catches internally, never throws)
         await silentSyncBudgets(conn, group.id);
 
         const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
-        const { text: budgetText } = formatBudgetProgressText(group.id);
+        const { text: budgetText, hasBudgets } = formatBudgetProgressText(group.id);
 
-        let notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+        let notifyText: string;
 
-        if (newYearUrl) {
-          notifyText += ` (${year})`;
+        if (hasBudgets) {
+          notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+          if (newYearUrl) {
+            notifyText += ` (${year})`;
+          }
+          notifyText += `\n\n${budgetText}`;
+          notifyText +=
+            '\n\nРедактировать бюджет можно через ИИ или командами:\n' +
+            '<code>/budget set Категория Сумма</code>\n' +
+            '<code>/budget sync</code>';
+        } else {
+          notifyText = `Пора сформировать бюджет\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+          if (newYearUrl) {
+            notifyText += ` (${year})`;
+          }
+          notifyText +=
+            '\n\nЗаполни вкладку в таблице или используй команды:\n' +
+            '<code>/budget set Категория Сумма</code>\n' +
+            '<code>/budget sync</code>';
         }
 
-        notifyText += `\n\n${budgetText}`;
-        notifyText +=
-          '\n\nРедактировать бюджет можно через ИИ или командами:\n' +
-          '<code>/budget set Категория Сумма</code>\n' +
-          '<code>/budget sync</code>';
+        // Telegram message limit is 4096 chars — truncate if needed
+        if (notifyText.length > 4000) {
+          notifyText = `${notifyText.slice(0, 3950)}...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
+        }
 
         await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
           sendMessage(notifyText),
