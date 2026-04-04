@@ -20,6 +20,36 @@ import type {
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 /**
+ * Data-quality-weighted projection that prevents false alerts from single large expenses.
+ *
+ * dataQuality ranges 0→1 based on how much data we have:
+ *   dayWeight  = min(1, daysElapsed / 14)   — need ~2 weeks for reliable extrapolation
+ *   txWeight   = min(1, txDensity / 0.5)    — need ≥1 tx every 2 days for a pattern
+ *   dataQuality = dayWeight × txWeight
+ *
+ * Blend: projected = dataQuality × linearProjection + (1 − dataQuality) × currentSpent
+ *
+ * At low quality (1 tx on day 4): projected ≈ currentSpent → no false critical alert.
+ * At high quality (daily expenses, day 20+): projected ≈ linear → accurate forecast.
+ */
+export function smartProjection(
+  linearProjection: number,
+  currentSpent: number,
+  daysElapsed: number,
+  txCount: number,
+): number {
+  if (daysElapsed <= 0) return currentSpent;
+
+  const txDensity = txCount / daysElapsed;
+  const dayWeight = Math.min(1, daysElapsed / 14);
+  const txWeight = Math.min(1, txDensity / 0.5);
+  const dataQuality = dayWeight * txWeight;
+
+  const projected = dataQuality * linearProjection + (1 - dataQuality) * currentSpent;
+  return Math.round(projected * 100) / 100;
+}
+
+/**
  * SpendingAnalytics - computes financial metrics from expense data
  * All methods are synchronous (bun:sqlite is synchronous)
  * Uses parameterized dates from JS, not SQLite date('now'), for timezone safety
@@ -68,8 +98,10 @@ export class SpendingAnalytics {
 
     const categoryTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
     const categorySpentEur: Record<string, number> = {};
+    const categoryTxCount: Record<string, number> = {};
     for (const ct of categoryTotals) {
       categorySpentEur[ct.category] = ct.total;
+      categoryTxCount[ct.category] = ct.tx_count;
     }
 
     const dayOfMonth = now.getDate();
@@ -86,7 +118,15 @@ export class SpendingAnalytics {
       const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
       const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
-      const projectedTotal = dailyBurnRate * daysInMonth;
+      const linearProjection = dailyBurnRate * daysInMonth;
+
+      // Smart projection: blend linear extrapolation with conservative estimate
+      // based on data quality (transaction density + days elapsed).
+      // Low quality (few tx, early month) → projected ≈ current spent (conservative)
+      // High quality (many tx, late month) → projected ≈ linear extrapolation
+      const txCount = categoryTxCount[budget.category] || 0;
+      const projectedTotal = smartProjection(linearProjection, spent, daysElapsed, txCount);
+
       const projectedOvershoot = projectedTotal - budget.limit_amount;
       const runwayDays =
         dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
@@ -547,7 +587,10 @@ export class SpendingAnalytics {
     const currentTotal = database.expenses.getTotalEurForRange(groupId, monthStart, today);
     if (currentTotal === 0 && daysElapsed < 3) return null;
 
-    const projectedTotal = (currentTotal / daysElapsed) * daysInMonth;
+    // Use total transaction count for overall projection quality
+    const totalTxCount = database.expenses.getCountForRange(groupId, monthStart, today);
+    const linearTotal = (currentTotal / daysElapsed) * daysInMonth;
+    const projectedTotal = smartProjection(linearTotal, currentTotal, daysElapsed, totalTxCount);
 
     // Get last month total for comparison
     const prevMonth = subMonths(now, 1);
@@ -584,7 +627,8 @@ export class SpendingAnalytics {
 
     const categoryProjections: CategoryProjection[] = [];
     for (const cat of currentCatTotals) {
-      const catProjected = (cat.total / daysElapsed) * daysInMonth;
+      const catLinear = (cat.total / daysElapsed) * daysInMonth;
+      const catProjected = smartProjection(catLinear, cat.total, daysElapsed, cat.tx_count);
       const budget = budgetMap[cat.category];
 
       let budgetLimitEur: number | null = null;

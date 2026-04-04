@@ -612,6 +612,82 @@ describe('edge cases', () => {
     expect(result?.type).toBe('velocity_spike');
   });
 
+  test('projection-based alert (critical) suppressed in first 5 days', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Car',
+          days_elapsed: 4, // day 4 < 5
+          projected_total: 1200,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9050, snapshot);
+    // Should NOT fire — too early for projection-based alerts
+    expect(result).toBeNull();
+  });
+
+  test('projection-based alert (warning) suppressed in first 5 days', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Car',
+          days_elapsed: 3,
+          projected_total: 450,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9051, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('exceeded status still fires even in first 5 days', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Car',
+          days_elapsed: 3,
+          spent: 600,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9052, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.topic).toContain('exceeded');
+  });
+
+  test('critical alert fires after day 5', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Food',
+          days_elapsed: 10,
+          projected_total: 1200,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9053, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+  });
+
   test('budget_limit=0 with status exceeded does NOT trigger (disabled category)', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
     const snapshot = buildNeutralSnapshot({

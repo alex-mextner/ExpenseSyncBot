@@ -24,7 +24,7 @@ mock.module('../../database', () => ({
 }));
 
 // Import AFTER mock is set up
-const { SpendingAnalytics } = await import('./spending-analytics');
+const { SpendingAnalytics, smartProjection } = await import('./spending-analytics');
 
 class TestableSpendingAnalytics extends SpendingAnalytics {
   testComputeVelocity = (groupId: number, today: string) => this.computeVelocity(groupId, today);
@@ -341,7 +341,7 @@ describe('computeProjection', () => {
     expect(projection.days_in_month).toBe(getDaysInMonth(now));
   });
 
-  test('projection is based on daily rate * total days', () => {
+  test('projection uses smart algorithm: blends linear with conservative estimate', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const projection = analytics.testComputeProjection(
       GROUP_ID,
@@ -353,8 +353,12 @@ describe('computeProjection', () => {
 
     if (projection) {
       const dailyRate = projection.current_total / projection.days_elapsed;
-      const expectedProjected = Math.round(dailyRate * projection.days_in_month * 100) / 100;
-      expect(projection.projected_total).toBe(expectedProjected);
+      const linearProjected = dailyRate * projection.days_in_month;
+      // Smart projection is always between currentTotal and linearProjected
+      expect(projection.projected_total).toBeGreaterThanOrEqual(projection.current_total);
+      expect(projection.projected_total).toBeLessThanOrEqual(
+        Math.round(linearProjected * 100) / 100,
+      );
     }
   });
 
@@ -690,5 +694,109 @@ describe('getFinancialSnapshot', () => {
   test('monthTrend period is month', () => {
     const snapshot = analytics.getFinancialSnapshot(GROUP_ID);
     expect(snapshot.monthTrend.period).toBe('month');
+  });
+});
+
+// ============================================================
+// smartProjection unit tests
+// ============================================================
+
+describe('smartProjection', () => {
+  test('single large expense early in month → projected ≈ current spent', () => {
+    // Day 4, 1 transaction, 10200 spent → linear would be 76500
+    const linear = (10200 / 4) * 30; // 76500
+    const result = smartProjection(linear, 10200, 4, 1);
+
+    // dataQuality = min(1, 4/14) * min(1, (1/4)/0.5) = 0.286 * 0.5 = 0.143
+    // projected = 0.143 * 76500 + 0.857 * 10200 ≈ 10940 + 8741 ≈ 19681
+    // Should be much closer to 10200 than to 76500
+    expect(result).toBeLessThan(linear * 0.4);
+    expect(result).toBeGreaterThan(10200);
+  });
+
+  test('many daily expenses late in month → projected ≈ linear', () => {
+    // Day 20, 25 transactions, 5000 spent → linear = 7500
+    const linear = (5000 / 20) * 30; // 7500
+    const result = smartProjection(linear, 5000, 20, 25);
+
+    // dataQuality = min(1, 20/14) * min(1, (25/20)/0.5) = 1 * 1 = 1
+    // projected = 1 * 7500 + 0 * 5000 = 7500
+    expect(result).toBe(7500);
+  });
+
+  test('moderate data (day 10, 5 tx) → blended projection', () => {
+    const linear = (1000 / 10) * 30; // 3000
+    const result = smartProjection(linear, 1000, 10, 5);
+
+    // dataQuality = min(1, 10/14) * min(1, (5/10)/0.5) = 0.714 * 1 = 0.714
+    // projected = 0.714 * 3000 + 0.286 * 1000 = 2142 + 286 = 2428
+    expect(result).toBeGreaterThan(1000);
+    expect(result).toBeLessThan(3000);
+  });
+
+  test('zero days elapsed returns current spent', () => {
+    expect(smartProjection(0, 500, 0, 0)).toBe(500);
+  });
+
+  test('zero transactions → projected equals current spent', () => {
+    const linear = (0 / 5) * 30; // 0
+    const result = smartProjection(linear, 0, 5, 0);
+    expect(result).toBe(0);
+  });
+
+  test('high tx density with few days → partial confidence', () => {
+    // Day 3, 6 transactions (2 per day) → txDensity = 2, txWeight = 1
+    // dayWeight = 3/14 ≈ 0.214
+    const linear = (600 / 3) * 30; // 6000
+    const result = smartProjection(linear, 600, 3, 6);
+
+    // dataQuality = 0.214 * 1 = 0.214
+    // projected = 0.214 * 6000 + 0.786 * 600 = 1284 + 471.6 = 1755.6
+    expect(result).toBeGreaterThan(600);
+    expect(result).toBeLessThan(3000);
+  });
+});
+
+// ============================================================
+// Integration: single large expense should not trigger critical burn rate
+// ============================================================
+
+describe('burn rate: single large expense early in month', () => {
+  test('single large expense on day 4 does not produce critical status', () => {
+    // Group 10: budget 500 EUR for "Car", single expense of 200 EUR on day 4
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [10, 101010, 'EUR', '["EUR"]'],
+    );
+    db.run(
+      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      [10, 'Car', currentMonth, 500, 'EUR'],
+    );
+    // Single large expense: 200 EUR → linear projection = (200/dayOfMonth)*daysInMonth
+    // which on day 4 = 200/4*30 = 1500 → would be 'critical' with naive algorithm
+    db.run(
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [10, USER_ID, today, 'Car', 'repair', 200, 'EUR', 200],
+    );
+
+    const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+    const burnRates = analytics.testComputeBurnRates(10, now, currentMonth, monthStart, today);
+
+    expect(burnRates.length).toBe(1);
+    const carBurn = burnRates[0];
+
+    // Smart projection should keep this well below budget
+    // regardless of day of month (the key fix)
+    if (now.getDate() <= 7) {
+      // Early in month: smart projection dampens heavily
+      expect(carBurn?.status).not.toBe('critical');
+      expect(carBurn?.projected_total).toBeLessThan(500);
+    }
+    // In all cases, projected should be less than naive linear
+    const naiveLinear = (200 / now.getDate()) * getDaysInMonth(now);
+    if (carBurn) {
+      expect(carBurn.projected_total).toBeLessThanOrEqual(Math.round(naiveLinear * 100) / 100);
+    }
   });
 });
