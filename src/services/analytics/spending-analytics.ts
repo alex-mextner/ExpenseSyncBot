@@ -8,6 +8,7 @@ import type {
   BudgetUtilization,
   CategoryAnomaly,
   CategoryChange,
+  CategoryProfile,
   CategoryProjection,
   DayOfWeekPattern,
   FinancialSnapshot,
@@ -19,33 +20,100 @@ import type {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+/** Number of historical months to look back for category profiles */
+const HISTORY_MONTHS = 6;
+
 /**
- * Data-quality-weighted projection that prevents false alerts from single large expenses.
+ * Build per-category statistical profiles from monthly history.
  *
- * dataQuality ranges 0→1 based on how much data we have:
- *   dayWeight  = min(1, daysElapsed / 14)   — need ~2 weeks for reliable extrapolation
- *   txWeight   = min(1, txDensity / 0.5)    — need ≥1 tx every 2 days for a pattern
- *   dataQuality = dayWeight × txWeight
- *
- * Blend: projected = dataQuality × linearProjection + (1 − dataQuality) × currentSpent
- *
- * At low quality (1 tx on day 4): projected ≈ currentSpent → no false critical alert.
- * At high quality (daily expenses, day 20+): projected ≈ linear → accurate forecast.
+ * For each category computes:
+ * - EMA (exponential moving average) of monthly totals — weights recent months more
+ * - CV (coefficient of variation = stddev / mean) — measures spending regularity
+ * - Average transaction count per month
  */
-export function smartProjection(
-  linearProjection: number,
+export function buildCategoryProfiles(
+  historyRows: { category: string; month: string; monthly_total: number; tx_count: number }[],
+): Map<string, CategoryProfile> {
+  // Group rows by category, sorted by month (chronological order for EMA)
+  const byCategory = new Map<string, { totals: number[]; txCounts: number[] }>();
+  for (const row of historyRows) {
+    let entry = byCategory.get(row.category);
+    if (!entry) {
+      entry = { totals: [], txCounts: [] };
+      byCategory.set(row.category, entry);
+    }
+    entry.totals.push(row.monthly_total);
+    entry.txCounts.push(row.tx_count);
+  }
+
+  const profiles = new Map<string, CategoryProfile>();
+
+  for (const [category, data] of byCategory) {
+    const n = data.totals.length;
+    if (n === 0) continue;
+
+    // EMA: α = 2/(N+1), applied chronologically (oldest first)
+    const alpha = 2 / (n + 1);
+    let ema = data.totals[0] ?? 0;
+    for (let i = 1; i < n; i++) {
+      ema = alpha * (data.totals[i] ?? 0) + (1 - alpha) * ema;
+    }
+
+    // Mean and stddev for CV
+    const mean = data.totals.reduce((s, v) => s + v, 0) / n;
+    const variance = data.totals.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+    const stddev = Math.sqrt(variance);
+    const cv = mean > 0 ? stddev / mean : 0;
+
+    const avgTxPerMonth = data.txCounts.reduce((s, v) => s + v, 0) / n;
+
+    profiles.set(category, {
+      ema: Math.round(ema * 100) / 100,
+      cv: Math.round(cv * 1000) / 1000,
+      avgTxPerMonth: Math.round(avgTxPerMonth * 10) / 10,
+      monthsOfData: n,
+    });
+  }
+
+  return profiles;
+}
+
+/**
+ * EMA-based category projection with quadratic month-progress blending.
+ *
+ * Two estimates are blended:
+ * 1. History-based: max(currentSpent, EMA) — the historical baseline
+ * 2. Pace-based: linear extrapolation of current month's spending rate
+ *
+ * Blend weight (alpha) = (daysElapsed / daysInMonth)² × (1 + CV)
+ * - Quadratic: very low early in month, high late → prevents wild early extrapolation
+ * - CV adjustment: irregular categories (high CV) trust history less, shift to pace faster
+ *
+ * Without history: returns currentSpent (can't predict future for unknown categories).
+ */
+export function projectCategory(
   currentSpent: number,
   daysElapsed: number,
-  txCount: number,
+  daysInMonth: number,
+  profile: CategoryProfile | null,
 ): number {
   if (daysElapsed <= 0) return currentSpent;
 
-  const txDensity = txCount / daysElapsed;
-  const dayWeight = Math.min(1, daysElapsed / 14);
-  const txWeight = Math.min(1, txDensity / 0.5);
-  const dataQuality = dayWeight * txWeight;
+  // No history → conservative: can't predict future spending
+  if (!profile) return currentSpent;
 
-  const projected = dataQuality * linearProjection + (1 - dataQuality) * currentSpent;
+  const monthProgress = daysElapsed / daysInMonth;
+
+  // Quadratic blend, accelerated by category irregularity
+  const alpha = Math.min(1, monthProgress * monthProgress * (1 + profile.cv));
+
+  // History-based: EMA as baseline, but never below what's already spent
+  const historyBased = Math.max(currentSpent, profile.ema);
+
+  // Pace-based: linear extrapolation
+  const paceBased = (currentSpent / daysElapsed) * daysInMonth;
+
+  const projected = alpha * paceBased + (1 - alpha) * historyBased;
   return Math.round(projected * 100) / 100;
 }
 
@@ -98,11 +166,12 @@ export class SpendingAnalytics {
 
     const categoryTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
     const categorySpentEur: Record<string, number> = {};
-    const categoryTxCount: Record<string, number> = {};
     for (const ct of categoryTotals) {
       categorySpentEur[ct.category] = ct.total;
-      categoryTxCount[ct.category] = ct.tx_count;
     }
+
+    // Build per-category historical profiles for smart projection
+    const profiles = this.getCategoryProfiles(groupId, now);
 
     const dayOfMonth = now.getDate();
     const daysInMonth = getDaysInMonth(now);
@@ -118,14 +187,16 @@ export class SpendingAnalytics {
       const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
       const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
-      const linearProjection = dailyBurnRate * daysInMonth;
 
-      // Smart projection: blend linear extrapolation with conservative estimate
-      // based on data quality (transaction density + days elapsed).
-      // Low quality (few tx, early month) → projected ≈ current spent (conservative)
-      // High quality (many tx, late month) → projected ≈ linear extrapolation
-      const txCount = categoryTxCount[budget.category] || 0;
-      const projectedTotal = smartProjection(linearProjection, spent, daysElapsed, txCount);
+      // Profile is in EUR — convert EMA to budget currency for projection
+      const profileEur = profiles.get(budget.category) ?? null;
+      const profile: CategoryProfile | null = profileEur
+        ? {
+            ...profileEur,
+            ema: convertCurrency(profileEur.ema, BASE_CURRENCY, currency),
+          }
+        : null;
+      const projectedTotal = projectCategory(spent, daysElapsed, daysInMonth, profile);
 
       const projectedOvershoot = projectedTotal - budget.limit_amount;
       const runwayDays =
@@ -159,6 +230,21 @@ export class SpendingAnalytics {
     }
 
     return results;
+  }
+
+  /**
+   * Fetch monthly history and build per-category statistical profiles.
+   * Uses HISTORY_MONTHS of data, excluding the current month.
+   */
+  protected getCategoryProfiles(groupId: number, now: Date): Map<string, CategoryProfile> {
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+    const historyRows = database.expenses.getMonthlyHistoryByCategory(
+      groupId,
+      historyStart,
+      currentMonthStart,
+    );
+    return buildCategoryProfiles(historyRows);
   }
 
   /**
@@ -587,10 +673,12 @@ export class SpendingAnalytics {
     const currentTotal = database.expenses.getTotalEurForRange(groupId, monthStart, today);
     if (currentTotal === 0 && daysElapsed < 3) return null;
 
-    // Use total transaction count for overall projection quality
-    const totalTxCount = database.expenses.getCountForRange(groupId, monthStart, today);
-    const linearTotal = (currentTotal / daysElapsed) * daysInMonth;
-    const projectedTotal = smartProjection(linearTotal, currentTotal, daysElapsed, totalTxCount);
+    // Build aggregate profile across all categories for overall projection
+    const profiles = this.getCategoryProfiles(groupId, now);
+    const aggregateEma = [...profiles.values()].reduce((s, p) => s + p.ema, 0);
+    const overallProfile: CategoryProfile | null =
+      profiles.size > 0 ? { ema: aggregateEma, cv: 0.5, avgTxPerMonth: 0, monthsOfData: 1 } : null;
+    const projectedTotal = projectCategory(currentTotal, daysElapsed, daysInMonth, overallProfile);
 
     // Get last month total for comparison
     const prevMonth = subMonths(now, 1);
@@ -627,8 +715,8 @@ export class SpendingAnalytics {
 
     const categoryProjections: CategoryProjection[] = [];
     for (const cat of currentCatTotals) {
-      const catLinear = (cat.total / daysElapsed) * daysInMonth;
-      const catProjected = smartProjection(catLinear, cat.total, daysElapsed, cat.tx_count);
+      const catProfile = profiles.get(cat.category) ?? null;
+      const catProjected = projectCategory(cat.total, daysElapsed, daysInMonth, catProfile);
       const budget = budgetMap[cat.category];
 
       let budgetLimitEur: number | null = null;

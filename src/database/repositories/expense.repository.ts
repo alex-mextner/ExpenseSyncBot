@@ -399,7 +399,8 @@ export class ExpenseRepository {
       SELECT
         category,
         strftime('%Y-%m', date) as month,
-        SUM(eur_amount) as monthly_total
+        SUM(eur_amount) as monthly_total,
+        COUNT(*) as tx_count
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date < ?
       GROUP BY category, month

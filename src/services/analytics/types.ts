@@ -168,6 +168,20 @@ export interface MonthlyHistoryRow {
   category: string;
   month: string;
   monthly_total: number;
+  tx_count: number;
+}
+
+// === Category Profile (for smart projections) ===
+
+export interface CategoryProfile {
+  /** Exponential moving average of monthly totals (EUR) */
+  ema: number;
+  /** Coefficient of variation (stddev / mean) — 0 = perfectly stable, >1 = very irregular */
+  cv: number;
+  /** Average number of transactions per month */
+  avgTxPerMonth: number;
+  /** How many months of history we have */
+  monthsOfData: number;
 }
 
 // === Advice tiers ===

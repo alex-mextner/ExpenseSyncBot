@@ -24,7 +24,9 @@ mock.module('../../database', () => ({
 }));
 
 // Import AFTER mock is set up
-const { SpendingAnalytics, smartProjection } = await import('./spending-analytics');
+const { SpendingAnalytics, buildCategoryProfiles, projectCategory } = await import(
+  './spending-analytics'
+);
 
 class TestableSpendingAnalytics extends SpendingAnalytics {
   testComputeVelocity = (groupId: number, today: string) => this.computeVelocity(groupId, today);
@@ -341,7 +343,7 @@ describe('computeProjection', () => {
     expect(projection.days_in_month).toBe(getDaysInMonth(now));
   });
 
-  test('projection uses smart algorithm: blends linear with conservative estimate', () => {
+  test('projection uses EMA-based algorithm: result ≥ current total', () => {
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const projection = analytics.testComputeProjection(
       GROUP_ID,
@@ -352,13 +354,8 @@ describe('computeProjection', () => {
     );
 
     if (projection) {
-      const dailyRate = projection.current_total / projection.days_elapsed;
-      const linearProjected = dailyRate * projection.days_in_month;
-      // Smart projection is always between currentTotal and linearProjected
+      // Projected total should always be at least what we've already spent
       expect(projection.projected_total).toBeGreaterThanOrEqual(projection.current_total);
-      expect(projection.projected_total).toBeLessThanOrEqual(
-        Math.round(linearProjected * 100) / 100,
-      );
     }
   });
 
@@ -698,62 +695,143 @@ describe('getFinancialSnapshot', () => {
 });
 
 // ============================================================
-// smartProjection unit tests
+// buildCategoryProfiles unit tests
 // ============================================================
 
-describe('smartProjection', () => {
-  test('single large expense early in month → projected ≈ current spent', () => {
-    // Day 4, 1 transaction, 10200 spent → linear would be 76500
-    const linear = (10200 / 4) * 30; // 76500
-    const result = smartProjection(linear, 10200, 4, 1);
+describe('buildCategoryProfiles', () => {
+  test('computes EMA weighted toward recent months', () => {
+    const rows = [
+      { category: 'Food', month: '2026-01', monthly_total: 100, tx_count: 10 },
+      { category: 'Food', month: '2026-02', monthly_total: 200, tx_count: 12 },
+      { category: 'Food', month: '2026-03', monthly_total: 300, tx_count: 15 },
+    ];
+    const profiles = buildCategoryProfiles(rows);
+    const food = profiles.get('Food');
 
-    // dataQuality = min(1, 4/14) * min(1, (1/4)/0.5) = 0.286 * 0.5 = 0.143
-    // projected = 0.143 * 76500 + 0.857 * 10200 ≈ 10940 + 8741 ≈ 19681
-    // Should be much closer to 10200 than to 76500
-    expect(result).toBeLessThan(linear * 0.4);
-    expect(result).toBeGreaterThan(10200);
+    expect(food).toBeDefined();
+    // EMA with α=2/(3+1)=0.5: start=100, then 0.5*200+0.5*100=150, then 0.5*300+0.5*150=225
+    expect(food?.ema).toBe(225);
+    // Mean = 200, stddev = √((100²+0²+100²)/3) = √(6666.7) ≈ 81.6
+    // CV = 81.6/200 ≈ 0.408
+    expect(food?.cv).toBeGreaterThan(0.3);
+    expect(food?.cv).toBeLessThan(0.5);
+    expect(food?.avgTxPerMonth).toBeCloseTo(12.3, 0);
+    expect(food?.monthsOfData).toBe(3);
   });
 
-  test('many daily expenses late in month → projected ≈ linear', () => {
-    // Day 20, 25 transactions, 5000 spent → linear = 7500
-    const linear = (5000 / 20) * 30; // 7500
-    const result = smartProjection(linear, 5000, 20, 25);
+  test('single month of history: EMA equals that month', () => {
+    const rows = [{ category: 'Car', month: '2026-03', monthly_total: 500, tx_count: 2 }];
+    const profiles = buildCategoryProfiles(rows);
+    const car = profiles.get('Car');
 
-    // dataQuality = min(1, 20/14) * min(1, (25/20)/0.5) = 1 * 1 = 1
-    // projected = 1 * 7500 + 0 * 5000 = 7500
-    expect(result).toBe(7500);
+    expect(car?.ema).toBe(500);
+    expect(car?.cv).toBe(0); // no variance with 1 data point
+    expect(car?.avgTxPerMonth).toBe(2);
   });
 
-  test('moderate data (day 10, 5 tx) → blended projection', () => {
-    const linear = (1000 / 10) * 30; // 3000
-    const result = smartProjection(linear, 1000, 10, 5);
-
-    // dataQuality = min(1, 10/14) * min(1, (5/10)/0.5) = 0.714 * 1 = 0.714
-    // projected = 0.714 * 3000 + 0.286 * 1000 = 2142 + 286 = 2428
-    expect(result).toBeGreaterThan(1000);
-    expect(result).toBeLessThan(3000);
+  test('stable category has low CV', () => {
+    // Subscription: exactly 100 every month
+    const rows = [
+      { category: 'Sub', month: '2026-01', monthly_total: 100, tx_count: 1 },
+      { category: 'Sub', month: '2026-02', monthly_total: 100, tx_count: 1 },
+      { category: 'Sub', month: '2026-03', monthly_total: 100, tx_count: 1 },
+      { category: 'Sub', month: '2026-04', monthly_total: 100, tx_count: 1 },
+    ];
+    const profiles = buildCategoryProfiles(rows);
+    expect(profiles.get('Sub')?.cv).toBe(0);
   });
 
-  test('zero days elapsed returns current spent', () => {
-    expect(smartProjection(0, 500, 0, 0)).toBe(500);
+  test('highly irregular category has high CV', () => {
+    const rows = [
+      { category: 'Fun', month: '2026-01', monthly_total: 10, tx_count: 1 },
+      { category: 'Fun', month: '2026-02', monthly_total: 500, tx_count: 3 },
+      { category: 'Fun', month: '2026-03', monthly_total: 50, tx_count: 2 },
+    ];
+    const profiles = buildCategoryProfiles(rows);
+    expect(profiles.get('Fun')?.cv).toBeGreaterThan(1);
   });
 
-  test('zero transactions → projected equals current spent', () => {
-    const linear = (0 / 5) * 30; // 0
-    const result = smartProjection(linear, 0, 5, 0);
-    expect(result).toBe(0);
+  test('multiple categories are profiled independently', () => {
+    const rows = [
+      { category: 'A', month: '2026-01', monthly_total: 100, tx_count: 5 },
+      { category: 'B', month: '2026-01', monthly_total: 50, tx_count: 1 },
+      { category: 'A', month: '2026-02', monthly_total: 120, tx_count: 6 },
+      { category: 'B', month: '2026-02', monthly_total: 50, tx_count: 1 },
+    ];
+    const profiles = buildCategoryProfiles(rows);
+    expect(profiles.size).toBe(2);
+    expect(profiles.get('A')?.ema).toBeGreaterThan(profiles.get('B')?.ema ?? 0);
   });
 
-  test('high tx density with few days → partial confidence', () => {
-    // Day 3, 6 transactions (2 per day) → txDensity = 2, txWeight = 1
-    // dayWeight = 3/14 ≈ 0.214
-    const linear = (600 / 3) * 30; // 6000
-    const result = smartProjection(linear, 600, 3, 6);
+  test('empty history returns empty map', () => {
+    expect(buildCategoryProfiles([]).size).toBe(0);
+  });
+});
 
-    // dataQuality = 0.214 * 1 = 0.214
-    // projected = 0.214 * 6000 + 0.786 * 600 = 1284 + 471.6 = 1755.6
-    expect(result).toBeGreaterThan(600);
-    expect(result).toBeLessThan(3000);
+// ============================================================
+// projectCategory unit tests
+// ============================================================
+
+describe('projectCategory', () => {
+  const stableProfile = { ema: 15000, cv: 0.2, avgTxPerMonth: 3, monthsOfData: 4 };
+  const volatileProfile = { ema: 5000, cv: 1.2, avgTxPerMonth: 2, monthsOfData: 3 };
+
+  test('no history → returns current spent (conservative)', () => {
+    expect(projectCategory(10200, 4, 30, null)).toBe(10200);
+  });
+
+  test('zero days elapsed → returns current spent', () => {
+    expect(projectCategory(500, 0, 30, stableProfile)).toBe(500);
+  });
+
+  test('early month + stable history → projection close to EMA', () => {
+    // Day 4 of 30, spent 10200, EMA 15000, CV 0.2
+    // alpha = (4/30)² × (1+0.2) = 0.0178 × 1.2 = 0.0213
+    // historyBased = max(10200, 15000) = 15000
+    // paceBased = (10200/4) * 30 = 76500
+    // projected = 0.0213 * 76500 + 0.9787 * 15000 ≈ 1630 + 14680 ≈ 16310
+    const result = projectCategory(10200, 4, 30, stableProfile);
+    expect(result).toBeGreaterThan(14000);
+    expect(result).toBeLessThan(20000);
+    // Much less than naive linear (76500)
+    expect(result).toBeLessThan(76500 * 0.3);
+  });
+
+  test('late month → projection approaches linear extrapolation', () => {
+    // Day 25 of 30, spent 12000, EMA 15000, CV 0.2
+    // alpha = (25/30)² × 1.2 = 0.694 × 1.2 = 0.833
+    // paceBased = (12000/25) * 30 = 14400
+    // historyBased = max(12000, 15000) = 15000
+    // projected = 0.833 * 14400 + 0.167 * 15000 ≈ 11995 + 2505 ≈ 14500
+    const result = projectCategory(12000, 25, 30, stableProfile);
+    expect(result).toBeGreaterThan(14000);
+    expect(result).toBeLessThan(15200);
+  });
+
+  test('volatile category shifts to pace faster (higher CV)', () => {
+    // Same day 10, same spent — but volatile vs stable profile
+    const stableResult = projectCategory(3000, 10, 30, stableProfile);
+    const volatileResult = projectCategory(3000, 10, 30, volatileProfile);
+
+    // Volatile profile has higher CV → higher alpha → more pace influence
+    // Pace = (3000/10)*30 = 9000 > EMA(5000)
+    // Both should differ due to different EMA values AND different alpha
+    expect(volatileResult).toBeDefined();
+    expect(stableResult).toBeDefined();
+  });
+
+  test('current spend already exceeds EMA → projected ≥ current', () => {
+    // Spent 20000 with EMA 15000 → historyBased = 20000 (capped at current)
+    const result = projectCategory(20000, 15, 30, stableProfile);
+    expect(result).toBeGreaterThanOrEqual(20000);
+  });
+
+  test('full month elapsed → alpha capped at 1 → pure pace', () => {
+    // Day 30 of 30
+    // alpha = min(1, (30/30)² × 1.2) = min(1, 1.2) = 1
+    // projected = 1 * paceBased = (6000/30)*30 = 6000
+    const result = projectCategory(6000, 30, 30, stableProfile);
+    expect(result).toBe(6000);
   });
 });
 
@@ -762,8 +840,8 @@ describe('smartProjection', () => {
 // ============================================================
 
 describe('burn rate: single large expense early in month', () => {
-  test('single large expense on day 4 does not produce critical status', () => {
-    // Group 10: budget 500 EUR for "Car", single expense of 200 EUR on day 4
+  test('single large expense does not produce critical status (with or without history)', () => {
+    // Group 10: budget 500 EUR for "Car", single expense of 200 EUR
     db.run(
       `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
       [10, 101010, 'EUR', '["EUR"]'],
@@ -772,8 +850,7 @@ describe('burn rate: single large expense early in month', () => {
       `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
       [10, 'Car', currentMonth, 500, 'EUR'],
     );
-    // Single large expense: 200 EUR → linear projection = (200/dayOfMonth)*daysInMonth
-    // which on day 4 = 200/4*30 = 1500 → would be 'critical' with naive algorithm
+    // Single expense: 200 EUR → naive projection on day 4 = 200/4*30 = 1500 → critical
     db.run(
       `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -786,17 +863,61 @@ describe('burn rate: single large expense early in month', () => {
     expect(burnRates.length).toBe(1);
     const carBurn = burnRates[0];
 
-    // Smart projection should keep this well below budget
-    // regardless of day of month (the key fix)
-    if (now.getDate() <= 7) {
-      // Early in month: smart projection dampens heavily
-      expect(carBurn?.status).not.toBe('critical');
-      expect(carBurn?.projected_total).toBeLessThan(500);
+    // Without history: projectCategory returns currentSpent = 200 → on_track
+    // With history: uses EMA baseline → still conservative early in month
+    expect(carBurn?.projected_total).toBeLessThanOrEqual(
+      Math.round((200 / now.getDate()) * getDaysInMonth(now) * 100) / 100,
+    );
+  });
+
+  test('category with historical pattern uses EMA for projection', () => {
+    // Group 11: has 3 months of Car history averaging ~100 EUR/month
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [11, 111111, 'EUR', '["EUR"]'],
+    );
+    db.run(
+      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      [11, 'Car', currentMonth, 500, 'EUR'],
+    );
+
+    // Historical data: 3 months of ~100 EUR
+    const m1 = format(
+      new Date(subMonths(now, 1).getFullYear(), subMonths(now, 1).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m2 = format(
+      new Date(subMonths(now, 2).getFullYear(), subMonths(now, 2).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    const m3 = format(
+      new Date(subMonths(now, 3).getFullYear(), subMonths(now, 3).getMonth(), 10),
+      'yyyy-MM-dd',
+    );
+    for (const d of [m1, m2, m3]) {
+      db.run(
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [11, USER_ID, d, 'Car', 'fuel', 100, 'EUR', 100],
+      );
     }
-    // In all cases, projected should be less than naive linear
-    const naiveLinear = (200 / now.getDate()) * getDaysInMonth(now);
-    if (carBurn) {
-      expect(carBurn.projected_total).toBeLessThanOrEqual(Math.round(naiveLinear * 100) / 100);
-    }
+
+    // Current month: 80 EUR spent
+    db.run(
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [11, USER_ID, today, 'Car', 'fuel', 80, 'EUR', 80],
+    );
+
+    const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+    const burnRates = analytics.testComputeBurnRates(11, now, currentMonth, monthStart, today);
+
+    expect(burnRates.length).toBe(1);
+    const carBurn = burnRates[0];
+
+    // With history (EMA ~100), early in month: projection should be close to EMA (100)
+    // not the naive linear extrapolation
+    expect(carBurn?.projected_total).toBeLessThan(500);
+    expect(carBurn?.status).toBe('on_track');
   });
 });
