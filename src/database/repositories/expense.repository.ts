@@ -404,6 +404,7 @@ export class ExpenseRepository {
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date < ?
       GROUP BY category, month
+      ORDER BY category, month
     `);
 
     return query.all(groupId, startDate, endDate);

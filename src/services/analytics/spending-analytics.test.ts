@@ -715,7 +715,6 @@ describe('buildCategoryProfiles', () => {
     // CV = 81.6/200 ≈ 0.408
     expect(food?.cv).toBeGreaterThan(0.3);
     expect(food?.cv).toBeLessThan(0.5);
-    expect(food?.avgTxPerMonth).toBeCloseTo(12.3, 0);
     expect(food?.monthsOfData).toBe(3);
   });
 
@@ -726,7 +725,6 @@ describe('buildCategoryProfiles', () => {
 
     expect(car?.ema).toBe(500);
     expect(car?.cv).toBe(0); // no variance with 1 data point
-    expect(car?.avgTxPerMonth).toBe(2);
   });
 
   test('stable category has low CV', () => {
@@ -773,8 +771,7 @@ describe('buildCategoryProfiles', () => {
 // ============================================================
 
 describe('projectCategory', () => {
-  const stableProfile = { ema: 15000, cv: 0.2, avgTxPerMonth: 3, monthsOfData: 4 };
-  const volatileProfile = { ema: 5000, cv: 1.2, avgTxPerMonth: 2, monthsOfData: 3 };
+  const stableProfile = { ema: 15000, cv: 0.2, monthsOfData: 4 };
 
   test('no history → returns current spent (conservative)', () => {
     expect(projectCategory(10200, 4, 30, null)).toBe(10200);
@@ -809,15 +806,17 @@ describe('projectCategory', () => {
   });
 
   test('volatile category shifts to pace faster (higher CV)', () => {
-    // Same day 10, same spent — but volatile vs stable profile
-    const stableResult = projectCategory(3000, 10, 30, stableProfile);
-    const volatileResult = projectCategory(3000, 10, 30, volatileProfile);
+    // Same EMA, same spent — only CV differs
+    const stable = { ema: 10000, cv: 0.1, monthsOfData: 4 };
+    const volatile_ = { ema: 10000, cv: 1.5, monthsOfData: 4 };
 
-    // Volatile profile has higher CV → higher alpha → more pace influence
-    // Pace = (3000/10)*30 = 9000 > EMA(5000)
-    // Both should differ due to different EMA values AND different alpha
-    expect(volatileResult).toBeDefined();
-    expect(stableResult).toBeDefined();
+    // Day 10 of 30, spent 5000
+    // Pace = (5000/10)*30 = 15000 > EMA(10000)
+    // Higher CV → higher alpha → more weight on pace → higher projection
+    const stableResult = projectCategory(5000, 10, 30, stable);
+    const volatileResult = projectCategory(5000, 10, 30, volatile_);
+
+    expect(volatileResult).toBeGreaterThan(stableResult);
   });
 
   test('current spend already exceeds EMA → projected ≥ current', () => {

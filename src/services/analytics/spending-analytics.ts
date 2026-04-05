@@ -34,43 +34,39 @@ const HISTORY_MONTHS = 6;
 export function buildCategoryProfiles(
   historyRows: { category: string; month: string; monthly_total: number; tx_count: number }[],
 ): Map<string, CategoryProfile> {
-  // Group rows by category, sorted by month (chronological order for EMA)
-  const byCategory = new Map<string, { totals: number[]; txCounts: number[] }>();
+  // Group rows by category (rows arrive sorted by category, month from SQL ORDER BY)
+  const byCategory = new Map<string, number[]>();
   for (const row of historyRows) {
-    let entry = byCategory.get(row.category);
-    if (!entry) {
-      entry = { totals: [], txCounts: [] };
-      byCategory.set(row.category, entry);
+    let totals = byCategory.get(row.category);
+    if (!totals) {
+      totals = [];
+      byCategory.set(row.category, totals);
     }
-    entry.totals.push(row.monthly_total);
-    entry.txCounts.push(row.tx_count);
+    totals.push(row.monthly_total);
   }
 
   const profiles = new Map<string, CategoryProfile>();
 
-  for (const [category, data] of byCategory) {
-    const n = data.totals.length;
+  for (const [category, totals] of byCategory) {
+    const n = totals.length;
     if (n === 0) continue;
 
     // EMA: α = 2/(N+1), applied chronologically (oldest first)
     const alpha = 2 / (n + 1);
-    let ema = data.totals[0] ?? 0;
+    let ema = totals[0] ?? 0;
     for (let i = 1; i < n; i++) {
-      ema = alpha * (data.totals[i] ?? 0) + (1 - alpha) * ema;
+      ema = alpha * (totals[i] ?? 0) + (1 - alpha) * ema;
     }
 
     // Mean and stddev for CV
-    const mean = data.totals.reduce((s, v) => s + v, 0) / n;
-    const variance = data.totals.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+    const mean = totals.reduce((s, v) => s + v, 0) / n;
+    const variance = totals.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
     const stddev = Math.sqrt(variance);
     const cv = mean > 0 ? stddev / mean : 0;
-
-    const avgTxPerMonth = data.txCounts.reduce((s, v) => s + v, 0) / n;
 
     profiles.set(category, {
       ema: Math.round(ema * 100) / 100,
       cv: Math.round(cv * 1000) / 1000,
-      avgTxPerMonth: Math.round(avgTxPerMonth * 10) / 10,
       monthsOfData: n,
     });
   }
@@ -132,8 +128,18 @@ export class SpendingAnalytics {
     const currentMonthStr = format(now, 'yyyy-MM');
     const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
 
+    // Compute category profiles once — used by both burnRates and projection
+    const profiles = this.getCategoryProfiles(groupId, now);
+
     return {
-      burnRates: this.computeBurnRates(groupId, now, currentMonthStr, currentMonthStart, today),
+      burnRates: this.computeBurnRates(
+        groupId,
+        now,
+        currentMonthStr,
+        currentMonthStart,
+        today,
+        profiles,
+      ),
       weekTrend: this.computeWeekOverWeek(groupId, today),
       monthTrend: this.computeMonthOverMonth(groupId, now, currentMonthStart, today),
       anomalies: this.computeAnomalies(groupId, now, currentMonthStart, today),
@@ -146,7 +152,14 @@ export class SpendingAnalytics {
         today,
       ),
       streak: this.computeStreak(groupId, today),
-      projection: this.computeProjection(groupId, now, currentMonthStr, currentMonthStart, today),
+      projection: this.computeProjection(
+        groupId,
+        now,
+        currentMonthStr,
+        currentMonthStart,
+        today,
+        profiles,
+      ),
     };
   }
 
@@ -160,6 +173,7 @@ export class SpendingAnalytics {
     currentMonth: string,
     monthStart: string,
     today: string,
+    profiles?: Map<string, CategoryProfile>,
   ): BudgetBurnRate[] {
     const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     if (budgets.length === 0) return [];
@@ -170,8 +184,7 @@ export class SpendingAnalytics {
       categorySpentEur[ct.category] = ct.total;
     }
 
-    // Build per-category historical profiles for smart projection
-    const profiles = this.getCategoryProfiles(groupId, now);
+    const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
 
     const dayOfMonth = now.getDate();
     const daysInMonth = getDaysInMonth(now);
@@ -189,7 +202,7 @@ export class SpendingAnalytics {
       const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
 
       // Profile is in EUR — convert EMA to budget currency for projection
-      const profileEur = profiles.get(budget.category) ?? null;
+      const profileEur = categoryProfiles.get(budget.category) ?? null;
       const profile: CategoryProfile | null = profileEur
         ? {
             ...profileEur,
@@ -664,6 +677,7 @@ export class SpendingAnalytics {
     currentMonth: string,
     monthStart: string,
     today: string,
+    profiles?: Map<string, CategoryProfile>,
   ): MonthlyProjection | null {
     const daysElapsed = now.getDate();
     const daysInMonth = getDaysInMonth(now);
@@ -674,10 +688,18 @@ export class SpendingAnalytics {
     if (currentTotal === 0 && daysElapsed < 3) return null;
 
     // Build aggregate profile across all categories for overall projection
-    const profiles = this.getCategoryProfiles(groupId, now);
-    const aggregateEma = [...profiles.values()].reduce((s, p) => s + p.ema, 0);
+    const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
+    const profileValues = [...categoryProfiles.values()];
+    const aggregateEma = profileValues.reduce((s, p) => s + p.ema, 0);
+
+    // Fix #2: compute real weighted CV from category profiles instead of hardcoded 0.5
+    const totalEma = aggregateEma || 1;
+    const weightedCv = profileValues.reduce((s, p) => s + p.cv * (p.ema / totalEma), 0);
+
     const overallProfile: CategoryProfile | null =
-      profiles.size > 0 ? { ema: aggregateEma, cv: 0.5, avgTxPerMonth: 0, monthsOfData: 1 } : null;
+      categoryProfiles.size > 0
+        ? { ema: aggregateEma, cv: Math.round(weightedCv * 1000) / 1000, monthsOfData: 1 }
+        : null;
     const projectedTotal = projectCategory(currentTotal, daysElapsed, daysInMonth, overallProfile);
 
     // Get last month total for comparison
@@ -715,7 +737,7 @@ export class SpendingAnalytics {
 
     const categoryProjections: CategoryProjection[] = [];
     for (const cat of currentCatTotals) {
-      const catProfile = profiles.get(cat.category) ?? null;
+      const catProfile = categoryProfiles.get(cat.category) ?? null;
       const catProjected = projectCategory(cat.total, daysElapsed, daysInMonth, catProfile);
       const budget = budgetMap[cat.category];
 
