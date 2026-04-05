@@ -94,6 +94,7 @@ function buildNeutralSnapshot(overrides: Partial<FinancialSnapshot> = {}): Finan
       overall_daily_average: 50,
     },
     projection: null,
+    technicalAnalysis: null,
     ...overrides,
   };
 }

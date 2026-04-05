@@ -107,6 +107,13 @@ export interface CategoryProjection {
 
 // === Financial Snapshot (aggregate) ===
 
+export interface TechnicalAnalysis {
+  /** Per-category TA analysis with forecasts, volatility, anomaly, trend */
+  categories: import('./ta/analyzer').CategoryTaAnalysis[];
+  /** Cross-category correlations (only significant ones) */
+  correlations: import('./ta/types').CorrelationResult[];
+}
+
 export interface FinancialSnapshot {
   burnRates: BudgetBurnRate[];
   weekTrend: SpendingTrend;
@@ -117,6 +124,8 @@ export interface FinancialSnapshot {
   budgetUtilization: BudgetUtilization | null;
   streak: SpendingStreak;
   projection: MonthlyProjection | null;
+  /** Technical analysis results (47 methods per category) */
+  technicalAnalysis: TechnicalAnalysis | null;
 }
 
 // === SQL result types ===

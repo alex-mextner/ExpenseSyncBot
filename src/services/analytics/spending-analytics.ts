@@ -3,6 +3,11 @@ import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-f
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency } from '../currency/converter';
+import type { CategoryTaAnalysis } from './ta/analyzer';
+
+import { analyzeCategory } from './ta/analyzer';
+import { categoryCorrelation } from './ta/pattern';
+import type { CorrelationResult } from './ta/types';
 import type {
   BudgetBurnRate,
   BudgetUtilization,
@@ -16,6 +21,7 @@ import type {
   SpendingStreak,
   SpendingTrend,
   SpendingVelocity,
+  TechnicalAnalysis,
 } from './types';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -160,6 +166,7 @@ export class SpendingAnalytics {
         today,
         profiles,
       ),
+      technicalAnalysis: this.computeTechnicalAnalysis(groupId, now, currentMonthStart, today),
     };
   }
 
@@ -773,6 +780,59 @@ export class SpendingAnalytics {
       confidence,
       category_projections: categoryProjections.slice(0, 15),
     };
+  }
+  /**
+   * Technical analysis: run 47 TA methods per category on monthly history.
+   * Returns per-category analysis + cross-category correlations.
+   */
+  protected computeTechnicalAnalysis(
+    groupId: number,
+    now: Date,
+    currentMonthStart: string,
+    today: string,
+  ): TechnicalAnalysis | null {
+    // Use 12 months of history for TA (more than the 6 used for profiles)
+    const historyStart = format(subMonths(startOfMonth(now), 12), 'yyyy-MM-dd');
+    const historyRows = database.expenses.getMonthlyHistoryByCategory(
+      groupId,
+      historyStart,
+      currentMonthStart,
+    );
+
+    if (historyRows.length === 0) return null;
+
+    // Group history by category → monthly totals array
+    const categoryMonthlyTotals = new Map<string, number[]>();
+    for (const row of historyRows) {
+      let totals = categoryMonthlyTotals.get(row.category);
+      if (!totals) {
+        totals = [];
+        categoryMonthlyTotals.set(row.category, totals);
+      }
+      totals.push(row.monthly_total);
+    }
+
+    // Get current month spending per category for anomaly detection
+    const currentTotals = database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
+    const currentByCategory = new Map<string, number>();
+    for (const row of currentTotals) {
+      currentByCategory.set(row.category, row.total);
+    }
+
+    // Run TA analysis per category
+    const categories: CategoryTaAnalysis[] = [];
+    for (const [category, monthlyTotals] of categoryMonthlyTotals) {
+      if (monthlyTotals.length < 2) continue;
+      const analysis = analyzeCategory(category, monthlyTotals, {
+        currentMonthSpent: currentByCategory.get(category) ?? 0,
+      });
+      categories.push(analysis);
+    }
+
+    // Cross-category correlations
+    const correlations: CorrelationResult[] = categoryCorrelation(categoryMonthlyTotals);
+
+    return { categories, correlations };
   }
 }
 
