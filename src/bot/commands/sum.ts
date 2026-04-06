@@ -204,20 +204,19 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
     }
   }
 
-  // Add TA trend summary for top spending categories
+  // Add trend summary for top spending categories
   const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
   if (snapshot.technicalAnalysis && snapshot.technicalAnalysis.categories.length > 0) {
     const taLines: string[] = [];
-    // Show categories with notable signals (anomaly, strong trend, or MACD crossover)
     for (const cat of snapshot.technicalAnalysis.categories) {
       const signals: string[] = [];
-      if (cat.anomaly.isAnomaly) signals.push('⚠️ аномалия');
-      if (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6) signals.push('↑ рост');
+      if (cat.anomaly.isAnomaly) signals.push('⚠️ необычный расход');
+      if (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6) signals.push('↑ растут');
       else if (cat.trend.direction === 'falling' && cat.trend.confidence >= 0.6)
-        signals.push('↓ снижение');
-      if (cat.trend.macd.crossover === 'bullish') signals.push('MACD ↑');
-      else if (cat.trend.macd.crossover === 'bearish') signals.push('MACD ↓');
-      if (cat.volatility.donchian.isBreakoutHigh) signals.push('рекорд');
+        signals.push('↓ снижаются');
+      if (cat.trend.macd.crossover === 'bullish') signals.push('📈 разворот вверх');
+      else if (cat.trend.macd.crossover === 'bearish') signals.push('📉 разворот вниз');
+      if (cat.volatility.donchian.isBreakoutHigh) signals.push('🚨 рекорд');
 
       if (signals.length > 0) {
         const forecast = convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, displayCurrency);
@@ -228,7 +227,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
       }
     }
     if (taLines.length > 0) {
-      message += `\n📈 Сигналы:\n${taLines.join('\n')}\n`;
+      message += `\n📈 Тренды:\n${taLines.join('\n')}\n`;
     }
   }
 

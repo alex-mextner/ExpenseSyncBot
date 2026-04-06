@@ -389,7 +389,7 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
   {
     name: 'get_technical_analysis',
     description:
-      'Get technical analysis for expense categories: trend direction, ensemble forecast, volatility, anomaly detection, MACD/RSI signals, Hurst exponent, quantile predictions. Requires ≥3 months of history. Use when asked about spending trends, forecasts, projections, or anomalies.',
+      'Analyze spending trends and predict future expenses. Shows for each category: whether spending is growing/falling/stable, forecast for next month, typical range, unusual spikes, and whether spending hit a record high. Requires ≥3 months of history. Use when asked about trends, forecasts, projections, or anomalies.',
     input_schema: {
       type: 'object' as const,
       properties: {

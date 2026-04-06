@@ -929,7 +929,7 @@ function executeGetTechnicalAnalysis(
     return {
       success: true,
       output: categoryFilter
-        ? `Нет данных TA для категории "${categoryFilter}". Доступны: ${ta.categories.map((c) => c.category).join(', ')}`
+        ? `Нет данных для категории "${categoryFilter}". Доступные: ${ta.categories.map((c) => c.category).join(', ')}`
         : 'Нет категорий с достаточной историей для анализа.',
     };
   }
@@ -937,91 +937,105 @@ function executeGetTechnicalAnalysis(
   const lines: string[] = [];
 
   for (const cat of categories) {
-    const trendLabel =
+    const trendRu =
       cat.trend.direction === 'rising'
-        ? 'rising'
+        ? 'растут'
         : cat.trend.direction === 'falling'
-          ? 'falling'
-          : 'stable';
+          ? 'снижаются'
+          : 'стабильны';
+    const confidencePct = Math.round(cat.trend.confidence * 100);
     const q = cat.forecasts.quantiles;
+    const bb = cat.volatility.bollingerBands;
 
     const catLines: string[] = [
-      `## ${cat.category} (${cat.monthsOfData} months)`,
-      `Trend: ${trendLabel} (confidence ${Math.round(cat.trend.confidence * 100)}%)`,
-      `Ensemble forecast: ${Math.round(cat.forecasts.ensemble)}`,
-      `Quantiles: P50=${Math.round(q.p50)} P75=${Math.round(q.p75)} P90=${Math.round(q.p90)} P95=${Math.round(q.p95)}`,
-      `Holt forecast: ${Math.round(cat.forecasts.holt.forecast)} (trend: ${cat.forecasts.holt.trend > 0 ? '+' : ''}${cat.forecasts.holt.trend.toFixed(1)}/mo)`,
-      `Theta forecast: ${Math.round(cat.forecasts.theta.forecast)}`,
+      `## ${cat.category} (данные за ${cat.monthsOfData} мес.)`,
+      `Тренд: расходы ${trendRu} (уверенность ${confidencePct}%)`,
+      `Прогноз на следующий месяц: ~${Math.round(cat.forecasts.ensemble)}`,
+      `Ожидаемый диапазон: от ${Math.round(bb.lower)} до ${Math.round(q.p75)}`,
+      `В худшем случае (5% вероятность): до ${Math.round(q.p95)}`,
     ];
 
-    // Bollinger
-    const bb = cat.volatility.bollingerBands;
-    catLines.push(
-      `Bollinger: %B=${bb.percentB.toFixed(2)} bandwidth=${bb.bandwidth.toFixed(2)} [${Math.round(bb.lower)}–${Math.round(bb.upper)}]`,
-    );
+    // Monthly change direction
+    if (cat.forecasts.holt.trend !== 0) {
+      const changePerMonth = Math.abs(cat.forecasts.holt.trend);
+      const changeDir = cat.forecasts.holt.trend > 0 ? 'растут' : 'снижаются';
+      catLines.push(
+        `Динамика: расходы ${changeDir} примерно на ${Math.round(changePerMonth)}/мес.`,
+      );
+    }
 
-    // Volatility
-    catLines.push(
-      `ATR: ${Math.round(cat.volatility.atr)}, Historical vol: ${cat.volatility.historicalVol.toFixed(3)}`,
-    );
+    // Normal range (Bollinger bands in user terms)
+    catLines.push(`Обычный коридор расходов: ${Math.round(bb.lower)}–${Math.round(bb.upper)}`);
 
     // Anomaly
     if (cat.anomaly.isAnomaly) {
-      catLines.push(
-        `⚠️ ANOMALY detected (${cat.anomaly.anomalyCount}/3 methods, z=${cat.anomaly.zScore.zScore.toFixed(1)})`,
-      );
+      const zAbs = Math.abs(cat.anomaly.zScore.zScore);
+      const severity = zAbs > 3 ? 'сильно' : 'заметно';
+      catLines.push(`⚠️ Необычный расход: текущий месяц ${severity} выбивается из нормы`);
     }
 
-    // MACD
-    if (cat.trend.macd.crossover !== 'none') {
-      catLines.push(
-        `MACD: ${cat.trend.macd.crossover} crossover (histogram=${cat.trend.macd.histogram.toFixed(1)})`,
-      );
+    // Momentum signals (MACD in user terms)
+    if (cat.trend.macd.crossover === 'bullish') {
+      catLines.push('📈 Расходы начали расти после периода снижения');
+    } else if (cat.trend.macd.crossover === 'bearish') {
+      catLines.push('📉 Расходы начали снижаться после периода роста');
     }
 
-    // RSI
-    if (cat.trend.rsi.signal !== 'neutral') {
-      catLines.push(`RSI: ${Math.round(cat.trend.rsi.value)} (${cat.trend.rsi.signal})`);
+    // Overheated/oversold (RSI in user terms)
+    if (cat.trend.rsi.signal === 'overbought') {
+      catLines.push('🔴 Расходы на аномально высоком уровне — вероятен откат вниз');
+    } else if (cat.trend.rsi.signal === 'oversold') {
+      catLines.push('🟢 Расходы на аномально низком уровне — могут вырасти');
     }
 
-    // Hurst
-    catLines.push(`Hurst: ${cat.trend.hurst.value.toFixed(2)} (${cat.trend.hurst.type})`);
+    // Predictability (Hurst in user terms)
+    if (cat.trend.hurst.type === 'trending') {
+      catLines.push('Паттерн: расходы ведут себя предсказуемо (тренд сохранится)');
+    } else if (cat.trend.hurst.type === 'mean_reverting') {
+      catLines.push('Паттерн: расходы возвращаются к среднему (всплески временны)');
+    } else {
+      catLines.push('Паттерн: расходы непредсказуемы (нет выраженного тренда)');
+    }
 
-    // Change points
+    // Regime changes (change points in user terms)
     if (cat.trend.changePoints.length > 0) {
-      catLines.push(`Change points: ${cat.trend.changePoints.length} regime changes detected`);
+      catLines.push(`Обнаружено ${cat.trend.changePoints.length} резких смен уровня расходов`);
     }
 
-    // Pivot points
+    // Support/resistance (pivot points in user terms)
     const pp = cat.trend.pivotPoints;
     catLines.push(
-      `Pivot: S2=${Math.round(pp.support2)} S1=${Math.round(pp.support1)} P=${Math.round(pp.pivot)} R1=${Math.round(pp.resistance1)} R2=${Math.round(pp.resistance2)}`,
+      `Уровни расходов: вряд ли ниже ${Math.round(pp.support1)}, вряд ли выше ${Math.round(pp.resistance1)}`,
     );
 
-    // Croston
+    // Intermittent spending (Croston in user terms)
     if (cat.forecasts.croston) {
       const cr = cat.forecasts.croston;
       catLines.push(
-        `Croston (intermittent): ~${Math.round(cr.expectedAmount)} every ${cr.expectedInterval.toFixed(1)} months`,
+        `Нерегулярные расходы: ~${Math.round(cr.expectedAmount)} примерно раз в ${cr.expectedInterval.toFixed(1)} мес.`,
       );
     }
 
-    // Donchian breakout
+    // Record high (Donchian in user terms)
     if (cat.volatility.donchian.isBreakoutHigh) {
-      catLines.push('Donchian: NEW HIGH — record spending level');
+      catLines.push('🚨 Расходы достигли исторического максимума!');
     }
 
     lines.push(catLines.join('\n'));
   }
 
-  // Correlations
+  // Correlations (in user terms)
   if (ta.correlations.length > 0) {
-    const corrLines = ['## Category correlations'];
+    const corrLines = ['## Связи между категориями'];
     for (const corr of ta.correlations.slice(0, 10)) {
-      const sign = corr.correlation > 0 ? '+' : '';
-      corrLines.push(
-        `${corr.category1} ↔ ${corr.category2}: r=${sign}${corr.correlation.toFixed(2)} (${corr.strength})`,
-      );
+      const direction = corr.correlation > 0 ? 'растут вместе' : 'одна растёт — другая падает';
+      const strengthRu =
+        corr.strength === 'strong_positive' || corr.strength === 'strong_negative'
+          ? 'сильная'
+          : corr.strength === 'moderate_positive' || corr.strength === 'moderate_negative'
+            ? 'заметная'
+            : 'слабая';
+      corrLines.push(`${corr.category1} ↔ ${corr.category2}: ${direction} (${strengthRu} связь)`);
     }
     lines.push(corrLines.join('\n'));
   }
