@@ -613,32 +613,218 @@ function printQualitativeReport(result: QualitativeResult): void {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Real-data mode: load from SQLite database
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Load real historical data from SQLite and convert to DailyExpense[] format.
+ * Each month is numbered 0..N-1, days are 1-based within month.
+ * Budgets are loaded from the database for the most recent month.
+ */
+function loadRealData(dbPath: string, groupId: number): {
+  expenses: DailyExpense[];
+  categories: CategoryConfig[];
+  months: number;
+} {
+  const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
+  const db = new Database(dbPath, { readonly: true });
+
+  // Get all expenses for the group, ordered by date
+  const rows = db.query<
+    { date: string; category: string; eur_amount: number },
+    [number]
+  >('SELECT date, category, eur_amount FROM expenses WHERE group_id = ? ORDER BY date ASC').all(groupId);
+
+  if (rows.length === 0) {
+    console.error(`No expenses found for group ${groupId} in ${dbPath}`);
+    process.exit(1);
+  }
+
+  // Get budgets for the most recent month
+  const budgetRows = db.query<
+    { category: string; limit_amount: number; currency: string },
+    [number]
+  >(`SELECT category, limit_amount, currency FROM budgets WHERE group_id = ? ORDER BY month DESC`).all(groupId);
+
+  const budgetMap = new Map<string, number>();
+  for (const b of budgetRows) {
+    if (!budgetMap.has(b.category)) {
+      budgetMap.set(b.category, b.limit_amount);
+    }
+  }
+
+  db.close();
+
+  // Compute monthly indices and build data
+  const monthSet = new Set<string>();
+  const categoryStats = new Map<string, { total: number; count: number; txCount: number }>();
+
+  for (const row of rows) {
+    const monthKey = row.date.substring(0, 7);
+    monthSet.add(monthKey);
+    const stats = categoryStats.get(row.category) ?? { total: 0, count: 0, txCount: 0 };
+    stats.total += row.eur_amount;
+    stats.count++;
+    categoryStats.set(row.category, stats);
+  }
+
+  const sortedMonths = [...monthSet].sort();
+  const monthIndex = new Map<string, number>();
+  for (let i = 0; i < sortedMonths.length; i++) {
+    monthIndex.set(sortedMonths[i] ?? '', i);
+  }
+
+  const expenses: DailyExpense[] = rows.map((row) => ({
+    day: Math.max(1, Math.min(30, Number.parseInt(row.date.substring(8, 10)))),
+    month: monthIndex.get(row.date.substring(0, 7)) ?? 0,
+    category: row.category,
+    amount: row.eur_amount,
+  }));
+
+  // Build category configs with real stats and budget
+  const categories: CategoryConfig[] = [];
+  const numMonths = sortedMonths.length;
+  for (const [cat, stats] of categoryStats) {
+    const monthlyAvg = stats.total / numMonths;
+    const monthlyTotals: number[] = [];
+    for (const m of sortedMonths) {
+      const mTotal = rows
+        .filter((r) => r.date.startsWith(m) && r.category === cat)
+        .reduce((s, r) => s + r.eur_amount, 0);
+      monthlyTotals.push(mTotal);
+    }
+    const variance = monthlyTotals.reduce((s, v) => s + (v - monthlyAvg) ** 2, 0) / numMonths;
+    categories.push({
+      name: cat,
+      monthlyAvg: Math.round(monthlyAvg),
+      monthlyStddev: Math.round(Math.sqrt(variance)),
+      avgTxPerMonth: Math.round(stats.count / numMonths),
+      budget: budgetMap.get(cat) ?? Math.round(monthlyAvg * 1.3),
+    });
+  }
+
+  return { expenses, categories, months: numMonths };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Run
 // ═══════════════════════════════════════════════════════════════
 
-console.log('Generating spending data with 5 random seeds...\n');
+const args = process.argv.slice(2);
+const isRealMode = args.includes('--real');
+const groupIdArg = args.find((a) => a.startsWith('--group-id='));
+const dbPathArg = args.find((a) => a.startsWith('--db='));
 
-const seeds = [42, 137, 256, 1001, 7777];
+if (isRealMode) {
+  const groupId = groupIdArg ? Number.parseInt(groupIdArg.split('=')[1] ?? '1') : 1;
+  const dbPath = dbPathArg ? dbPathArg.split('=')[1] ?? './data/expenses.db' : './data/expenses.db';
 
-// Aggregate results across seeds
-let allOld: Alert[] = [];
-let allEma: Alert[] = [];
-let allTa: Alert[] = [];
+  console.log(`Loading real data from ${dbPath} for group ${groupId}...\n`);
+  const { expenses, categories, months } = loadRealData(dbPath, groupId);
+  console.log(`Loaded ${expenses.length} expenses, ${categories.length} categories, ${months} months\n`);
 
-for (const seed of seeds) {
-  console.log(`  Seed ${seed}...`);
-  const data = generateSpendingData(seed);
-  const result = runQualitativeBacktest(data);
-  allOld = allOld.concat(result.old.alerts);
-  allEma = allEma.concat(result.ema.alerts);
-  allTa = allTa.concat(result.ta.alerts);
+  // Override globals for the real-data run
+  const realCATEGORIES = categories;
+  const realMONTHS = months;
+
+  // Run backtest on real data
+  const oldAlerts: Alert[] = [];
+  const emaAlerts: Alert[] = [];
+  const taAlerts: Alert[] = [];
+
+  for (let month = 0; month < realMONTHS; month++) {
+    const monthExpenses = expenses.filter((e) => e.month === month);
+    const actualTotals: Record<string, number> = {};
+    for (const cat of realCATEGORIES) {
+      actualTotals[cat.name] = monthExpenses
+        .filter((e) => e.category === cat.name)
+        .reduce((s, e) => s + e.amount, 0);
+    }
+
+    const historyRows: { category: string; month: string; monthly_total: number; tx_count: number }[] = [];
+    const monthlyHistoryByCat = new Map<string, number[]>();
+    for (let m = 0; m < month; m++) {
+      const mExpenses = expenses.filter((e) => e.month === m);
+      const catTotals: Record<string, { total: number; count: number }> = {};
+      for (const e of mExpenses) {
+        if (!catTotals[e.category]) catTotals[e.category] = { total: 0, count: 0 };
+        const ct = catTotals[e.category];
+        if (ct) { ct.total += e.amount; ct.count++; }
+      }
+      for (const [cat, data] of Object.entries(catTotals)) {
+        historyRows.push({ category: cat, month: `m-${m}`, monthly_total: data.total, tx_count: data.count });
+        const arr = monthlyHistoryByCat.get(cat) ?? [];
+        arr.push(data.total);
+        monthlyHistoryByCat.set(cat, arr);
+      }
+    }
+
+    const profiles = buildCategoryProfiles(historyRows);
+    const checkDays = [5, 10, 15, 20, 25];
+
+    for (const day of checkDays) {
+      for (const cat of realCATEGORIES) {
+        const spentSoFar = monthExpenses
+          .filter((e) => e.category === cat.name && e.day <= day)
+          .reduce((s, e) => s + e.amount, 0);
+        const actual = actualTotals[cat.name] ?? 0;
+        const daysRemaining = DAYS_PER_MONTH - day;
+        const overshootPercent = cat.budget > 0 ? ((actual - cat.budget) / cat.budget) * 100 : 0;
+        const wasCorrect = actual > cat.budget;
+
+        const oldProj = oldProjection(spentSoFar, day, DAYS_PER_MONTH);
+        const oldSev = classifySeverity(spentSoFar, oldProj, cat.budget);
+        if (oldSev !== 'none') {
+          oldAlerts.push({ month, day, category: cat.name, severity: oldSev, projected: Math.round(oldProj), budget: cat.budget, actualMonthEnd: Math.round(actual), daysRemaining, wasCorrect, overshootPercent });
+        }
+
+        const emaProj = emaProjection(spentSoFar, day, DAYS_PER_MONTH, profiles.get(cat.name) ?? null);
+        const emaSev = classifySeverity(spentSoFar, emaProj, cat.budget);
+        if (emaSev !== 'none') {
+          emaAlerts.push({ month, day, category: cat.name, severity: emaSev, projected: Math.round(emaProj), budget: cat.budget, actualMonthEnd: Math.round(actual), daysRemaining, wasCorrect, overshootPercent });
+        }
+
+        const history = monthlyHistoryByCat.get(cat.name) ?? [];
+        const taProj = taProjection(spentSoFar, day, DAYS_PER_MONTH, history);
+        const taSev = classifySeverity(spentSoFar, taProj, cat.budget);
+        if (taSev !== 'none') {
+          taAlerts.push({ month, day, category: cat.name, severity: taSev, projected: Math.round(taProj), budget: cat.budget, actualMonthEnd: Math.round(actual), daysRemaining, wasCorrect, overshootPercent });
+        }
+      }
+    }
+  }
+
+  const totalCatMonths = realMONTHS * realCATEGORIES.length;
+  printQualitativeReport({
+    old: { alerts: oldAlerts, metrics: computeQualitativeMetrics(oldAlerts, totalCatMonths) },
+    ema: { alerts: emaAlerts, metrics: computeQualitativeMetrics(emaAlerts, totalCatMonths) },
+    ta: { alerts: taAlerts, metrics: computeQualitativeMetrics(taAlerts, totalCatMonths) },
+  });
+} else {
+  // Simulated mode (default)
+  console.log('Generating spending data with 5 random seeds...\n');
+  console.log('Tip: use --real --group-id=N --db=path/to/expenses.db for real data\n');
+
+  const seeds = [42, 137, 256, 1001, 7777];
+  let allOld: Alert[] = [];
+  let allEma: Alert[] = [];
+  let allTa: Alert[] = [];
+
+  for (const seed of seeds) {
+    console.log(`  Seed ${seed}...`);
+    const data = generateSpendingData(seed);
+    const result = runQualitativeBacktest(data);
+    allOld = allOld.concat(result.old.alerts);
+    allEma = allEma.concat(result.ema.alerts);
+    allTa = allTa.concat(result.ta.alerts);
+  }
+
+  const totalCategoryMonths = seeds.length * MONTHS * CATEGORIES.length;
+  console.log('');
+
+  printQualitativeReport({
+    old: { alerts: allOld, metrics: computeQualitativeMetrics(allOld, totalCategoryMonths) },
+    ema: { alerts: allEma, metrics: computeQualitativeMetrics(allEma, totalCategoryMonths) },
+    ta: { alerts: allTa, metrics: computeQualitativeMetrics(allTa, totalCategoryMonths) },
+  });
 }
-
-const totalCategoryMonths = seeds.length * MONTHS * CATEGORIES.length;
-console.log('');
-
-printQualitativeReport({
-  old: { alerts: allOld, metrics: computeQualitativeMetrics(allOld, totalCategoryMonths) },
-  ema: { alerts: allEma, metrics: computeQualitativeMetrics(allEma, totalCategoryMonths) },
-  ta: { alerts: allTa, metrics: computeQualitativeMetrics(allTa, totalCategoryMonths) },
-});

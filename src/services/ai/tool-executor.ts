@@ -84,6 +84,8 @@ export async function executeTool(
         return executeGetBankTransactions(input, ctx);
       case 'get_bank_balances':
         return executeGetBankBalances(input, ctx);
+      case 'get_technical_analysis':
+        return executeGetTechnicalAnalysis(input, ctx);
       case 'get_recurring_patterns':
         return executeGetRecurringPatterns(ctx);
       case 'manage_recurring_pattern':
@@ -889,6 +891,142 @@ async function executeFindMissingExpenses(
       ? `${allMissing.length} ${pluralize(allMissing.length, 'транзакция', 'транзакции', 'транзакций')} без записи:\n${summaryParts.join('\n')}`
       : (summaryParts[0] ?? '0 транзакций без записи'),
   };
+}
+
+// === Technical Analysis tool ===
+
+function executeGetTechnicalAnalysis(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): ToolResult {
+  const group = database.groups.findById(ctx.groupId);
+  if (!group) return { success: false, error: 'Group not found' };
+
+  const { spendingAnalytics } = require('../analytics/spending-analytics') as {
+    spendingAnalytics: {
+      getFinancialSnapshot: (groupId: number) => {
+        technicalAnalysis: import('../analytics/types').TechnicalAnalysis | null;
+      };
+    };
+  };
+  const snapshot = spendingAnalytics.getFinancialSnapshot(ctx.groupId);
+
+  if (!snapshot.technicalAnalysis) {
+    return {
+      success: true,
+      output: 'Недостаточно данных для технического анализа (нужно ≥3 месяцев истории).',
+    };
+  }
+
+  const ta = snapshot.technicalAnalysis;
+  const categoryFilter = input['category'] as string | undefined;
+
+  const categories = categoryFilter
+    ? ta.categories.filter((c) => c.category.toLowerCase() === categoryFilter.toLowerCase())
+    : ta.categories;
+
+  if (categories.length === 0) {
+    return {
+      success: true,
+      output: categoryFilter
+        ? `Нет данных TA для категории "${categoryFilter}". Доступны: ${ta.categories.map((c) => c.category).join(', ')}`
+        : 'Нет категорий с достаточной историей для анализа.',
+    };
+  }
+
+  const lines: string[] = [];
+
+  for (const cat of categories) {
+    const trendLabel =
+      cat.trend.direction === 'rising'
+        ? 'rising'
+        : cat.trend.direction === 'falling'
+          ? 'falling'
+          : 'stable';
+    const q = cat.forecasts.quantiles;
+
+    const catLines: string[] = [
+      `## ${cat.category} (${cat.monthsOfData} months)`,
+      `Trend: ${trendLabel} (confidence ${Math.round(cat.trend.confidence * 100)}%)`,
+      `Ensemble forecast: ${Math.round(cat.forecasts.ensemble)}`,
+      `Quantiles: P50=${Math.round(q.p50)} P75=${Math.round(q.p75)} P90=${Math.round(q.p90)} P95=${Math.round(q.p95)}`,
+      `Holt forecast: ${Math.round(cat.forecasts.holt.forecast)} (trend: ${cat.forecasts.holt.trend > 0 ? '+' : ''}${cat.forecasts.holt.trend.toFixed(1)}/mo)`,
+      `Theta forecast: ${Math.round(cat.forecasts.theta.forecast)}`,
+    ];
+
+    // Bollinger
+    const bb = cat.volatility.bollingerBands;
+    catLines.push(
+      `Bollinger: %B=${bb.percentB.toFixed(2)} bandwidth=${bb.bandwidth.toFixed(2)} [${Math.round(bb.lower)}–${Math.round(bb.upper)}]`,
+    );
+
+    // Volatility
+    catLines.push(
+      `ATR: ${Math.round(cat.volatility.atr)}, Historical vol: ${cat.volatility.historicalVol.toFixed(3)}`,
+    );
+
+    // Anomaly
+    if (cat.anomaly.isAnomaly) {
+      catLines.push(
+        `⚠️ ANOMALY detected (${cat.anomaly.anomalyCount}/3 methods, z=${cat.anomaly.zScore.zScore.toFixed(1)})`,
+      );
+    }
+
+    // MACD
+    if (cat.trend.macd.crossover !== 'none') {
+      catLines.push(
+        `MACD: ${cat.trend.macd.crossover} crossover (histogram=${cat.trend.macd.histogram.toFixed(1)})`,
+      );
+    }
+
+    // RSI
+    if (cat.trend.rsi.signal !== 'neutral') {
+      catLines.push(`RSI: ${Math.round(cat.trend.rsi.value)} (${cat.trend.rsi.signal})`);
+    }
+
+    // Hurst
+    catLines.push(`Hurst: ${cat.trend.hurst.value.toFixed(2)} (${cat.trend.hurst.type})`);
+
+    // Change points
+    if (cat.trend.changePoints.length > 0) {
+      catLines.push(`Change points: ${cat.trend.changePoints.length} regime changes detected`);
+    }
+
+    // Pivot points
+    const pp = cat.trend.pivotPoints;
+    catLines.push(
+      `Pivot: S2=${Math.round(pp.support2)} S1=${Math.round(pp.support1)} P=${Math.round(pp.pivot)} R1=${Math.round(pp.resistance1)} R2=${Math.round(pp.resistance2)}`,
+    );
+
+    // Croston
+    if (cat.forecasts.croston) {
+      const cr = cat.forecasts.croston;
+      catLines.push(
+        `Croston (intermittent): ~${Math.round(cr.expectedAmount)} every ${cr.expectedInterval.toFixed(1)} months`,
+      );
+    }
+
+    // Donchian breakout
+    if (cat.volatility.donchian.isBreakoutHigh) {
+      catLines.push('Donchian: NEW HIGH — record spending level');
+    }
+
+    lines.push(catLines.join('\n'));
+  }
+
+  // Correlations
+  if (ta.correlations.length > 0) {
+    const corrLines = ['## Category correlations'];
+    for (const corr of ta.correlations.slice(0, 10)) {
+      const sign = corr.correlation > 0 ? '+' : '';
+      corrLines.push(
+        `${corr.category1} ↔ ${corr.category2}: r=${sign}${corr.correlation.toFixed(2)} (${corr.strength})`,
+      );
+    }
+    lines.push(corrLines.join('\n'));
+  }
+
+  return { success: true, output: lines.join('\n\n') };
 }
 
 // === Recurring pattern tools ===

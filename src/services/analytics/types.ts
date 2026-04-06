@@ -203,6 +203,8 @@ export type TriggerType =
   | 'first_expense_of_month'
   | 'recurring_missed'
   | 'pending_bank_transactions'
+  | 'ta_trend_change'
+  | 'ta_anomaly'
   | 'manual';
 
 export type OverallSeverity = 'good' | 'watch' | 'concern' | 'critical';

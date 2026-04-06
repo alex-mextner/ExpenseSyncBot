@@ -109,6 +109,59 @@ export function checkSmartTriggers(
     }
   }
 
+  // === Trigger 2b: TA anomaly (multi-method consensus) ===
+  if (snap.technicalAnalysis) {
+    for (const cat of snap.technicalAnalysis.categories) {
+      if (cat.anomaly.isAnomaly && cat.anomaly.anomalyCount >= 2) {
+        const topic = `ta_anomaly:${cat.category}`;
+        if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+          if (canSendAdvice(groupId, 'alert')) {
+            return {
+              type: 'ta_anomaly',
+              tier: 'alert',
+              topic,
+              data: {
+                category: cat.category,
+                anomaly_count: cat.anomaly.anomalyCount,
+                z_score: cat.anomaly.zScore.zScore,
+                direction: cat.anomaly.zScore.direction,
+              },
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // === Trigger 2c: TA trend change (MACD crossover + high confidence) ===
+  if (snap.technicalAnalysis) {
+    for (const cat of snap.technicalAnalysis.categories) {
+      if (
+        cat.trend.macd.crossover === 'bullish' &&
+        cat.trend.direction === 'rising' &&
+        cat.trend.confidence >= 0.6
+      ) {
+        const topic = `ta_trend_change:${cat.category}:rising`;
+        if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+          if (canSendAdvice(groupId, 'quick')) {
+            return {
+              type: 'ta_trend_change',
+              tier: 'quick',
+              topic,
+              data: {
+                category: cat.category,
+                direction: 'rising',
+                confidence: cat.trend.confidence,
+                ensemble_forecast: cat.forecasts.ensemble,
+                macd_crossover: cat.trend.macd.crossover,
+              },
+            };
+          }
+        }
+      }
+    }
+  }
+
   // === Trigger 3: Velocity spike (acceleration > 50%) ===
   if (snap.velocity.trend === 'accelerating' && snap.velocity.acceleration > 50) {
     const topic = 'velocity_spike';

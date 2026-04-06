@@ -47,6 +47,12 @@ mock.module('../../utils/logger', () => ({
   logger: logMock,
 }));
 
+mock.module('../../services/analytics/spending-analytics', () => ({
+  spendingAnalytics: {
+    getFinancialSnapshot: () => ({ technicalAnalysis: null }),
+  },
+}));
+
 // ── Import after mocks ──
 
 import { beforeEach, describe, expect, it } from 'bun:test';

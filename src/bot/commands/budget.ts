@@ -9,6 +9,7 @@ import {
   getCurrencySymbol,
 } from '../../config/constants';
 import { database } from '../../database';
+import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -240,6 +241,34 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
     const emoji = getCategoryEmoji(budget.category);
     const status = is_exceeded ? '(!)' : is_warning ? '(~)' : '';
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
+  }
+
+  // Add TA forecast insights for budgeted categories
+  const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
+  if (snapshot.technicalAnalysis) {
+    const taInsights: string[] = [];
+    for (const cat of snapshot.technicalAnalysis.categories) {
+      const bp = budgetProgress.find((b) => b.budget.category === cat.category);
+      if (!bp) continue;
+
+      const forecast = Math.round(
+        convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency as CurrencyCode),
+      );
+      const trendLabel =
+        cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
+      const forecastPct =
+        bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
+
+      // Only show insights for categories approaching or exceeding budget
+      if (forecastPct >= 80 || cat.anomaly.isAnomaly || cat.trend.direction === 'rising') {
+        let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency as CurrencyCode)} ${trendLabel}`;
+        if (cat.anomaly.isAnomaly) insight += ' ⚠️';
+        taInsights.push(insight);
+      }
+    }
+    if (taInsights.length > 0) {
+      message += `\nПрогноз на месяц:\n${taInsights.join('\n')}\n`;
+    }
   }
 
   return { text: message.trim(), hasBudgets: true };

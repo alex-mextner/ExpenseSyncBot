@@ -387,6 +387,21 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
     },
   },
   {
+    name: 'get_technical_analysis',
+    description:
+      'Get technical analysis for expense categories: trend direction, ensemble forecast, volatility, anomaly detection, MACD/RSI signals, Hurst exponent, quantile predictions. Requires ≥3 months of history. Use when asked about spending trends, forecasts, projections, or anomalies.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        category: {
+          type: 'string',
+          description:
+            'Optional: filter by specific category. Omit for all categories with enough history.',
+        },
+      },
+    },
+  },
+  {
     name: 'get_recurring_patterns',
     description:
       'Get all recurring expense patterns for the group (rent, subscriptions, etc.). Returns patterns with their status, expected amounts, and next expected dates.',
@@ -456,6 +471,7 @@ export const TOOL_LABELS: Record<string, string> = {
   manage_category: 'Управляю категориями',
   get_bank_transactions: 'Загружаю банковские транзакции',
   get_bank_balances: 'Проверяю балансы счетов',
+  get_technical_analysis: 'Анализирую тренды и прогнозы',
   get_recurring_patterns: 'Загружаю повторяющиеся платежи',
   manage_recurring_pattern: 'Управляю повторяющимся платежом',
   find_missing_expenses: 'Ищу пропущенные расходы',
