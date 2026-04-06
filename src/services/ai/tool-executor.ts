@@ -981,31 +981,35 @@ function executeGetTechnicalAnalysis(
       catLines.push('📉 Расходы начали снижаться после периода роста');
     }
 
-    // Overheated/oversold (RSI in user terms)
+    // Unusually high/low spending (RSI in user terms)
     if (cat.trend.rsi.signal === 'overbought') {
-      catLines.push('🔴 Расходы на аномально высоком уровне — вероятен откат вниз');
+      catLines.push(
+        '🔴 Траты непривычно высокие уже несколько месяцев — стоит проверить, не появились ли лишние расходы',
+      );
     } else if (cat.trend.rsi.signal === 'oversold') {
-      catLines.push('🟢 Расходы на аномально низком уровне — могут вырасти');
+      catLines.push(
+        '🟢 Траты непривычно низкие — возможно, что-то откладывается и потом придёт разом',
+      );
     }
 
     // Predictability (Hurst in user terms)
     if (cat.trend.hurst.type === 'trending') {
-      catLines.push('Паттерн: расходы ведут себя предсказуемо (тренд сохранится)');
+      catLines.push('Характер расходов: стабильный, скорее всего продолжат в том же направлении');
     } else if (cat.trend.hurst.type === 'mean_reverting') {
-      catLines.push('Паттерн: расходы возвращаются к среднему (всплески временны)');
+      catLines.push('Характер расходов: после всплесков обычно возвращаются к привычному уровню');
     } else {
-      catLines.push('Паттерн: расходы непредсказуемы (нет выраженного тренда)');
+      catLines.push('Характер расходов: меняются хаотично, сложно предсказать');
     }
 
     // Regime changes (change points in user terms)
     if (cat.trend.changePoints.length > 0) {
-      catLines.push(`Обнаружено ${cat.trend.changePoints.length} резких смен уровня расходов`);
+      catLines.push(`За историю было ${cat.trend.changePoints.length} резких смен уровня трат`);
     }
 
-    // Support/resistance (pivot points in user terms)
+    // Typical spending bounds (pivot points in user terms)
     const pp = cat.trend.pivotPoints;
     catLines.push(
-      `Уровни расходов: вряд ли ниже ${Math.round(pp.support1)}, вряд ли выше ${Math.round(pp.resistance1)}`,
+      `Типичный минимум ~${Math.round(pp.support1)}, типичный максимум ~${Math.round(pp.resistance1)}`,
     );
 
     // Intermittent spending (Croston in user terms)

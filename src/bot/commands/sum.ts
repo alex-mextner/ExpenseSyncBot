@@ -214,8 +214,8 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
       if (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6) signals.push('↑ растут');
       else if (cat.trend.direction === 'falling' && cat.trend.confidence >= 0.6)
         signals.push('↓ снижаются');
-      if (cat.trend.macd.crossover === 'bullish') signals.push('📈 разворот вверх');
-      else if (cat.trend.macd.crossover === 'bearish') signals.push('📉 разворот вниз');
+      if (cat.trend.macd.crossover === 'bullish') signals.push('📈 начали расти');
+      else if (cat.trend.macd.crossover === 'bearish') signals.push('📉 пошли на спад');
       if (cat.volatility.donchian.isBreakoutHigh) signals.push('🚨 рекорд');
 
       if (signals.length > 0) {
