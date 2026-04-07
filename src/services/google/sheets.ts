@@ -1142,14 +1142,27 @@ export async function deleteExpenseRowsByIndex(
   });
 }
 
+export interface EurMismatchWarning {
+  row: number;
+  date: string;
+  category: string;
+  sheetEur: number;
+  recalcEur: number;
+}
+
 /**
  * Read all expenses from Google Sheet.
- * Returns expenses and any rows with amounts in multiple currency columns (data errors).
+ * Returns expenses, multi-currency errors, and EUR mismatch warnings.
+ * EUR amounts are always recalculated from amount × Rate — sheet EUR(calc) is not trusted.
  */
 export async function readExpensesFromSheet(
   conn: GoogleConn,
   spreadsheetId: string,
-): Promise<{ expenses: SheetRow[]; errors: MultiCurrencyRowError[] }> {
+): Promise<{
+  expenses: SheetRow[];
+  errors: MultiCurrencyRowError[];
+  eurMismatches: EurMismatchWarning[];
+}> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
@@ -1161,7 +1174,7 @@ export async function readExpensesFromSheet(
   const rows = response.data.values || [];
 
   if (rows.length === 0) {
-    return { expenses: [], errors: [] };
+    return { expenses: [], errors: [], eurMismatches: [] };
   }
 
   const headers = rows[0] as string[];
@@ -1198,6 +1211,7 @@ export async function readExpensesFromSheet(
 
   const expenses: SheetRow[] = [];
   const errors: MultiCurrencyRowError[] = [];
+  const eurMismatchRows: EurMismatchWarning[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as string[];
@@ -1256,24 +1270,48 @@ export async function readExpensesFromSheet(
       }
     }
 
-    // EUR amount: from sheet if available, otherwise recalculate
+    // EUR amount: prefer recalculated value; fall back to sheet only for EUR expenses
+    const [firstCurr, firstAmt] = Object.entries(amounts)[0] ?? [];
     let eurAmount: number;
-    if (eurAmountStr && eurAmountStr.trim() !== '') {
-      const parsed = parseFloat(eurAmountStr);
-      eurAmount = !Number.isNaN(parsed) ? parsed : 0;
+
+    if (firstCurr === 'EUR') {
+      // EUR expenses: amount IS eur_amount
+      eurAmount = firstAmt ?? 0;
+    } else if (rate && firstAmt) {
+      // Non-EUR with Rate column: recalculate (Rate stores "1 CURRENCY = rate EUR")
+      eurAmount = Math.round(firstAmt * rate * 100) / 100;
+    } else if (firstCurr && firstAmt) {
+      // No Rate column: use runtime converter
+      eurAmount = convertToEUR(firstAmt, firstCurr as CurrencyCode);
     } else {
-      const [curr, amt] = Object.entries(amounts)[0] ?? [];
-      if (curr && amt) {
-        eurAmount = rate
-          ? Math.round(amt * rate * 100) / 100
-          : convertToEUR(amt, curr as CurrencyCode);
-      } else {
-        eurAmount = 0;
+      eurAmount = 0;
+    }
+
+    // Warn if sheet EUR(calc) diverges significantly from recalculated value
+    if (eurAmountStr && eurAmountStr.trim() !== '' && eurAmount > 0) {
+      const sheetEur = parseFloat(eurAmountStr);
+      if (!Number.isNaN(sheetEur) && sheetEur > 0) {
+        const ratio = sheetEur / eurAmount;
+        if (ratio < 0.5 || ratio > 2.0) {
+          eurMismatchRows.push({
+            row: i + 1,
+            date,
+            category,
+            sheetEur,
+            recalcEur: eurAmount,
+          });
+        }
       }
     }
 
     expenses.push({ date, amounts, eurAmount, rate, category, comment });
   }
 
-  return { expenses, errors };
+  if (eurMismatchRows.length > 0) {
+    logger.warn(
+      `[SHEETS] ${eurMismatchRows.length} rows have EUR mismatch (sheet formula vs recalculated)`,
+    );
+  }
+
+  return { expenses, errors, eurMismatches: eurMismatchRows };
 }

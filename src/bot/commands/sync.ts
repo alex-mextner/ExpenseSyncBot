@@ -5,6 +5,7 @@ import type { Expense } from '../../database/types';
 import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import {
+  type EurMismatchWarning,
   type GoogleConn,
   googleConn,
   type MultiCurrencyRowError,
@@ -78,6 +79,7 @@ export interface SyncResult {
   }>;
   createdCategories: string[];
   errors: MultiCurrencyRowError[];
+  eurMismatches: EurMismatchWarning[];
 }
 
 /**
@@ -91,10 +93,11 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     throw new Error('Group not configured for Google Sheets');
   }
 
-  const { expenses: sheetExpenses, errors } = await readExpensesFromSheet(
-    googleConn(group),
-    group.spreadsheet_id,
-  );
+  const {
+    expenses: sheetExpenses,
+    errors,
+    eurMismatches,
+  } = await readExpensesFromSheet(googleConn(group), group.spreadsheet_id);
 
   logger.info(`[SYNC] Sheet: ${sheetExpenses.length} expenses, ${errors.length} errors`);
 
@@ -125,6 +128,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     updated: [],
     createdCategories: [],
     errors,
+    eurMismatches,
   };
 
   // Create missing categories
@@ -514,6 +518,20 @@ export async function handleSyncCommand(
       );
       await sendMessage(
         `⚠️ Строки с суммами в нескольких валютах (пропущены):\n${errorLines.join('\n')}`,
+      );
+    }
+
+    if (result.eurMismatches.length > 0) {
+      const lines = result.eurMismatches
+        .slice(0, 5)
+        .map(
+          (m) =>
+            `• Строка ${m.row}: ${m.date} ${m.category} — таблица: ${m.sheetEur}€, пересчёт: ${m.recalcEur}€`,
+        );
+      const extra =
+        result.eurMismatches.length > 5 ? `\n...и ещё ${result.eurMismatches.length - 5}` : '';
+      await sendMessage(
+        `⚠️ EUR формулы в таблице расходились с пересчётом по Rate (исправлено):\n${lines.join('\n')}${extra}`,
       );
     }
 
