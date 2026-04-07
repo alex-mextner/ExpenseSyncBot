@@ -1210,6 +1210,17 @@ export function runMigrations(db: Database): void {
           CHF: 1.05,
         };
 
+        // Guard: skip if expenses table doesn't have eur_amount (test DBs with partial schema)
+        const hasEurCol = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('expenses') WHERE name = 'eur_amount'`,
+          )
+          .get();
+        if (!hasEurCol?.count) {
+          logger.info('✓ expenses.eur_amount column not found, skipping');
+          return;
+        }
+
         // Find expenses where eur_amount is suspiciously constant (the bug marker)
         // or zero for non-EUR currencies
         const buggyConst = db
