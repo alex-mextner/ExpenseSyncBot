@@ -137,7 +137,7 @@ export function ewmaVariance(data: number[], lambda = 0.94): number {
   if (data.length < 2) return 0;
 
   const mean = data.reduce((s, v) => s + v, 0) / data.length;
-  let variance = (data[0] ?? 0 - mean) ** 2;
+  let variance = ((data[0] ?? 0) - mean) ** 2;
 
   for (let i = 1; i < data.length; i++) {
     const deviation = ((data[i] ?? 0) - mean) ** 2;

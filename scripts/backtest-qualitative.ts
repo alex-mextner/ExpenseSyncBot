@@ -14,6 +14,7 @@
  * Run: bun scripts/backtest-qualitative.ts
  */
 
+import { Database } from 'bun:sqlite';
 import { analyzeCategory } from '../src/services/analytics/ta/analyzer';
 import type { QualitativeMetrics } from '../src/services/analytics/ta/types';
 
@@ -626,7 +627,6 @@ function loadRealData(dbPath: string, groupId: number): {
   categories: CategoryConfig[];
   months: number;
 } {
-  const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
   const db = new Database(dbPath, { readonly: true });
 
   // Get all expenses for the group, ordered by date

@@ -234,8 +234,10 @@ export function hurstExponent(data: number[]): HurstResult {
 
     if (rsValues.length > 0) {
       const avgRS = rsValues.reduce((s, v) => s + v, 0) / rsValues.length;
-      logRS.push(Math.log(avgRS));
-      logN.push(Math.log(size));
+      if (avgRS > 0) {
+        logRS.push(Math.log(avgRS));
+        logN.push(Math.log(size));
+      }
     }
   }
 

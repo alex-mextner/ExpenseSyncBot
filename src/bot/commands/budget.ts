@@ -252,7 +252,7 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
       if (!bp) continue;
 
       const forecast = Math.round(
-        convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency as CurrencyCode),
+        convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency),
       );
       const trendLabel =
         cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
@@ -260,8 +260,12 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
         bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
 
       // Only show insights for categories approaching or exceeding budget
-      if (forecastPct >= 80 || cat.anomaly.isAnomaly || cat.trend.direction === 'rising') {
-        let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency as CurrencyCode)} ${trendLabel}`;
+      if (
+        forecastPct >= 80 ||
+        cat.anomaly.isAnomaly ||
+        (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6)
+      ) {
+        let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency)} ${trendLabel}`;
         if (cat.anomaly.isAnomaly) insight += ' ⚠️';
         taInsights.push(insight);
       }

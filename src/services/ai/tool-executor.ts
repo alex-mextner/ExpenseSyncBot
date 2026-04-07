@@ -12,6 +12,7 @@ import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
+import { spendingAnalytics } from '../analytics/spending-analytics';
 import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
@@ -899,16 +900,6 @@ function executeGetTechnicalAnalysis(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): ToolResult {
-  const group = database.groups.findById(ctx.groupId);
-  if (!group) return { success: false, error: 'Group not found' };
-
-  const { spendingAnalytics } = require('../analytics/spending-analytics') as {
-    spendingAnalytics: {
-      getFinancialSnapshot: (groupId: number) => {
-        technicalAnalysis: import('../analytics/types').TechnicalAnalysis | null;
-      };
-    };
-  };
   const snapshot = spendingAnalytics.getFinancialSnapshot(ctx.groupId);
 
   if (!snapshot.technicalAnalysis) {
@@ -951,8 +942,7 @@ function executeGetTechnicalAnalysis(
       `## ${cat.category} (данные за ${cat.monthsOfData} мес.)`,
       `Тренд: расходы ${trendRu} (уверенность ${confidencePct}%)`,
       `Прогноз на следующий месяц: ~${Math.round(cat.forecasts.ensemble)}`,
-      `Ожидаемый диапазон: от ${Math.round(bb.lower)} до ${Math.round(q.p75)}`,
-      `В худшем случае (5% вероятность): до ${Math.round(q.p95)}`,
+      `Обычный коридор: ${Math.round(bb.lower)}–${Math.round(bb.upper)}, в худшем случае до ${Math.round(q.p95)}`,
     ];
 
     // Monthly change direction
@@ -963,9 +953,6 @@ function executeGetTechnicalAnalysis(
         `Динамика: расходы ${changeDir} примерно на ${Math.round(changePerMonth)}/мес.`,
       );
     }
-
-    // Normal range (Bollinger bands in user terms)
-    catLines.push(`Обычный коридор расходов: ${Math.round(bb.lower)}–${Math.round(bb.upper)}`);
 
     // Anomaly
     if (cat.anomaly.isAnomaly) {
