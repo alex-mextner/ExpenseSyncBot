@@ -1,6 +1,20 @@
 // Tests for /health endpoint
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { database } from '../database';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+
+mock.module('../database', () => {
+  const actual = require('../database/types');
+  return {
+    ...actual,
+    database: {
+      groups: {
+        findById: mock(() => null),
+      },
+    },
+    _budgetWriter: mock(),
+  };
+});
+
+const { database } = await import('../database');
 
 // Use a random port to avoid conflicts with running server
 const TEST_PORT = 19_876 + Math.floor(Math.random() * 1000);
