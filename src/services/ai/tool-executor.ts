@@ -3,7 +3,7 @@
  * Maps tool calls to database operations and services
  */
 import type Big from 'big.js';
-import { endOfMonth, format } from 'date-fns';
+import { endOfMonth, format, getDaysInMonth } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
@@ -938,10 +938,20 @@ function executeGetTechnicalAnalysis(
     const q = cat.forecasts.quantiles;
     const bb = cat.volatility.bollingerBands;
 
+    // Current month pace: extrapolate current spending to end of month
+    const now = new Date();
+    const dayOfMonth = now.getDate();
+    const daysInMonth = getDaysInMonth(now);
+    const currentSpent = Math.round(cat.currentMonthSpent);
+    const paceProjection =
+      dayOfMonth > 0 ? Math.round((cat.currentMonthSpent / dayOfMonth) * daysInMonth) : 0;
+
     const catLines: string[] = [
       `## ${cat.category} (данные за ${cat.monthsOfData} мес.)`,
+      `Текущий месяц: потрачено ${currentSpent} за ${dayOfMonth} из ${daysInMonth} дней`,
+      `Темп текущего месяца: если так пойдёт дальше → ~${paceProjection} к концу месяца`,
+      `Прогноз по истории: ~${Math.round(cat.forecasts.ensemble)}`,
       `Тренд: расходы ${trendRu} (уверенность ${confidencePct}%)`,
-      `Прогноз на следующий месяц: ~${Math.round(cat.forecasts.ensemble)}`,
       `Обычный коридор: ${Math.round(bb.lower)}–${Math.round(bb.upper)}, в худшем случае до ${Math.round(q.p95)}`,
     ];
 

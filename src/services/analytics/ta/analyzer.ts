@@ -49,6 +49,8 @@ import {
 export interface CategoryTaAnalysis {
   category: string;
   monthsOfData: number;
+  /** Current month's actual spending so far (EUR) */
+  currentMonthSpent: number;
 
   // Forecasting (multiple methods for ensemble)
   forecasts: {
@@ -219,6 +221,7 @@ export function analyzeCategory(
   return {
     category,
     monthsOfData: n,
+    currentMonthSpent: currentSpent,
     forecasts: {
       sma3,
       wma3,

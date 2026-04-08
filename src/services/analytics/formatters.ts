@@ -292,6 +292,11 @@ function formatTechnicalAnalysis(ta: TechnicalAnalysis): string {
   for (const cat of ta.categories) {
     const parts: string[] = [`<b>${cat.category}</b> (${cat.monthsOfData} мес)`];
 
+    // Current month spending
+    if (cat.currentMonthSpent > 0) {
+      parts.push(`Текущий месяц: ${Math.round(cat.currentMonthSpent)}`);
+    }
+
     // Trend direction
     const trendLabel =
       cat.trend.direction === 'rising'

@@ -12,12 +12,13 @@ import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
 import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
+import { BufferStreamWriter } from './buffer-stream';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
 import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { TOOL_DEFINITIONS } from './tools';
-import type { AgentContext, ToolCallResult } from './types';
+import type { AgentContext, AgentStreamWriter, ToolCallResult } from './types';
 
 const logger = createLogger('agent');
 
@@ -212,13 +213,65 @@ export class ExpenseBotAgent {
   }
 
   /**
+   * Run the agent in batch mode: execute tools and produce text without streaming to Telegram.
+   * Used for proactive advice where we want to validate and format before sending.
+   *
+   * @param userMessage - The prompt/instruction for the agent
+   * @param systemPromptOverride - Optional system prompt override (defaults to standard agent prompt)
+   * @returns Final text response, or empty string if agent chose to stay silent
+   */
+  async runBatch(userMessage: string, systemPromptOverride?: string): Promise<string> {
+    const writer = new BufferStreamWriter();
+    const debugCtx = aiDebugLogger.createRunContext(
+      this.ctx.userId,
+      this.ctx.chatId,
+      this.ctx.userName,
+      this.ctx.userFullName,
+      userMessage,
+    );
+
+    const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }];
+
+    const systemPrompt = systemPromptOverride ?? this.buildSystemPrompt();
+    debugCtx?.logSystemPrompt(systemPrompt);
+
+    logger.info(`[AGENT-BATCH] Starting: model=${AI_MODEL}`);
+    logger.info(`[AGENT-BATCH] Prompt: "${userMessage.substring(0, 150)}"`);
+
+    const toolCallNames: string[] = [];
+
+    try {
+      const result = await this.runWithRetry(
+        messages,
+        systemPrompt,
+        writer,
+        debugCtx,
+        toolCallNames,
+      );
+
+      debugCtx?.logAiText(result.text);
+      debugCtx?.logFinal(result.text, result.toolCount);
+      debugCtx?.flush();
+
+      return result.text;
+    } catch (error) {
+      if (error instanceof Anthropic.APIError) {
+        logger.error({ err: error }, `[AGENT-BATCH] API error: ${error.status}`);
+      } else {
+        logger.error({ err: error }, '[AGENT-BATCH] Error');
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Retry wrapper: runs runAgentLoop with exponential backoff for transient API errors.
    * After all retries exhausted, the error propagates to run()'s catch for user notification.
    */
   private async runWithRetry(
     messages: Anthropic.MessageParam[],
     systemPrompt: string,
-    writer: TelegramStreamWriter,
+    writer: AgentStreamWriter,
     debugCtx: AiDebugRunContext | null,
     toolCallNames: string[],
   ): Promise<{ text: string; toolCount: number }> {
@@ -289,7 +342,7 @@ export class ExpenseBotAgent {
   private async runAgentLoop(
     messages: Anthropic.MessageParam[],
     systemPrompt: string,
-    writer: TelegramStreamWriter,
+    writer: AgentStreamWriter,
     debugCtx: AiDebugRunContext | null,
     signal: AbortSignal,
     toolCallNames: string[],

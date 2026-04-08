@@ -814,6 +814,7 @@ function buildTaCategory(
   return {
     category: overrides.category ?? 'TestCat',
     monthsOfData: 6,
+    currentMonthSpent: 0,
     forecasts: {
       sma3: 200,
       wma3: 200,

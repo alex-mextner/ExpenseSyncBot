@@ -1421,6 +1421,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Food',
             monthsOfData: 6,
+            currentMonthSpent: 280,
             trend: {
               direction: 'rising',
               confidence: 0.8,
@@ -1476,7 +1477,9 @@ describe('get_technical_analysis', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Food');
     expect(result.output).toContain('растут');
-    expect(result.output).toContain('Прогноз на следующий месяц');
+    expect(result.output).toContain('Прогноз по истории');
+    expect(result.output).toContain('Текущий месяц: потрачено 280');
+    expect(result.output).toContain('Темп текущего месяца');
     expect(result.output).toContain('Обычный коридор');
     expect(result.output).not.toContain('MACD');
     expect(result.output).not.toContain('RSI');
@@ -1490,6 +1493,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Food',
             monthsOfData: 6,
+            currentMonthSpent: 180,
             trend: {
               direction: 'stable',
               confidence: 0.5,
@@ -1539,6 +1543,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Transport',
             monthsOfData: 4,
+            currentMonthSpent: 50,
             trend: {
               direction: 'falling',
               confidence: 0.7,
@@ -1598,6 +1603,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Food',
             monthsOfData: 3,
+            currentMonthSpent: 150,
             trend: {
               direction: 'stable',
               confidence: 0.5,
@@ -1662,6 +1668,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Shopping',
             monthsOfData: 8,
+            currentMonthSpent: 520,
             trend: {
               direction: 'rising',
               confidence: 0.9,
