@@ -1,5 +1,6 @@
 /** Text message handler — parses expense messages, handles receipt links, and routes AI mentions */
 import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
@@ -38,6 +39,59 @@ export function resetSheetWriteFailures(groupId: number): void {
   sheetFailuresByGroup.delete(groupId);
 }
 
+/** Build a fallback Telegram deep link (opens in browser on some platforms) */
+function buildGroupDeepLink(telegramGroupId: number): string {
+  const idStr = telegramGroupId.toString();
+  const chatId = idStr.startsWith('-100') ? idStr.slice(4) : idStr.slice(1);
+  return `https://t.me/c/${chatId}`;
+}
+
+/** Lazily fetch and cache a group's invite link via Bot API */
+async function getOrFetchInviteLink(
+  telegramGroupId: number,
+  cachedLink: string | null,
+): Promise<string | null> {
+  if (cachedLink) return cachedLink;
+  const { exportInviteLink } = await import('../../services/bank/telegram-sender');
+  const link = await exportInviteLink(telegramGroupId);
+  if (link) {
+    database.groups.update(telegramGroupId, { invite_link: link });
+  }
+  return link;
+}
+
+/** Send redirect message to user in private chat with buttons to their groups */
+export async function sendPrivateChatRedirect(telegramId: number): Promise<void> {
+  const groups = database.groupMembers.findGroupsByTelegramId(telegramId);
+
+  if (groups.length > 0) {
+    // Resolve invite links for each group (invite links open natively in Telegram)
+    const buttons = await Promise.all(
+      groups.map(async (g) => {
+        const inviteLink = await getOrFetchInviteLink(g.telegramGroupId, g.inviteLink);
+        return [
+          {
+            text: g.title || 'Группа',
+            url: inviteLink || buildGroupDeepLink(g.telegramGroupId),
+          },
+        ];
+      }),
+    );
+
+    await sendMessage('💬 Бот работает только в группах.\n\nДля учета расходов перейди в группу:', {
+      reply_markup: { inline_keyboard: buttons },
+    });
+  } else {
+    await sendMessage('💬 Бот работает только в группах.');
+    await sendMessage(
+      `<b>Как начать:</b>\n\n` +
+        `1. Создай группу в Telegram\n` +
+        `2. Добавь @${env.BOT_USERNAME} в группу\n` +
+        `3. Набери /connect для настройки`,
+    );
+  }
+}
+
 /**
  * Handle expense message
  */
@@ -62,45 +116,7 @@ export async function handleExpenseMessage(
 
   if (!isGroup) {
     logger.info(`[MSG] Message from private chat (user ${telegramId})`);
-
-    // Check if user has associated group
-    const user = database.users.findByTelegramId(telegramId);
-
-    if (user?.group_id) {
-      const group = database.groups.findById(user.group_id);
-
-      if (group?.telegram_group_id) {
-        // Create inline keyboard with link to group
-        // For supergroups: remove -100 prefix, for regular groups: just remove minus
-        const groupIdStr = group.telegram_group_id.toString();
-        const chatId = groupIdStr.startsWith('-100') ? groupIdStr.slice(4) : groupIdStr.slice(1);
-
-        const keyboard = {
-          inline_keyboard: [
-            [
-              {
-                text: '🔗 Перейти в группу',
-                url: `https://t.me/c/${chatId}`,
-              },
-            ],
-          ],
-        };
-
-        await sendMessage(
-          '💬 Бот работает только в группах.\n\nДля учета расходов используй команды в группе:',
-          { reply_markup: keyboard },
-        );
-      } else {
-        await sendMessage(
-          '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
-        );
-      }
-    } else {
-      await sendMessage(
-        '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
-      );
-    }
-
+    await sendPrivateChatRedirect(telegramId);
     return true;
   }
 
@@ -177,6 +193,12 @@ export async function handleExpenseMessage(
     user = database.users.findByTelegramId(telegramId);
     if (!user) return true;
   }
+
+  // Track group title and user membership for private chat redirect buttons
+  if (groupTitle !== group.title) {
+    database.groups.update(telegramGroupId, { title: groupTitle });
+  }
+  database.groupMembers.upsert(telegramId, group.id);
 
   // Check if we're waiting for design edit or code edit input
   const pendingTaskId = consumePendingDesignEdit(telegramGroupId);

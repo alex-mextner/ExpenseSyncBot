@@ -99,6 +99,16 @@ export async function sendDirect(
   return withChatContext(chatId, null, () => sendMessage(text, options));
 }
 
+/** Export invite link for a group chat. Returns null on failure (e.g. bot lacks can_invite_users). */
+export async function exportInviteLink(chatId: number): Promise<string | null> {
+  try {
+    return await getBot().api.exportChatInviteLink({ chat_id: chatId });
+  } catch (error) {
+    logger.debug({ err: error, chatId }, 'exportInviteLink failed');
+    return null;
+  }
+}
+
 /** Send a document (file) directly to a specific chatId via Telegram API.
  * Used for admin notifications with log attachments. */
 export async function sendDocumentDirect(

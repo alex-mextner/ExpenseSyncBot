@@ -69,6 +69,9 @@ function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
     user = database.users.findByTelegramId(telegramId);
   }
 
+  // Track membership for private chat group buttons
+  database.groupMembers.upsert(telegramId, group.id);
+
   return user ? { user, group } : null;
 }
 
