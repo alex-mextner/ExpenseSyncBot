@@ -8,7 +8,6 @@ import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets'
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { loadDigitEmojis, loadReactionEmojis } from '../utils/digit-emoji';
 import { createLogger } from '../utils/logger.ts';
-import { acquirePolling } from '../utils/polling-handoff';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
@@ -38,7 +37,7 @@ import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
-import type { BotInstance, Ctx } from './types';
+import type { Ctx } from './types';
 
 const logger = createLogger('index');
 
@@ -210,18 +209,8 @@ export function createBot(): Bot {
 /**
  * Start bot
  */
-export async function startBot(): Promise<{ bot: Bot; stopPolling: () => void }> {
+export async function startBot(): Promise<Bot> {
   const bot = createBot();
-
-  // Acquire the polling token before starting — signals any running instance to stop.
-  // Prevents Telegram 409 Conflict (two simultaneous getUpdates callers).
-  const stopPolling = await acquirePolling(async () => {
-    try {
-      await bot.stop(3_000);
-    } catch {
-      // Already stopped — ignore.
-    }
-  });
 
   logger.info('🤖 Starting bot...');
   await bot.start();
@@ -263,7 +252,7 @@ export async function startBot(): Promise<{ bot: Bot; stopPolling: () => void }>
   await devPipeline.resumeIncompleteTasksOnStartup();
   logger.info('✓ Dev pipeline started');
 
-  return { bot, stopPolling };
+  return bot;
 }
 
 /**
@@ -271,7 +260,7 @@ export async function startBot(): Promise<{ bot: Bot; stopPolling: () => void }>
  * current year, create a new current-year spreadsheet, copy current-year rows there,
  * and clean up the old spreadsheet.
  */
-export function createStartupMigration(bot: BotInstance) {
+export function createStartupMigration(bot: Bot) {
   return async function runStartupYearSplitMigration(): Promise<void> {
     const currentYear = new Date().getFullYear();
     const groups = database.groups.findAll();
