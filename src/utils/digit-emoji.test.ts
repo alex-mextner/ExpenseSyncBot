@@ -107,9 +107,10 @@ describe('digitEmoji', () => {
     expect(digitEmoji(1)).toBe('1.');
     expect(digitEmoji(5)).toBe('5.');
     expect(digitEmoji(9)).toBe('9.');
+    expect(digitEmoji(12)).toBe('12.');
   });
 
-  test('returns tg-emoji HTML when emojis are loaded', async () => {
+  test('returns tg-emoji HTML for single digits', async () => {
     const bot = createMockBot([
       { emoji: '1\uFE0F\u20E3', custom_emoji_id: 'emoji_one' },
       { emoji: '2\uFE0F\u20E3', custom_emoji_id: 'emoji_two' },
@@ -123,12 +124,34 @@ describe('digitEmoji', () => {
     expect(digitEmoji(3)).toBe('<tg-emoji emoji-id="emoji_three">3</tg-emoji>');
   });
 
-  test('falls back for digits without emoji IDs', async () => {
+  test('composes multi-digit numbers from individual emoji', async () => {
+    const allDigits = Array.from({ length: 10 }, (_, i) => ({
+      emoji: `${i}\uFE0F\u20E3`,
+      custom_emoji_id: `id_${i}`,
+    }));
+    const bot = createMockBot(allDigits);
+
+    await loadDigitEmojis(bot);
+
+    expect(digitEmoji(10)).toBe(
+      '<tg-emoji emoji-id="id_1">1</tg-emoji><tg-emoji emoji-id="id_0">0</tg-emoji>',
+    );
+    expect(digitEmoji(12)).toBe(
+      '<tg-emoji emoji-id="id_1">1</tg-emoji><tg-emoji emoji-id="id_2">2</tg-emoji>',
+    );
+    expect(digitEmoji(25)).toBe(
+      '<tg-emoji emoji-id="id_2">2</tg-emoji><tg-emoji emoji-id="id_5">5</tg-emoji>',
+    );
+  });
+
+  test('falls back to plain text if any digit in multi-digit number is missing', async () => {
+    // Only has digit 1, missing digit 0
     const bot = createMockBot([{ emoji: '1\uFE0F\u20E3', custom_emoji_id: 'emoji_one' }]);
 
     await loadDigitEmojis(bot);
 
     expect(digitEmoji(1)).toBe('<tg-emoji emoji-id="emoji_one">1</tg-emoji>');
+    expect(digitEmoji(10)).toBe('10.');
     expect(digitEmoji(5)).toBe('5.');
   });
 });

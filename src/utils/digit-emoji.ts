@@ -20,7 +20,7 @@ const KEYCAP_TO_DIGIT: Record<string, number> = {
   '9\uFE0F\u20E3': 9,
 };
 
-/** Cached digit (1-9) → custom_emoji_id mapping */
+/** Cached digit (0-9) → custom_emoji_id mapping */
 let digitEmojiIds: Map<number, string> | null = null;
 
 /**
@@ -54,15 +54,36 @@ export async function loadDigitEmojis(bot: BotInstance): Promise<void> {
 }
 
 /**
- * Get HTML for a digit custom emoji (1-9).
- * Returns `<tg-emoji emoji-id="...">N</tg-emoji>` if loaded, plain digit otherwise.
+ * Format a single digit (0-9) as a custom emoji tag.
+ * Returns plain digit if emoji ID is not available.
+ */
+function singleDigitEmoji(d: number): string {
+  const id = digitEmojiIds?.get(d);
+  if (id) {
+    return `<tg-emoji emoji-id="${id}">${d}</tg-emoji>`;
+  }
+  return '';
+}
+
+/**
+ * Get HTML for a numbered custom emoji.
+ * For 1-9: single emoji. For 10+: composed from individual digit emojis.
+ * Falls back to plain "N." when emojis are not loaded.
  */
 export function digitEmoji(n: number): string {
-  const id = digitEmojiIds?.get(n);
-  if (id) {
-    return `<tg-emoji emoji-id="${id}">${n}</tg-emoji>`;
+  if (!digitEmojiIds || digitEmojiIds.size === 0) {
+    return `${n}.`;
   }
-  return `${n}.`;
+
+  const digits = String(n).split('').map(Number);
+  const parts = digits.map(singleDigitEmoji);
+
+  // If any digit lacks an emoji ID, fall back to plain text
+  if (parts.some((p) => p === '')) {
+    return `${n}.`;
+  }
+
+  return parts.join('');
 }
 
 /** Check if digit emojis are loaded (for testing) */
