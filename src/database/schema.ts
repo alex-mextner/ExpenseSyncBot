@@ -1199,7 +1199,8 @@ export function runMigrations(db: Database): void {
       up: () => {
         // Race condition in appendExpenseRow wrote EUR formulas referencing wrong rows.
         // Sync then imported those wrong EUR values into eur_amount.
-        // Fix: recalculate eur_amount from amount + currency using fallback rates.
+        // Fix: recalculate eur_amount from amount + currency using approximate fallback rates.
+        // These are recovery rates, not the exact rates used at transaction time.
         const rates: Record<string, number> = {
           EUR: 1,
           USD: 0.92,

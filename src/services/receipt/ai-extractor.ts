@@ -298,10 +298,14 @@ export async function extractExpensesFromReceipt(
 
           // Detect leaked prompt instructions in name_ru (weak models echo format descriptions)
           if (looksLikePromptLeak(item.name_ru)) {
+            const safeOriginal =
+              item.name_original && !looksLikePromptLeak(item.name_original)
+                ? item.name_original
+                : null;
             logger.warn(
-              `[AI_EXTRACTOR] Prompt leak detected in name_ru: "${item.name_ru}", falling back to name_original`,
+              `[AI_EXTRACTOR] Prompt leak detected in name_ru: "${item.name_ru}", fallback: ${safeOriginal ?? 'generic'}`,
             );
-            item.name_ru = item.name_original || `Товар (${item.total})`;
+            item.name_ru = safeOriginal || `Товар (${item.total})`;
           }
 
           // Ensure possible_categories exists and is an array

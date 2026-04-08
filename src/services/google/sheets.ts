@@ -322,7 +322,7 @@ async function appendExpenseRowImpl(
 
   // Write EUR formula using the ACTUAL row number from the API response
   if (needsFormula && updatedRange) {
-    const rowMatch = updatedRange.match(/!A(\d+):/);
+    const rowMatch = updatedRange.match(/!A(\d+)/);
     if (rowMatch?.[1]) {
       const actualRow = Number.parseInt(rowMatch[1], 10);
       const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);

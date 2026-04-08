@@ -522,16 +522,20 @@ export async function handleSyncCommand(
     }
 
     if (result.eurMismatches.length > 0) {
+      // N+2 rule: show all if ≤7, otherwise show 5 + "ещё N" (N≥3)
+      const maxVisible = result.eurMismatches.length <= 7 ? result.eurMismatches.length : 5;
       const lines = result.eurMismatches
-        .slice(0, 5)
+        .slice(0, maxVisible)
         .map(
           (m) =>
             `• Строка ${m.row}: ${m.date} ${m.category} — таблица: ${m.sheetEur}€, пересчёт: ${m.recalcEur}€`,
         );
       const extra =
-        result.eurMismatches.length > 5 ? `\n...и ещё ${result.eurMismatches.length - 5}` : '';
+        result.eurMismatches.length > maxVisible
+          ? `\n...и ещё ${result.eurMismatches.length - maxVisible}`
+          : '';
       await sendMessage(
-        `⚠️ EUR формулы в таблице расходились с пересчётом по Rate (исправлено):\n${lines.join('\n')}${extra}`,
+        `⚠️ EUR формулы в таблице расходились с Rate (в БД используются пересчитанные значения):\n${lines.join('\n')}${extra}`,
       );
     }
 

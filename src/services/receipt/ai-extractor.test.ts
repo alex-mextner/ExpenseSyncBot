@@ -447,7 +447,7 @@ describe('extractExpensesFromReceipt', () => {
       expect(result.items[0]?.name_ru).toBe('Banana 1kg');
     });
 
-    it('falls back to "Товар (total)" when both name_ru and name_original are leaked', async () => {
+    it('falls back to "Товар (total)" when name_original is null', async () => {
       const leakedJson = JSON.stringify({
         items: [
           {
@@ -466,6 +466,27 @@ describe('extractExpensesFromReceipt', () => {
 
       const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
       expect(result.items[0]?.name_ru).toBe('Товар (270)');
+    });
+
+    it('falls back to "Товар (total)" when name_original is also leaked', async () => {
+      const leakedJson = JSON.stringify({
+        items: [
+          {
+            name_ru: 'перевод на русский',
+            name_original: 'оригинальное название товара',
+            quantity: 1,
+            price: 200,
+            total: 200,
+            category: 'Еда',
+            possible_categories: [],
+          },
+        ],
+        currency: 'RSD',
+      });
+      mockFetchWithContent(leakedJson);
+
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
+      expect(result.items[0]?.name_ru).toBe('Товар (200)');
     });
 
     it('does not flag normal product names', async () => {
