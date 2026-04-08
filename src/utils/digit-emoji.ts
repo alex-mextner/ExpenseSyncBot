@@ -1,27 +1,40 @@
-/** Fetches and caches digit custom emoji IDs from a Telegram sticker set for numbered lists */
+/** Fetches and caches custom emoji IDs for numbered lists and message reactions */
+import type { TelegramReactionType } from '@gramio/types';
 import type { BotInstance } from '../bot/types';
 import { createLogger } from './logger.ts';
 
 const logger = createLogger('digit-emoji');
 
 const STICKER_SET_NAME = 'CyrillicFont';
+const RESTRICTED_EMOJI_SET = 'RestrictedEmoji';
 
-/** Keycap digit emojis → digit index mapping */
-const KEYCAP_TO_DIGIT: Record<string, number> = {
-  '0\uFE0F\u20E3': 0,
-  '1\uFE0F\u20E3': 1,
-  '2\uFE0F\u20E3': 2,
-  '3\uFE0F\u20E3': 3,
-  '4\uFE0F\u20E3': 4,
-  '5\uFE0F\u20E3': 5,
-  '6\uFE0F\u20E3': 6,
-  '7\uFE0F\u20E3': 7,
-  '8\uFE0F\u20E3': 8,
-  '9\uFE0F\u20E3': 9,
-};
+/** Keycap digit emojis (used as sticker alt text in CyrillicFont) */
+const KEYCAP_EMOJIS = [
+  '0\uFE0F\u20E3',
+  '1\uFE0F\u20E3',
+  '2\uFE0F\u20E3',
+  '3\uFE0F\u20E3',
+  '4\uFE0F\u20E3',
+  '5\uFE0F\u20E3',
+  '6\uFE0F\u20E3',
+  '7\uFE0F\u20E3',
+  '8\uFE0F\u20E3',
+  '9\uFE0F\u20E3',
+] as const;
+
+/** Keycap emoji string → digit index mapping */
+const KEYCAP_TO_DIGIT: Record<string, number> = Object.fromEntries(
+  KEYCAP_EMOJIS.map((emoji, i) => [emoji, i]),
+);
 
 /** Cached digit (0-9) → custom_emoji_id mapping */
 let digitEmojiIds: Map<number, string> | null = null;
+
+/** Cached ✅ custom emoji ID from RestrictedEmoji set */
+let checkEmojiId: string | null = null;
+
+/** Cached 💯 custom emoji ID from RestrictedEmoji set */
+let hundredEmojiId: string | null = null;
 
 /**
  * Fetch CyrillicFont sticker set and cache digit emoji IDs.
@@ -55,12 +68,13 @@ export async function loadDigitEmojis(bot: BotInstance): Promise<void> {
 
 /**
  * Format a single digit (0-9) as a custom emoji tag.
- * Returns plain digit if emoji ID is not available.
+ * The alt text inside <tg-emoji> must be the original keycap emoji (e.g. 1️⃣),
+ * not just the digit — otherwise Telegram rejects with ENTITY_TEXT_INVALID.
  */
 function singleDigitEmoji(d: number): string {
   const id = digitEmojiIds?.get(d);
   if (id) {
-    return `<tg-emoji emoji-id="${id}">${d}</tg-emoji>`;
+    return `<tg-emoji emoji-id="${id}">${KEYCAP_EMOJIS[d]}</tg-emoji>`;
   }
   return '';
 }
@@ -86,6 +100,71 @@ export function digitEmoji(n: number): string {
   return parts.join('');
 }
 
+/**
+ * Load ✅ and 💯 custom emoji from RestrictedEmoji sticker set.
+ * Safe to call multiple times — fetches only once.
+ */
+export async function loadReactionEmojis(bot: BotInstance): Promise<void> {
+  if (checkEmojiId) return;
+
+  try {
+    const stickerSet = await bot.api.getStickerSet({ name: RESTRICTED_EMOJI_SET });
+    for (const sticker of stickerSet.stickers) {
+      if (!sticker.custom_emoji_id) continue;
+      if (sticker.emoji === '✅' && !checkEmojiId) {
+        checkEmojiId = sticker.custom_emoji_id;
+      }
+      if (sticker.emoji === '💯' && !hundredEmojiId) {
+        hundredEmojiId = sticker.custom_emoji_id;
+      }
+    }
+    if (checkEmojiId) {
+      logger.info(`Loaded ✅ emoji from ${RESTRICTED_EMOJI_SET}: ${checkEmojiId}`);
+    }
+    if (hundredEmojiId) {
+      logger.info(`Loaded 💯 emoji from ${RESTRICTED_EMOJI_SET}: ${hundredEmojiId}`);
+    }
+    if (!checkEmojiId && !hundredEmojiId) {
+      logger.warn(`No reaction emojis found in ${RESTRICTED_EMOJI_SET}`);
+    }
+  } catch (err) {
+    logger.error({ err }, `Failed to load ${RESTRICTED_EMOJI_SET} sticker set`);
+  }
+}
+
+/** Get single digit (0-9) custom emoji ID for reactions */
+export function getDigitEmojiId(digit: number): string | null {
+  return digitEmojiIds?.get(digit) ?? null;
+}
+
+/** Get ✅ custom emoji ID */
+export function getCheckEmojiId(): string | null {
+  return checkEmojiId;
+}
+
+/**
+ * Build single reaction for expense messages.
+ * 1 expense → ✅, 2-9 → digit, 10+ → 💯. Fallback → 👍.
+ */
+export function buildExpenseReaction(expenseCount: number): TelegramReactionType {
+  if (expenseCount >= 10 && hundredEmojiId) {
+    return { type: 'custom_emoji', custom_emoji_id: hundredEmojiId };
+  }
+
+  if (expenseCount >= 2 && expenseCount <= 9) {
+    const digitId = digitEmojiIds?.get(expenseCount);
+    if (digitId) {
+      return { type: 'custom_emoji', custom_emoji_id: digitId };
+    }
+  }
+
+  if (checkEmojiId) {
+    return { type: 'custom_emoji', custom_emoji_id: checkEmojiId };
+  }
+
+  return { type: 'emoji', emoji: '👍' };
+}
+
 /** Check if digit emojis are loaded (for testing) */
 export function hasDigitEmojis(): boolean {
   return digitEmojiIds !== null && digitEmojiIds.size > 0;
@@ -94,4 +173,6 @@ export function hasDigitEmojis(): boolean {
 /** Reset cached emojis (for testing) */
 export function resetDigitEmojis(): void {
   digitEmojiIds = null;
+  checkEmojiId = null;
+  hundredEmojiId = null;
 }

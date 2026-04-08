@@ -5,7 +5,16 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 // NODE_ENV=test silences pino globally — no stdout pollution.
 // Logger mock not needed here: we verify behavior via return values.
 
-import { digitEmoji, hasDigitEmojis, loadDigitEmojis, resetDigitEmojis } from './digit-emoji';
+import {
+  buildExpenseReaction,
+  digitEmoji,
+  getCheckEmojiId,
+  getDigitEmojiId,
+  hasDigitEmojis,
+  loadDigitEmojis,
+  loadReactionEmojis,
+  resetDigitEmojis,
+} from './digit-emoji';
 
 beforeEach(() => {
   resetDigitEmojis();
@@ -49,7 +58,7 @@ describe('loadDigitEmojis', () => {
 
     expect(hasDigitEmojis()).toBe(true);
     expect(digitEmoji(1)).toBe('1.');
-    expect(digitEmoji(2)).toBe('<tg-emoji emoji-id="id_2">2</tg-emoji>');
+    expect(digitEmoji(2)).toBe('<tg-emoji emoji-id="id_2">2\uFE0F\u20E3</tg-emoji>');
   });
 
   test('hasDigitEmojis returns false when no digit emojis found', async () => {
@@ -97,7 +106,8 @@ describe('loadDigitEmojis', () => {
 
     expect(hasDigitEmojis()).toBe(true);
     for (let i = 0; i <= 9; i++) {
-      expect(digitEmoji(i)).toBe(`<tg-emoji emoji-id="id_${i}">${i}</tg-emoji>`);
+      const keycap = `${i}\uFE0F\u20E3`;
+      expect(digitEmoji(i)).toBe(`<tg-emoji emoji-id="id_${i}">${keycap}</tg-emoji>`);
     }
   });
 });
@@ -119,9 +129,9 @@ describe('digitEmoji', () => {
 
     await loadDigitEmojis(bot);
 
-    expect(digitEmoji(1)).toBe('<tg-emoji emoji-id="emoji_one">1</tg-emoji>');
-    expect(digitEmoji(2)).toBe('<tg-emoji emoji-id="emoji_two">2</tg-emoji>');
-    expect(digitEmoji(3)).toBe('<tg-emoji emoji-id="emoji_three">3</tg-emoji>');
+    expect(digitEmoji(1)).toBe('<tg-emoji emoji-id="emoji_one">1\uFE0F\u20E3</tg-emoji>');
+    expect(digitEmoji(2)).toBe('<tg-emoji emoji-id="emoji_two">2\uFE0F\u20E3</tg-emoji>');
+    expect(digitEmoji(3)).toBe('<tg-emoji emoji-id="emoji_three">3\uFE0F\u20E3</tg-emoji>');
   });
 
   test('composes multi-digit numbers from individual emoji', async () => {
@@ -134,13 +144,13 @@ describe('digitEmoji', () => {
     await loadDigitEmojis(bot);
 
     expect(digitEmoji(10)).toBe(
-      '<tg-emoji emoji-id="id_1">1</tg-emoji><tg-emoji emoji-id="id_0">0</tg-emoji>',
+      '<tg-emoji emoji-id="id_1">1\uFE0F\u20E3</tg-emoji><tg-emoji emoji-id="id_0">0\uFE0F\u20E3</tg-emoji>',
     );
     expect(digitEmoji(12)).toBe(
-      '<tg-emoji emoji-id="id_1">1</tg-emoji><tg-emoji emoji-id="id_2">2</tg-emoji>',
+      '<tg-emoji emoji-id="id_1">1\uFE0F\u20E3</tg-emoji><tg-emoji emoji-id="id_2">2\uFE0F\u20E3</tg-emoji>',
     );
     expect(digitEmoji(25)).toBe(
-      '<tg-emoji emoji-id="id_2">2</tg-emoji><tg-emoji emoji-id="id_5">5</tg-emoji>',
+      '<tg-emoji emoji-id="id_2">2\uFE0F\u20E3</tg-emoji><tg-emoji emoji-id="id_5">5\uFE0F\u20E3</tg-emoji>',
     );
   });
 
@@ -150,14 +160,14 @@ describe('digitEmoji', () => {
 
     await loadDigitEmojis(bot);
 
-    expect(digitEmoji(1)).toBe('<tg-emoji emoji-id="emoji_one">1</tg-emoji>');
+    expect(digitEmoji(1)).toBe('<tg-emoji emoji-id="emoji_one">1\uFE0F\u20E3</tg-emoji>');
     expect(digitEmoji(10)).toBe('10.');
     expect(digitEmoji(5)).toBe('5.');
   });
 });
 
 describe('resetDigitEmojis', () => {
-  test('clears cached emojis', async () => {
+  test('clears cached emojis including check emoji', async () => {
     const bot = createMockBot([{ emoji: '1\uFE0F\u20E3', custom_emoji_id: 'id_1' }]);
 
     await loadDigitEmojis(bot);
@@ -165,6 +175,158 @@ describe('resetDigitEmojis', () => {
 
     resetDigitEmojis();
     expect(hasDigitEmojis()).toBe(false);
+    expect(getCheckEmojiId()).toBeNull();
     expect(digitEmoji(1)).toBe('1.');
+  });
+});
+
+describe('loadReactionEmojis', () => {
+  function createReactionBot(stickers: Array<{ emoji?: string; custom_emoji_id?: string }>) {
+    return {
+      api: {
+        getStickerSet: mock().mockResolvedValue({ name: 'RestrictedEmoji', stickers }),
+      },
+    } as unknown as Parameters<typeof loadReactionEmojis>[0];
+  }
+
+  test('loads ✅ and 💯 from sticker set', async () => {
+    const bot = createReactionBot([
+      { emoji: '✅', custom_emoji_id: 'id_check' },
+      { emoji: '💯', custom_emoji_id: 'id_hundred' },
+      { emoji: '❌', custom_emoji_id: 'id_cross' },
+    ]);
+
+    await loadReactionEmojis(bot);
+
+    expect(getCheckEmojiId()).toBe('id_check');
+  });
+
+  test('handles missing ✅ gracefully', async () => {
+    const bot = createReactionBot([
+      { emoji: '❌', custom_emoji_id: 'id_cross' },
+      { emoji: '💯', custom_emoji_id: 'id_hundred' },
+    ]);
+
+    await loadReactionEmojis(bot);
+
+    expect(getCheckEmojiId()).toBeNull();
+  });
+
+  test('handles API error gracefully', async () => {
+    const bot = {
+      api: { getStickerSet: mock().mockRejectedValue(new Error('Not found')) },
+    } as unknown as Parameters<typeof loadReactionEmojis>[0];
+
+    await loadReactionEmojis(bot);
+
+    expect(getCheckEmojiId()).toBeNull();
+  });
+
+  test('does not refetch if already loaded', async () => {
+    const getStickerSet = mock().mockResolvedValue({
+      name: 'RestrictedEmoji',
+      stickers: [{ emoji: '✅', custom_emoji_id: 'id_check' }],
+    });
+    const bot = { api: { getStickerSet } } as unknown as Parameters<typeof loadReactionEmojis>[0];
+
+    await loadReactionEmojis(bot);
+    await loadReactionEmojis(bot);
+
+    expect(getStickerSet).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('getDigitEmojiId', () => {
+  test('returns null when not loaded', () => {
+    expect(getDigitEmojiId(1)).toBeNull();
+  });
+
+  test('returns custom emoji ID for loaded digit', async () => {
+    const bot = createMockBot([
+      { emoji: '2\uFE0F\u20E3', custom_emoji_id: 'id_2' },
+      { emoji: '5\uFE0F\u20E3', custom_emoji_id: 'id_5' },
+    ]);
+
+    await loadDigitEmojis(bot);
+
+    expect(getDigitEmojiId(2)).toBe('id_2');
+    expect(getDigitEmojiId(5)).toBe('id_5');
+    expect(getDigitEmojiId(7)).toBeNull();
+  });
+});
+
+describe('buildExpenseReaction', () => {
+  function loadReaction(stickers: Array<{ emoji?: string; custom_emoji_id?: string }>) {
+    return {
+      api: {
+        getStickerSet: mock().mockResolvedValue({ name: 'RestrictedEmoji', stickers }),
+      },
+    } as unknown as Parameters<typeof loadReactionEmojis>[0];
+  }
+
+  test('returns 👍 fallback when no custom emojis loaded', () => {
+    expect(buildExpenseReaction(1)).toEqual({ type: 'emoji', emoji: '👍' });
+  });
+
+  test('returns ✅ for single expense', async () => {
+    await loadReactionEmojis(loadReaction([{ emoji: '✅', custom_emoji_id: 'check_id' }]));
+
+    expect(buildExpenseReaction(1)).toEqual({
+      type: 'custom_emoji',
+      custom_emoji_id: 'check_id',
+    });
+  });
+
+  test('returns digit for 2-9 expenses', async () => {
+    await loadReactionEmojis(
+      loadReaction([
+        { emoji: '✅', custom_emoji_id: 'check_id' },
+        { emoji: '💯', custom_emoji_id: 'hundred_id' },
+      ]),
+    );
+    const digitBot = createMockBot([
+      { emoji: '2\uFE0F\u20E3', custom_emoji_id: 'digit_2' },
+      { emoji: '5\uFE0F\u20E3', custom_emoji_id: 'digit_5' },
+    ]);
+    await loadDigitEmojis(digitBot);
+
+    expect(buildExpenseReaction(2)).toEqual({ type: 'custom_emoji', custom_emoji_id: 'digit_2' });
+    expect(buildExpenseReaction(5)).toEqual({ type: 'custom_emoji', custom_emoji_id: 'digit_5' });
+  });
+
+  test('returns 💯 for 10+ expenses', async () => {
+    await loadReactionEmojis(
+      loadReaction([
+        { emoji: '✅', custom_emoji_id: 'check_id' },
+        { emoji: '💯', custom_emoji_id: 'hundred_id' },
+      ]),
+    );
+
+    expect(buildExpenseReaction(10)).toEqual({
+      type: 'custom_emoji',
+      custom_emoji_id: 'hundred_id',
+    });
+    expect(buildExpenseReaction(25)).toEqual({
+      type: 'custom_emoji',
+      custom_emoji_id: 'hundred_id',
+    });
+  });
+
+  test('falls back to ✅ for 2-9 when digit emojis not loaded', async () => {
+    await loadReactionEmojis(loadReaction([{ emoji: '✅', custom_emoji_id: 'check_id' }]));
+
+    expect(buildExpenseReaction(3)).toEqual({
+      type: 'custom_emoji',
+      custom_emoji_id: 'check_id',
+    });
+  });
+
+  test('falls back to ✅ for 10+ when 💯 not loaded', async () => {
+    await loadReactionEmojis(loadReaction([{ emoji: '✅', custom_emoji_id: 'check_id' }]));
+
+    expect(buildExpenseReaction(10)).toEqual({
+      type: 'custom_emoji',
+      custom_emoji_id: 'check_id',
+    });
   });
 });

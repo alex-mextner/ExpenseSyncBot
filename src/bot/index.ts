@@ -6,8 +6,9 @@ import { initSender } from '../services/bank/telegram-sender';
 import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
-import { loadDigitEmojis } from '../utils/digit-emoji';
+import { loadDigitEmojis, loadReactionEmojis } from '../utils/digit-emoji';
 import { createLogger } from '../utils/logger.ts';
+import { acquirePolling } from '../utils/polling-handoff';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
@@ -209,8 +210,18 @@ export function createBot(): Bot {
 /**
  * Start bot
  */
-export async function startBot(): Promise<Bot> {
+export async function startBot(): Promise<{ bot: Bot; stopPolling: () => void }> {
   const bot = createBot();
+
+  // Acquire the polling token before starting — signals any running instance to stop.
+  // Prevents Telegram 409 Conflict (two simultaneous getUpdates callers).
+  const stopPolling = await acquirePolling(async () => {
+    try {
+      await bot.stop(3_000);
+    } catch {
+      // Already stopped — ignore.
+    }
+  });
 
   logger.info('🤖 Starting bot...');
   await bot.start();
@@ -237,8 +248,9 @@ export async function startBot(): Promise<Bot> {
     logger.error({ err }, 'Failed to verify spreadsheet columns (non-fatal)');
   }
 
-  // Load CyrillicFont digit emojis for numbered expense summaries
+  // Load custom emojis for expense summaries and reactions
   await loadDigitEmojis(bot);
+  await loadReactionEmojis(bot);
 
   // Start background photo processor
   logger.info('📸 Starting photo processor...');
@@ -251,7 +263,7 @@ export async function startBot(): Promise<Bot> {
   await devPipeline.resumeIncompleteTasksOnStartup();
   logger.info('✓ Dev pipeline started');
 
-  return bot;
+  return { bot, stopPolling };
 }
 
 /**
