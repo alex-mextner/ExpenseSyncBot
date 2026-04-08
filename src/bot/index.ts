@@ -6,6 +6,7 @@ import { initSender } from '../services/bank/telegram-sender';
 import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
+import { loadDigitEmojis } from '../utils/digit-emoji';
 import { createLogger } from '../utils/logger.ts';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
@@ -235,6 +236,9 @@ export async function startBot(): Promise<Bot> {
   } catch (err) {
     logger.error({ err }, 'Failed to verify spreadsheet columns (non-fatal)');
   }
+
+  // Load CyrillicFont digit emojis for numbered expense summaries
+  await loadDigitEmojis(bot);
 
   // Start background photo processor
   logger.info('📸 Starting photo processor...');
