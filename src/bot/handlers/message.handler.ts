@@ -11,6 +11,7 @@ import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
 import { digitEmoji } from '../../utils/digit-emoji';
 import { getErrorMessage } from '../../utils/error';
 import { findBestCategoryMatch } from '../../utils/fuzzy-search';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
@@ -330,27 +331,33 @@ export async function handleExpenseMessage(
     }
 
     // If category exists, save directly
-    let saved = false;
     if (categoryExists || !parsed.category) {
       logger.info(`[MSG] Line ${index + 1}: saving to sheet`);
       try {
         await saveExpenseToSheet(user.id, group.id, pendingExpense.id);
         successCount++;
-        saved = true;
+        processedExpenses.push({
+          amount: parsed.amount,
+          currency: parsed.currency,
+          category: parsed.category,
+          comment: parsed.comment,
+          saved: true,
+        });
       } catch (error) {
         logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
         database.pendingExpenses.delete(pendingExpense.id);
         await sendMessage(getSheetWriteErrorMessage(group.id));
       }
+    } else {
+      // New category — pending confirmation
+      processedExpenses.push({
+        amount: parsed.amount,
+        currency: parsed.currency,
+        category: parsed.category,
+        comment: parsed.comment,
+        saved: false,
+      });
     }
-
-    processedExpenses.push({
-      amount: parsed.amount,
-      currency: parsed.currency,
-      category: parsed.category,
-      comment: parsed.comment,
-      saved,
-    });
   }
 
   // Only react if at least one expense was processed
@@ -374,8 +381,8 @@ export async function handleExpenseMessage(
     const summaryLines = processedExpenses.map((exp, i) => {
       const num = digitEmoji(i + 1);
       const amount = formatAmount(exp.amount, exp.currency);
-      const cat = exp.category ?? '';
-      const comment = exp.comment ? ` — ${exp.comment}` : '';
+      const cat = escapeHtml(exp.category ?? '');
+      const comment = exp.comment ? ` — ${escapeHtml(exp.comment)}` : '';
       const status = exp.saved ? '' : ' ❓';
       return `${num} ${amount} ${cat}${comment}${status}`;
     });
