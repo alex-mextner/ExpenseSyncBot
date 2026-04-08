@@ -1194,6 +1194,68 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '045_fix_corrupted_eur_amounts',
+      up: () => {
+        // Race condition in appendExpenseRow wrote EUR formulas referencing wrong rows.
+        // Sync then imported those wrong EUR values into eur_amount.
+        // Fix: recalculate eur_amount from amount + currency using approximate fallback rates.
+        // These are recovery rates, not the exact rates used at transaction time.
+        const rates: Record<string, number> = {
+          EUR: 1,
+          USD: 0.92,
+          RUB: 0.0093,
+          RSD: 0.0086,
+          GBP: 1.18,
+          BYN: 0.28,
+          CHF: 1.05,
+        };
+
+        // Guard: skip if expenses table doesn't have eur_amount (test DBs with partial schema)
+        const hasEurCol = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('expenses') WHERE name = 'eur_amount'`,
+          )
+          .get();
+        if (!hasEurCol?.count) {
+          logger.info('✓ expenses.eur_amount column not found, skipping');
+          return;
+        }
+
+        // Find expenses where eur_amount is suspiciously constant (the bug marker)
+        // or zero for non-EUR currencies
+        const buggyConst = db
+          .query<{ id: number; amount: number; currency: string; eur_amount: number }, []>(
+            `SELECT id, amount, currency, eur_amount FROM expenses
+             WHERE (ABS(eur_amount - 2.197105278) < 0.001 AND ABS(amount - 258) > 1)
+                OR (eur_amount = 0 AND currency != 'EUR')`,
+          )
+          .all();
+
+        if (buggyConst.length === 0) {
+          logger.info('✓ No corrupted eur_amounts found');
+          return;
+        }
+
+        const updateStmt = db.query<void, [number, number]>(
+          `UPDATE expenses SET eur_amount = ? WHERE id = ?`,
+        );
+
+        let fixed = 0;
+        for (const row of buggyConst) {
+          const rate = rates[row.currency];
+          if (!rate) {
+            logger.warn(`[MIGRATION] No rate for ${row.currency}, skipping expense ${row.id}`);
+            continue;
+          }
+          const correctEur = Math.round(row.amount * rate * 100) / 100;
+          updateStmt.run(correctEur, row.id);
+          fixed++;
+        }
+
+        logger.info(`✓ Fixed ${fixed} corrupted eur_amounts (of ${buggyConst.length} found)`);
+      },
+    },
   ];
 
   // Check and run migrations

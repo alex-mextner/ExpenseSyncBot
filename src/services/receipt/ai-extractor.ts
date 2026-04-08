@@ -7,6 +7,22 @@ import { extractTextFromHTML } from './receipt-fetcher';
 
 const logger = createLogger('ai-extractor');
 
+/** Detect when the AI model returns prompt format descriptions instead of actual values */
+function looksLikePromptLeak(nameRu: string): boolean {
+  const lower = nameRu.toLowerCase();
+  const leakPatterns = [
+    'название товара',
+    'перевод на русский',
+    'оригинальное название',
+    'product name',
+    'name_ru',
+    'name_original',
+    'наименование позиции',
+    'описание товара',
+  ];
+  return leakPatterns.some((p) => lower.includes(p));
+}
+
 const client = new InferenceClient(env.HF_TOKEN);
 
 // Models to try in order (reasoning model first, then fallback to non-reasoning)
@@ -278,6 +294,18 @@ export async function extractExpensesFromReceipt(
             !item.category
           ) {
             throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
+          }
+
+          // Detect leaked prompt instructions in name_ru (weak models echo format descriptions)
+          if (looksLikePromptLeak(item.name_ru)) {
+            const safeOriginal =
+              item.name_original && !looksLikePromptLeak(item.name_original)
+                ? item.name_original
+                : null;
+            logger.warn(
+              `[AI_EXTRACTOR] Prompt leak detected in name_ru: "${item.name_ru}", fallback: ${safeOriginal ?? 'generic'}`,
+            );
+            item.name_ru = safeOriginal || `Товар (${item.total})`;
           }
 
           // Ensure possible_categories exists and is an array
