@@ -1,15 +1,12 @@
-/** Receipt summarizer — uses Hugging Face to generate a human-readable summary of receipt items */
-import { InferenceClient } from '@huggingface/inference';
+/** Receipt summarizer — builds human-readable summaries of receipt items, AI-powered corrections */
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
-import { env } from '../../config/env';
 import type { ReceiptItem } from '../../database/types';
 import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
+import { aiComplete, stripThinkingTags } from '../ai/completion';
 
 const logger = createLogger('receipt-summarizer');
-
-const client = new InferenceClient(env.HF_TOKEN);
 
 /**
  * Summary item structure
@@ -197,33 +194,20 @@ ${historyText}
 
   logger.info(`[RECEIPT_SUMMARIZER] Sending correction to AI: "${userCorrection}"`);
 
-  const response = await client.chatCompletion({
-    provider: 'novita',
-    model: 'deepseek-ai/DeepSeek-R1-0528',
+  const { text: responseText } = await aiComplete({
     messages: [
       {
         role: 'system',
         content:
           'You are a JSON processor. Apply user corrections to receipt summaries. Return only valid JSON, no explanations.',
       },
-      {
-        role: 'user',
-        content: prompt,
-      },
+      { role: 'user', content: prompt },
     ],
-    max_tokens: 2000,
+    maxTokens: 2000,
     temperature: 0.3,
   });
 
-  const responseText = response.choices[0]?.message?.content?.trim();
-
-  if (!responseText) {
-    throw new Error('Empty response from AI');
-  }
-
-  // Remove thinking tags
-  // Greedy * to capture until the LAST </think> (models may emit multiple think blocks)
-  const cleanedResponse = responseText.replace(/<think>[\s\S]*<\/think>/gi, '').trim();
+  const cleanedResponse = stripThinkingTags(responseText);
 
   logger.info(`[RECEIPT_SUMMARIZER] AI response: ${cleanedResponse.substring(0, 200)}...`);
 

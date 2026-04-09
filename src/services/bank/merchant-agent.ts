@@ -1,26 +1,14 @@
 // Merchant normalization AI agent — batch-processes unmatched merchant strings
 // into pending_review rules. Runs after each sync cycle and on new rule requests.
 // Only active when BOT_ADMIN_CHAT_ID is configured.
-import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { MerchantRuleRequest } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
+import { aiComplete, stripThinkingTags } from '../ai/completion';
 import { sendDirect } from './telegram-sender';
 
 const logger = createLogger('merchant-agent');
-
-let client: Anthropic | null = null;
-
-function getClient(): Anthropic {
-  if (!client) {
-    client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-      baseURL: env.AI_BASE_URL,
-    });
-  }
-  return client;
-}
 
 interface AiRuleSuggestion {
   pattern: string;
@@ -131,14 +119,13 @@ ${existingList || '(пусто)'}
 Возвращай ровно ${requests.length} объектов в том же порядке.`;
 
   try {
-    const response = await getClient().messages.create({
-      model: env.AI_MODEL,
-      max_tokens: 1000,
+    const { text } = await aiComplete({
       messages: [{ role: 'user', content: prompt }],
+      maxTokens: 1000,
     });
 
-    const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
-    const match = text.match(/\[[\s\S]*\]/);
+    const cleaned = stripThinkingTags(text);
+    const match = cleaned.match(/\[[\s\S]*\]/);
     if (!match) throw new Error('No JSON array in response');
 
     const parsed = JSON.parse(match[0]) as AiRuleSuggestion[];
