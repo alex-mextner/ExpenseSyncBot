@@ -118,17 +118,17 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'set_budget',
     description:
-      'Set or update budget limit for a category. Saves to DB and syncs to Google Sheets.',
+      'Set or update budget limit for a category. Saves to DB and syncs to Google Sheets. Pass an `items` array to set multiple budgets in one call (max 20).',
     input_schema: {
       type: 'object' as const,
       properties: {
         category: {
           type: 'string',
-          description: 'Category name',
+          description: 'Category name (single mode)',
         },
         amount: {
           type: 'number',
-          description: 'Budget limit amount',
+          description: 'Budget limit amount (single mode)',
         },
         currency: {
           type: 'string',
@@ -139,19 +139,37 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: 'string',
           description: 'Month in "YYYY-MM" format. Default: current month.',
         },
+        items: {
+          type: 'array',
+          description:
+            'Batch mode: array of {category, amount, currency?, month?}. When present, top-level category/amount are ignored.',
+          items: {
+            type: 'object',
+            properties: {
+              category: { type: 'string' },
+              amount: { type: 'number' },
+              currency: { type: 'string' },
+              month: { type: 'string' },
+            },
+            required: ['category', 'amount'],
+          },
+        },
       },
-      required: ['category', 'amount'],
     },
   },
   {
     name: 'delete_budget',
-    description: 'Delete budget for a category in a specific month.',
+    description:
+      'Delete budget for a category in a specific month. Pass a category array to delete multiple at once.',
     input_schema: {
       type: 'object' as const,
       properties: {
         category: {
-          type: 'string',
-          description: 'Category name',
+          oneOf: [
+            { type: 'string', description: 'Single category' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of categories' },
+          ],
+          description: 'Category name(s). Pass an array to delete multiple budgets at once.',
         },
         month: {
           type: 'string',
@@ -164,13 +182,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'add_expense',
     description:
-      'Add a new expense. Use when the user asks to record an expense in natural language. The expense is saved to the database AND synced to Google Sheets.',
+      'Add a new expense. Use when the user asks to record an expense in natural language. The expense is saved to the database AND synced to Google Sheets. Pass an `items` array to add multiple expenses in one call (max 20).',
     input_schema: {
       type: 'object' as const,
       properties: {
         amount: {
           type: 'number',
-          description: 'Expense amount',
+          description: 'Expense amount (single mode)',
         },
         currency: {
           type: 'string',
@@ -179,7 +197,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
         category: {
           type: 'string',
-          description: 'Expense category',
+          description: 'Expense category (single mode)',
         },
         comment: {
           type: 'string',
@@ -189,20 +207,39 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: 'string',
           description: 'Date in "YYYY-MM-DD" format. Default: today.',
         },
+        items: {
+          type: 'array',
+          description:
+            'Batch mode: array of {amount, currency?, category, comment?, date?}. When present, top-level fields are ignored.',
+          items: {
+            type: 'object',
+            properties: {
+              amount: { type: 'number' },
+              currency: { type: 'string' },
+              category: { type: 'string' },
+              comment: { type: 'string' },
+              date: { type: 'string' },
+            },
+            required: ['amount', 'category'],
+          },
+        },
       },
-      required: ['amount', 'category'],
     },
   },
   {
     name: 'delete_expense',
     description:
-      'Delete an expense by ID. IMPORTANT: Always call get_expenses first to find the expense ID and show it to the user for confirmation before deleting. Note: this deletes from the local database only -- the user should run /sync afterwards to re-sync with Google Sheets.',
+      'Delete expense(s) by ID. IMPORTANT: Always call get_expenses first to find the expense ID and show it to the user for confirmation before deleting. Pass an array to delete multiple at once. Note: this deletes from the local database only -- the user should run /sync afterwards to re-sync with Google Sheets.',
     input_schema: {
       type: 'object' as const,
       properties: {
         expense_id: {
-          type: 'number',
-          description: 'ID of the expense to delete. Get this from get_expenses results.',
+          oneOf: [
+            { type: 'number', description: 'Single expense ID' },
+            { type: 'array', items: { type: 'number' }, description: 'Array of expense IDs' },
+          ],
+          description:
+            'ID(s) of the expense(s) to delete. Pass an array to delete multiple at once.',
         },
       },
       required: ['expense_id'],
@@ -275,7 +312,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: 'manage_category',
-    description: 'Create or delete an expense category.',
+    description:
+      'Create or delete expense categories. Pass a name array to manage multiple at once.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -285,8 +323,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           description: 'Action to perform',
         },
         name: {
-          type: 'string',
-          description: 'Category name',
+          oneOf: [
+            { type: 'string', description: 'Single category name' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of category names' },
+          ],
+          description: 'Category name(s). Pass an array to create/delete multiple at once.',
         },
       },
       required: ['action', 'name'],
@@ -337,9 +378,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         bank_name: {
-          type: 'string',
+          oneOf: [
+            { type: 'string', description: 'Single bank name' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of bank names' },
+          ],
           description:
-            'Which bank to show: "all" for all banks, or a bank registry key for a specific one (case-insensitive substring match, e.g. "tbc-ge"). Always specify explicitly.',
+            'Which bank(s) to show: "all" for all banks, or bank registry key(s) (case-insensitive substring match). Pass an array for multiple banks.',
         },
       },
       required: ['bank_name'],
@@ -398,13 +442,16 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
   {
     name: 'manage_recurring_pattern',
     description:
-      'Pause, resume, dismiss, or delete a recurring expense pattern. Use get_recurring_patterns first to find the pattern ID.',
+      'Pause, resume, dismiss, or delete recurring expense patterns. Pass a pattern_id array to manage multiple at once.',
     input_schema: {
       type: 'object' as const,
       properties: {
         pattern_id: {
-          type: 'number',
-          description: 'ID of the recurring pattern to manage',
+          oneOf: [
+            { type: 'number', description: 'Single pattern ID' },
+            { type: 'array', items: { type: 'number' }, description: 'Array of pattern IDs' },
+          ],
+          description: 'ID(s) of the recurring pattern(s) to manage.',
         },
         action: {
           type: 'string',
