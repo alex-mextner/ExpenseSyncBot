@@ -489,9 +489,29 @@ async function executeDeleteBudget(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const category = input['category'] as string;
+  const rawCategory = input['category'];
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
+  if (isBatchInput(rawCategory)) {
+    const categories = rawCategory as string[];
+    return executeBatchItems(categories, 'delete_budget', (category) =>
+      executeDeleteBudgetSingle(category, month, ctx),
+    );
+  }
+
+  if (Array.isArray(rawCategory)) {
+    return { success: false, error: 'category array is empty' };
+  }
+
+  const category = rawCategory as string;
+  return executeDeleteBudgetSingle(category, month, ctx);
+}
+
+async function executeDeleteBudgetSingle(
+  category: string,
+  month: string,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   if (!category) {
     return { success: false, error: 'category is required' };
   }

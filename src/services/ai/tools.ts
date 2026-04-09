@@ -159,13 +159,17 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: 'delete_budget',
-    description: 'Delete budget for a category in a specific month.',
+    description:
+      'Delete budget for a category in a specific month. Pass a category array to delete multiple at once.',
     input_schema: {
       type: 'object' as const,
       properties: {
         category: {
-          type: 'string',
-          description: 'Category name',
+          oneOf: [
+            { type: 'string', description: 'Single category' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of categories' },
+          ],
+          description: 'Category name(s). Pass an array to delete multiple budgets at once.',
         },
         month: {
           type: 'string',

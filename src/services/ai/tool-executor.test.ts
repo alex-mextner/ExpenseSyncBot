@@ -1055,6 +1055,39 @@ describe('executeDeleteBudget', () => {
   });
 });
 
+describe('delete_budget batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch delete with category array', async () => {
+    const result = await executeTool(
+      'delete_budget',
+      { category: ['Food', 'Transport', 'Fun'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockBudgetManagerDelete).toHaveBeenCalledTimes(3);
+  });
+
+  test('single delete still works (backward compat)', async () => {
+    const result = await executeTool(
+      'delete_budget',
+      { category: 'Food' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockBudgetManagerDelete).toHaveBeenCalledTimes(1);
+    expect(result.output).toContain('Budget deleted for Food');
+  });
+
+  test('empty category array returns error', async () => {
+    const result = await executeTool('delete_budget', { category: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeSetCustomPrompt', () => {
   beforeEach(resetAllMocks);
 
