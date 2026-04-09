@@ -78,7 +78,7 @@ export async function executeTool(
       case 'set_custom_prompt':
         return executeSetCustomPrompt(input, ctx);
       case 'manage_category':
-        return executeManageCategory(input, ctx);
+        return await executeManageCategory(input, ctx);
       case 'calculate':
         return executeCalculate(input, ctx);
       case 'get_bank_transactions':
@@ -707,12 +707,34 @@ function executeSetCustomPrompt(input: Record<string, unknown>, ctx: AgentContex
   };
 }
 
-function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+async function executeManageCategory(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const action = input['action'] as string;
-  const name = input['name'] as string;
+  const rawName = input['name'];
 
-  if (!action || !name) {
-    return { success: false, error: 'action and name are required' };
+  if (!action) {
+    return { success: false, error: 'action is required' };
+  }
+
+  if (isBatchInput(rawName)) {
+    const names = rawName as string[];
+    return executeBatchItems(names, 'manage_category', async (name) =>
+      executeManageCategorySingle(action, name, ctx),
+    );
+  }
+
+  if (Array.isArray(rawName)) {
+    return { success: false, error: 'name array is empty' };
+  }
+
+  return executeManageCategorySingle(action, rawName as string, ctx);
+}
+
+function executeManageCategorySingle(action: string, name: string, ctx: AgentContext): ToolResult {
+  if (!name) {
+    return { success: false, error: 'name is required' };
   }
 
   if (action === 'create') {

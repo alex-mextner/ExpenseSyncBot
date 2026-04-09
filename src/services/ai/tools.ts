@@ -312,7 +312,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: 'manage_category',
-    description: 'Create or delete an expense category.',
+    description:
+      'Create or delete expense categories. Pass a name array to manage multiple at once.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -322,8 +323,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           description: 'Action to perform',
         },
         name: {
-          type: 'string',
-          description: 'Category name',
+          oneOf: [
+            { type: 'string', description: 'Single category name' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of category names' },
+          ],
+          description: 'Category name(s). Pass an array to create/delete multiple at once.',
         },
       },
       required: ['action', 'name'],

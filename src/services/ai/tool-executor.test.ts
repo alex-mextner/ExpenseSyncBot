@@ -1101,6 +1101,60 @@ describe('executeManageCategory', () => {
   });
 });
 
+describe('manage_category batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch create with name array', async () => {
+    const result = await executeTool(
+      'manage_category',
+      { action: 'create', name: ['Еда', 'Транспорт', 'Развлечения'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockCategories.create).toHaveBeenCalledTimes(3);
+  });
+
+  test('batch delete with name array', async () => {
+    mockCategories.findByName.mockImplementation((_gid: number, name: string) => ({
+      id: name.length,
+      group_id: 1,
+      name,
+      created_at: '',
+    }));
+
+    const result = await executeTool(
+      'manage_category',
+      { action: 'delete', name: ['Еда', 'Транспорт'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('2/2 succeeded');
+  });
+
+  test('single manage_category still works', async () => {
+    const result = await executeTool(
+      'manage_category',
+      { action: 'create', name: 'Еда' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('created');
+  });
+
+  test('empty name array returns error', async () => {
+    const result = await executeTool(
+      'manage_category',
+      { action: 'create', name: [] },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeDeleteBudget', () => {
   beforeEach(resetAllMocks);
 
