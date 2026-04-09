@@ -132,7 +132,10 @@ const BANK_ACCOUNTS_FIXTURE = [
   },
 ];
 
-const BANK_CONNECTIONS_MAP: Record<number, { id: number; bank_name: string; display_name: string }> = {
+const BANK_CONNECTIONS_MAP: Record<
+  number,
+  { id: number; bank_name: string; display_name: string }
+> = {
   10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
   20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
   30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
