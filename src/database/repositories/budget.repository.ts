@@ -1,5 +1,6 @@
 /** Budget repository — CRUD and progress tracking for per-category spending budgets */
 import type { Database } from 'bun:sqlite';
+import { findBestCategoryMatch } from '../../utils/fuzzy-search';
 import type { Budget, BudgetProgress, CreateBudgetData } from '../types';
 
 /**
@@ -65,14 +66,21 @@ export class BudgetRepository implements BudgetReadRepository {
     return query.get(id) || null;
   }
 
-  /** Find budget for specific group, category and month (case-insensitive category) */
+  /** Find budget for specific group, category and month.
+   * Uses full fuzzy matching pipeline (exact → case → trim → phonetic → Levenshtein)
+   * to handle typos, case differences, and minor spelling variations. */
   findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null {
-    const lowerCategory = category.toLowerCase();
     const rows = this.db
       .query<Budget, [number, string]>('SELECT * FROM budgets WHERE group_id = ? AND month = ?')
       .all(groupId, month);
 
-    return rows.find((r) => r.category.toLowerCase() === lowerCategory) ?? null;
+    if (rows.length === 0) return null;
+
+    const categories = rows.map((r) => r.category);
+    const matched = findBestCategoryMatch(category, categories);
+    if (!matched) return null;
+
+    return rows.find((r) => r.category === matched) ?? null;
   }
 
   /** Get budget for exact month — no fallback */
@@ -149,13 +157,13 @@ export class BudgetRepository implements BudgetReadRepository {
     };
   }
 
-  /** Check if category exists in any budget for group (case-insensitive) */
+  /** Check if category exists in any budget for group (fuzzy match) */
   hasBudget(groupId: number, category: string): boolean {
-    const lowerCategory = category.toLowerCase();
     const rows = this.db
-      .query<Budget, [number]>('SELECT category FROM budgets WHERE group_id = ?')
+      .query<Budget, [number]>('SELECT DISTINCT category FROM budgets WHERE group_id = ?')
       .all(groupId);
 
-    return rows.some((r) => r.category.toLowerCase() === lowerCategory);
+    const categories = rows.map((r) => r.category);
+    return findBestCategoryMatch(category, categories) !== null;
   }
 }
