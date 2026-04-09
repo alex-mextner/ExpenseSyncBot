@@ -35,7 +35,7 @@ export function trackMembership(telegramId: number, groupId: number): void {
 }
 
 export const SHEET_WRITE_ERROR =
-  '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /connect и повтори попытку.';
+  '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /reconnect и повтори попытку.';
 
 /** Build a fallback Telegram deep link (opens in browser on some platforms) */
 function buildGroupDeepLink(telegramGroupId: number): string {

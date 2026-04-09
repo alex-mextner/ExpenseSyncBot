@@ -4,8 +4,8 @@ import { describe, expect, it } from 'bun:test';
 import { buildBudgetAlertStatus, SHEET_WRITE_ERROR } from './message.handler';
 
 describe('SHEET_WRITE_ERROR', () => {
-  it('mentions /connect for recovery', () => {
-    expect(SHEET_WRITE_ERROR).toContain('/connect');
+  it('mentions /reconnect for recovery', () => {
+    expect(SHEET_WRITE_ERROR).toContain('/reconnect');
   });
 
   it('contains error indicator', () => {
