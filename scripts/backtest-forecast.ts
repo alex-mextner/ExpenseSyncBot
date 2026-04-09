@@ -385,7 +385,7 @@ function oldProjection(currentSpent: number, daysElapsed: number, daysInMonth: n
 }
 
 type Status = 'on_track' | 'warning' | 'critical' | 'exceeded';
-type AlertKind = 'factual' | 'prognostic' | 'no_budget';
+type AlertKind = 'factual' | 'prognostic' | 'no_budget' | 'norm_anomaly';
 
 const SEVERITY_ORDER: Record<Status, number> = {
   on_track: 0,
@@ -722,6 +722,30 @@ function runBacktest(
           }
         }
 
+        // Norm anomaly: spending pace significantly above historical average
+        // Independent of budget — fires even for categories without budget
+        if (profile && profile.ema > 0 && spentSoFar > 0) {
+          const monthProgress = day / daysPerMonth;
+          const expectedByNow = profile.ema * monthProgress;
+          const paceRatio = spentSoFar / expectedByNow;
+          const normAnomalyKey = `norm:${catKey}`;
+          const lastNormDay = noBudgetLastDay.get(normAnomalyKey) ?? -999;
+
+          // Fire if pace >= 1.5x norm AND haven't fired in last 7 days for this cat-month
+          if (paceRatio >= 1.5 && (day - lastNormDay >= 7)) {
+            noBudgetLastDay.set(normAnomalyKey, day);
+            const anomalyStatus: Status = paceRatio >= 3 ? 'critical' : 'warning';
+            hybridAlerts.push({
+              month, day, category: cat.name, status: anomalyStatus,
+              kind: 'norm_anomaly',
+              projected: Math.round(spentSoFar / monthProgress),
+              budget, actualMonthEnd: Math.round(actual),
+              wasCorrect: actual > profile.ema * 1.3, // TP if month-end actually above norm
+              daysRemaining: daysPerMonth - day,
+            });
+          }
+        }
+
         // Track MAPE at checkpoints
         if (actual > 0) {
           accuracy.push({
@@ -746,6 +770,7 @@ interface AlertStats {
   factual: number;
   prognostic: number;
   noBudget: number;
+  normAnomaly: number;
   prognosticTP: number;
   prognosticFP: number;
   prognosticPrecision: number;
@@ -765,6 +790,7 @@ function computeStats(alerts: AlertEvent[], totalMonths: number, totalCatMonths:
     (a) => a.kind === 'prognostic' && (a.status === 'critical' || a.status === 'exceeded') && a.day > 5,
   );
   const noBudgetAlerts = alerts.filter((a) => a.kind === 'no_budget');
+  const normAnomalyAlerts = alerts.filter((a) => a.kind === 'norm_anomaly');
 
   // Prognostic precision: deduplicate by category-month (first alert per cat-month)
   const progUnique = new Map<string, AlertEvent>();
@@ -778,10 +804,10 @@ function computeStats(alerts: AlertEvent[], totalMonths: number, totalCatMonths:
   // No prognostic alerts = neutral (0.5), not "all wrong" (0)
   const progPrecision = progDeduped.length > 0 ? progTP / progDeduped.length : 0.5;
 
-  // Deduplicate all non-no_budget alerts by category-month
+  // Deduplicate all non-no_budget/norm_anomaly alerts by category-month
   const allUnique = new Map<string, AlertEvent>();
   for (const a of alerts) {
-    if (a.kind === 'no_budget') continue;
+    if (a.kind === 'no_budget' || a.kind === 'norm_anomaly') continue;
     const key = `${a.month}:${a.category}`;
     if (!allUnique.has(key)) allUnique.set(key, a);
   }
@@ -835,7 +861,7 @@ function computeStats(alerts: AlertEvent[], totalMonths: number, totalCatMonths:
   const severityAccuracy = deduped.length > 0 ? severityMatches / deduped.length : 1;
 
   // Alert fatigue penalty: >5 alerts/month = fatigue, users stop reading
-  const alertsPerMonth = totalMonths > 0 ? (alerts.length - noBudgetAlerts.length) / totalMonths : 0;
+  const alertsPerMonth = totalMonths > 0 ? (alerts.length - noBudgetAlerts.length - normAnomalyAlerts.length) / totalMonths : 0;
   const fatiguePenalty = Math.max(0, 1 - alertsPerMonth / 10); // 0 alerts=1.0, 10/month=0, 20/month=0
 
   // Signal quality composite
@@ -870,6 +896,7 @@ function computeStats(alerts: AlertEvent[], totalMonths: number, totalCatMonths:
     factual: factualAlerts.length,
     prognostic: prognosticAlerts.length,
     noBudget: noBudgetAlerts.length,
+    normAnomaly: normAnomalyAlerts.length,
     prognosticTP: progTP,
     prognosticFP: progFP,
     prognosticPrecision: progPrecision,
@@ -905,6 +932,7 @@ function printReport(
   console.log(`│   Factual (spent>=budget)    │ ${String(oldStats.factual).padStart(12)} │ ${String(hybridStats.factual).padStart(14)} │`);
   console.log(`│   Prognostic (projected)     │ ${String(oldStats.prognostic).padStart(12)} │ ${String(hybridStats.prognostic).padStart(14)} │`);
   console.log(`│   No-budget recommendations  │ ${String(oldStats.noBudget).padStart(12)} │ ${String(hybridStats.noBudget).padStart(14)} │`);
+  console.log(`│   Norm anomaly               │ ${String(oldStats.normAnomaly).padStart(12)} │ ${String(hybridStats.normAnomaly).padStart(14)} │`);
   console.log('├──────────────────────────────┼──────────────┼────────────────┤');
   console.log(`│ Prognostic TP                │ ${String(oldStats.prognosticTP).padStart(12)} │ ${String(hybridStats.prognosticTP).padStart(14)} │`);
   console.log(`│ Prognostic FP                │ ${String(oldStats.prognosticFP).padStart(12)} │ ${String(hybridStats.prognosticFP).padStart(14)} │`);

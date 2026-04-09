@@ -65,14 +65,14 @@ export class BudgetRepository implements BudgetReadRepository {
     return query.get(id) || null;
   }
 
-  /** Find budget for specific group, category and month */
+  /** Find budget for specific group, category and month (case-insensitive category) */
   findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null {
-    const query = this.db.query<Budget, [number, string, string]>(`
-      SELECT * FROM budgets
-      WHERE group_id = ? AND category = ? AND month = ?
-    `);
+    const lowerCategory = category.toLowerCase();
+    const rows = this.db
+      .query<Budget, [number, string]>('SELECT * FROM budgets WHERE group_id = ? AND month = ?')
+      .all(groupId, month);
 
-    return query.get(groupId, category, month) || null;
+    return rows.find((r) => r.category.toLowerCase() === lowerCategory) ?? null;
   }
 
   /** Get budget for exact month — no fallback */
@@ -118,12 +118,10 @@ export class BudgetRepository implements BudgetReadRepository {
    * INTERNAL — use BudgetManager.delete() instead.
    */
   deleteByGroupCategoryMonth(groupId: number, category: string, month: string): boolean {
-    const query = this.db.query<void, [number, string, string]>(`
-      DELETE FROM budgets
-      WHERE group_id = ? AND category = ? AND month = ?
-    `);
-
-    query.run(groupId, category, month);
+    const budget = this.findByGroupCategoryMonth(groupId, category, month);
+    if (budget) {
+      this.db.query<void, [number]>('DELETE FROM budgets WHERE id = ?').run(budget.id);
+    }
     return true;
   }
 
@@ -151,14 +149,13 @@ export class BudgetRepository implements BudgetReadRepository {
     };
   }
 
-  /** Check if category exists in any budget for group */
+  /** Check if category exists in any budget for group (case-insensitive) */
   hasBudget(groupId: number, category: string): boolean {
-    const query = this.db.query<{ count: number }, [number, string]>(`
-      SELECT COUNT(*) as count FROM budgets
-      WHERE group_id = ? AND category = ?
-    `);
+    const lowerCategory = category.toLowerCase();
+    const rows = this.db
+      .query<Budget, [number]>('SELECT category FROM budgets WHERE group_id = ?')
+      .all(groupId);
 
-    const result = query.get(groupId, category);
-    return result ? result.count > 0 : false;
+    return rows.some((r) => r.category.toLowerCase() === lowerCategory);
   }
 }
