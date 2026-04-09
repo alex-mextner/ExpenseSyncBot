@@ -176,10 +176,44 @@ export function croston(data: number[], alpha = 0.3): CrostonResult {
     intervalEma = alpha * (intervals[i] ?? 1) + (1 - alpha) * intervalEma;
   }
 
+  // SBA (Syntetos-Boylan Approximation) bias correction
+  // Classical Croston has positive bias; SBA removes it with factor (1 - α/2)
+  const classicalForecast = intervalEma > 0 ? amountEma / intervalEma : 0;
   return {
-    forecast: intervalEma > 0 ? amountEma / intervalEma : 0,
+    forecast: classicalForecast * (1 - alpha / 2),
     expectedAmount: amountEma,
     expectedInterval: intervalEma,
+  };
+}
+
+/**
+ * TSB (Teunter-Syntetos-Babai) — Croston variant for fading demand.
+ * Unlike classical Croston which keeps forecasting the same amount forever,
+ * TSB models demand probability directly and decays it on zero periods.
+ * If a category stops being used, TSB gradually reduces the forecast to zero.
+ */
+export function crostonTSB(data: number[], alpha = 0.3, beta = 0.3): CrostonResult {
+  if (data.length === 0) return { forecast: 0, expectedAmount: 0, expectedInterval: 1 };
+
+  const firstNZ = data.findIndex((v) => v > 0);
+  if (firstNZ === -1) return { forecast: 0, expectedAmount: 0, expectedInterval: data.length || 1 };
+
+  let amount = data[firstNZ] ?? 0;
+  let prob = 1 / (1 + firstNZ);
+
+  for (let t = firstNZ + 1; t < data.length; t++) {
+    if ((data[t] ?? 0) > 0) {
+      amount = alpha * (data[t] ?? 0) + (1 - alpha) * amount;
+      prob = beta + (1 - beta) * prob;
+    } else {
+      prob = (1 - beta) * prob;
+    }
+  }
+
+  return {
+    forecast: prob * amount,
+    expectedAmount: amount,
+    expectedInterval: prob > 0 ? 1 / prob : data.length,
   };
 }
 

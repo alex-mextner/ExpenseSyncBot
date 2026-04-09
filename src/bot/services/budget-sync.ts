@@ -21,6 +21,7 @@ const EMPTY_SYNC_RESULT: BudgetSyncResult = {
   updated: [],
   deleted: [],
   createdCategories: [],
+  multiWordWarnings: [],
 };
 
 // ── Auto-sync budgets with cooldown ──
@@ -114,6 +115,16 @@ function buildAutoSyncBudgetsMessage(
     }
   }
 
+  if (result.multiWordWarnings.length > 0) {
+    lines.push('\n⚠️ Категории с пробелами:');
+    for (const w of result.multiWordWarnings) {
+      lines.push(`  ${w}`);
+    }
+    lines.push(
+      '\nБот записывает только первое слово как категорию. Переименуй в таблице на одно слово без пробелов.',
+    );
+  }
+
   const text = lines.join('\n');
   if (buttons.length > 0) {
     return { text, reply_markup: { inline_keyboard: buttons.map((b) => [b]) } };
@@ -133,6 +144,8 @@ export interface BudgetSyncResult {
   }>;
   deleted: Array<{ month: string; category: string; limit: number; currency: CurrencyCode }>;
   createdCategories: string[];
+  /** Warnings about multi-word categories found in sheet */
+  multiWordWarnings: string[];
 }
 
 /**
@@ -169,6 +182,7 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
     updated: [],
     deleted: [],
     createdCategories: [],
+    multiWordWarnings: [],
   };
 
   const sheetCategories = new Set<string>(sheetBudgets.map((b) => b.category));
@@ -186,13 +200,14 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
       const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
 
       if (!existing) {
-        mgr.importFromSheet({
+        const { multiWordWarning } = mgr.importFromSheet({
           groupId,
           category: b.category,
           month: currentMonth,
           amount: b.limit,
           currency: b.currency,
         });
+        if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
         result.added.push({
           month: currentMonth,
           category: b.category,
@@ -200,13 +215,14 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
           currency: b.currency,
         });
       } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
-        mgr.importFromSheet({
+        const { multiWordWarning } = mgr.importFromSheet({
           groupId,
           category: b.category,
           month: currentMonth,
           amount: b.limit,
           currency: b.currency,
         });
+        if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
         result.updated.push({
           month: currentMonth,
           category: b.category,

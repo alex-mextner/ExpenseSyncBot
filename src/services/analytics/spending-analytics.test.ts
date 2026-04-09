@@ -24,9 +24,8 @@ mock.module('../../database', () => ({
 }));
 
 // Import AFTER mock is set up
-const { SpendingAnalytics, buildCategoryProfiles, projectCategory } = await import(
-  './spending-analytics'
-);
+const { SpendingAnalytics, buildCategoryProfiles, buildIntervalProfiles, projectCategory } =
+  await import('./spending-analytics');
 
 class TestableSpendingAnalytics extends SpendingAnalytics {
   testComputeVelocity = (groupId: number, today: string) => this.computeVelocity(groupId, today);
@@ -771,7 +770,13 @@ describe('buildCategoryProfiles', () => {
 // ============================================================
 
 describe('projectCategory', () => {
-  const stableProfile = { ema: 15000, cv: 0.2, monthsOfData: 4 };
+  const stableProfile = {
+    ema: 15000,
+    cv: 0.2,
+    monthsOfData: 4,
+    avgTxPerMonth: 10,
+    zeroMonthRatio: 0,
+  };
 
   test('no history → returns current spent (conservative)', () => {
     expect(projectCategory(10200, 4, 30, null)).toBe(10200);
@@ -805,18 +810,16 @@ describe('projectCategory', () => {
     expect(result).toBeLessThan(15200);
   });
 
-  test('volatile category shifts to pace faster (higher CV)', () => {
-    // Same EMA, same spent — only CV differs
-    const stable = { ema: 10000, cv: 0.1, monthsOfData: 4 };
-    const volatile_ = { ema: 10000, cv: 1.5, monthsOfData: 4 };
+  test('erratic category (high CV) uses pace-only projection', () => {
+    // CV=1.5 → CV²=2.25 > 0.49 → classified as "erratic"
+    // Erratic uses pace-only (no history anchor) to avoid false alarms from outlier months
+    const erratic = { ema: 10000, cv: 1.5, monthsOfData: 4, avgTxPerMonth: 3, zeroMonthRatio: 0 };
 
-    // Day 10 of 30, spent 5000
-    // Pace = (5000/10)*30 = 15000 > EMA(10000)
-    // Higher CV → higher alpha → more weight on pace → higher projection
-    const stableResult = projectCategory(5000, 10, 30, stable);
-    const volatileResult = projectCategory(5000, 10, 30, volatile_);
-
-    expect(volatileResult).toBeGreaterThan(stableResult);
+    // Day 10 of 30, spent 5000 → pace = (5000/10)*30 = 15000
+    const result = projectCategory(5000, 10, 30, erratic);
+    expect(result).toBe(15000);
+    // Pace-only: no blending with EMA
+    expect(result).toBeGreaterThanOrEqual(5000);
   });
 
   test('current spend already exceeds EMA → projected ≥ current', () => {
@@ -918,5 +921,204 @@ describe('burn rate: single large expense early in month', () => {
     // not the naive linear extrapolation
     expect(carBurn?.projected_total).toBeLessThan(500);
     expect(carBurn?.status).toBe('on_track');
+  });
+});
+
+// ============================================================
+// buildIntervalProfiles — cycle detection from raw transactions
+// ============================================================
+
+describe('buildIntervalProfiles', () => {
+  test('detects stable interval pattern (regular refueling)', () => {
+    // Transactions every ~20 days with similar amounts
+    const transactions = [
+      { date: '2026-01-05', category: 'Машина', amount: 50 },
+      { date: '2026-01-25', category: 'Машина', amount: 48 },
+      { date: '2026-02-14', category: 'Машина', amount: 52 },
+      { date: '2026-03-06', category: 'Машина', amount: 49 },
+      { date: '2026-03-26', category: 'Машина', amount: 51 },
+    ];
+
+    const profiles = buildIntervalProfiles(transactions);
+    const profile = profiles.get('Машина');
+
+    expect(profile).toBeDefined();
+    expect(profile?.isStable).toBe(true);
+    expect(profile?.avgInterval).toBeGreaterThan(18);
+    expect(profile?.avgInterval).toBeLessThan(22);
+    expect(profile?.intervalCv).toBeLessThan(0.4);
+    expect(profile?.avgAmount).toBeGreaterThan(45);
+    expect(profile?.avgAmount).toBeLessThan(55);
+  });
+
+  test('rejects irregular pattern (high CV)', () => {
+    // Intervals: 3, 45, 7, 60 days — very irregular
+    const transactions = [
+      { date: '2026-01-01', category: 'Развлечения', amount: 100 },
+      { date: '2026-01-04', category: 'Развлечения', amount: 200 },
+      { date: '2026-02-18', category: 'Развлечения', amount: 50 },
+      { date: '2026-02-25', category: 'Развлечения', amount: 300 },
+      { date: '2026-04-26', category: 'Развлечения', amount: 80 },
+    ];
+
+    const profiles = buildIntervalProfiles(transactions);
+    const profile = profiles.get('Развлечения');
+
+    expect(profile).toBeDefined();
+    expect(profile?.isStable).toBe(false);
+    expect(profile?.intervalCv).toBeGreaterThanOrEqual(0.4);
+  });
+
+  test('filters out gaps > 90 days', () => {
+    // Gap of 120 days between tx 2 and tx 3 should be excluded
+    const transactions = [
+      { date: '2026-01-05', category: 'Здоровье', amount: 100 },
+      { date: '2026-01-25', category: 'Здоровье', amount: 100 },
+      { date: '2026-02-14', category: 'Здоровье', amount: 100 },
+      { date: '2026-03-06', category: 'Здоровье', amount: 100 },
+      { date: '2026-07-04', category: 'Здоровье', amount: 100 }, // 120-day gap
+      { date: '2026-07-24', category: 'Здоровье', amount: 100 },
+    ];
+
+    const profiles = buildIntervalProfiles(transactions);
+    const profile = profiles.get('Здоровье');
+
+    expect(profile).toBeDefined();
+    // Should have 4 valid intervals (20, 20, 20, 20) — the 120-day gap excluded
+    expect(profile?.avgInterval).toBeGreaterThan(18);
+    expect(profile?.avgInterval).toBeLessThan(22);
+  });
+
+  test('skips category with fewer than 3 valid intervals', () => {
+    const transactions = [
+      { date: '2026-01-05', category: 'Редкое', amount: 100 },
+      { date: '2026-01-25', category: 'Редкое', amount: 100 },
+      { date: '2026-02-14', category: 'Редкое', amount: 100 },
+      // Only 2 intervals — below minimum
+    ];
+
+    const profiles = buildIntervalProfiles(transactions);
+    expect(profiles.has('Редкое')).toBe(false);
+  });
+
+  test('filters out same-day transactions', () => {
+    // Multiple items on same day (e.g., one receipt) should not count as 0-day intervals
+    const transactions = [
+      { date: '2026-01-05', category: 'Еда', amount: 10 },
+      { date: '2026-01-05', category: 'Еда', amount: 15 },
+      { date: '2026-01-05', category: 'Еда', amount: 20 },
+      { date: '2026-01-25', category: 'Еда', amount: 12 },
+      { date: '2026-01-25', category: 'Еда', amount: 18 },
+      { date: '2026-02-14', category: 'Еда', amount: 11 },
+      { date: '2026-03-06', category: 'Еда', amount: 14 },
+      { date: '2026-03-26', category: 'Еда', amount: 13 },
+    ];
+
+    const profiles = buildIntervalProfiles(transactions);
+    const profile = profiles.get('Еда');
+
+    expect(profile).toBeDefined();
+    // Valid intervals: 20, 20, 20, 20 (same-day duplicates excluded)
+    expect(profile?.avgInterval).toBeGreaterThan(18);
+  });
+
+  test('groups categories independently', () => {
+    const transactions = [
+      { date: '2026-01-05', category: 'A', amount: 50 },
+      { date: '2026-01-25', category: 'A', amount: 48 },
+      { date: '2026-02-14', category: 'A', amount: 52 },
+      { date: '2026-03-06', category: 'A', amount: 49 },
+      { date: '2026-01-01', category: 'B', amount: 100 },
+      { date: '2026-01-02', category: 'B', amount: 100 },
+      // B has only 1 interval → should not appear
+    ];
+
+    const profiles = buildIntervalProfiles(transactions);
+    expect(profiles.has('A')).toBe(true);
+    expect(profiles.has('B')).toBe(false);
+  });
+
+  test('empty input returns empty map', () => {
+    const profiles = buildIntervalProfiles([]);
+    expect(profiles.size).toBe(0);
+  });
+});
+
+// ============================================================
+// projectCategory with intervalProfile parameter
+// ============================================================
+
+describe('projectCategory with intervalProfile', () => {
+  const stableProfile = { ema: 150, cv: 0.2, monthsOfData: 4, avgTxPerMonth: 2, zeroMonthRatio: 0 };
+
+  test('stable interval profile overrides S-B routing', () => {
+    // Day 10 of 30, spent 50, last tx 4 days ago (below 5-day stall threshold)
+    // Interval profile: every 20 days, avg amount 50
+    // Time to next fill: 20 - 4 = 16 days, fits in remaining 20 days
+    // Expected more fills: 1 + floor((20 - 16) / 20) = 1 + 0 = 1
+    // Projected: 50 + 1 * 50 = 100
+    const interval = { avgInterval: 20, intervalCv: 0.15, avgAmount: 50, isStable: true };
+    const result = projectCategory(50, 10, 30, stableProfile, 4, interval);
+    expect(result).toBe(100);
+  });
+
+  test('interval profile predicts multiple remaining fills', () => {
+    // Day 5 of 30, spent 50, last tx today (daysSinceLastTx = 0)
+    // Interval: every 7 days, avg 50
+    // Time to next: 7 - 0 = 7 days, remaining = 25
+    // Fills: 1 + floor((25 - 7) / 7) = 1 + 2 = 3
+    // Projected: 50 + 3 * 50 = 200
+    const interval = { avgInterval: 7, intervalCv: 0.2, avgAmount: 50, isStable: true };
+    const result = projectCategory(50, 5, 30, null, 0, interval);
+    expect(result).toBe(200);
+  });
+
+  test('interval profile with no remaining time predicts 0 more fills', () => {
+    // Day 28 of 30, last tx 2 days ago
+    // Interval: every 20 days, avg 50
+    // Time to next: 20 - 2 = 18 days, remaining = 2 days → 18 > 2, no more fills
+    // Projected: 200 + 0 = 200
+    const interval = { avgInterval: 20, intervalCv: 0.15, avgAmount: 50, isStable: true };
+    const result = projectCategory(200, 28, 30, stableProfile, 2, interval);
+    expect(result).toBe(200);
+  });
+
+  test('unstable interval profile falls through to S-B routing', () => {
+    // isStable = false → interval profile ignored, falls through to normal projection
+    const interval = { avgInterval: 20, intervalCv: 0.6, avgAmount: 50, isStable: false };
+    const withInterval = projectCategory(5000, 10, 30, stableProfile, 2, interval);
+    const without = projectCategory(5000, 10, 30, stableProfile, 2);
+    expect(withInterval).toBe(without);
+  });
+
+  test('undefined interval profile falls through to S-B routing', () => {
+    const withUndef = projectCategory(5000, 10, 30, stableProfile, 2, undefined);
+    const without = projectCategory(5000, 10, 30, stableProfile, 2);
+    expect(withUndef).toBe(without);
+  });
+
+  test('stall detection still works even with interval profile', () => {
+    // daysSinceLastTx = 6, monthProgress > 0.33 → stalled, returns current
+    const interval = { avgInterval: 10, intervalCv: 0.1, avgAmount: 50, isStable: true };
+    const result = projectCategory(100, 15, 30, stableProfile, 6, interval);
+    expect(result).toBe(100);
+  });
+
+  test('interval profile with daysSinceLastTx undefined defaults to 0', () => {
+    // Day 5 of 30, no daysSinceLastTx → treated as 0
+    // Interval: every 10 days, avg 50
+    // Time to next: 10 - 0 = 10 days, remaining = 25
+    // Fills: 1 + floor((25 - 10) / 10) = 1 + 1 = 2
+    // Projected: 50 + 2 * 50 = 150
+    const interval = { avgInterval: 10, intervalCv: 0.1, avgAmount: 50, isStable: true };
+    const result = projectCategory(50, 5, 30, null, undefined, interval);
+    expect(result).toBe(150);
+  });
+
+  test('result is never less than currentSpent', () => {
+    // Even if interval math somehow produces less (impossible with this formula, but guarding)
+    const interval = { avgInterval: 100, intervalCv: 0.1, avgAmount: 1, isStable: true };
+    const result = projectCategory(500, 10, 30, null, 0, interval);
+    expect(result).toBeGreaterThanOrEqual(500);
   });
 });

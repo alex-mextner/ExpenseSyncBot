@@ -1,5 +1,13 @@
 /** Spending analytics — computes financial snapshots with trends, anomalies, and budget burn rates */
-import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-fns';
+import {
+  differenceInDays,
+  format,
+  getDaysInMonth,
+  parseISO,
+  startOfMonth,
+  subDays,
+  subMonths,
+} from 'date-fns';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency } from '../currency/converter';
@@ -17,6 +25,7 @@ import type {
   CategoryProjection,
   DayOfWeekPattern,
   FinancialSnapshot,
+  IntervalProfile,
   MonthlyProjection,
   SpendingStreak,
   SpendingTrend,
@@ -41,19 +50,20 @@ export function buildCategoryProfiles(
   historyRows: { category: string; month: string; monthly_total: number; tx_count: number }[],
 ): Map<string, CategoryProfile> {
   // Group rows by category (rows arrive sorted by category, month from SQL ORDER BY)
-  const byCategory = new Map<string, number[]>();
+  const byCategory = new Map<string, { totals: number[]; txCounts: number[] }>();
   for (const row of historyRows) {
-    let totals = byCategory.get(row.category);
-    if (!totals) {
-      totals = [];
-      byCategory.set(row.category, totals);
+    let entry = byCategory.get(row.category);
+    if (!entry) {
+      entry = { totals: [], txCounts: [] };
+      byCategory.set(row.category, entry);
     }
-    totals.push(row.monthly_total);
+    entry.totals.push(row.monthly_total);
+    entry.txCounts.push(row.tx_count);
   }
 
   const profiles = new Map<string, CategoryProfile>();
 
-  for (const [category, totals] of byCategory) {
+  for (const [category, { totals, txCounts }] of byCategory) {
     const n = totals.length;
     if (n === 0) continue;
 
@@ -70,10 +80,87 @@ export function buildCategoryProfiles(
     const stddev = Math.sqrt(variance);
     const cv = mean > 0 ? stddev / mean : 0;
 
+    const totalTx = txCounts.reduce((s, v) => s + v, 0);
+    const zeroMonths = totals.filter((v) => v === 0).length;
+
     profiles.set(category, {
       ema: Math.round(ema * 100) / 100,
       cv: Math.round(cv * 1000) / 1000,
       monthsOfData: n,
+      avgTxPerMonth: Math.round((totalTx / n) * 10) / 10,
+      zeroMonthRatio: Math.round((zeroMonths / n) * 100) / 100,
+    });
+  }
+
+  return profiles;
+}
+
+/** Max gap between transactions (days) before treating as an outlier in interval computation */
+const MAX_INTERVAL_DAYS = 90;
+
+/** Minimum number of valid intervals to compute an interval profile */
+const MIN_INTERVALS = 3;
+
+/** CV threshold below which an interval profile is considered stable */
+const INTERVAL_CV_THRESHOLD = 0.4;
+
+/**
+ * Build per-category interval profiles from raw transaction-level data.
+ *
+ * Detects cycle-based spending patterns (e.g., car refueling every ~21 days,
+ * salon every ~6 weeks) by analyzing intervals between consecutive transactions.
+ * Categories with stable intervals get a profile used for more accurate projection.
+ */
+export function buildIntervalProfiles(
+  transactions: { date: string; category: string; amount: number }[],
+): Map<string, IntervalProfile> {
+  // Group by category
+  const byCategory = new Map<string, { date: string; amount: number }[]>();
+  for (const tx of transactions) {
+    const arr = byCategory.get(tx.category) ?? [];
+    arr.push({ date: tx.date, amount: tx.amount });
+    byCategory.set(tx.category, arr);
+  }
+
+  const profiles = new Map<string, IntervalProfile>();
+
+  for (const [category, txList] of byCategory) {
+    // Sort by date ascending
+    txList.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Compute intervals between consecutive transactions
+    const intervals: number[] = [];
+    const amounts: number[] = [];
+    for (let i = 1; i < txList.length; i++) {
+      const days = differenceInDays(parseISO(txList[i]!.date), parseISO(txList[i - 1]!.date));
+      // Filter out outlier gaps (e.g., category not used for 3+ months)
+      if (days > MAX_INTERVAL_DAYS) continue;
+      // Filter out same-day transactions (multiple items on one receipt)
+      if (days <= 0) continue;
+      intervals.push(days);
+    }
+
+    if (intervals.length < MIN_INTERVALS) continue;
+
+    // Collect amounts for avg computation (all transactions, not just interval-paired)
+    for (const tx of txList) {
+      amounts.push(tx.amount);
+    }
+
+    const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
+    const variance = intervals.reduce((s, v) => s + (v - avgInterval) ** 2, 0) / intervals.length;
+    const stddev = Math.sqrt(variance);
+    const intervalCv = avgInterval > 0 ? stddev / avgInterval : 999;
+
+    const avgAmount = amounts.reduce((s, v) => s + v, 0) / amounts.length;
+
+    profiles.set(category, {
+      avgInterval: Math.round(avgInterval * 100) / 100,
+      intervalCv: Math.round(intervalCv * 1000) / 1000,
+      avgAmount: Math.round(avgAmount * 100) / 100,
+      // Only for low-frequency categories (≥5 day intervals): refueling, salon, etc.
+      // High-frequency (daily groceries) should use monthly EMA, not interval-based.
+      isStable: intervalCv < INTERVAL_CV_THRESHOLD && avgInterval >= 5,
     });
   }
 
@@ -81,40 +168,136 @@ export function buildCategoryProfiles(
 }
 
 /**
- * EMA-based category projection with quadratic month-progress blending.
+ * Activity gate: skip projection if not enough transactions this month.
  *
- * Two estimates are blended:
- * 1. History-based: max(currentSpent, EMA) — the historical baseline
- * 2. Pace-based: linear extrapolation of current month's spending rate
+ * Two-tier gate:
+ * - Sparse categories (avgTx < 5/month): need at least 2 tx (prevents one-off false alarms)
+ * - Frequent categories (avgTx ≥ 5): need at least 30% of expected tx by this day
+ *   (not 100% — avoids gate being too strict due to outlier high-tx months)
+ */
+export function passesActivityGate(
+  txCountThisMonth: number,
+  daysElapsed: number,
+  daysInMonth: number,
+  profile: CategoryProfile | null,
+): boolean {
+  if (txCountThisMonth === 0) return false;
+
+  if (!profile) return txCountThisMonth >= 2;
+
+  if (profile.avgTxPerMonth < 5) {
+    // Sparse: just need 2+ tx to confirm the category is active this month
+    return txCountThisMonth >= 2;
+  }
+
+  // Frequent: need 30% of expected tx by this point in the month
+  const monthProgress = daysElapsed / daysInMonth;
+  const expectedTxSoFar = profile.avgTxPerMonth * monthProgress;
+  return txCountThisMonth >= Math.max(2, Math.ceil(expectedTxSoFar * 0.3));
+}
+
+/**
+ * Syntetos-Boylan demand pattern classification.
+ * Routes category to the right forecasting algorithm.
  *
- * Blend weight (alpha) = (daysElapsed / daysInMonth)² × (1 + CV)
- * - Quadratic: very low early in month, high late → prevents wild early extrapolation
- * - CV adjustment: irregular categories (high CV) trust history less, shift to pace faster
+ * ADI (Average Demand Interval) = 1 / (1 - zeroMonthRatio)
+ * CV² = cv² (squared coefficient of variation)
  *
- * Without history: returns currentSpent (can't predict future for unknown categories).
+ * | | ADI < 1.32 | ADI ≥ 1.32 |
+ * |---|---|---|
+ * | CV² < 0.49 | Smooth → EMA/Holt | Intermittent → Croston SBA |
+ * | CV² ≥ 0.49 | Erratic → Median | Lumpy → Quantile P75 |
+ */
+type DemandPattern = 'smooth' | 'intermittent' | 'erratic' | 'lumpy';
+
+function classifyDemandPattern(profile: CategoryProfile): DemandPattern {
+  const adi = profile.zeroMonthRatio > 0 ? 1 / (1 - profile.zeroMonthRatio) : 1;
+  const cv2 = profile.cv * profile.cv;
+
+  if (adi >= 1.32 && cv2 >= 0.49) return 'lumpy';
+  if (adi >= 1.32) return 'intermittent';
+  if (cv2 >= 0.49) return 'erratic';
+  return 'smooth';
+}
+
+/**
+ * Hybrid category projection using Syntetos-Boylan demand classification.
+ *
+ * Routing:
+ * - Stable interval profile → interval-based cycle projection (highest priority)
+ * - No history or < 3 months → return currentSpent (not enough data)
+ * - Stalled (no tx in last 5+ days after mid-month) → return currentSpent
+ * - Smooth → EMA-based blend with CV-adjusted pace trust
+ * - Intermittent/Lumpy → Croston-style with activity probability
+ * - Erratic → pace-only (no history anchor)
+ *
+ * daysSinceLastTx: how many days since the last transaction in this category this month.
+ * Used for stall detection — if spending stopped, don't extrapolate.
+ *
+ * intervalProfile: if provided and stable, uses interval-based projection
+ * (count expected remaining fills * avg fill amount) instead of S-B routing.
  */
 export function projectCategory(
   currentSpent: number,
   daysElapsed: number,
   daysInMonth: number,
   profile: CategoryProfile | null,
+  daysSinceLastTx?: number,
+  intervalProfile?: IntervalProfile,
 ): number {
   if (daysElapsed <= 0) return currentSpent;
 
-  // No history → conservative: can't predict future spending
-  if (!profile) return currentSpent;
-
   const monthProgress = daysElapsed / daysInMonth;
 
-  // Quadratic blend, accelerated by category irregularity
+  // Stall detection: if no transactions in 5+ days and we're past 1/3 of month,
+  // spending in this category has likely stopped — don't extrapolate
+  if (daysSinceLastTx !== undefined && daysSinceLastTx >= 5 && monthProgress > 0.33) {
+    return currentSpent;
+  }
+
+  // Interval-based cycle projection: more precise for periodic categories
+  // (refueling, salon, subscriptions) where monthly total depends on cycle alignment
+  if (intervalProfile?.isStable) {
+    const daysRemaining = daysInMonth - daysElapsed;
+    const daysSinceLast = daysSinceLastTx ?? 0;
+    // Time until next expected fill: remaining interval from last tx
+    const timeToNextFill = Math.max(0, intervalProfile.avgInterval - daysSinceLast);
+    const expectedMoreFills =
+      timeToNextFill <= daysRemaining
+        ? 1 + Math.floor((daysRemaining - timeToNextFill) / intervalProfile.avgInterval)
+        : 0;
+    const projected = currentSpent + expectedMoreFills * intervalProfile.avgAmount;
+    return Math.max(currentSpent, Math.round(projected * 100) / 100);
+  }
+
+  if (!profile || profile.monthsOfData < 3) return currentSpent;
+
+  const pattern = classifyDemandPattern(profile);
+
+  // Lumpy: practically unforecastable (high CV + many zero months) → only factual alerts
+  if (pattern === 'lumpy') return currentSpent;
+
+  if (pattern === 'intermittent') {
+    let activityProb = 1 - profile.zeroMonthRatio;
+    if (monthProgress > 0.3 && currentSpent < profile.ema * 0.1) {
+      activityProb *= monthProgress;
+    }
+    const expectedTotal = profile.ema * activityProb;
+    const paceBased = (currentSpent / daysElapsed) * daysInMonth;
+    const alpha = monthProgress * monthProgress;
+    const projected = alpha * paceBased + (1 - alpha) * Math.max(currentSpent, expectedTotal);
+    return Math.max(currentSpent, Math.round(projected * 100) / 100);
+  }
+
+  if (pattern === 'erratic') {
+    const paceBased = (currentSpent / daysElapsed) * daysInMonth;
+    return Math.max(currentSpent, Math.round(paceBased * 100) / 100);
+  }
+
+  // Smooth: standard EMA blend with CV-adjusted pace trust
   const alpha = Math.min(1, monthProgress * monthProgress * (1 + profile.cv));
-
-  // History-based: EMA as baseline, but never below what's already spent
   const historyBased = Math.max(currentSpent, profile.ema);
-
-  // Pace-based: linear extrapolation
   const paceBased = (currentSpent / daysElapsed) * daysInMonth;
-
   const projected = alpha * paceBased + (1 - alpha) * historyBased;
   return Math.round(projected * 100) / 100;
 }
@@ -187,8 +370,10 @@ export class SpendingAnalytics {
 
     const categoryTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
     const categorySpentEur: Record<string, number> = {};
+    const categoryTxCount: Record<string, number> = {};
     for (const ct of categoryTotals) {
       categorySpentEur[ct.category] = ct.total;
+      categoryTxCount[ct.category] = ct.tx_count;
     }
 
     const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
@@ -201,8 +386,11 @@ export class SpendingAnalytics {
     const results: BudgetBurnRate[] = [];
 
     for (const budget of budgets) {
+      // Skip zero-budget categories — no meaningful projection possible
+      if (budget.limit_amount <= 0) continue;
       const currency = budget.currency as CurrencyCode;
       const spentEur = categorySpentEur[budget.category] || 0;
+      const txCount = categoryTxCount[budget.category] || 0;
       // Convert EUR spent to budget currency for comparison
       const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
@@ -216,19 +404,34 @@ export class SpendingAnalytics {
             ema: convertCurrency(profileEur.ema, BASE_CURRENCY, currency),
           }
         : null;
-      const projectedTotal = projectCategory(spent, daysElapsed, daysInMonth, profile);
+
+      // Activity gate: skip projection if not enough transactions
+      const hasEnoughActivity = passesActivityGate(txCount, daysElapsed, daysInMonth, profile);
+      const projectedTotal = hasEnoughActivity
+        ? projectCategory(spent, daysElapsed, daysInMonth, profile)
+        : spent;
 
       const projectedOvershoot = projectedTotal - budget.limit_amount;
       const runwayDays =
         dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
 
+      // Dynamic warning threshold: volatile categories need higher projection before warning
+      // CV=0 → 85%, CV=0.5 → 90%, CV≥1.0 → 95%
+      const cv = profileEur?.cv ?? 0;
+      const warningThreshold = 0.85 + 0.1 * Math.min(1, cv);
+
+      // If historical norm (EMA) exceeds budget, projection-based alerts are meaningless —
+      // the category chronically overspends, so every projection > budget is expected, not a signal.
+      // Only factual exceedance (spent >= budget) should trigger alerts in this case.
+      const normExceedsBudget = profile && profile.ema > budget.limit_amount;
+
       // Determine status: cascade top-down
       let status: BudgetBurnRate['status'];
       if (spent >= budget.limit_amount) {
         status = 'exceeded';
-      } else if (projectedTotal > budget.limit_amount * 1.0) {
+      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount) {
         status = 'critical';
-      } else if (projectedTotal > budget.limit_amount * 0.85) {
+      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount * warningThreshold) {
         status = 'warning';
       } else {
         status = 'on_track';
@@ -705,7 +908,13 @@ export class SpendingAnalytics {
 
     const overallProfile: CategoryProfile | null =
       categoryProfiles.size > 0
-        ? { ema: aggregateEma, cv: Math.round(weightedCv * 1000) / 1000, monthsOfData: 1 }
+        ? {
+            ema: aggregateEma,
+            cv: Math.round(weightedCv * 1000) / 1000,
+            monthsOfData: Math.max(...profileValues.map((p) => p.monthsOfData)),
+            avgTxPerMonth: profileValues.reduce((s, p) => s + p.avgTxPerMonth, 0),
+            zeroMonthRatio: 0,
+          }
         : null;
     const projectedTotal = projectCategory(currentTotal, daysElapsed, daysInMonth, overallProfile);
 

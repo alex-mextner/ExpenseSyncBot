@@ -189,6 +189,23 @@ export interface CategoryProfile {
   cv: number;
   /** How many months of history we have */
   monthsOfData: number;
+  /** Average transactions per month (for activity gate) */
+  avgTxPerMonth: number;
+  /** Fraction of months with zero spending (for intermittent detection) */
+  zeroMonthRatio: number;
+}
+
+// === Interval Profile (for cycle-based categories like refueling, salon, etc.) ===
+
+export interface IntervalProfile {
+  /** Average interval between transactions in days */
+  avgInterval: number;
+  /** CV of intervals (stability measure) */
+  intervalCv: number;
+  /** Average transaction amount */
+  avgAmount: number;
+  /** Whether the cycle is stable enough to use (intervalCv < 0.4) */
+  isStable: boolean;
 }
 
 // === Advice tiers ===

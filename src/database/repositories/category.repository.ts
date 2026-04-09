@@ -34,7 +34,8 @@ export class CategoryRepository {
    * Normalize category name - capitalize first letter
    */
   private normalizeCategory(name: string): string {
-    const trimmed = name.trim();
+    // Strip trailing dots/punctuation that cause duplicates (Расходыквартиры. → Расходыквартиры)
+    const trimmed = name.trim().replace(/[.\s]+$/, '');
     if (!trimmed) return trimmed;
     return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
   }

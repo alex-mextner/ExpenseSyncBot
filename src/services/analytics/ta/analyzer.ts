@@ -4,7 +4,15 @@
  */
 
 import { iqrMethod, modifiedZScore, zScore } from './anomaly';
-import { croston, holt, holtWinters, medianForecast, quantileForecast, theta } from './forecasting';
+import {
+  croston,
+  crostonTSB,
+  holt,
+  holtWinters,
+  medianForecast,
+  quantileForecast,
+  theta,
+} from './forecasting';
 import { kama, sma, wma } from './moving-averages';
 import { hurstExponent, percentileBands, pivotPoints } from './pattern';
 import {
@@ -144,9 +152,12 @@ export function analyzeCategory(
   const thetaResult = theta(data);
   const quantiles = quantileForecast(data);
 
-  // Croston only for intermittent data (>30% zero months)
+  // Croston/TSB for intermittent data (>30% zero months)
+  // TSB handles fading demand better — use it when the last observation is zero
   const zeroMonths = data.filter((v) => v === 0).length;
-  const crostonResult = zeroMonths > n * 0.3 ? croston(data) : null;
+  const isIntermittent = zeroMonths > n * 0.3;
+  const lastIsZero = (data[n - 1] ?? 0) === 0;
+  const crostonResult = isIntermittent ? (lastIsZero ? crostonTSB(data) : croston(data)) : null;
 
   // Holt-Winters only with enough seasonal data
   const hwResult = n >= seasonalPeriod * 2 ? holtWinters(data, seasonalPeriod) : null;

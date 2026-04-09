@@ -4,9 +4,15 @@
  * Normalize category name - capitalize first letter
  */
 export function normalizeCategoryName(name: string): string {
-  const trimmed = name.trim();
+  // Trim whitespace + trailing dots/punctuation that cause category duplicates
+  const trimmed = name.trim().replace(/[.\s]+$/, '');
   if (!trimmed) return trimmed;
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+/** Check if a category name looks like it has multiple words (spaces inside) */
+export function isMultiWordCategory(name: string): boolean {
+  return name.trim().includes(' ');
 }
 
 /**
