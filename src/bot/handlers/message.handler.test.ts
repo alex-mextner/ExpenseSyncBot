@@ -1,17 +1,7 @@
-// Tests for sheet write error tracking and budget alert logic in message handler
+// Tests for budget alert logic in message handler
 
 import { describe, expect, it } from 'bun:test';
-import { buildBudgetAlertStatus, SHEET_WRITE_ERROR } from './message.handler';
-
-describe('SHEET_WRITE_ERROR', () => {
-  it('mentions /reconnect for recovery', () => {
-    expect(SHEET_WRITE_ERROR).toContain('/reconnect');
-  });
-
-  it('contains error indicator', () => {
-    expect(SHEET_WRITE_ERROR).toContain('❌');
-  });
-});
+import { buildBudgetAlertStatus } from './message.handler';
 
 describe('buildBudgetAlertStatus — budget currency conversion', () => {
   // RSD fallback rate: 1 RSD = 0.0086 EUR → 1 EUR ≈ 116 RSD

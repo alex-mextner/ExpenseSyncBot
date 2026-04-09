@@ -142,7 +142,7 @@ const sendToChat = mock((text: string, options?: Record<string, unknown>) => {
 });
 mock.module('../send', () => ({ sendToChat }));
 
-import { saveExpenseBatch, saveReceiptExpenses } from './expense-saver';
+import { SHEET_WRITE_ERROR, saveExpenseBatch, saveReceiptExpenses } from './expense-saver';
 
 // ── Test data ────────────────────────────────────────────────────────────────
 
@@ -369,15 +369,19 @@ describe('saveReceiptExpenses', () => {
 
     appendExpenseRows.mockRejectedValueOnce(new Error('Sheet error'));
 
-    await expect(
-      saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID),
-    ).rejects.toThrow('Sheet error');
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Batch write attempted once, failed
     expect(appendExpenseRows).toHaveBeenCalledTimes(1);
     // No DB writes — atomic rollback
     expect(mockExpenseCreate).not.toHaveBeenCalled();
     expect(mockTransaction).not.toHaveBeenCalled();
+    // Receipt items NOT deleted — user can retry after /reconnect
+    expect(mockReceiptItemsDelete).not.toHaveBeenCalled();
+    // Error message sent to user
+    const errorMsg = sentMessages.find((m) => m.text.includes('/reconnect'));
+    expect(errorMsg).toBeDefined();
+    expect(errorMsg?.text).toBe(SHEET_WRITE_ERROR);
   });
 });
 

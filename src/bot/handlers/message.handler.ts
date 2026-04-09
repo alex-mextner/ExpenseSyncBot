@@ -18,7 +18,11 @@ import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
+import {
+  SHEET_WRITE_ERROR,
+  saveExpenseBatch,
+  saveReceiptExpenses,
+} from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
@@ -33,9 +37,6 @@ export function trackMembership(telegramId: number, groupId: number): void {
   database.groupMembers.upsert(telegramId, groupId);
   recentMemberships.add(key);
 }
-
-export const SHEET_WRITE_ERROR =
-  '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /reconnect и повтори попытку.';
 
 /** Build a fallback Telegram deep link (opens in browser on some platforms) */
 function buildGroupDeepLink(telegramGroupId: number): string {

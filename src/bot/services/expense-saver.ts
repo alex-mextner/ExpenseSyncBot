@@ -19,6 +19,10 @@ import { silentSyncBudgets } from './budget-sync';
 
 const logger = createLogger('expense-saver');
 
+/** User-facing error shown when Google Sheets write fails (auth expired, etc.) */
+export const SHEET_WRITE_ERROR =
+  '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /reconnect и повтори попытку.';
+
 // ── Internal types ──────────────────────────────────────────────────────────
 
 interface ExpenseWriteData {
@@ -37,9 +41,9 @@ interface ExpenseWriteData {
 function prepareExpenseRow(
   group: Group,
   pendingExpense: PendingExpense,
+  currentDate: string,
 ): { row: ExpenseRowData; write: ExpenseWriteData } {
   const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);
-  const currentDate = format(new Date(), 'yyyy-MM-dd');
   const category = pendingExpense.detected_category || 'Без категории';
   const rate = getExchangeRate(pendingExpense.parsed_currency);
 
@@ -121,6 +125,9 @@ export async function saveExpenseBatch(
   // Sync budgets once before the batch
   await silentSyncBudgets(googleConn(group), group.id);
 
+  // Compute date once — all rows in a batch share the same timestamp
+  const currentDate = format(new Date(), 'yyyy-MM-dd');
+
   // Prepare all rows (pure computation, no I/O)
   const rows: ExpenseRowData[] = [];
   const writes: ExpenseWriteData[] = [];
@@ -131,7 +138,7 @@ export async function saveExpenseBatch(
       throw new Error(`Pending expense ${id} not found`);
     }
 
-    const { row, write } = prepareExpenseRow(group, pendingExpense);
+    const { row, write } = prepareExpenseRow(group, pendingExpense, currentDate);
     rows.push(row);
     writes.push(write);
   }
@@ -291,7 +298,14 @@ export async function saveReceiptExpenses(
     eurAmount: batch.eurAmount,
     rate: batch.rate,
   }));
-  await appendExpenseRows(googleConn(group), group.spreadsheet_id, sheetRows);
+
+  try {
+    await appendExpenseRows(googleConn(group), group.spreadsheet_id, sheetRows);
+  } catch (error) {
+    logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet — receipt items kept');
+    await sendMessage(SHEET_WRITE_ERROR);
+    return;
+  }
 
   // All sheet writes succeeded — commit all to DB in one transaction
   database.transaction(() => {
