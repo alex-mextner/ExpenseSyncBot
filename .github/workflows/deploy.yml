@@ -76,8 +76,51 @@ jobs:
             echo "🔄 Reloading Caddy..."
             caddy reload --config /etc/caddy/Caddyfile
 
-            echo "🔄 Reloading PM2 process..."
-            /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env
+            # ── Blue-green zero-downtime deploy ──────────────────────────────
+            # Caddy always has localhost:3311 + localhost:3312 with lb_policy first.
+            # Green (3312) signals blue (3311) to stop polling via polling-handoff.
+            # No 409 Conflict: handoff ensures only one poller at a time.
+            BUN=/var/www/.bun/bin/bun
+            PM2=/var/www/.bun/bin/pm2
+
+            # Remove stale green from a previous failed deploy
+            $PM2 delete esb-green 2>/dev/null || true
+
+            # Start green on 3312 — acquirePolling will signal blue to stop polling
+            echo "Starting green process on port 3312..."
+            OAUTH_SERVER_PORT=3312 $PM2 start ./start.sh \
+              --name esb-green \
+              --cwd /var/www/ExpenseSyncBot \
+              --no-autorestart \
+              --log /var/www/ExpenseSyncBot/logs/green-out.log
+
+            # Wait up to 90s for green /health (bot start + handoff takes ~10-30s)
+            echo "Waiting for green /health on 3312..."
+            for i in $(seq 1 30); do
+              curl -sf http://localhost:3312/health 2>/dev/null && { echo "  Green healthy."; break; }
+              [ $i -eq 30 ] && {
+                echo "ERROR: green did not become healthy." >&2
+                $PM2 delete esb-green 2>/dev/null || true
+                exit 1
+              }
+              sleep 3
+            done
+
+            # Reload blue — sequential: SIGTERM old (stopPolling+DB close) → start new on 3311.
+            # New blue's acquirePolling signals green to stop, then starts polling on 3311.
+            echo "Reloading blue (expensesyncbot) on 3311..."
+            $PM2 reload ecosystem.config.cjs --update-env
+
+            # Wait up to 90s for blue /health on 3311
+            echo "Waiting for blue /health on 3311..."
+            for i in $(seq 1 30); do
+              curl -sf http://localhost:3311/health 2>/dev/null && { echo "  Blue healthy."; break; }
+              [ $i -eq 30 ] && { echo "ERROR: blue did not become healthy." >&2; exit 1; }
+              sleep 3
+            done
+
+            # Remove green (already stopped polling, just needs process cleanup)
+            $PM2 delete esb-green 2>/dev/null || true
 
             echo "✅ Deployment completed successfully!"
 

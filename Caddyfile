@@ -20,11 +20,15 @@ expense-sync-bot.invntrm.ru {
 		file_server
 	}
 
-	# All proxied endpoints — retry during PM2 reload so clients see a delay, not 502.
-	# Caddy holds the connection and retries every 500ms for up to 10s.
+	# All proxied endpoints — both ports always present: lb_policy first prefers 3311.
+	# When 3311 is down, Caddy auto-routes to 3312 (green process during deploy).
 	@backend path /callback* /health /api/*
 	handle @backend {
-		reverse_proxy localhost:3311 {
+		reverse_proxy localhost:3311 localhost:3312 {
+			lb_policy       first
+			health_uri      /health
+			health_interval 2s
+			health_timeout  3s
 			lb_try_duration 10s
 			lb_try_interval 500ms
 		}
@@ -52,8 +56,21 @@ expense-sync-bot-app.invntrm.ru {
 	# API requests proxied to the Bun server — retry during PM2 reload
 	# Must be in a separate handle block BEFORE the SPA catch-all,
 	# otherwise try_files rewrites /api/* to /index.html → 405
+
+	# Mini App frontend (Vite build)
+	root * /var/www/ExpenseSyncBot/miniapp/dist
+	file_server
+
+	# SPA fallback — serve index.html for client-side routing
+	try_files {path} /index.html
+
+	# API requests proxied to the Bun server
 	handle /api/* {
-		reverse_proxy localhost:3311 {
+		reverse_proxy localhost:3311 localhost:3312 {
+			lb_policy       first
+			health_uri      /health
+			health_interval 2s
+			health_timeout  3s
 			lb_try_duration 10s
 			lb_try_interval 500ms
 		}
