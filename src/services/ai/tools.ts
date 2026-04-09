@@ -229,13 +229,17 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'delete_expense',
     description:
-      'Delete an expense by ID. IMPORTANT: Always call get_expenses first to find the expense ID and show it to the user for confirmation before deleting. Note: this deletes from the local database only -- the user should run /sync afterwards to re-sync with Google Sheets.',
+      'Delete expense(s) by ID. IMPORTANT: Always call get_expenses first to find the expense ID and show it to the user for confirmation before deleting. Pass an array to delete multiple at once. Note: this deletes from the local database only -- the user should run /sync afterwards to re-sync with Google Sheets.',
     input_schema: {
       type: 'object' as const,
       properties: {
         expense_id: {
-          type: 'number',
-          description: 'ID of the expense to delete. Get this from get_expenses results.',
+          oneOf: [
+            { type: 'number', description: 'Single expense ID' },
+            { type: 'array', items: { type: 'number' }, description: 'Array of expense IDs' },
+          ],
+          description:
+            'ID(s) of the expense(s) to delete. Pass an array to delete multiple at once.',
         },
       },
       required: ['expense_id'],

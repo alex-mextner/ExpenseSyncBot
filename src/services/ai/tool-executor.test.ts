@@ -799,6 +799,74 @@ describe('executeDeleteExpense', () => {
   });
 });
 
+describe('delete_expense batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch delete with expense_id array', async () => {
+    mockExpenses.findById.mockImplementation((id: number) => ({
+      id,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: 'test',
+      amount: 10,
+      currency: 'EUR',
+      eur_amount: 10,
+      created_at: '',
+    }));
+
+    const result = await executeTool(
+      'delete_expense',
+      { expense_id: [10, 11, 12] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockExpenses.delete).toHaveBeenCalledTimes(3);
+  });
+
+  test('batch delete rejects expense from another group', async () => {
+    mockExpenses.findById
+      .mockReturnValueOnce({
+        id: 10, group_id: 1, user_id: 123, date: '2026-03-01',
+        category: 'Food', comment: '', amount: 10, currency: 'EUR', eur_amount: 10, created_at: '',
+      })
+      .mockReturnValueOnce({
+        id: 11, group_id: 999, user_id: 123, date: '2026-03-01',
+        category: 'Food', comment: '', amount: 10, currency: 'EUR', eur_amount: 10, created_at: '',
+      });
+
+    const result = await executeTool(
+      'delete_expense',
+      { expense_id: [10, 11] },
+      ctx,
+    );
+
+    expect(result.output).toContain('1/2 succeeded');
+    expect(result.output).toContain('Access denied');
+  });
+
+  test('single delete still works', async () => {
+    mockExpenses.findById.mockReturnValue({
+      id: 10, group_id: 1, user_id: 123, date: '2026-03-01',
+      category: 'Food', comment: 'lunch', amount: 15, currency: 'EUR', eur_amount: 15, created_at: '',
+    });
+
+    const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
+    expect(result.success).toBe(true);
+    expect(mockExpenses.delete).toHaveBeenCalledWith(10);
+    expect(result.output).toContain('Expense 10 deleted');
+  });
+
+  test('empty expense_id array returns error', async () => {
+    const result = await executeTool('delete_expense', { expense_id: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeSetBudget', () => {
   beforeEach(resetAllMocks);
 

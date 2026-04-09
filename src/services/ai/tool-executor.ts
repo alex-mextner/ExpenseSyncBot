@@ -70,7 +70,7 @@ export async function executeTool(
       case 'add_expense':
         return await executeAddExpense(input, ctx);
       case 'delete_expense':
-        return executeDeleteExpense(input, ctx);
+        return await executeDeleteExpense(input, ctx);
       case 'sync_from_sheets':
         return await executeSyncFromSheets(ctx);
       case 'sync_budgets':
@@ -591,9 +591,27 @@ async function executeAddExpenseSingle(
   }
 }
 
-function executeDeleteExpense(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const expenseId = input['expense_id'] as number;
+async function executeDeleteExpense(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  const rawId = input['expense_id'];
 
+  if (isBatchInput(rawId)) {
+    const ids = rawId as number[];
+    return executeBatchItems(ids, 'delete_expense', async (id) =>
+      executeDeleteExpenseSingle(id, ctx),
+    );
+  }
+
+  if (Array.isArray(rawId)) {
+    return { success: false, error: 'expense_id array is empty' };
+  }
+
+  return executeDeleteExpenseSingle(rawId as number, ctx);
+}
+
+function executeDeleteExpenseSingle(expenseId: number, ctx: AgentContext): ToolResult {
   if (!expenseId) {
     return { success: false, error: 'expense_id is required' };
   }
