@@ -508,6 +508,22 @@ async function executeAddExpense(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
+  if (isBatchInput(input['items'])) {
+    const items = input['items'] as Array<Record<string, unknown>>;
+    return executeBatchItems(items, 'add_expense', (item) => executeAddExpenseSingle(item, ctx));
+  }
+
+  if (Array.isArray(input['items'])) {
+    return { success: false, error: 'items array is empty' };
+  }
+
+  return executeAddExpenseSingle(input, ctx);
+}
+
+async function executeAddExpenseSingle(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const amount = input['amount'] as number;
   const category = input['category'] as string;
   const comment = (input['comment'] as string) || '';

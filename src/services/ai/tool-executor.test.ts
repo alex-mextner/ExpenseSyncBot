@@ -177,6 +177,9 @@ function resetAllMocks() {
   mockBudgetManagerDelete.mockReset();
   mockBudgetManagerDelete.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
 
+  mockRecord.mockReset();
+  mockRecord.mockReturnValue(Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+
   mockCategories.findByGroupId.mockReset();
   mockCategories.findByGroupId.mockReturnValue([]);
   mockCategories.findByName.mockReset();
@@ -673,6 +676,74 @@ describe('executeAddExpense', () => {
     const result = await executeTool('add_expense', { amount: 100 }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid');
+  });
+});
+
+describe('add_expense batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch add_expense with items array records each expense', async () => {
+    const result = await executeTool(
+      'add_expense',
+      {
+        items: [
+          { amount: 300, category: 'Еда', comment: 'кофе' },
+          { amount: 800, category: 'Еда', comment: 'обед' },
+          { amount: 500, category: 'Транспорт', comment: 'такси' },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockRecord).toHaveBeenCalledTimes(3);
+  });
+
+  test('single add_expense still works (backward compat)', async () => {
+    const result = await executeTool(
+      'add_expense',
+      { amount: 300, category: 'Еда', comment: 'кофе' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(result.output).toContain('Expense added');
+  });
+
+  test('batch over 20 items is rejected', async () => {
+    const items = Array.from({ length: 21 }, (_, i) => ({
+      amount: 100,
+      category: `Cat${i}`,
+    }));
+
+    const result = await executeTool('add_expense', { items }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('20');
+  });
+
+  test('items array takes priority over top-level fields', async () => {
+    const result = await executeTool(
+      'add_expense',
+      {
+        amount: 999,
+        category: 'IGNORED',
+        items: [{ amount: 42, category: 'Real', comment: 'test' }],
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('1/1 succeeded');
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const callArg = mockRecord.mock.calls[0][2];
+    expect(callArg.category).toBe('Real');
+    expect(callArg.amount).toBe(42);
+  });
+
+  test('empty items array returns error', async () => {
+    const result = await executeTool('add_expense', { items: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
   });
 });
 

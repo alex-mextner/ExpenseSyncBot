@@ -178,13 +178,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'add_expense',
     description:
-      'Add a new expense. Use when the user asks to record an expense in natural language. The expense is saved to the database AND synced to Google Sheets.',
+      'Add a new expense. Use when the user asks to record an expense in natural language. The expense is saved to the database AND synced to Google Sheets. Pass an `items` array to add multiple expenses in one call (max 20).',
     input_schema: {
       type: 'object' as const,
       properties: {
         amount: {
           type: 'number',
-          description: 'Expense amount',
+          description: 'Expense amount (single mode)',
         },
         currency: {
           type: 'string',
@@ -193,7 +193,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
         category: {
           type: 'string',
-          description: 'Expense category',
+          description: 'Expense category (single mode)',
         },
         comment: {
           type: 'string',
@@ -203,8 +203,23 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: 'string',
           description: 'Date in "YYYY-MM-DD" format. Default: today.',
         },
+        items: {
+          type: 'array',
+          description:
+            'Batch mode: array of {amount, currency?, category, comment?, date?}. When present, top-level fields are ignored.',
+          items: {
+            type: 'object',
+            properties: {
+              amount: { type: 'number' },
+              currency: { type: 'string' },
+              category: { type: 'string' },
+              comment: { type: 'string' },
+              date: { type: 'string' },
+            },
+            required: ['amount', 'category'],
+          },
+        },
       },
-      required: ['amount', 'category'],
     },
   },
   {
