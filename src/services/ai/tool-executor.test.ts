@@ -93,56 +93,57 @@ const mockBankTransactions = {
   ]),
 };
 
+const BANK_ACCOUNTS_FIXTURE = [
+  {
+    id: 1,
+    connection_id: 10,
+    title: 'TBC Card',
+    balance: 5000,
+    currency: 'GEL',
+    type: 'card',
+    is_excluded: 0,
+  },
+  {
+    id: 2,
+    connection_id: 10,
+    title: 'TBC Savings',
+    balance: 20000,
+    currency: 'GEL',
+    type: 'savings',
+    is_excluded: 0,
+  },
+  {
+    id: 3,
+    connection_id: 20,
+    title: 'Kaspi Card',
+    balance: 100000,
+    currency: 'KZT',
+    type: 'card',
+    is_excluded: 0,
+  },
+  {
+    id: 4,
+    connection_id: 30,
+    title: 'Monobank UAH',
+    balance: 3000,
+    currency: 'UAH',
+    type: 'card',
+    is_excluded: 0,
+  },
+];
+
+const BANK_CONNECTIONS_MAP: Record<number, { id: number; bank_name: string; display_name: string }> = {
+  10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
+  20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
+  30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
+};
+
 const mockBankAccounts = {
-  findByGroupId: mock(() => [
-    {
-      id: 1,
-      connection_id: 10,
-      title: 'TBC Card',
-      balance: 5000,
-      currency: 'GEL',
-      type: 'card',
-      is_excluded: 0,
-    },
-    {
-      id: 2,
-      connection_id: 10,
-      title: 'TBC Savings',
-      balance: 20000,
-      currency: 'GEL',
-      type: 'savings',
-      is_excluded: 0,
-    },
-    {
-      id: 3,
-      connection_id: 20,
-      title: 'Kaspi Card',
-      balance: 100000,
-      currency: 'KZT',
-      type: 'card',
-      is_excluded: 0,
-    },
-    {
-      id: 4,
-      connection_id: 30,
-      title: 'Monobank UAH',
-      balance: 3000,
-      currency: 'UAH',
-      type: 'card',
-      is_excluded: 0,
-    },
-  ]),
+  findByGroupId: mock(() => BANK_ACCOUNTS_FIXTURE),
 };
 
 const mockBankConnections = {
-  findById: mock((id: number) => {
-    const map: Record<number, { id: number; bank_name: string; display_name: string }> = {
-      10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
-      20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
-      30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
-    };
-    return map[id] ?? null;
-  }),
+  findById: mock((id: number) => BANK_CONNECTIONS_MAP[id] ?? null),
   findActiveByGroupId: mock(() => []),
 };
 
@@ -330,53 +331,9 @@ function resetAllMocks() {
   ]);
 
   mockBankAccounts.findByGroupId.mockReset();
-  mockBankAccounts.findByGroupId.mockReturnValue([
-    {
-      id: 1,
-      connection_id: 10,
-      title: 'TBC Card',
-      balance: 5000,
-      currency: 'GEL',
-      type: 'card',
-      is_excluded: 0,
-    },
-    {
-      id: 2,
-      connection_id: 10,
-      title: 'TBC Savings',
-      balance: 20000,
-      currency: 'GEL',
-      type: 'savings',
-      is_excluded: 0,
-    },
-    {
-      id: 3,
-      connection_id: 20,
-      title: 'Kaspi Card',
-      balance: 100000,
-      currency: 'KZT',
-      type: 'card',
-      is_excluded: 0,
-    },
-    {
-      id: 4,
-      connection_id: 30,
-      title: 'Monobank UAH',
-      balance: 3000,
-      currency: 'UAH',
-      type: 'card',
-      is_excluded: 0,
-    },
-  ]);
+  mockBankAccounts.findByGroupId.mockReturnValue(BANK_ACCOUNTS_FIXTURE);
   mockBankConnections.findById.mockReset();
-  mockBankConnections.findById.mockImplementation((id: number) => {
-    const map: Record<number, { id: number; bank_name: string; display_name: string }> = {
-      10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
-      20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
-      30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
-    };
-    return map[id] ?? null;
-  });
+  mockBankConnections.findById.mockImplementation((id: number) => BANK_CONNECTIONS_MAP[id] ?? null);
   mockBankConnections.findActiveByGroupId.mockReset();
   mockBankConnections.findActiveByGroupId.mockReturnValue([]);
 

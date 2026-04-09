@@ -72,6 +72,23 @@ describe('executeBatchItems', () => {
     expect(result.error).toContain(`${MAX_BATCH_SIZE}`);
   });
 
+  test('catches thrown exceptions and reports them as failures', async () => {
+    const executor = async (item: { n: number }): Promise<ToolResult> => {
+      if (item.n === 2) throw new Error('DB connection lost');
+      return { success: true, output: `ok #${item.n}` };
+    };
+
+    const result = await executeBatchItems(
+      [{ n: 1 }, { n: 2 }, { n: 3 }],
+      'add_expense',
+      executor,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('2/3 succeeded');
+    expect(result.output).toContain('DB connection lost');
+  });
+
   test('returns all-failed summary when everything fails', async () => {
     const executor = async (): Promise<ToolResult> => ({
       success: false,
