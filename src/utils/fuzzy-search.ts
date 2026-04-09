@@ -1,4 +1,10 @@
-// Fuzzy category matching: phonetic normalization + Levenshtein distance
+/** Fuzzy category matching: phonetic normalization + Levenshtein distance + zero-shot classifier fallback */
+
+import { InferenceClient } from '@huggingface/inference';
+import { env } from '../config/env';
+import { createLogger } from './logger';
+
+const logger = createLogger('fuzzy-search');
 
 /**
  * Normalize category name - capitalize first letter
@@ -135,4 +141,53 @@ export function findBestCategoryMatch(input: string, categories: string[]): stri
   }
 
   return bestMatch;
+}
+
+const CLASSIFIER_MODEL = 'joeddav/xlm-roberta-large-xnli';
+const CLASSIFIER_MIN_SCORE = 0.4;
+
+/**
+ * Zero-shot classifier fallback: asks the model "is this text about category X?"
+ * Used when all string-based methods fail (different wording for same concept).
+ * Example: "Расходы на ремонт квартиры" → matches "Ремонт" semantically.
+ */
+async function classifyCategory(input: string, categories: string[]): Promise<string | null> {
+  if (!env.HF_TOKEN || categories.length === 0) return null;
+
+  try {
+    const client = new InferenceClient(env.HF_TOKEN);
+    const result = await client.zeroShotClassification({
+      model: CLASSIFIER_MODEL,
+      inputs: input,
+      parameters: { candidate_labels: categories },
+    });
+
+    const top = result[0];
+    if (top && top.score >= CLASSIFIER_MIN_SCORE) {
+      logger.debug({ input, match: top.label, score: top.score }, 'classifier match');
+      return top.label;
+    }
+    return null;
+  } catch (err) {
+    logger.warn({ err, input }, 'zero-shot classifier failed, skipping');
+    return null;
+  }
+}
+
+/**
+ * Async version of findBestCategoryMatch with zero-shot classifier fallback.
+ * Pipeline: exact → startsWith → contains → phonetic → Levenshtein → classifier.
+ * Use this in places where async is acceptable (handlers, sync).
+ * Falls back gracefully if HF_TOKEN is not set or classifier fails.
+ */
+export async function findBestCategoryMatchAsync(
+  input: string,
+  categories: string[],
+): Promise<string | null> {
+  // Try all sync methods first
+  const syncResult = findBestCategoryMatch(input, categories);
+  if (syncResult) return syncResult;
+
+  // Last resort: zero-shot classifier (semantic matching)
+  return classifyCategory(input, categories);
 }
