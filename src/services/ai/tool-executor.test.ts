@@ -95,10 +95,42 @@ const mockBankTransactions = {
 
 const mockBankAccounts = {
   findByGroupId: mock(() => [
-    { id: 1, connection_id: 10, title: 'TBC Card', balance: 5000, currency: 'GEL', type: 'card', is_excluded: 0 },
-    { id: 2, connection_id: 10, title: 'TBC Savings', balance: 20000, currency: 'GEL', type: 'savings', is_excluded: 0 },
-    { id: 3, connection_id: 20, title: 'Kaspi Card', balance: 100000, currency: 'KZT', type: 'card', is_excluded: 0 },
-    { id: 4, connection_id: 30, title: 'Monobank UAH', balance: 3000, currency: 'UAH', type: 'card', is_excluded: 0 },
+    {
+      id: 1,
+      connection_id: 10,
+      title: 'TBC Card',
+      balance: 5000,
+      currency: 'GEL',
+      type: 'card',
+      is_excluded: 0,
+    },
+    {
+      id: 2,
+      connection_id: 10,
+      title: 'TBC Savings',
+      balance: 20000,
+      currency: 'GEL',
+      type: 'savings',
+      is_excluded: 0,
+    },
+    {
+      id: 3,
+      connection_id: 20,
+      title: 'Kaspi Card',
+      balance: 100000,
+      currency: 'KZT',
+      type: 'card',
+      is_excluded: 0,
+    },
+    {
+      id: 4,
+      connection_id: 30,
+      title: 'Monobank UAH',
+      balance: 3000,
+      currency: 'UAH',
+      type: 'card',
+      is_excluded: 0,
+    },
   ]),
 };
 
@@ -299,10 +331,42 @@ function resetAllMocks() {
 
   mockBankAccounts.findByGroupId.mockReset();
   mockBankAccounts.findByGroupId.mockReturnValue([
-    { id: 1, connection_id: 10, title: 'TBC Card', balance: 5000, currency: 'GEL', type: 'card', is_excluded: 0 },
-    { id: 2, connection_id: 10, title: 'TBC Savings', balance: 20000, currency: 'GEL', type: 'savings', is_excluded: 0 },
-    { id: 3, connection_id: 20, title: 'Kaspi Card', balance: 100000, currency: 'KZT', type: 'card', is_excluded: 0 },
-    { id: 4, connection_id: 30, title: 'Monobank UAH', balance: 3000, currency: 'UAH', type: 'card', is_excluded: 0 },
+    {
+      id: 1,
+      connection_id: 10,
+      title: 'TBC Card',
+      balance: 5000,
+      currency: 'GEL',
+      type: 'card',
+      is_excluded: 0,
+    },
+    {
+      id: 2,
+      connection_id: 10,
+      title: 'TBC Savings',
+      balance: 20000,
+      currency: 'GEL',
+      type: 'savings',
+      is_excluded: 0,
+    },
+    {
+      id: 3,
+      connection_id: 20,
+      title: 'Kaspi Card',
+      balance: 100000,
+      currency: 'KZT',
+      type: 'card',
+      is_excluded: 0,
+    },
+    {
+      id: 4,
+      connection_id: 30,
+      title: 'Monobank UAH',
+      balance: 3000,
+      currency: 'UAH',
+      type: 'card',
+      is_excluded: 0,
+    },
   ]);
   mockBankConnections.findById.mockReset();
   mockBankConnections.findById.mockImplementation((id: number) => {
@@ -812,9 +876,11 @@ describe('add_expense batch', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('1/1 succeeded');
     expect(mockRecord).toHaveBeenCalledTimes(1);
-    const callArg = mockRecord.mock.calls[0][2];
-    expect(callArg.category).toBe('Real');
-    expect(callArg.amount).toBe(42);
+    const calls = mockRecord.mock.calls as unknown as Array<
+      [number, number, { category: string; amount: number }]
+    >;
+    expect(calls[0]?.[2].category).toBe('Real');
+    expect(calls[0]?.[2].amount).toBe(42);
   });
 
   test('empty items array returns error', async () => {
@@ -880,7 +946,7 @@ describe('delete_expense batch', () => {
   beforeEach(resetAllMocks);
 
   test('batch delete with expense_id array', async () => {
-    mockExpenses.findById.mockImplementation((id: number) => ({
+    mockExpenses.findById.mockImplementation(((id: number) => ({
       id,
       group_id: 1,
       user_id: 123,
@@ -888,16 +954,12 @@ describe('delete_expense batch', () => {
       category: 'Food',
       comment: 'test',
       amount: 10,
-      currency: 'EUR',
+      currency: 'EUR' as const,
       eur_amount: 10,
       created_at: '',
-    }));
+    })) as unknown as () => Expense | null);
 
-    const result = await executeTool(
-      'delete_expense',
-      { expense_id: [10, 11, 12] },
-      ctx,
-    );
+    const result = await executeTool('delete_expense', { expense_id: [10, 11, 12] }, ctx);
 
     expect(result.success).toBe(true);
     expect(result.output).toContain('3/3 succeeded');
@@ -907,19 +969,31 @@ describe('delete_expense batch', () => {
   test('batch delete rejects expense from another group', async () => {
     mockExpenses.findById
       .mockReturnValueOnce({
-        id: 10, group_id: 1, user_id: 123, date: '2026-03-01',
-        category: 'Food', comment: '', amount: 10, currency: 'EUR', eur_amount: 10, created_at: '',
+        id: 10,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Food',
+        comment: '',
+        amount: 10,
+        currency: 'EUR',
+        eur_amount: 10,
+        created_at: '',
       })
       .mockReturnValueOnce({
-        id: 11, group_id: 999, user_id: 123, date: '2026-03-01',
-        category: 'Food', comment: '', amount: 10, currency: 'EUR', eur_amount: 10, created_at: '',
+        id: 11,
+        group_id: 999,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Food',
+        comment: '',
+        amount: 10,
+        currency: 'EUR',
+        eur_amount: 10,
+        created_at: '',
       });
 
-    const result = await executeTool(
-      'delete_expense',
-      { expense_id: [10, 11] },
-      ctx,
-    );
+    const result = await executeTool('delete_expense', { expense_id: [10, 11] }, ctx);
 
     expect(result.output).toContain('1/2 succeeded');
     expect(result.output).toContain('Access denied');
@@ -927,8 +1001,16 @@ describe('delete_expense batch', () => {
 
   test('single delete still works', async () => {
     mockExpenses.findById.mockReturnValue({
-      id: 10, group_id: 1, user_id: 123, date: '2026-03-01',
-      category: 'Food', comment: 'lunch', amount: 15, currency: 'EUR', eur_amount: 15, created_at: '',
+      id: 10,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: 'lunch',
+      amount: 15,
+      currency: 'EUR',
+      eur_amount: 15,
+      created_at: '',
     });
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
@@ -1032,11 +1114,7 @@ describe('set_budget batch', () => {
   });
 
   test('single set_budget still works (backward compat)', async () => {
-    const result = await executeTool(
-      'set_budget',
-      { category: 'Food', amount: 500 },
-      ctx,
-    );
+    const result = await executeTool('set_budget', { category: 'Food', amount: 500 }, ctx);
     expect(result.success).toBe(true);
     expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
     expect(result.output).toContain('Budget set: Food');
@@ -1055,9 +1133,11 @@ describe('set_budget batch', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('1/1 succeeded');
     expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
-    const callArg = mockBudgetManagerSet.mock.calls[0][0];
-    expect(callArg.category).toBe('Real');
-    expect(callArg.amount).toBe(100);
+    const calls = mockBudgetManagerSet.mock.calls as unknown as Array<
+      [{ category: string; amount: number }]
+    >;
+    expect(calls[0]?.[0].category).toBe('Real');
+    expect(calls[0]?.[0].amount).toBe(100);
   });
 
   test('empty items array returns error', async () => {
@@ -1194,12 +1274,12 @@ describe('manage_category batch', () => {
   });
 
   test('batch delete with name array', async () => {
-    mockCategories.findByName.mockImplementation((_gid: number, name: string) => ({
+    mockCategories.findByName.mockImplementation(((_gid: number, name: string) => ({
       id: name.length,
       group_id: 1,
       name,
       created_at: '',
-    }));
+    })) as unknown as () => Category | null);
 
     const result = await executeTool(
       'manage_category',
@@ -1212,21 +1292,13 @@ describe('manage_category batch', () => {
   });
 
   test('single manage_category still works', async () => {
-    const result = await executeTool(
-      'manage_category',
-      { action: 'create', name: 'Еда' },
-      ctx,
-    );
+    const result = await executeTool('manage_category', { action: 'create', name: 'Еда' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('created');
   });
 
   test('empty name array returns error', async () => {
-    const result = await executeTool(
-      'manage_category',
-      { action: 'create', name: [] },
-      ctx,
-    );
+    const result = await executeTool('manage_category', { action: 'create', name: [] }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('empty');
   });
@@ -1270,11 +1342,7 @@ describe('delete_budget batch', () => {
   });
 
   test('single delete still works (backward compat)', async () => {
-    const result = await executeTool(
-      'delete_budget',
-      { category: 'Food' },
-      ctx,
-    );
+    const result = await executeTool('delete_budget', { category: 'Food' }, ctx);
     expect(result.success).toBe(true);
     expect(mockBudgetManagerDelete).toHaveBeenCalledTimes(1);
     expect(result.output).toContain('Budget deleted for Food');
@@ -1831,11 +1899,7 @@ describe('get_bank_balances array bank_name', () => {
   beforeEach(resetAllMocks);
 
   test('accepts array of bank names and filters OR-match', async () => {
-    const result = await executeTool(
-      'get_bank_balances',
-      { bank_name: ['tbc-ge', 'kaspi'] },
-      ctx,
-    );
+    const result = await executeTool('get_bank_balances', { bank_name: ['tbc-ge', 'kaspi'] }, ctx);
 
     expect(result.success).toBe(true);
     // Should include TBC (2 accounts) + Kaspi (1 account), exclude Monobank
@@ -1847,44 +1911,28 @@ describe('get_bank_balances array bank_name', () => {
   });
 
   test('single string bank_name still works (backward compat)', async () => {
-    const result = await executeTool(
-      'get_bank_balances',
-      { bank_name: 'kaspi' },
-      ctx,
-    );
+    const result = await executeTool('get_bank_balances', { bank_name: 'kaspi' }, ctx);
 
     expect(result.success).toBe(true);
     expect(result.data).toHaveLength(1);
   });
 
   test('bank_name "all" returns all accounts', async () => {
-    const result = await executeTool(
-      'get_bank_balances',
-      { bank_name: 'all' },
-      ctx,
-    );
+    const result = await executeTool('get_bank_balances', { bank_name: 'all' }, ctx);
 
     expect(result.success).toBe(true);
     expect(result.data).toHaveLength(4);
   });
 
   test('array with "all" returns all accounts', async () => {
-    const result = await executeTool(
-      'get_bank_balances',
-      { bank_name: ['tbc-ge', 'all'] },
-      ctx,
-    );
+    const result = await executeTool('get_bank_balances', { bank_name: ['tbc-ge', 'all'] }, ctx);
 
     expect(result.success).toBe(true);
     expect(result.data).toHaveLength(4);
   });
 
   test('no matching bank returns helpful error with available banks', async () => {
-    const result = await executeTool(
-      'get_bank_balances',
-      { bank_name: ['nonexistent'] },
-      ctx,
-    );
+    const result = await executeTool('get_bank_balances', { bank_name: ['nonexistent'] }, ctx);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual([]);

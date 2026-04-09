@@ -17,6 +17,7 @@ import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
+import { executeBatchItems, isBatchInput } from './batch';
 import {
   computeExpenseStats,
   type ExpenseStats,
@@ -25,7 +26,6 @@ import {
   formatStatsTrend,
   type TrendEntry,
 } from './stats';
-import { executeBatchItems, isBatchInput } from './batch';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
