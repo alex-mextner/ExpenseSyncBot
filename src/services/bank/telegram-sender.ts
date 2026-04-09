@@ -99,12 +99,17 @@ export async function sendDirect(
   return withChatContext(chatId, null, () => sendMessage(text, options));
 }
 
-/** Export invite link for a group chat. Returns null on failure (e.g. bot lacks can_invite_users). */
-export async function exportInviteLink(chatId: number): Promise<string | null> {
+/** Create a non-primary invite link for a group chat.
+ * Uses createChatInviteLink (not exportChatInviteLink) to avoid revoking existing invite links. */
+export async function createInviteLink(chatId: number): Promise<string | null> {
   try {
-    return await getBot().api.exportChatInviteLink({ chat_id: chatId });
+    const result = await getBot().api.createChatInviteLink({
+      chat_id: chatId,
+      name: 'ExpenseSyncBot redirect',
+    });
+    return result.invite_link;
   } catch (error) {
-    logger.debug({ err: error, chatId }, 'exportInviteLink failed');
+    logger.debug({ err: error, chatId }, 'createInviteLink failed');
     return null;
   }
 }

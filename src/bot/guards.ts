@@ -3,6 +3,7 @@
 import { database } from '../database';
 import type { Group } from '../database/types';
 import { sendMessage } from '../services/bank/telegram-sender';
+import { trackMembership } from './handlers/message.handler';
 import type { Ctx } from './types';
 
 /** Handler that receives a resolved group — no need for manual group lookup. */
@@ -38,6 +39,12 @@ export function requireGroup(handler: GroupCommandHandler): (ctx: Ctx['Command']
     if (!group) {
       await sendMessage('❌ Группа не настроена. Используй /connect');
       return;
+    }
+
+    // Track membership for private chat redirect buttons
+    const telegramId = ctx.from?.id;
+    if (telegramId) {
+      trackMembership(telegramId, group.id);
     }
 
     return handler(ctx, group);

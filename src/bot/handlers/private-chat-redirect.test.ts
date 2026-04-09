@@ -1,6 +1,6 @@
 // Tests for private chat redirect — group buttons, instructions for new users
 
-import { describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -10,10 +10,10 @@ mock.module('../../utils/logger', () => ({
 }));
 
 const sendMessageMock = mock();
-const exportInviteLinkMock = mock((): Promise<string | null> => Promise.resolve(null));
+const createInviteLinkMock = mock((): Promise<string | null> => Promise.resolve(null));
 mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: sendMessageMock,
-  exportInviteLink: exportInviteLinkMock,
+  createInviteLink: createInviteLinkMock,
   withChatContext: mock(),
   initSender: mock(),
   editMessageText: mock(),
@@ -24,6 +24,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
 
 const findGroupsByTelegramIdMock = mock();
 const updateGroupMock = mock();
+const upsertMemberMock = mock();
 mock.module('../../database', () => {
   const actual = require('../../database/types');
   return {
@@ -31,6 +32,7 @@ mock.module('../../database', () => {
     database: {
       groupMembers: {
         findGroupsByTelegramId: findGroupsByTelegramIdMock,
+        upsert: upsertMemberMock,
       },
       groups: {
         update: updateGroupMock,
@@ -50,6 +52,16 @@ type ButtonRow = Array<{ text: string; url: string }>;
 type SendCall = [string, { reply_markup: { inline_keyboard: ButtonRow[] } }];
 
 describe('sendPrivateChatRedirect', () => {
+  beforeEach(() => {
+    sendMessageMock.mockReset();
+    createInviteLinkMock.mockReset();
+    createInviteLinkMock.mockResolvedValue(null);
+    findGroupsByTelegramIdMock.mockReset();
+    updateGroupMock.mockReset();
+    logMock.error.mockClear();
+    logMock.warn.mockClear();
+  });
+
   test('uses stored invite link when available', async () => {
     findGroupsByTelegramIdMock.mockReturnValue([
       {
@@ -59,49 +71,44 @@ describe('sendPrivateChatRedirect', () => {
         inviteLink: 'https://t.me/+abc123',
       },
     ]);
-    sendMessageMock.mockReset();
-    exportInviteLinkMock.mockReset();
 
     await sendPrivateChatRedirect(111);
 
     const [, opts] = sendMessageMock.mock.calls[0] as SendCall;
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.url).toBe('https://t.me/+abc123');
-    // Should NOT call exportInviteLink when invite_link is already cached
-    expect(exportInviteLinkMock).not.toHaveBeenCalled();
+    // Should NOT call createInviteLink when invite_link is already cached
+    expect(createInviteLinkMock).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
   test('fetches and caches invite link when not stored', async () => {
     findGroupsByTelegramIdMock.mockReturnValue([
       { groupId: 1, telegramGroupId: -1001234567890, title: 'Семья', inviteLink: null },
     ]);
-    exportInviteLinkMock.mockReset();
-    exportInviteLinkMock.mockResolvedValue('https://t.me/+fetched456');
-    updateGroupMock.mockReset();
-    sendMessageMock.mockReset();
+    createInviteLinkMock.mockResolvedValue('https://t.me/+fetched456');
 
     await sendPrivateChatRedirect(222);
 
-    expect(exportInviteLinkMock).toHaveBeenCalledWith(-1001234567890);
+    expect(createInviteLinkMock).toHaveBeenCalledWith(-1001234567890);
     expect(updateGroupMock).toHaveBeenCalledWith(-1001234567890, {
       invite_link: 'https://t.me/+fetched456',
     });
 
     const [, opts] = sendMessageMock.mock.calls[0] as SendCall;
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.url).toBe('https://t.me/+fetched456');
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
   test('falls back to t.me/c/ deep link when invite link unavailable', async () => {
     findGroupsByTelegramIdMock.mockReturnValue([
       { groupId: 1, telegramGroupId: -1001234567890, title: 'Семья', inviteLink: null },
     ]);
-    exportInviteLinkMock.mockReset();
-    exportInviteLinkMock.mockResolvedValue(null);
-    sendMessageMock.mockReset();
 
     await sendPrivateChatRedirect(333);
 
     const [, opts] = sendMessageMock.mock.calls[0] as SendCall;
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.url).toBe('https://t.me/c/1234567890');
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
   test('shows buttons for multiple groups', async () => {
@@ -119,7 +126,6 @@ describe('sendPrivateChatRedirect', () => {
         inviteLink: 'https://t.me/+bbb',
       },
     ]);
-    sendMessageMock.mockReset();
 
     await sendPrivateChatRedirect(444);
 
@@ -129,23 +135,23 @@ describe('sendPrivateChatRedirect', () => {
     expect(opts.reply_markup.inline_keyboard).toHaveLength(2);
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.text).toBe('Семья');
     expect(opts.reply_markup.inline_keyboard[1]?.[0]?.text).toBe('Работа');
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
   test('uses "Группа" fallback when group has no title', async () => {
     findGroupsByTelegramIdMock.mockReturnValue([
       { groupId: 1, telegramGroupId: -1001111111111, title: null, inviteLink: 'https://t.me/+x' },
     ]);
-    sendMessageMock.mockReset();
 
     await sendPrivateChatRedirect(555);
 
     const [, opts] = sendMessageMock.mock.calls[0] as SendCall;
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.text).toBe('Группа');
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
   test('sends instructions when user has no groups', async () => {
     findGroupsByTelegramIdMock.mockReturnValue([]);
-    sendMessageMock.mockReset();
 
     await sendPrivateChatRedirect(666);
 
@@ -158,14 +164,20 @@ describe('sendPrivateChatRedirect', () => {
     expect(secondMsg).toContain('Создай группу');
     expect(secondMsg).toContain('@ExpenseSyncBot');
     expect(secondMsg).toContain('/connect');
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
-  test('no unexpected errors logged', async () => {
-    findGroupsByTelegramIdMock.mockReturnValue([]);
-    sendMessageMock.mockReset();
+  test('gracefully falls back to deep link when createInviteLink fails', async () => {
+    findGroupsByTelegramIdMock.mockReturnValue([
+      { groupId: 1, telegramGroupId: -1001234567890, title: 'Тест', inviteLink: null },
+    ]);
+    createInviteLinkMock.mockRejectedValue(new Error('API timeout'));
 
-    await sendPrivateChatRedirect(777);
+    await sendPrivateChatRedirect(888);
 
-    expect(logMock.error).not.toHaveBeenCalled();
+    // Should fall back to deep link, not crash
+    const [, opts] = sendMessageMock.mock.calls[0] as SendCall;
+    expect(opts.reply_markup.inline_keyboard[0]?.[0]?.url).toBe('https://t.me/c/1234567890');
+    expect(opts.reply_markup.inline_keyboard[0]?.[0]?.text).toBe('Тест');
   });
 });

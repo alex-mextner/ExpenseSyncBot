@@ -29,8 +29,8 @@ export interface CreateGroupData {
 }
 
 export interface UpdateGroupData {
-  title?: string;
-  invite_link?: string;
+  title?: string | null;
+  invite_link?: string | null;
   google_refresh_token?: string;
   spreadsheet_id?: string;
   default_currency?: CurrencyCode;
@@ -39,16 +39,6 @@ export interface UpdateGroupData {
   active_topic_id?: number | null;
   bank_panel_summary_message_id?: number | null;
   oauth_client?: OAuthClientType;
-}
-
-/**
- * Group member — junction table for user-group many-to-many relationship
- */
-export interface GroupMember {
-  id: number;
-  telegram_id: number;
-  group_id: number;
-  joined_at: string;
 }
 
 /**

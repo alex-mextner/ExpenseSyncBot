@@ -3,7 +3,7 @@ import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constan
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
-import { sendMessage } from '../../services/bank/telegram-sender';
+import { createInviteLink, sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
@@ -26,6 +26,17 @@ const logger = createLogger('message.handler');
 /** Track consecutive sheet write failures per group to suggest /reconnect */
 const sheetFailuresByGroup = new Map<number, number>();
 
+/** Recently-seen user+group pairs — skip redundant DB upserts */
+const recentMemberships = new Set<string>();
+
+/** Track user membership in a group, skipping DB write if recently seen */
+export function trackMembership(telegramId: number, groupId: number): void {
+  const key = `${telegramId}:${groupId}`;
+  if (recentMemberships.has(key)) return;
+  database.groupMembers.upsert(telegramId, groupId);
+  recentMemberships.add(key);
+}
+
 export function getSheetWriteErrorMessage(groupId: number): string {
   const count = sheetFailuresByGroup.get(groupId) ?? 0;
   sheetFailuresByGroup.set(groupId, count + 1);
@@ -46,18 +57,36 @@ function buildGroupDeepLink(telegramGroupId: number): string {
   return `https://t.me/c/${chatId}`;
 }
 
+/** In-flight invite link requests — prevents duplicate API calls for the same group */
+const pendingInviteLinks = new Map<number, Promise<string | null>>();
+
 /** Lazily fetch and cache a group's invite link via Bot API */
 async function getOrFetchInviteLink(
   telegramGroupId: number,
   cachedLink: string | null,
 ): Promise<string | null> {
   if (cachedLink) return cachedLink;
-  const { exportInviteLink } = await import('../../services/bank/telegram-sender');
-  const link = await exportInviteLink(telegramGroupId);
-  if (link) {
-    database.groups.update(telegramGroupId, { invite_link: link });
-  }
-  return link;
+
+  // Deduplicate concurrent fetches for the same group
+  const pending = pendingInviteLinks.get(telegramGroupId);
+  if (pending) return pending;
+
+  const promise = createInviteLink(telegramGroupId)
+    .then((link) => {
+      if (link) {
+        database.groups.update(telegramGroupId, { invite_link: link });
+      }
+      return link;
+    })
+    .catch((error) => {
+      logger.warn({ err: error, telegramGroupId }, 'Failed to fetch invite link');
+      return null;
+    })
+    .finally(() => {
+      pendingInviteLinks.delete(telegramGroupId);
+    });
+  pendingInviteLinks.set(telegramGroupId, promise);
+  return promise;
 }
 
 /** Send redirect message to user in private chat with buttons to their groups */
@@ -121,7 +150,7 @@ export async function handleExpenseMessage(
   }
 
   const telegramGroupId = ctx.chat.id;
-  const groupTitle = ctx.chat.title || `Group ${telegramGroupId}`;
+  const groupTitle = ctx.chat.title;
 
   logger.info(`[MSG] Message from group "${groupTitle}" (${telegramGroupId})`);
 
@@ -195,10 +224,10 @@ export async function handleExpenseMessage(
   }
 
   // Track group title and user membership for private chat redirect buttons
-  if (groupTitle !== group.title) {
+  if (groupTitle && groupTitle !== group.title) {
     database.groups.update(telegramGroupId, { title: groupTitle });
   }
-  database.groupMembers.upsert(telegramId, group.id);
+  trackMembership(telegramId, group.id);
 
   // Check if we're waiting for design edit or code edit input
   const pendingTaskId = consumePendingDesignEdit(telegramGroupId);
