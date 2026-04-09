@@ -74,8 +74,13 @@ function makeFetchDelegate(): (
   return async (url, init) => globalThis.fetch(url, init);
 }
 
+// OpenAI SDK throws on empty apiKey at construction — pass a placeholder
+// for missing keys so module load doesn't fail in tests / partial setups.
+// Actual API calls will fail with 401 if the placeholder is hit at runtime.
+const PLACEHOLDER_KEY = 'missing';
+
 const zaiClient = new OpenAI({
-  apiKey: env.ANTHROPIC_API_KEY,
+  apiKey: env.ANTHROPIC_API_KEY || PLACEHOLDER_KEY,
   baseURL: ZAI_BASE_URL,
   timeout: DEFAULT_TIMEOUT_MS,
   maxRetries: 0,
@@ -83,7 +88,7 @@ const zaiClient = new OpenAI({
 });
 
 const hfClient = new OpenAI({
-  apiKey: env.HF_TOKEN,
+  apiKey: env.HF_TOKEN || PLACEHOLDER_KEY,
   baseURL: HF_BASE_URL,
   timeout: DEFAULT_TIMEOUT_MS,
   maxRetries: 0,
@@ -91,7 +96,7 @@ const hfClient = new OpenAI({
 });
 
 const geminiClient = new OpenAI({
-  apiKey: env.GEMINI_API_KEY,
+  apiKey: env.GEMINI_API_KEY || PLACEHOLDER_KEY,
   baseURL: GEMINI_BASE_URL,
   timeout: DEFAULT_TIMEOUT_MS,
   maxRetries: 0,

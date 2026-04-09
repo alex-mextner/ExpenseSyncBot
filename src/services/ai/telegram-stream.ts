@@ -84,11 +84,20 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
 
 /**
  * Returns true if the AI response is a skip signal — bot chose to stay silent.
- * Recognized signals: [SKIP], ..., or empty string.
+ * Recognized signals (case-insensitive):
+ * - [SKIP], [Skip], [skip], [SKIP, SKIP] (broken brackets)
+ * - [ПРОПУСК], ПРОПУСК] (Russian variant)
+ * - [SKIP] embedded anywhere in text
+ * - ..., … (ellipsis)
+ * - empty/whitespace string
  */
 export function isSkipSignal(text: string): boolean {
   const t = text.trim();
-  return t === '[SKIP]' || t === '...' || t === '';
+  if (t === '' || t === '...' || t === '…') return true;
+  // Match [SKIP], [skip], [SKIP (broken), SKIP], [ПРОПУСК], ПРОПУСК], etc.
+  // Requires at least ONE square bracket (open or close) to avoid matching
+  // raw words "skip" and parentheses-wrapped "(SKIP)".
+  return /(\[(skip|пропуск)\]?|(skip|пропуск)\])/i.test(t);
 }
 
 const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
