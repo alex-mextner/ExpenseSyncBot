@@ -118,17 +118,17 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: 'set_budget',
     description:
-      'Set or update budget limit for a category. Saves to DB and syncs to Google Sheets.',
+      'Set or update budget limit for a category. Saves to DB and syncs to Google Sheets. Pass an `items` array to set multiple budgets in one call (max 20).',
     input_schema: {
       type: 'object' as const,
       properties: {
         category: {
           type: 'string',
-          description: 'Category name',
+          description: 'Category name (single mode)',
         },
         amount: {
           type: 'number',
-          description: 'Budget limit amount',
+          description: 'Budget limit amount (single mode)',
         },
         currency: {
           type: 'string',
@@ -139,8 +139,22 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: 'string',
           description: 'Month in "YYYY-MM" format. Default: current month.',
         },
+        items: {
+          type: 'array',
+          description:
+            'Batch mode: array of {category, amount, currency?, month?}. When present, top-level category/amount are ignored.',
+          items: {
+            type: 'object',
+            properties: {
+              category: { type: 'string' },
+              amount: { type: 'number' },
+              currency: { type: 'string' },
+              month: { type: 'string' },
+            },
+            required: ['category', 'amount'],
+          },
+        },
       },
-      required: ['category', 'amount'],
     },
   },
   {

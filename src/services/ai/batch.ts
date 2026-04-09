@@ -39,13 +39,20 @@ export async function executeBatchItems<T>(
   const results: BatchItemResult[] = [];
 
   for (const item of items) {
-    const result = await executor(item);
-    results.push({
-      success: result.success,
-      message: result.success
-        ? `✓ ${toolName}: ${result.output ?? 'OK'}`
-        : `✗ ${toolName}: ${result.error ?? 'Unknown error'}`,
-    });
+    try {
+      const result = await executor(item);
+      results.push({
+        success: result.success,
+        message: result.success
+          ? `✓ ${toolName}: ${result.output ?? 'OK'}`
+          : `✗ ${toolName}: ${result.error ?? 'Unknown error'}`,
+      });
+    } catch (err) {
+      results.push({
+        success: false,
+        message: `✗ ${toolName}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      });
+    }
   }
 
   const succeeded = results.filter((r) => r.success).length;

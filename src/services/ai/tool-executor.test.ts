@@ -760,6 +760,97 @@ describe('executeSetBudget', () => {
   });
 });
 
+describe('set_budget batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch set_budget with items array calls set for each item', async () => {
+    const result = await executeTool(
+      'set_budget',
+      {
+        items: [
+          { category: 'Food', amount: 50000 },
+          { category: 'Transport', amount: 10000 },
+          { category: 'Fun', amount: 20000 },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockBudgetManagerSet).toHaveBeenCalledTimes(3);
+  });
+
+  test('batch set_budget reports partial failure', async () => {
+    mockBudgetManagerSet
+      .mockResolvedValueOnce({ sheetsSynced: false })
+      .mockRejectedValueOnce(new Error('Sheet error'))
+      .mockResolvedValueOnce({ sheetsSynced: false });
+
+    const result = await executeTool(
+      'set_budget',
+      {
+        items: [
+          { category: 'Food', amount: 100 },
+          { category: 'Bad', amount: 200 },
+          { category: 'OK', amount: 300 },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('2/3 succeeded');
+    expect(result.output).toContain('✗');
+  });
+
+  test('batch over 20 items is rejected', async () => {
+    const items = Array.from({ length: 21 }, (_, i) => ({
+      category: `Cat${i}`,
+      amount: 100,
+    }));
+
+    const result = await executeTool('set_budget', { items }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('20');
+  });
+
+  test('single set_budget still works (backward compat)', async () => {
+    const result = await executeTool(
+      'set_budget',
+      { category: 'Food', amount: 500 },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
+    expect(result.output).toContain('Budget set: Food');
+  });
+
+  test('items array takes priority over top-level fields', async () => {
+    const result = await executeTool(
+      'set_budget',
+      {
+        category: 'IGNORED',
+        amount: 999,
+        items: [{ category: 'Real', amount: 100 }],
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('1/1 succeeded');
+    expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
+    const callArg = mockBudgetManagerSet.mock.calls[0][0];
+    expect(callArg.category).toBe('Real');
+    expect(callArg.amount).toBe(100);
+  });
+
+  test('empty items array returns error', async () => {
+    const result = await executeTool('set_budget', { items: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeGetCategories', () => {
   beforeEach(resetAllMocks);
 

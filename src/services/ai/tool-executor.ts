@@ -25,6 +25,7 @@ import {
   formatStatsTrend,
   type TrendEntry,
 } from './stats';
+import { executeBatchItems, isBatchInput } from './batch';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
@@ -415,6 +416,22 @@ function executeGetExchangeRates(): ToolResult {
 // === Write tools ===
 
 async function executeSetBudget(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  if (isBatchInput(input['items'])) {
+    const items = input['items'] as Array<Record<string, unknown>>;
+    return executeBatchItems(items, 'set_budget', (item) => executeSetBudgetSingle(item, ctx));
+  }
+
+  if (Array.isArray(input['items'])) {
+    return { success: false, error: 'items array is empty' };
+  }
+
+  return executeSetBudgetSingle(input, ctx);
+}
+
+async function executeSetBudgetSingle(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
