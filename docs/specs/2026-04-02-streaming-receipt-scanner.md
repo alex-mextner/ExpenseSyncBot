@@ -12,32 +12,37 @@ Async scan with SSE streaming. Server accepts request, returns scanId immediatel
 
 ### Scan Store (`src/web/scan-store.ts`)
 
-In-memory `Map<string, ScanState>` with 5-minute TTL auto-cleanup (setInterval 60s).
+In-memory `Map<string, ScanState>` with 30-minute TTL auto-cleanup (setInterval 60s).
 
 ```typescript
 type ScanPhase = 'pending' | 'fetching' | 'processing' | 'extracting' | 'done' | 'error'
 
 interface ScanState {
   phase: ScanPhase
+  groupId: number           // internal group ID — for auth on SSE/poll endpoints
+  telegramGroupId: number   // Telegram group ID — for auth context resolution on SSE/poll
   url?: string              // shortened URL extracted from QR (for display)
   rawUrl?: string           // original URL from QR
-  items: MiniappReceiptItem[] // items parsed so far
-  currency?: string
+  items: ScanReceiptItem[]  // items parsed so far (mapped to client-facing format)
+  currency?: CurrencyCode
   fileId?: string | null    // Telegram file_id (OCR only)
   error?: string
   errorCode?: string
   createdAt: number
-  subscribers: Set<(event: string) => void>  // SSE connections
 }
 ```
 
+**Item type mapping:** AI extractor returns `AIReceiptItem` (with `name_ru`, `quantity`, `possible_categories`). The scan store and SSE events use the client-facing `ScanReceiptItem` type (`name`, `qty`, no `possible_categories`). The mapping (`name_ru → name`, `quantity → qty`) happens inside the processing pipeline before items are stored in ScanState or emitted via SSE. Both QR and OCR flows use the same mapping. This keeps the client simple — no post-processing needed.
+
+**SSE pub/sub** is managed separately from data: `Map<string, Set<(event: string) => void>>` alongside the state map. This avoids mixing serializable data with function references.
+
 Functions:
-- `createScan(): string` — generates nanoid, stores initial state, returns scanId
+- `createScan(groupId: number, telegramGroupId: number): string` — generates `crypto.randomUUID()`, stores initial state with both IDs, returns scanId
 - `getScan(id): ScanState | undefined`
-- `updateScan(id, patch)` — merges patch, notifies all SSE subscribers
+- `updateScan(id, patch)` — merges patch, auto-emits `status` event when `phase` changes (except `done`/`error` which have their own events)
 - `emitEvent(id, event, data)` — sends SSE-formatted message to all subscribers
-- `subscribe(id, send): () => void` — adds SSE send fn, returns unsubscribe
-- Cleanup loop: delete scans older than 5 minutes every 60 seconds
+- `subscribe(id, send): () => void` — adds SSE send fn, returns unsubscribe. Max 5 subscribers per scanId (rejects with 429 beyond that).
+- Cleanup loop: delete scans older than 30 minutes every 60 seconds
 
 ### API Endpoints
 
@@ -61,33 +66,41 @@ Kicks off background processing (fire-and-forget, no await):
 
 #### `POST /api/receipt/ocr?groupId=X`
 
-**Body:** FormData with `image` field (JPEG, max 2MB)
+**Body:** FormData with `image` field (JPEG, max 2MB). Client compresses image before upload: long side ≤ 1800px, JPEG quality 0.85, max 2 MB (uses `OffscreenCanvas` + `createImageBitmap`).
 
 **Response:** `202 { scanId: string }`
 
-Background processing:
+Background processing — same streaming pattern as QR scan, but with vision models:
 
-1. `updateScan(scanId, { phase: 'processing' })` + `emitEvent(scanId, 'status', { phase: 'processing' })`
-2. Sharp resize image
-3. Qwen vision OCR → extracted text
-4. Upload original to Telegram → fileId
-5. `updateScan(scanId, { phase: 'extracting', fileId })` + `emitEvent(scanId, 'status', { phase: 'extracting' })`
-6. `streamExtractExpenses(text, categories, onItem)` — same streaming extraction
-7. Same completion/error handling as QR scan
+1. `updateScan(scanId, { phase: 'processing' })` — auto-emits `status` event
+2. Sharp resize image (1800px, JPEG 85%)
+3. Upload original image to Telegram via `bot.api.sendPhoto()` → extract `fileId` from response. Fire-and-forget: log warning on failure, continue with `fileId: null`
+4. `updateScan(scanId, { phase: 'extracting', fileId })`
+5. `streamExtractFromImage(imageBuffer, categories, onItem)` — streaming VLM extraction:
+   - Same KIE prompt as QR scan (extract items with names, categories, prices as JSON)
+   - Model chain: glm-5v-turbo (Z.ai direct API, `api.z.ai/api/paas/v4/chat/completions`) → Qwen2.5-VL-72B (HF default provider) as fallback
+   - Z.ai API key: `ANTHROPIC_API_KEY` env var (shared with other Z.ai services)
+   - Image passed as base64 data URL in chat message `image_url` content part
+   - Uses `StreamJsonParser` + `stream: true` — items appear one by one, same as QR flow
+   - Each item emitted as SSE `item` event immediately
+   - Returns full `AIExtractionResult` for `done` event
+6. On completion: `updateScan(scanId, { phase: 'done', items, currency })` + `emitEvent('done', { items, currency, fileId })`
+7. On error: same as QR scan
 
 #### `GET /api/receipt/scan/:scanId/stream`
 
 SSE endpoint. Auth via `initData` query param (same as existing dashboard SSE).
 
 1. Find scan state — 404 if missing
-2. Create ReadableStream, register subscriber
-3. Immediately replay current state:
+2. Verify that the authenticated user belongs to `scanState.groupId` — 403 if not
+3. Create ReadableStream, register subscriber (reject with 429 if already at 5 subscribers)
+4. Immediately replay current state:
    - If url exists → emit `url` event
-   - For each item already parsed → emit `item` event
+   - For each item in `state.items` → emit `item` event
    - If phase is `done` → emit `done` + close
    - If phase is `error` → emit `error` + close
-4. Keep alive with ping every 15 seconds
-5. Unsubscribe + cleanup on disconnect
+5. Keep alive with ping every 15 seconds
+6. Unsubscribe + cleanup on disconnect
 
 This replay mechanism is what enables phone sleep recovery: client reconnects, gets all already-parsed items instantly, then continues receiving new ones.
 
@@ -107,6 +120,14 @@ Polling fallback. Returns current state as JSON:
 ```
 
 Used when EventSource fails and client needs to check if scan is done.
+
+#### `GET /api/categories?groupId=X`
+
+Returns category names for the group. Used by client to populate category combobox in confirm phase.
+
+**Response:** `200 { categories: string[] }`
+
+Auth via `X-Telegram-Init-Data` header (same as other endpoints).
 
 ### SSE Event Protocol
 
@@ -130,48 +151,44 @@ event: ping
 data: {}
 ```
 
-### AI Streaming Extractor
+### AI Streaming Functions
 
-New function in `ai-extractor.ts`:
+Two streaming functions, same pattern: `chatCompletionStream()` with `StreamJsonParser`, fallback model chain.
+
+#### `streamExtractExpenses` (QR — text → items with categories)
 
 ```typescript
 async function streamExtractExpenses(
-  text: string,
+  receiptData: string,
   existingCategories: string[],
-  onItem: (item: MiniappReceiptItem) => void,
-  options?: { maxRetries?: number }
+  onItem: (item: ScanReceiptItem) => void,
+  options?: { maxRetries?: number; categoryExamples?: Map<string, CategoryExample[]> }
 ): Promise<AIExtractionResult>
 ```
 
-Changes from current `extractExpensesFromReceipt`:
-- Uses `client.chatCompletionStream()` instead of `client.chatCompletion()`
-- Adds `AbortSignal.timeout(30_000)` on each attempt
-- Accumulates tokens into buffer
-- Strips `<think>...</think>` blocks on the fly
-- Uses partial JSON parser to detect complete items → calls `onItem` for each
-- After stream ends, does final validation (same as current: category matching, field validation)
-- Returns full result as before (for `done` event and state update)
-- Retry logic unchanged (3 attempts per model, exponential backoff), but timeout prevents 2-min 504 hangs
+- Input: text (HTML or plain) from `fetchReceiptData()`
+- Models: DeepSeek-R1 (novita) → DeepSeek-V3 (fireworks-ai)
+- `onItem` receives mapped `ScanReceiptItem` (name_ru → name, quantity → qty)
+- 3 attempts per model, 30s `AbortSignal` timeout per attempt
 
-The non-streaming `extractExpensesFromReceipt` stays for backward compatibility (used by photo-processor background worker for bot photo flow).
-
-### Partial JSON Item Parser (`src/services/receipt/stream-json-parser.ts`)
-
-Extracts complete items from a growing JSON string buffer:
+#### `streamExtractFromImage` (OCR — image → items with categories)
 
 ```typescript
-class StreamJsonParser {
-  private buffer = ''
-  private emittedCount = 0
-  private insideThink = false
-
-  /** Append new tokens, returns newly completed items */
-  push(chunk: string): AIReceiptItem[]
-
-  /** Get all items found so far */
-  getAllItems(): AIReceiptItem[]
-}
+async function streamExtractFromImage(
+  imageBuffer: Buffer,
+  existingCategories: string[],
+  onItem: (item: ScanReceiptItem) => void,
+  options?: { maxRetries?: number; categoryExamples?: Map<string, CategoryExample[]> }
+): Promise<AIExtractionResult>
 ```
+
+- Input: JPEG buffer, passed as base64 data URL in `image_url` content part
+- Models: glm-5v-turbo (Z.ai direct, `api.z.ai/api/paas/v4/chat/completions`) → Qwen2.5-VL-72B (HF default)
+- Z.ai auth: `ANTHROPIC_API_KEY` env var, OpenAI-compatible chat completion format
+- Same KIE prompt, same `StreamJsonParser`, same `onItem` callback as QR flow
+- Items streamed with categories — unified behavior with QR scan
+
+The non-streaming `extractExpensesFromReceipt` stays for backward compatibility (photo-processor bot flow). It should also get the 30s `AbortSignal` timeout.
 
 Algorithm:
 1. Append chunk to buffer
@@ -180,7 +197,7 @@ Algorithm:
 4. Find `"items"` + `[` in buffer
 5. Walk chars from array start, track brace depth
 6. When `}` closes at depth 0 inside array → try `JSON.parse()` on that substring
-7. If valid and has required fields (name_ru, total) → it's a complete item
+7. If valid and has required fields for current mode → it's a complete item
 8. Return items beyond `emittedCount`, update counter
 
 Edge cases handled:
@@ -224,14 +241,17 @@ This reduces worst-case from 2 min × 3 retries × 2 models = 12 min → 30s × 
 
 ## Client (Miniapp)
 
-### API Functions (`miniapp/src/api/receipt.ts`)
+### API Functions (`miniapp/src/api/receipt-stream.ts`)
 
 ```typescript
 /** Start async QR scan, returns scanId */
-export async function startScan(groupId: number, qr: string): Promise<{ scanId: string }>
+export async function startScan(groupId: number, qr: string): Promise<string>
 
-/** Start async OCR scan, returns scanId */
-export async function startOcr(groupId: number, imageBlob: Blob): Promise<{ scanId: string }>
+/** Start async OCR scan, returns scanId. Client compresses image before upload. */
+export async function startOcr(groupId: number, imageBlob: Blob): Promise<string>
+
+/** Fetch group categories for combobox */
+export async function fetchCategories(groupId: number): Promise<string[]>
 
 /** Poll scan state (fallback) */
 export async function pollScan(scanId: string): Promise<ScanPollResult>
@@ -240,10 +260,10 @@ export async function pollScan(scanId: string): Promise<ScanPollResult>
 export function streamScan(
   scanId: string,
   callbacks: {
-    onUrl?: (url: string) => void
+    onUrl?: (url: string, raw?: string) => void
     onStatus?: (phase: string) => void
     onItem?: (item: ReceiptItem) => void
-    onDone?: (result: ScanResult) => void
+    onDone?: (result: { items: ReceiptItem[]; currency?: string; fileId?: string | null }) => void
     onError?: (error: { message: string; code: string }) => void
   }
 ): () => void
@@ -251,8 +271,8 @@ export function streamScan(
 
 `streamScan` implementation:
 1. Opens `EventSource` to `/api/receipt/scan/:scanId/stream?initData=...`
-2. Registers event listeners for each event type
-3. On `onerror`: close EventSource, start polling every 3 seconds
+2. Registers event listeners for each event type (url, status, item, done, error)
+3. On `onerror`: close EventSource, start polling with exponential backoff (`×1.5` starting at 3s, cap at 10s: 3 → 4.5 → 6.75 → 10)
 4. Polling: call `pollScan()`, check phase, replay any new items, stop when done/error
 5. Returns cleanup function (close ES + clear poll interval)
 
@@ -292,6 +312,8 @@ New items slide in with CSS transition. Skeleton placeholder at bottom pulses wh
 
 #### OCR Flow
 
+Same streaming pattern as QR — items appear one by one with categories.
+
 ```
 ┌─────────────────────────────┐
 │  ┌─────────────────────────┐│
@@ -305,10 +327,18 @@ New items slide in with CSS transition. Skeleton placeholder at bottom pulses wh
 │                              │
 │  ── then when items start ──│
 │                              │
-│  Распознаём позиции...      │  ← phase 'extracting'
+│  Распознаём позиции...      │  ← phase 'extracting', items stream from VLM
 │  ┌─────────────────────────┐│
-│  │ Редиска         94.99   ││
+│  │ Редиска         94.99   ││  ← items appear one by one with categories
+│  │ 1 × 94.99   [Еда]      ││
 │  └─────────────────────────┘│
+│  ┌─────────────────────────┐│
+│  │ Мороженое       369.98  ││
+│  │ 2 × 184.99  [Еда]      ││
+│  └─────────────────────────┘│
+│  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐│
+│  │ ░░░░░░░░░░░░░░░░░░░░░  ││  ← skeleton placeholder
+│  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘│
 └─────────────────────────────┘
 ```
 
@@ -329,7 +359,7 @@ Photo shown via `URL.createObjectURL(blob)` — stored in component state. As it
   height: 3px;
   background: linear-gradient(to right, transparent 0%, #4CAF50 30%, #4CAF50 70%, transparent 100%);
   box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
-  animation: scanMove 2.5s ease-in-out infinite;
+  animation: scanMove 2.5s ease-in-out infinite alternate;
 }
 
 @keyframes scanMove {
@@ -349,18 +379,34 @@ When `done` event arrives:
 
 No items are re-rendered — the same list elements get additional controls.
 
-### Session Recovery (Phone Sleep)
+### Connection Recovery
 
-State persisted to `sessionStorage`:
-- `scanId` — to reconnect
-- `photoObjectUrl` — can't persist blobs, but scan line animation stops; if photo lost, just show items
-- `items` — already received items (for instant render before SSE replay)
+Two scenarios:
 
-On component mount:
-1. Check sessionStorage for active scan
-2. If found: restore items to state, open SSE stream
-3. SSE replay sends all items — deduplicate by index
-4. Continue from where we left off
+**SSE drop without reload (phone sleep):**
+1. EventSource `onerror` fires
+2. Client polls `GET /api/receipt/scan/:scanId` once to get current state
+3. If `done` → go straight to confirm with full items
+4. If `error` → show error
+5. If still processing → reconnect SSE (replay mechanism sends all items parsed so far)
+
+**Page reload (Telegram killed WebView, INIT_DATA_EXPIRED recovery, etc.):**
+
+Extends the existing `INIT_DATA_EXPIRED` session recovery pattern in Scanner.tsx. Currently it saves `{ phase, items, fileId, currency, urlInput, scrollPosition }` to sessionStorage key `scanner_saved_state`, sets `reloadAttempted` flag to prevent infinite loops, reloads page for fresh initData, then restores state on mount.
+
+New flow adds `scanId` to the saved state:
+
+1. On scan start: save `{ scanId, groupId }` to sessionStorage (alongside existing fields)
+2. On any `INIT_DATA_EXPIRED` error (SSE, poll, or confirm): save full state + scanId, reload (same as current pattern)
+3. On mount, if sessionStorage has `scanId`:
+   - Poll `GET /api/receipt/scan/:scanId` with fresh initData
+   - If `done` → restore full items + currency, go to `confirm` phase
+   - If still processing → open SSE stream (replay sends all parsed items), enter `streaming` phase
+   - If 404 (scan expired on server) → clear sessionStorage, show `idle`
+   - If `error` → show error
+4. `reloadAttempted` flag logic — **unchanged** from current implementation (prevents loops when initData keeps expiring)
+5. On `done`/`error`/confirm success → clear scanId from sessionStorage
+6. Photo preview on reload: convert blob to base64 data URL via `FileReader.readAsDataURL()` and save to sessionStorage alongside scanId. After JPEG compression the image is ~200KB, base64 adds ~33% → ~270KB, well within sessionStorage 5MB limit. On mount, if data URL present, show it as photo preview during streaming recovery.
 
 ## Error Handling
 
@@ -368,11 +414,13 @@ On component mount:
 |----------|----------|
 | HF provider timeout (30s) | Retry next attempt, same model |
 | All attempts on model fail | Try next model |
-| All models fail | `error` event + admin notification + scan state = error |
+| All models fail (QR or OCR) | `error` event + admin notification + scan state = error |
+| Provider billing exhausted | `error` event with CREDITS_EXHAUSTED code + admin notification |
+| Telegram file upload fails (OCR) | Log warning, continue with `fileId: null` — non-blocking |
 | Network error during fetch | `error` event with FETCH_FAILED code |
 | Phone sleep (SSE drops) | Client polls GET, reconnects SSE, replays items |
 | Page reload | sessionStorage recovery, poll for current state |
-| scanId expired (>5 min) | GET returns 404, client shows "Скан истёк, попробуй ещё раз" |
+| scanId expired (>30 min) | GET returns 404, client shows "Скан истёк, попробуй ещё раз" |
 | Invalid auth (initData expired) | Existing session recovery flow (save + reload) |
 
 ## Migration
@@ -386,4 +434,4 @@ Old sync endpoints (`POST /api/receipt/scan` returning items directly, `POST /ap
 - Admin notification for individual provider failures (Novita down but V3 saves) — separate issue
 - Changing AI model IDs (R1-0528 vs R1) — separate from streaming
 - WebSocket transport — SSE is sufficient and simpler
-- Persistent scan store (Redis/SQLite) — in-memory Map is fine for 5-min TTL, single process
+- Persistent scan store (Redis/SQLite) — in-memory Map is fine for 30-min TTL, single process
