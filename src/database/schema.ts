@@ -12,8 +12,14 @@ const logger = createLogger('schema');
  * Initialize database connection
  */
 export function initDatabase(): Database {
-  mkdirSync(dirname(env.DATABASE_PATH), { recursive: true });
-  const db = new Database(env.DATABASE_PATH, { create: true });
+  // In tests, use in-memory DB to avoid file lock contention between parallel test processes
+  const isTest = process.env.NODE_ENV === 'test';
+  const dbPath = isTest ? ':memory:' : env.DATABASE_PATH;
+
+  if (!isTest) {
+    mkdirSync(dirname(env.DATABASE_PATH), { recursive: true });
+  }
+  const db = new Database(dbPath, { create: true });
 
   // Enable WAL mode for better concurrency
   db.exec('PRAGMA journal_mode = WAL;');
