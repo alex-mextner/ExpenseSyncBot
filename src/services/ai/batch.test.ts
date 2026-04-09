@@ -78,11 +78,7 @@ describe('executeBatchItems', () => {
       return { success: true, output: `ok #${item.n}` };
     };
 
-    const result = await executeBatchItems(
-      [{ n: 1 }, { n: 2 }, { n: 3 }],
-      'add_expense',
-      executor,
-    );
+    const result = await executeBatchItems([{ n: 1 }, { n: 2 }, { n: 3 }], 'add_expense', executor);
 
     expect(result.success).toBe(true);
     expect(result.output).toContain('2/3 succeeded');
