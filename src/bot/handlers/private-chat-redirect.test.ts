@@ -46,7 +46,7 @@ mock.module('../../config/env', () => ({
   env: { BOT_USERNAME: 'ExpenseSyncBot' },
 }));
 
-const { sendPrivateChatRedirect } = await import('./message.handler');
+const { sendPrivateChatRedirect, trackMembership } = await import('./message.handler');
 
 type ButtonRow = Array<{ text: string; url: string }>;
 type SendCall = [string, { reply_markup: { inline_keyboard: ButtonRow[] } }];
@@ -179,5 +179,34 @@ describe('sendPrivateChatRedirect', () => {
     const [, opts] = sendMessageMock.mock.calls[0] as SendCall;
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.url).toBe('https://t.me/c/1234567890');
     expect(opts.reply_markup.inline_keyboard[0]?.[0]?.text).toBe('Тест');
+  });
+});
+
+describe('trackMembership', () => {
+  beforeEach(() => {
+    upsertMemberMock.mockReset();
+  });
+
+  test('calls upsert on first call for a user+group pair', () => {
+    trackMembership(10001, 1);
+    expect(upsertMemberMock).toHaveBeenCalledTimes(1);
+    expect(upsertMemberMock).toHaveBeenCalledWith(10001, 1);
+  });
+
+  test('skips upsert on repeated calls for the same user+group pair', () => {
+    // Use a unique telegramId to avoid interference from prior tests
+    trackMembership(10002, 2);
+    upsertMemberMock.mockReset();
+
+    trackMembership(10002, 2);
+    expect(upsertMemberMock).not.toHaveBeenCalled();
+  });
+
+  test('calls upsert for different groups even with the same user', () => {
+    trackMembership(10003, 3);
+    trackMembership(10003, 4);
+    expect(upsertMemberMock).toHaveBeenCalledTimes(2);
+    expect(upsertMemberMock).toHaveBeenCalledWith(10003, 3);
+    expect(upsertMemberMock).toHaveBeenCalledWith(10003, 4);
   });
 });
