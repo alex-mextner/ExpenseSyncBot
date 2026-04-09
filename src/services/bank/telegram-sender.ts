@@ -99,6 +99,21 @@ export async function sendDirect(
   return withChatContext(chatId, null, () => sendMessage(text, options));
 }
 
+/** Create a non-primary invite link for a group chat.
+ * Uses createChatInviteLink (not exportChatInviteLink) to avoid revoking existing invite links. */
+export async function createInviteLink(chatId: number): Promise<string | null> {
+  try {
+    const result = await getBot().api.createChatInviteLink({
+      chat_id: chatId,
+      name: 'ExpenseSyncBot redirect',
+    });
+    return result.invite_link;
+  } catch (error) {
+    logger.debug({ err: error, chatId }, 'createInviteLink failed');
+    return null;
+  }
+}
+
 /** Send a document (file) directly to a specific chatId via Telegram API.
  * Used for admin notifications with log attachments. */
 export async function sendDocumentDirect(

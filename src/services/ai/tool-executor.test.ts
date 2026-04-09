@@ -33,6 +33,8 @@ const mockGroups = {
   findById: mock((): Group | null => ({
     id: 1,
     telegram_group_id: 456,
+    title: null,
+    invite_link: null,
     google_refresh_token: null,
     spreadsheet_id: null,
     default_currency: 'EUR',
@@ -192,6 +194,8 @@ function resetAllMocks() {
   mockGroups.findById.mockReturnValue({
     id: 1,
     telegram_group_id: 456,
+    title: null,
+    invite_link: null,
     google_refresh_token: null,
     spreadsheet_id: null,
     default_currency: 'EUR',
@@ -814,6 +818,8 @@ describe('executeGetGroupSettings', () => {
     mockGroups.findById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
+      title: null,
+      invite_link: null,
       google_refresh_token: null,
       spreadsheet_id: null,
       default_currency: 'EUR',

@@ -1256,6 +1256,54 @@ export function runMigrations(db: Database): void {
         logger.info(`✓ Fixed ${fixed} corrupted eur_amounts (of ${buggyConst.length} found)`);
       },
     },
+    {
+      name: '046_create_group_members',
+      up: () => {
+        // Add title column to groups table
+        const hasTitle = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('groups') WHERE name = 'title'`,
+          )
+          .get();
+        if (hasTitle?.count === 0) {
+          db.exec(`ALTER TABLE groups ADD COLUMN title TEXT`);
+          logger.info('✓ Added title column to groups');
+        }
+
+        // Add invite_link column to groups table for Telegram-native buttons
+        const hasInviteLink = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('groups') WHERE name = 'invite_link'`,
+          )
+          .get();
+        if (hasInviteLink?.count === 0) {
+          db.exec(`ALTER TABLE groups ADD COLUMN invite_link TEXT`);
+          logger.info('✓ Added invite_link column to groups');
+        }
+
+        // Create group_members junction table for tracking all user-group memberships
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS group_members (
+            id INTEGER PRIMARY KEY,
+            telegram_id INTEGER NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(telegram_id, group_id)
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_group_members_telegram_id ON group_members(telegram_id)`,
+        );
+
+        // Backfill from existing users
+        db.exec(`
+          INSERT OR IGNORE INTO group_members (telegram_id, group_id)
+          SELECT telegram_id, group_id FROM users WHERE group_id IS NOT NULL
+        `);
+
+        logger.info('✓ Created group_members table');
+      },
+    },
   ];
 
   // Check and run migrations

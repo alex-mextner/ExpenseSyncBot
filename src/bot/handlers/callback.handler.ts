@@ -43,7 +43,7 @@ import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
-import { getSheetWriteErrorMessage } from './message.handler';
+import { getSheetWriteErrorMessage, trackMembership } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -68,6 +68,9 @@ function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
     database.users.update(telegramId, { group_id: group.id });
     user = database.users.findByTelegramId(telegramId);
   }
+
+  // Track membership for private chat group buttons
+  trackMembership(telegramId, group.id);
 
   return user ? { user, group } : null;
 }

@@ -3,6 +3,7 @@ import { database } from '../../database';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import { formatErrorForUser } from '../bot-error-formatter';
+import { sendPrivateChatRedirect } from '../handlers/message.handler';
 import type { Ctx } from '../types';
 import { buildHelpText, EXPENSE_EXAMPLES } from './help';
 
@@ -53,10 +54,7 @@ export async function handleStartCommand(ctx: Ctx['Command']): Promise<void> {
         );
       }
     } else {
-      await sendMessage(
-        `👋 Я работаю только в группах.\n\n` +
-          `Добавь меня в группу и набери /connect для настройки.`,
-      );
+      await sendPrivateChatRedirect(telegramId);
     }
   } catch (error) {
     logger.error({ err: error }, '[CMD] Error in /start');

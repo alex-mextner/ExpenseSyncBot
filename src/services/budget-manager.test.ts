@@ -14,6 +14,8 @@ const mockFindByGroupCategoryMonth = mock((): Budget | null => null);
 const mockFindGroupById = mock((): Group | null => ({
   id: 1,
   telegram_group_id: 456,
+  title: null,
+  invite_link: null,
   google_refresh_token: 'encrypted-token',
   spreadsheet_id: 'legacy-sheet-id',
   default_currency: 'EUR' as CurrencyCode,
@@ -80,6 +82,8 @@ function resetAll() {
   mockFindGroupById.mockReturnValue({
     id: 1,
     telegram_group_id: 456,
+    title: null,
+    invite_link: null,
     google_refresh_token: 'encrypted-token',
     spreadsheet_id: 'legacy-sheet-id',
     default_currency: 'EUR' as CurrencyCode,
@@ -172,6 +176,8 @@ describe('BudgetManager.set', () => {
     mockFindGroupById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
+      title: null,
+      invite_link: null,
       google_refresh_token: null,
       spreadsheet_id: null,
       default_currency: 'EUR' as CurrencyCode,
@@ -247,6 +253,8 @@ describe('BudgetManager.set', () => {
     mockFindGroupById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
+      title: null,
+      invite_link: null,
       google_refresh_token: 'token',
       spreadsheet_id: null,
       default_currency: 'EUR' as CurrencyCode,
@@ -300,6 +308,8 @@ describe('BudgetManager.delete', () => {
     mockFindGroupById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
+      title: null,
+      invite_link: null,
       google_refresh_token: 'token',
       spreadsheet_id: 'sheet',
       default_currency: 'USD' as CurrencyCode,
@@ -327,6 +337,8 @@ describe('BudgetManager.delete', () => {
     mockFindGroupById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
+      title: null,
+      invite_link: null,
       google_refresh_token: null,
       spreadsheet_id: null,
       default_currency: 'EUR' as CurrencyCode,
