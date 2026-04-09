@@ -195,9 +195,9 @@ const TEXT_CHAIN: ModelSlot[] = [
   { name: 'DeepSeek-R1', call: callHF('deepseek-ai/DeepSeek-R1-0528', 'novita') },
 ];
 
+// Vision: z.ai doesn't support vision via OpenAI endpoint (tested 2026-04-09), HF only
 const VISION_CHAIN: ModelSlot[] = [
   { name: 'Qwen-VL', call: callHF('Qwen/Qwen2.5-VL-72B-Instruct') },
-  { name: `GLM (${env.AI_MODEL})`, call: callOpenAI(env.AI_MODEL) },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

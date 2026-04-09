@@ -2,7 +2,7 @@
 // Translates typed service errors into user-friendly Telegram messages
 
 import {
-  AnthropicError,
+  AiProviderError,
   AppError,
   GoogleSheetsError,
   HuggingFaceError,
@@ -24,7 +24,7 @@ export function formatErrorForUser(error: unknown): string {
   if (error instanceof NetworkError) {
     return 'Нет соединения с сервисом. Проверь интернет и попробуй снова.';
   }
-  if (error instanceof AnthropicError || error instanceof HuggingFaceError) {
+  if (error instanceof AiProviderError || error instanceof HuggingFaceError) {
     return 'AI-сервис временно недоступен. Попробуй позже.';
   }
   if (error instanceof AppError) {
