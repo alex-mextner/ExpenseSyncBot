@@ -93,6 +93,27 @@ const mockBankTransactions = {
   ]),
 };
 
+const mockBankAccounts = {
+  findByGroupId: mock(() => [
+    { id: 1, connection_id: 10, title: 'TBC Card', balance: 5000, currency: 'GEL', type: 'card', is_excluded: 0 },
+    { id: 2, connection_id: 10, title: 'TBC Savings', balance: 20000, currency: 'GEL', type: 'savings', is_excluded: 0 },
+    { id: 3, connection_id: 20, title: 'Kaspi Card', balance: 100000, currency: 'KZT', type: 'card', is_excluded: 0 },
+    { id: 4, connection_id: 30, title: 'Monobank UAH', balance: 3000, currency: 'UAH', type: 'card', is_excluded: 0 },
+  ]),
+};
+
+const mockBankConnections = {
+  findById: mock((id: number) => {
+    const map: Record<number, { id: number; bank_name: string; display_name: string }> = {
+      10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
+      20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
+      30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
+    };
+    return map[id] ?? null;
+  }),
+  findActiveByGroupId: mock(() => []),
+};
+
 const mockRecurringPatterns = {
   findById: mock((id: number) => ({
     id,
@@ -118,6 +139,8 @@ mock.module('../../database', () => ({
     groups: mockGroups,
     users: mockUsers,
     bankTransactions: mockBankTransactions,
+    bankAccounts: mockBankAccounts,
+    bankConnections: mockBankConnections,
     recurringPatterns: mockRecurringPatterns,
   }),
 }));
@@ -273,6 +296,25 @@ function resetAllMocks() {
       connection_id: 1,
     },
   ]);
+
+  mockBankAccounts.findByGroupId.mockReset();
+  mockBankAccounts.findByGroupId.mockReturnValue([
+    { id: 1, connection_id: 10, title: 'TBC Card', balance: 5000, currency: 'GEL', type: 'card', is_excluded: 0 },
+    { id: 2, connection_id: 10, title: 'TBC Savings', balance: 20000, currency: 'GEL', type: 'savings', is_excluded: 0 },
+    { id: 3, connection_id: 20, title: 'Kaspi Card', balance: 100000, currency: 'KZT', type: 'card', is_excluded: 0 },
+    { id: 4, connection_id: 30, title: 'Monobank UAH', balance: 3000, currency: 'UAH', type: 'card', is_excluded: 0 },
+  ]);
+  mockBankConnections.findById.mockReset();
+  mockBankConnections.findById.mockImplementation((id: number) => {
+    const map: Record<number, { id: number; bank_name: string; display_name: string }> = {
+      10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
+      20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
+      30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
+    };
+    return map[id] ?? null;
+  });
+  mockBankConnections.findActiveByGroupId.mockReset();
+  mockBankConnections.findActiveByGroupId.mockReturnValue([]);
 
   mockRecurringPatterns.findById.mockReset();
   mockRecurringPatterns.findById.mockImplementation((id: number) => ({
@@ -1782,5 +1824,70 @@ describe('find_missing_expenses batch', () => {
     expect(mockBankTransactions.findUnmatched).toHaveBeenCalledTimes(2);
     expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-01-01', '2026-01-31');
     expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-02-01', '2026-02-28');
+  });
+});
+
+describe('get_bank_balances array bank_name', () => {
+  beforeEach(resetAllMocks);
+
+  test('accepts array of bank names and filters OR-match', async () => {
+    const result = await executeTool(
+      'get_bank_balances',
+      { bank_name: ['tbc-ge', 'kaspi'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    // Should include TBC (2 accounts) + Kaspi (1 account), exclude Monobank
+    expect(result.data).toHaveLength(3);
+    const bankNames = (result.data as Array<{ bank_name: string }>).map((a) => a.bank_name);
+    expect(bankNames).toContain('tbc-ge');
+    expect(bankNames).toContain('kaspi');
+    expect(bankNames).not.toContain('monobank');
+  });
+
+  test('single string bank_name still works (backward compat)', async () => {
+    const result = await executeTool(
+      'get_bank_balances',
+      { bank_name: 'kaspi' },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(1);
+  });
+
+  test('bank_name "all" returns all accounts', async () => {
+    const result = await executeTool(
+      'get_bank_balances',
+      { bank_name: 'all' },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(4);
+  });
+
+  test('array with "all" returns all accounts', async () => {
+    const result = await executeTool(
+      'get_bank_balances',
+      { bank_name: ['tbc-ge', 'all'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(4);
+  });
+
+  test('no matching bank returns helpful error with available banks', async () => {
+    const result = await executeTool(
+      'get_bank_balances',
+      { bank_name: ['nonexistent'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual([]);
+    expect(result.summary).toContain('tbc-ge');
   });
 });

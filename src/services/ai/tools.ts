@@ -378,9 +378,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         bank_name: {
-          type: 'string',
+          oneOf: [
+            { type: 'string', description: 'Single bank name' },
+            { type: 'array', items: { type: 'string' }, description: 'Array of bank names' },
+          ],
           description:
-            'Which bank to show: "all" for all banks, or a bank registry key for a specific one (case-insensitive substring match, e.g. "tbc-ge"). Always specify explicitly.',
+            'Which bank(s) to show: "all" for all banks, or bank registry key(s) (case-insensitive substring match). Pass an array for multiple banks.',
         },
       },
       required: ['bank_name'],

@@ -853,21 +853,24 @@ function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentCo
 }
 
 function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const rawBankName =
-    typeof input['bank_name'] === 'string' ? input['bank_name'].toLowerCase() : '';
-  const bankNameFilter = rawBankName === 'all' || rawBankName === '' ? undefined : rawBankName;
+  const bankNames = normalizeArrayParam(input['bank_name']);
+  const isAll = bankNames.length === 0 || bankNames.some((b) => b.toLowerCase() === 'all');
+  const filters = isAll
+    ? undefined
+    : bankNames.map((b) => b.toLowerCase()).filter((b) => b !== 'all');
 
   const accounts = database.bankAccounts.findByGroupId(ctx.groupId, true);
-  const filtered = bankNameFilter
+  const filtered = filters
     ? accounts.filter((a) => {
         const conn = database.bankConnections.findById(a.connection_id);
-        return conn?.bank_name?.toLowerCase().includes(bankNameFilter) ?? false;
+        const bankName = conn?.bank_name?.toLowerCase() ?? '';
+        return filters.some((f) => bankName.includes(f));
       })
     : accounts;
 
   if (filtered.length === 0) {
     // Check if there are accounts at all (ignoring the bank_name filter)
-    if (bankNameFilter) {
+    if (filters) {
       if (accounts.length > 0) {
         const availableBanks = [
           ...new Set(
@@ -879,7 +882,7 @@ function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContex
         return {
           success: true,
           data: [],
-          summary: `No accounts found matching bank_name filter "${bankNameFilter}". Available bank keys: ${availableBanks}. Retry with bank_name: "all" to see all accounts.`,
+          summary: `No accounts found matching bank_name filter "${filters.join(', ')}". Available bank keys: ${availableBanks}. Retry with bank_name: "all" to see all accounts.`,
         };
       }
     }
