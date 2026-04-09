@@ -439,13 +439,16 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
   {
     name: 'manage_recurring_pattern',
     description:
-      'Pause, resume, dismiss, or delete a recurring expense pattern. Use get_recurring_patterns first to find the pattern ID.',
+      'Pause, resume, dismiss, or delete recurring expense patterns. Pass a pattern_id array to manage multiple at once.',
     input_schema: {
       type: 'object' as const,
       properties: {
         pattern_id: {
-          type: 'number',
-          description: 'ID of the recurring pattern to manage',
+          oneOf: [
+            { type: 'number', description: 'Single pattern ID' },
+            { type: 'array', items: { type: 'number' }, description: 'Array of pattern IDs' },
+          ],
+          description: 'ID(s) of the recurring pattern(s) to manage.',
         },
         action: {
           type: 'string',

@@ -93,6 +93,23 @@ const mockBankTransactions = {
   ]),
 };
 
+const mockRecurringPatterns = {
+  findById: mock((id: number) => ({
+    id,
+    group_id: 1,
+    category: `Cat${id}`,
+    expected_amount: 100,
+    currency: 'EUR',
+    expected_day: 1,
+    next_expected_date: null,
+    last_seen_date: null,
+    status: 'active',
+  })),
+  updateStatus: mock(() => {}),
+  delete: mock(() => {}),
+  findAllByGroupId: mock(() => []),
+};
+
 mock.module('../../database', () => ({
   database: mockDatabase({
     expenses: mockExpenses,
@@ -101,6 +118,7 @@ mock.module('../../database', () => ({
     groups: mockGroups,
     users: mockUsers,
     bankTransactions: mockBankTransactions,
+    recurringPatterns: mockRecurringPatterns,
   }),
 }));
 
@@ -255,6 +273,23 @@ function resetAllMocks() {
       connection_id: 1,
     },
   ]);
+
+  mockRecurringPatterns.findById.mockReset();
+  mockRecurringPatterns.findById.mockImplementation((id: number) => ({
+    id,
+    group_id: 1,
+    category: `Cat${id}`,
+    expected_amount: 100,
+    currency: 'EUR',
+    expected_day: 1,
+    next_expected_date: null,
+    last_seen_date: null,
+    status: 'active',
+  }));
+  mockRecurringPatterns.updateStatus.mockReset();
+  mockRecurringPatterns.delete.mockReset();
+  mockRecurringPatterns.findAllByGroupId.mockReset();
+  mockRecurringPatterns.findAllByGroupId.mockReturnValue([]);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -1315,6 +1350,42 @@ describe('calculate tool', () => {
     const result = await executeTool('calculate', { expression: '0 - 63000000 / 0.5' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toMatch(/^-.*e\d+/);
+  });
+});
+
+describe('manage_recurring_pattern batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch pause with pattern_id array', async () => {
+    const result = await executeTool(
+      'manage_recurring_pattern',
+      { pattern_id: [1, 2, 3], action: 'pause' },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockRecurringPatterns.updateStatus).toHaveBeenCalledTimes(3);
+  });
+
+  test('single pattern still works', async () => {
+    const result = await executeTool(
+      'manage_recurring_pattern',
+      { pattern_id: 1, action: 'pause' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('paused');
+  });
+
+  test('empty pattern_id array returns error', async () => {
+    const result = await executeTool(
+      'manage_recurring_pattern',
+      { pattern_id: [], action: 'pause' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
   });
 });
 

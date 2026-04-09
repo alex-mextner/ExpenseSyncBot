@@ -88,7 +88,7 @@ export async function executeTool(
       case 'get_recurring_patterns':
         return executeGetRecurringPatterns(ctx);
       case 'manage_recurring_pattern':
-        return executeManageRecurringPattern(input, ctx);
+        return await executeManageRecurringPattern(input, ctx);
       case 'find_missing_expenses':
         return await executeFindMissingExpenses(input, ctx);
       case 'render_table':
@@ -1004,15 +1004,38 @@ function executeGetRecurringPatterns(ctx: AgentContext): ToolResult {
   return { success: true, output: lines.join('\n') };
 }
 
-function executeManageRecurringPattern(
+async function executeManageRecurringPattern(
   input: Record<string, unknown>,
   ctx: AgentContext,
-): ToolResult {
-  const patternId = input['pattern_id'] as number;
+): Promise<ToolResult> {
+  const rawPatternId = input['pattern_id'];
   const action = input['action'] as string;
 
-  if (!patternId || !action) {
-    return { success: false, error: 'pattern_id and action are required' };
+  if (!action) {
+    return { success: false, error: 'action is required' };
+  }
+
+  if (isBatchInput(rawPatternId)) {
+    const ids = rawPatternId as number[];
+    return executeBatchItems(ids, 'manage_recurring_pattern', async (id) =>
+      executeManageRecurringPatternSingle(id, action, ctx),
+    );
+  }
+
+  if (Array.isArray(rawPatternId)) {
+    return { success: false, error: 'pattern_id array is empty' };
+  }
+
+  return executeManageRecurringPatternSingle(rawPatternId as number, action, ctx);
+}
+
+function executeManageRecurringPatternSingle(
+  patternId: number,
+  action: string,
+  ctx: AgentContext,
+): ToolResult {
+  if (!patternId) {
+    return { success: false, error: 'pattern_id is required' };
   }
 
   const pattern = database.recurringPatterns.findById(patternId);
