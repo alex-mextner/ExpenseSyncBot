@@ -1,5 +1,4 @@
-/** Streaming AI completion with tool calling and provider fallback */
-import { InferenceClient } from '@huggingface/inference';
+/** Streaming AI completion with tool calling and provider fallback — all via OpenAI SDK */
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
@@ -8,20 +7,34 @@ const logger = createLogger('ai-streaming');
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const ZAI_OPENAI_BASE_URL = 'https://api.z.ai/api/paas/v4';
+const ZAI_BASE_URL = 'https://api.z.ai/api/paas/v4';
+const HF_BASE_URL = 'https://router.huggingface.co/v1';
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-// ── Clients ─────────────────────────────────────────────────────────────────
+// ── Clients (all OpenAI SDK, different base URLs) ───────────────────────────
 
-const openaiClient = new OpenAI({
+function makeFetchDelegate(): (
+  url: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response> {
+  return async (url, init) => globalThis.fetch(url, init);
+}
+
+const zaiClient = new OpenAI({
   apiKey: env.ANTHROPIC_API_KEY,
-  baseURL: ZAI_OPENAI_BASE_URL,
+  baseURL: ZAI_BASE_URL,
   timeout: DEFAULT_TIMEOUT_MS,
   maxRetries: 0,
-  fetch: async (url: string | URL | Request, init?: RequestInit) => globalThis.fetch(url, init),
+  fetch: makeFetchDelegate(),
 });
 
-const hfClient = new InferenceClient(env.HF_TOKEN);
+const hfClient = new OpenAI({
+  apiKey: env.HF_TOKEN,
+  baseURL: HF_BASE_URL,
+  timeout: DEFAULT_TIMEOUT_MS,
+  maxRetries: 0,
+  fetch: makeFetchDelegate(),
+});
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -118,7 +131,7 @@ function openaiSlot(model: string): ProviderSlot {
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
       }
-      const stream = await openaiClient.chat.completions.create(params, { signal: opts.signal });
+      const stream = await zaiClient.chat.completions.create(params, { signal: opts.signal });
 
       let text = '';
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
@@ -185,48 +198,34 @@ function openaiSlot(model: string): ProviderSlot {
   };
 }
 
-// ── HuggingFace streaming adapter (non-streaming fallback) ──────────────────
+// ── HuggingFace fallback (non-streaming via OpenAI SDK) ─────────────────────
 
-type HFProvider = NonNullable<Parameters<typeof hfClient.chatCompletion>[0]['provider']>;
-
-function hfSlot(model: string, provider?: HFProvider): ProviderSlot {
+function hfSlot(model: string): ProviderSlot {
   return {
     name: model.includes('DeepSeek') ? 'DeepSeek-R1' : model,
     stream: async (opts, callbacks) => {
-      // HF InferenceClient doesn't support streaming with tool calling reliably,
-      // so we use non-streaming chatCompletion and emit the full text at once.
-      type HFParams = Parameters<typeof hfClient.chatCompletion>[0];
-      const base = {
+      // HF router doesn't reliably support streaming with tool calling,
+      // so we use non-streaming completion and emit the full text at once.
+      const response = await hfClient.chat.completions.create({
         model,
-        messages: opts.messages as HFParams['messages'],
+        messages: opts.messages,
         max_tokens: opts.maxTokens,
         temperature: opts.temperature ?? 0.3,
-      };
-      const params: HFParams = provider ? { ...base, provider } : base;
-      // HF doesn't support OpenAI-format tools natively — omit for now
-      // Tool calling through HF fallback works text-only (no structured tool calls)
+        // HF DeepSeek-R1 doesn't support tool calling — text-only fallback
+      });
+      const choice = response.choices[0];
+      const text = choice?.message?.content?.trim() ?? '';
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-
-      try {
-        const response = await hfClient.chatCompletion(params);
-        const choice = response.choices[0];
-        const text = choice?.message?.content?.trim() ?? '';
-
-        if (text) {
-          callbacks.onTextDelta?.(text);
-        }
-
-        return {
-          text,
-          toolCalls: [],
-          finishReason: choice?.finish_reason ?? 'stop',
-          assistantMessage: { role: 'assistant', content: text || null },
-        };
-      } finally {
-        clearTimeout(timeoutId);
+      if (text) {
+        callbacks.onTextDelta?.(text);
       }
+
+      return {
+        text,
+        toolCalls: [],
+        finishReason: choice?.finish_reason ?? 'stop',
+        assistantMessage: { role: 'assistant', content: text || null },
+      };
     },
   };
 }
@@ -235,7 +234,7 @@ function hfSlot(model: string, provider?: HFProvider): ProviderSlot {
 
 const STREAMING_CHAIN: ProviderSlot[] = [
   openaiSlot(env.AI_MODEL),
-  hfSlot('deepseek-ai/DeepSeek-R1-0528', 'novita'),
+  hfSlot('deepseek-ai/DeepSeek-R1-0528'),
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

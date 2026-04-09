@@ -28,7 +28,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@huggingface/inference": "^4.13.3",
     "@octokit/rest": "^22.0.1",
     "big.js": "^7.0.1",
     "currency.js": "^2.0.4",

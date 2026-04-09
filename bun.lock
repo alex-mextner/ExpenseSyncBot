@@ -5,7 +5,6 @@
     "": {
       "name": "expensesyncbot",
       "dependencies": {
-        "@huggingface/inference": "^4.13.3",
         "@octokit/rest": "^22.0.1",
         "big.js": "^7.0.1",
         "currency.js": "^2.0.4",
@@ -68,12 +67,6 @@
     "@gramio/keyboards": ["@gramio/keyboards@1.2.1", "", { "dependencies": { "@gramio/types": "^9.0.1" } }, "sha512-HqCJl9HmLTvckA2fMRc+mC258vBr2zKfMqvFEGEgaeauIIP4n8TTT9GU4YCqVFTGTzGA5I6gnfk87dGZuSP6vA=="],
 
     "@gramio/types": ["@gramio/types@9.2.3", "", {}, "sha512-DvqjO4rEoEeyyvZt4lj+fsp4Gchj9lOQB+5Zn8gjABhT+FBURzEMrHkvClatpVYICylhSTwK0PbvJCIeGuq18w=="],
-
-    "@huggingface/inference": ["@huggingface/inference@4.13.3", "", { "dependencies": { "@huggingface/jinja": "^0.5.1", "@huggingface/tasks": "^0.19.63" } }, "sha512-ZpyIlO9Xd0sDiD3QZSQMsJ19iFXYOHHxrgA6pK5Mh5RMY27XlnbLNhazAAaBsmen8vWG6SlGHlyjl7kvjlNoqQ=="],
-
-    "@huggingface/jinja": ["@huggingface/jinja@0.5.1", "", {}, "sha512-yUZLld4lrM9iFxHCwFQ7D1HW2MWMwSbeB7WzWqFYDWK+rEb+WldkLdAJxUPOmgICMHZLzZGVcVjFh3w/YGubng=="],
-
-    "@huggingface/tasks": ["@huggingface/tasks@0.19.64", "", {}, "sha512-uF1PGQp2lLh1Z9YpQWNz2xKeWuKNDFHma3gIWsF7AP8WD1bWYGfS7np0EyqOHBxti40LI6xGGq96JEwI1n7G/Q=="],
 
     "@img/colour": ["@img/colour@1.0.0", "", {}, "sha512-A5P/LfWGFSl6nsckYtjw9da+19jB8hkJ6ACTGcDfEJ0aE+l2n2El7dsVM7UVHZQ9s2lmYMWlrS21YLy2IR1LUw=="],
 

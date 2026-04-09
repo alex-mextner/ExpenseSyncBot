@@ -1,5 +1,4 @@
-/** Shared AI completion with automatic provider fallback */
-import { InferenceClient } from '@huggingface/inference';
+/** Shared AI completion with automatic provider fallback — all providers via OpenAI SDK */
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
@@ -47,7 +46,7 @@ export interface CompletionOptions {
   messages: ChatMessage[];
   maxTokens: number;
   temperature?: number;
-  /** Use vision model chain (Qwen-VL → GLM) instead of text chain (GLM → DeepSeek-R1) */
+  /** Use vision model chain (Qwen-VL via HF) instead of text chain (GLM → DeepSeek-R1) */
   vision?: boolean;
   /** Request timeout in ms (default: 60 000) */
   timeoutMs?: number;
@@ -59,22 +58,45 @@ export interface CompletionOptions {
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const ZAI_OPENAI_BASE_URL = 'https://api.z.ai/api/paas/v4';
+const ZAI_BASE_URL = 'https://api.z.ai/api/paas/v4';
+const HF_BASE_URL = 'https://router.huggingface.co/v1';
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TEMPERATURE = 0.3;
 
-// ── Clients (lazy-ish singletons, created once at module load) ──────────────
+// ── Clients (all OpenAI SDK, different base URLs) ───────────────────────────
 
-const openaiClient = new OpenAI({
+function makeFetchDelegate(): (
+  url: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response> {
+  return async (url, init) => globalThis.fetch(url, init);
+}
+
+const zaiClient = new OpenAI({
   apiKey: env.ANTHROPIC_API_KEY,
-  baseURL: ZAI_OPENAI_BASE_URL,
+  baseURL: ZAI_BASE_URL,
   timeout: DEFAULT_TIMEOUT_MS,
   maxRetries: 0,
-  fetch: async (url: string | URL | Request, init?: RequestInit) => globalThis.fetch(url, init),
+  fetch: makeFetchDelegate(),
 });
 
-const hfClient = new InferenceClient(env.HF_TOKEN);
+const hfClient = new OpenAI({
+  apiKey: env.HF_TOKEN,
+  baseURL: HF_BASE_URL,
+  timeout: DEFAULT_TIMEOUT_MS,
+  maxRetries: 0,
+  fetch: makeFetchDelegate(),
+});
+
+const geminiClient = new OpenAI({
+  apiKey: env.GEMINI_API_KEY,
+  baseURL: GEMINI_BASE_URL,
+  timeout: DEFAULT_TIMEOUT_MS,
+  maxRetries: 0,
+  fetch: makeFetchDelegate(),
+});
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
@@ -96,22 +118,9 @@ interface ModelSlot {
   ) => Promise<RawResponse>;
 }
 
-function raceTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
-    ),
-  ]);
-}
-
 /** Server errors and timeouts mean the provider is down — retrying won't help */
 function isProviderDown(error: unknown): boolean {
   if (error instanceof OpenAI.APIError && error.status !== undefined && error.status >= 500) {
-    return true;
-  }
-  const hfErr = error as { httpResponse?: { status?: number } };
-  if (hfErr.httpResponse?.status !== undefined && hfErr.httpResponse.status >= 500) {
     return true;
   }
   return error instanceof Error && error.message.includes('timed out');
@@ -119,26 +128,15 @@ function isProviderDown(error: unknown): boolean {
 
 function logError(error: unknown): void {
   if (error instanceof OpenAI.APIError) {
-    logger.error(`[AI] OpenAI API: ${error.status} ${error.message}`);
-    return;
-  }
-  const err = error as {
-    httpRequest?: { url?: string; method?: string };
-    httpResponse?: { status?: number; statusText?: string };
-  };
-  if (err.httpResponse) {
-    logger.error(`[AI] HTTP ${err.httpResponse.status} ${err.httpResponse.statusText || ''}`);
-  }
-  if (err.httpRequest) {
-    logger.error(`[AI] → ${err.httpRequest.method} ${err.httpRequest.url}`);
+    logger.error(`[AI] API error: ${error.status} ${error.message}`);
   }
 }
 
-// ── OpenAI SDK adapter (z.ai GLM) ──────────────────────────────────────────
+// ── OpenAI SDK adapter (works for any OpenAI-compatible provider) ───────────
 
-function callOpenAI(model: string): ModelSlot['call'] {
+function callProvider(client: OpenAI, model: string): ModelSlot['call'] {
   return async (msgs, maxTokens, temp, _timeoutMs, tools) => {
-    const response = await openaiClient.chat.completions.create({
+    const response = await client.chat.completions.create({
       model,
       messages: msgs as OpenAI.ChatCompletionMessageParam[],
       max_tokens: maxTokens,
@@ -165,39 +163,17 @@ function callOpenAI(model: string): ModelSlot['call'] {
   };
 }
 
-// ── HuggingFace SDK adapter ─────────────────────────────────────────────────
-
-type HFCompletionParams = Parameters<typeof hfClient.chatCompletion>[0];
-
-function callHF(model: string, provider?: HFCompletionParams['provider']): ModelSlot['call'] {
-  return async (msgs, maxTokens, temp, timeoutMs) => {
-    const base = {
-      model,
-      messages: msgs as HFCompletionParams['messages'],
-      max_tokens: maxTokens,
-      temperature: temp,
-    };
-    const params: HFCompletionParams = provider ? { ...base, provider } : base;
-    const response = await raceTimeout(hfClient.chatCompletion(params), timeoutMs, model);
-    const choice = response.choices[0];
-    return {
-      text: choice?.message?.content?.trim() ?? null,
-      finishReason: choice?.finish_reason ?? null,
-      usage: response.usage,
-    };
-  };
-}
-
 // ── Model chains ────────────────────────────────────────────────────────────
 
 const TEXT_CHAIN: ModelSlot[] = [
-  { name: `GLM (${env.AI_MODEL})`, call: callOpenAI(env.AI_MODEL) },
-  { name: 'DeepSeek-R1', call: callHF('deepseek-ai/DeepSeek-R1-0528', 'novita') },
+  { name: `GLM (${env.AI_MODEL})`, call: callProvider(zaiClient, env.AI_MODEL) },
+  { name: 'DeepSeek-R1', call: callProvider(hfClient, 'deepseek-ai/DeepSeek-R1-0528') },
 ];
 
-// Vision: z.ai doesn't support vision via OpenAI endpoint (tested 2026-04-09), HF only
+// Vision: Gemini Flash (cheap, fast) → Qwen-VL via HF (free fallback)
 const VISION_CHAIN: ModelSlot[] = [
-  { name: 'Qwen-VL', call: callHF('Qwen/Qwen2.5-VL-72B-Instruct') },
+  { name: 'Gemini-Flash', call: callProvider(geminiClient, 'gemini-2.5-flash') },
+  { name: 'Qwen-VL', call: callProvider(hfClient, 'Qwen/Qwen2.5-VL-72B-Instruct') },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -206,7 +182,7 @@ const VISION_CHAIN: ModelSlot[] = [
  * Run a chat completion with automatic provider fallback.
  *
  * Text chain:   GLM via z.ai → DeepSeek-R1 via HuggingFace
- * Vision chain: Qwen-VL via HuggingFace → GLM via z.ai
+ * Vision chain: Qwen-VL via HuggingFace
  *
  * On 5xx / timeout the current model is abandoned immediately
  * (no wasted retries against a dead provider).
