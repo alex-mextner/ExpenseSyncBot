@@ -18,7 +18,7 @@ import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
+import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
@@ -303,7 +303,6 @@ export async function handleExpenseMessage(
 
   logger.info(`[MSG] Processing ${lines.length} line(s)`);
 
-  let successCount = 0;
   const newCategories: string[] = [];
   const categoryNames = database.categories.getCategoryNames(group.id);
 
@@ -314,13 +313,16 @@ export async function handleExpenseMessage(
     category: string | null;
     comment: string;
     saved: boolean;
+    pendingExpenseId: number;
+    categoryExists: boolean;
   }
   const processedExpenses: ProcessedExpense[] = [];
+
+  // ── Phase 1: parse all lines and create pending expenses (no network) ──
 
   for (const [index, line] of lines.entries()) {
     logger.info(`[MSG] Processing line ${index + 1}/${lines.length}: "${line}"`);
 
-    // Parse expense
     const parsed = parseExpenseMessage(line, group.default_currency);
 
     if (!parsed) {
@@ -363,7 +365,6 @@ export async function handleExpenseMessage(
 
     logger.info(`[MSG] Line ${index + 1}: category "${parsed.category}" exists: ${categoryExists}`);
 
-    // Create pending expense
     const pendingExpense = database.pendingExpenses.create({
       user_id: user.id,
       message_id: messageId,
@@ -376,51 +377,82 @@ export async function handleExpenseMessage(
 
     logger.info(`[MSG] Line ${index + 1}: created pending expense ${pendingExpense.id}`);
 
-    // If category doesn't exist, track it for confirmation
     if (!categoryExists && parsed.category && !newCategories.includes(parsed.category)) {
       newCategories.push(parsed.category);
     }
 
-    // If category exists, save directly
-    if (categoryExists || !parsed.category) {
-      logger.info(`[MSG] Line ${index + 1}: saving to sheet`);
-      try {
-        await saveExpenseToSheet(user.id, group.id, pendingExpense.id);
-        successCount++;
-        processedExpenses.push({
-          amount: parsed.amount,
-          currency: parsed.currency,
-          category: parsed.category,
-          comment: parsed.comment,
-          saved: true,
-        });
-      } catch (error) {
-        logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
-        database.pendingExpenses.delete(pendingExpense.id);
-        await sendMessage(getSheetWriteErrorMessage(group.id));
-      }
-    } else {
-      // New category — pending confirmation
-      processedExpenses.push({
-        amount: parsed.amount,
-        currency: parsed.currency,
-        category: parsed.category,
-        comment: parsed.comment,
-        saved: false,
+    processedExpenses.push({
+      amount: parsed.amount,
+      currency: parsed.currency,
+      category: parsed.category,
+      comment: parsed.comment,
+      saved: false,
+      pendingExpenseId: pendingExpense.id,
+      categoryExists: categoryExists || !parsed.category,
+    });
+  }
+
+  // ── Phase 2: set 👀 reaction immediately (fire-and-forget, no await) ──
+
+  const hasProcessedExpenses =
+    processedExpenses.some((e) => e.categoryExists) || newCategories.length > 0;
+
+  if (hasProcessedExpenses) {
+    bot.api
+      .setMessageReaction({
+        chat_id: telegramGroupId,
+        message_id: messageId,
+        reaction: [{ type: 'emoji', emoji: '👀' }],
+      })
+      .catch((error) => {
+        logger.error({ err: error }, '[MSG] Failed to set 👀 reaction');
       });
+  }
+
+  // ── Phase 3: save confirmed expenses atomically (all sheets → one DB transaction) ──
+
+  const confirmedIds = processedExpenses
+    .filter((e) => e.categoryExists)
+    .map((e) => e.pendingExpenseId);
+  let batchFailed = false;
+
+  if (confirmedIds.length > 0) {
+    try {
+      await saveExpenseBatch(user.id, group.id, confirmedIds);
+      for (const exp of processedExpenses) {
+        if (exp.categoryExists) exp.saved = true;
+      }
+    } catch (error) {
+      logger.error({ err: error }, '[MSG] Batch save failed — no expenses committed');
+      for (const id of confirmedIds) {
+        database.pendingExpenses.delete(id);
+      }
+      batchFailed = true;
     }
   }
 
-  // Only react if at least one expense was processed
-  const hasProcessedExpenses = successCount > 0 || newCategories.length > 0;
+  // ── Phase 4: replace 👀 with final reaction ──
 
-  if (hasProcessedExpenses) {
-    // Set ✅ reaction (+ digit count for multiple expenses), fallback to 👍 if custom emoji unsupported
+  if (confirmedIds.length > 0) {
     try {
-      await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
+      if (!batchFailed) {
+        await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
+      } else {
+        await bot.api.setMessageReaction({
+          chat_id: telegramGroupId,
+          message_id: messageId,
+          reaction: [{ type: 'emoji', emoji: '👎' }],
+        });
+      }
     } catch (error) {
-      logger.error({ err: error }, '[MSG] Failed to set reaction');
+      logger.error({ err: error }, '[MSG] Failed to set final reaction');
     }
+  }
+
+  if (batchFailed) {
+    await sendMessage(
+      '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /connect и повтори попытку.',
+    );
   }
 
   // Send numbered summary when multiple expenses recognized
@@ -448,11 +480,8 @@ export async function handleExpenseMessage(
     return true;
   }
 
-  // Success - no need to send additional message, reaction + numbered summary is enough
+  logger.info(`[MSG] ✅ Processed ${confirmedIds.length}/${lines.length} expenses successfully`);
 
-  logger.info(`[MSG] ✅ Processed ${successCount}/${lines.length} expenses successfully`);
-
-  // Maybe send daily advice (20% probability)
   if (hasProcessedExpenses) {
     await maybeSmartAdvice(group.id);
   }
