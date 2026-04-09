@@ -1,9 +1,23 @@
-/**
- * Anthropic tool definitions for the expense bot agent
- */
-import type Anthropic from '@anthropic-ai/sdk';
+/** OpenAI-format tool definitions for the expense bot agent */
+import type OpenAI from 'openai';
 
-export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
+/** Shorthand: wraps name+description+parameters into OpenAI tool shape */
+function tool(
+  name: string,
+  description: string,
+  parameters: Record<string, unknown>,
+): OpenAI.ChatCompletionTool {
+  return { type: 'function', function: { name, description, parameters } };
+}
+
+/** Convert legacy Anthropic-format tool defs to OpenAI format (input_schema → parameters) */
+function fromAnthropicFormat(
+  defs: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>,
+): OpenAI.ChatCompletionTool[] {
+  return defs.map((d) => tool(d.name, d.description, d.input_schema));
+}
+
+export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat([
   // === Read tools ===
   {
     name: 'get_expenses',
@@ -481,7 +495,7 @@ Call IN PARALLEL with your text response. In the text, present the same data as 
       },
     },
   },
-];
+]);
 
 /**
  * Human-readable labels for tool execution indicators

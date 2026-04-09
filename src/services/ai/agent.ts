@@ -1,12 +1,13 @@
 /**
- * ExpenseBotAgent - Anthropic Claude agent with tool calling for expense management
+ * ExpenseBotAgent — OpenAI SDK agent with tool calling for expense management
  *
  * Streams text to Telegram, executes tools, and manages the conversation loop.
  * Only final text responses are saved to chat history (not intermediate tool_use rounds).
  */
-import Anthropic from '@anthropic-ai/sdk';
+
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
+import type OpenAI from 'openai';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
 import type { ChatMessage } from '../../database/types';
@@ -14,6 +15,14 @@ import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
+import {
+  aiStreamRound,
+  formatApiError,
+  getBackoffDelay,
+  isRetryableError,
+  type StreamCallbacks,
+  type StreamRoundResult,
+} from './streaming';
 import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { TOOL_DEFINITIONS } from './tools';
@@ -30,57 +39,15 @@ const MAX_API_RETRIES = 2; // 3 attempts total (1 initial + 2 retries)
 export const AI_MODEL = env.AI_MODEL;
 export const AI_BASE_URL = env.AI_BASE_URL;
 
-/** Transient errors worth retrying: overload, rate limit, server errors, network, timeout */
-function isRetryableError(error: unknown): boolean {
-  if (error instanceof Error && error.name === 'AbortError') return true;
-  if (error instanceof Anthropic.APIError) {
-    return error.status === 429 || error.status >= 500;
-  }
-  const code = (error as NodeJS.ErrnoException).code;
-  if (
-    code &&
-    ['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'ENOTFOUND'].includes(code)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-/** Exponential backoff: 2s → 6s. For 429, uses retry-after header when available (capped at 30s). */
-function getBackoffDelay(attempt: number, error: unknown): number {
-  if (error instanceof Anthropic.APIError && error.status === 429) {
-    const retryAfter = error.headers?.get('retry-after');
-    if (retryAfter) {
-      const seconds = Number.parseInt(retryAfter, 10);
-      if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
-    }
-    return 5000;
-  }
-  return Math.min(2000 * 3 ** attempt, 30_000);
-}
-
 export class ExpenseBotAgent {
-  private anthropic: Anthropic;
-  private apiKey: string;
   private ctx: AgentContext;
 
-  constructor(apiKey: string, ctx: AgentContext) {
-    this.anthropic = new Anthropic({
-      apiKey,
-      baseURL: AI_BASE_URL || undefined,
-    });
-    this.apiKey = apiKey;
+  constructor(_apiKey: string, ctx: AgentContext) {
     this.ctx = ctx;
   }
 
   /**
    * Run the full agent loop: stream text, execute tools, update Telegram message
-   *
-   * @param userMessage - The user's question or command
-   * @param conversationHistory - Recent chat messages for context
-   * @param bot - GramIO bot instance for Telegram API calls
-   * @param messageThreadId - Optional forum topic thread ID
-   * @returns Final text response (for saving to chat history)
    */
   async run(userMessage: string, conversationHistory: ChatMessage[], bot: Bot): Promise<string> {
     const writer = new TelegramStreamWriter(bot, this.ctx.chatId);
@@ -92,33 +59,26 @@ export class ExpenseBotAgent {
       userMessage,
     );
 
-    const messages: Anthropic.MessageParam[] = [
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'system', content: this.buildSystemPrompt() },
       ...this.buildHistoryMessages(conversationHistory),
       { role: 'user', content: userMessage },
     ];
 
-    logger.info(`[AGENT] Starting: model=${AI_MODEL} base=${AI_BASE_URL}`);
+    logger.info(`[AGENT] Starting: model=${AI_MODEL}`);
     logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
-    const systemPrompt = this.buildSystemPrompt();
-    debugCtx?.logSystemPrompt(systemPrompt);
+    debugCtx?.logSystemPrompt(messages[0]?.content as string);
     debugCtx?.logHistory(conversationHistory.map((m) => ({ role: m.role, content: m.content })));
 
     const toolCallNames: string[] = [];
 
     try {
-      const result = await this.runWithRetry(
-        messages,
-        systemPrompt,
-        writer,
-        debugCtx,
-        toolCallNames,
-      );
+      const result = await this.runWithRetry(messages, writer, debugCtx, toolCallNames);
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
 
-      // Skip signal — bot chose to stay silent, delete the placeholder message.
-      // Never skip on explicit @mention — user intentionally addressed the bot.
+      // Skip signal — bot chose to stay silent
       if (isSkipSignal(finalText) && !this.ctx.isMention) {
         logger.info('[AGENT] Skip signal — staying silent');
         await writer.deleteSentMessage();
@@ -127,7 +87,7 @@ export class ExpenseBotAgent {
 
       // --- Validation pass (only when no tools were called) ---
       if (toolCallNames.length === 0) {
-        const validation = await validateResponse(this.apiKey, {
+        const validation = await validateResponse(env.ANTHROPIC_API_KEY, {
           userMessage,
           toolCalls: toolCallNames,
           response: finalText,
@@ -151,7 +111,6 @@ export class ExpenseBotAgent {
           try {
             const retry = await this.runAgentLoop(
               messages,
-              systemPrompt,
               writer,
               debugCtx,
               retryController.signal,
@@ -178,7 +137,6 @@ export class ExpenseBotAgent {
       await writer.sendRemainingChunks();
       return finalText;
     } catch (error) {
-      // Always clean up: stop typing indicator and remove placeholder message
       await writer.deleteSentMessage();
 
       if (error instanceof Error && error.name === 'AbortError') {
@@ -187,13 +145,12 @@ export class ExpenseBotAgent {
         throw new AgentError(timeoutMsg);
       }
 
-      if (error instanceof Anthropic.APIError) {
-        const errorMsg = this.formatApiError(error);
+      if (error instanceof Error && 'status' in error) {
+        const errorMsg = formatApiError(error);
         await this.sendErrorToUser(bot, errorMsg);
         throw new AgentError(errorMsg);
       }
 
-      // Network and unknown HTTP errors: notify user, then wrap for callers
       const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
       const errCode = (error as NodeJS.ErrnoException).code;
       if (errCode && networkCodes.includes(errCode)) {
@@ -213,11 +170,9 @@ export class ExpenseBotAgent {
 
   /**
    * Retry wrapper: runs runAgentLoop with exponential backoff for transient API errors.
-   * After all retries exhausted, the error propagates to run()'s catch for user notification.
    */
   private async runWithRetry(
-    messages: Anthropic.MessageParam[],
-    systemPrompt: string,
+    messages: OpenAI.ChatCompletionMessageParam[],
     writer: TelegramStreamWriter,
     debugCtx: AiDebugRunContext | null,
     toolCallNames: string[],
@@ -229,7 +184,6 @@ export class ExpenseBotAgent {
       try {
         return await this.runAgentLoop(
           messages,
-          systemPrompt,
           writer,
           debugCtx,
           controller.signal,
@@ -253,25 +207,11 @@ export class ExpenseBotAgent {
         clearTimeout(timeout);
       }
     }
-    // Unreachable: loop always returns or throws on final attempt. Satisfies TypeScript.
     throw new Error('[AGENT] Retry loop exhausted');
   }
 
   protected async sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private formatApiError(error: InstanceType<typeof Anthropic.APIError>): string {
-    if (error.status === 429) {
-      logger.warn(`[AGENT] Rate limited (429) after all retries`);
-      return '\u23f3 Слишком много запросов к AI. Подождите минуту.';
-    }
-    if (error.status === 529) {
-      logger.warn(`[AGENT] Overloaded (529) after all retries`);
-      return '\u26a1 AI сервер перегружен. Попробуйте позже.';
-    }
-    logger.error({ err: error }, `[AGENT] Anthropic API error: ${error.status}`);
-    return '\u274c Ошибка AI. Попробуйте позже.';
   }
 
   private async sendErrorToUser(bot: Bot, message: string): Promise<void> {
@@ -284,11 +224,9 @@ export class ExpenseBotAgent {
 
   /**
    * Execute the streaming agent loop: stream text, call tools, repeat until done.
-   * Returns the final text response.
    */
   private async runAgentLoop(
-    messages: Anthropic.MessageParam[],
-    systemPrompt: string,
+    messages: OpenAI.ChatCompletionMessageParam[],
     writer: TelegramStreamWriter,
     debugCtx: AiDebugRunContext | null,
     signal: AbortSignal,
@@ -302,108 +240,72 @@ export class ExpenseBotAgent {
       round++;
       debugCtx?.logRound(round);
 
-      const stream = this.anthropic.messages.stream(
-        {
-          model: AI_MODEL,
-          max_tokens: 4096,
-          system: [
-            {
-              type: 'text',
-              text: systemPrompt,
-              cache_control: { type: 'ephemeral' },
-            },
-          ],
-          messages,
-          tools: TOOL_DEFINITIONS,
-        },
-        { signal },
+      const callbacks: StreamCallbacks = {
+        onTextDelta: (text) => writer.appendText(text),
+        onToolCallStart: (name) => writer.setToolLabel(name, {}),
+      };
+
+      const result: StreamRoundResult = await aiStreamRound(
+        { messages, tools: TOOL_DEFINITIONS, maxTokens: 4096, temperature: 0.3, signal },
+        callbacks,
       );
 
-      let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
+      // Execute tool calls
       const toolResults: ToolCallResult[] = [];
 
-      for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          writer.appendText(event.delta.text);
+      for (const tc of result.toolCalls) {
+        const input = JSON.parse(tc.arguments || '{}');
+
+        logger.info(`[AGENT] Tool call: ${tc.name} ${JSON.stringify(input)}`);
+        debugCtx?.logToolCall(tc.name, input);
+
+        writer.setToolLabel(tc.name, input);
+        await writer.flush(true);
+
+        const toolResult = await executeTool(tc.name, input, this.ctx);
+
+        if (toolResult.success) {
+          const preview = toolResult.output ? toolResult.output.substring(0, 300) : '(no output)';
+          const total = toolResult.output?.length ?? 0;
+          logger.info(
+            `[AGENT] Tool result: ${tc.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
+          );
+        } else {
+          logger.info(`[AGENT] Tool result: ${tc.name} ERR: ${toolResult.error}`);
         }
 
-        if (event.type === 'content_block_start') {
-          if (event.content_block.type === 'tool_use') {
-            currentToolUse = {
-              id: event.content_block.id,
-              name: event.content_block.name,
-              inputJson: '',
-            };
-          }
-        }
+        debugCtx?.logToolResult(
+          tc.name,
+          toolResult.success,
+          toolResult.output,
+          toolResult.error,
+          toolResult.data,
+          toolResult.summary,
+        );
+        totalToolCalls++;
+        toolCallNames.push(tc.name);
 
-        if (event.type === 'content_block_delta' && event.delta.type === 'input_json_delta') {
-          if (currentToolUse) {
-            currentToolUse.inputJson += event.delta.partial_json;
-          }
-        }
+        writer.markToolResult(toolResult.success);
 
-        if (event.type === 'content_block_stop') {
-          if (currentToolUse) {
-            const input = JSON.parse(currentToolUse.inputJson || '{}');
-
-            logger.info(`[AGENT] Tool call: ${currentToolUse.name} ${JSON.stringify(input)}`);
-            debugCtx?.logToolCall(currentToolUse.name, input);
-
-            writer.setToolLabel(currentToolUse.name, input);
-            await writer.flush(true);
-
-            const result = await executeTool(currentToolUse.name, input, this.ctx);
-
-            if (result.success) {
-              const preview = result.output ? result.output.substring(0, 300) : '(no output)';
-              const total = result.output?.length ?? 0;
-              logger.info(
-                `[AGENT] Tool result: ${currentToolUse.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
-              );
-            } else {
-              logger.info(`[AGENT] Tool result: ${currentToolUse.name} ERR: ${result.error}`);
-            }
-
-            debugCtx?.logToolResult(
-              currentToolUse.name,
-              result.success,
-              result.output,
-              result.error,
-              result.data,
-              result.summary,
-            );
-            totalToolCalls++;
-            toolCallNames.push(currentToolUse.name);
-
-            writer.markToolResult(result.success);
-
-            toolResults.push({ id: currentToolUse.id, result });
-
-            currentToolUse = null;
-          }
-        }
+        toolResults.push({ id: tc.id, result: toolResult });
       }
-
-      const finalMessage = await stream.finalMessage();
-      const fullAssistantContent = finalMessage.content;
 
       if (toolResults.length > 0) {
         writer.commitIntermediate();
 
-        messages.push({ role: 'assistant', content: fullAssistantContent });
-        messages.push({
-          role: 'user',
-          content: toolResults.map((tr) => ({
-            type: 'tool_result' as const,
-            tool_use_id: tr.id,
-            content: tr.result.success
-              ? tr.result.data !== undefined
-                ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
-                : tr.result.output || 'Success'
-              : `Error: ${tr.result.error}`,
-          })),
-        });
+        // Add assistant message with tool calls to history
+        messages.push(result.assistantMessage);
+
+        // Add tool results (OpenAI format: role=tool)
+        for (const tr of toolResults) {
+          const content = tr.result.success
+            ? tr.result.data !== undefined
+              ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
+              : tr.result.output || 'Success'
+            : `Error: ${tr.result.error}`;
+
+          messages.push({ role: 'tool', tool_call_id: tr.id, content });
+        }
         continueLoop = true;
       } else {
         continueLoop = false;
@@ -456,7 +358,6 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 7a. When referring to "average" or "typical" spending → use MEDIAN from the stats, not avg. Median better represents the typical expense because it's not skewed by outliers. Avg is available for context but median should be the default "average" in your replies.
 8. After calling set_budget or delete_budget → ALWAYS call get_budgets immediately to get fresh data before writing the response. Never use values from a previous get_budgets call after modifying budgets.
 8a. BULK BUDGET SETTING: when the user asks to set budgets for multiple categories at once, FIRST call get_budgets to see which categories already have budgets this month. After setting all requested budgets, compare the list of existing budget categories with the ones you just set. If there are categories with existing budgets that were NOT mentioned by the user → ask whether they should be zeroed out (set to 0) or left unchanged. List those categories with their current limits. Do NOT silently leave old budgets in place — the user may have intended to replace the entire budget plan.
-8b. BATCH OPERATIONS: set_budget and add_expense accept an \`items\` array for multiple operations in one call (max 20). delete_budget, delete_expense, manage_category, manage_recurring_pattern accept arrays in their primary field (category, expense_id, name, pattern_id). Prefer batch over sequential calls. Each item executes independently — partial failures don't abort the batch.
 9. Bank balance questions → call get_bank_balances WITHOUT bank_name filter (omit it). If result data is empty, check the summary field and relay it to the user exactly — do NOT say the bank is not connected if the summary says otherwise. NEVER suggest /connect for bank issues — /connect is for Google Sheets only. For bank issues use /bank. If the user asks about disabled/excluded accounts → add include_excluded: true.
 10. Bank transaction history → call get_bank_transactions.
 11. Missing/unmatched bank expenses → call find_missing_expenses.
@@ -519,7 +420,8 @@ When a user asks "что ты умеешь?", "what can you do?", or similar —
 ${formatCommandsForPrompt()}
 
 ## WHEN TO STAY SILENT
-Respond with exactly [SKIP] and nothing else unless the message contains a direct question or command for you.
+CRITICAL: The skip marker is EXACTLY the 6-character string [SKIP]. Not [ПРОПУСК], not [skip], not (skip), not any variation. ALWAYS output [SKIP] in English, in square brackets, uppercase. This is a machine-parsed token — do not translate it.
+When you decide to stay silent, output [SKIP] and NOTHING ELSE — no reasoning, no emoji, no "Готово", no commentary before or after.
 Stay silent ([SKIP]) when:
 - Someone makes a statement, shares a thought, or talks about plans ("надо будет обсудить", "хочу разобраться", "интересно было бы", "мог бы", "было бы хорошо")
 - Casual acknowledgements: "ok", "thanks", "понял", "окей", "хорошо", "+1", "ок"
@@ -545,32 +447,12 @@ Respond in Russian if the user writes in Russian, otherwise in English.`;
   }
 
   /**
-   * Convert stored chat messages to Anthropic message format
-   * Only handles plain text messages (tool_use rounds are not stored)
+   * Convert stored chat messages to OpenAI message format
    */
-  private buildHistoryMessages(history: ChatMessage[]): Anthropic.MessageParam[] {
-    const messages: Anthropic.MessageParam[] = [];
-
-    for (const msg of history) {
-      // Try parsing as JSON (future-proofing), fall back to plain text
-      let content: string | Anthropic.ContentBlockParam[];
-      try {
-        const parsed = JSON.parse(msg.content);
-        if (Array.isArray(parsed)) {
-          content = parsed;
-        } else {
-          content = msg.content;
-        }
-      } catch {
-        content = msg.content;
-      }
-
-      messages.push({
-        role: msg.role as 'user' | 'assistant',
-        content,
-      });
-    }
-
-    return messages;
+  private buildHistoryMessages(history: ChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
+    return history.map((msg) => ({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content,
+    }));
   }
 }

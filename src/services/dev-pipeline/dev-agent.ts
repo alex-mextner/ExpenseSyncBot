@@ -1,114 +1,89 @@
-// AI-powered dev agent — uses Anthropic tool calling to implement tasks via file and git operations
-import Anthropic from '@anthropic-ai/sdk';
-import { env } from '../../config/env';
+// AI-powered dev agent — uses OpenAI SDK with tool calling to implement tasks via file and git operations
+import type OpenAI from 'openai';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
-import { AI_BASE_URL, AI_MODEL } from '../ai/agent';
+import { aiComplete, type ChatMessage } from '../ai/completion';
 import { deleteFile, fileExists, listDirectory, readFile, searchCode, writeFile } from './file-ops';
 import { commitChanges, managePackages, revertFileToMain } from './git-ops';
 
 const logger = createLogger('dev-agent');
 
-const DEV_TOOLS: Anthropic.Tool[] = [
-  {
-    name: 'read_file',
-    description:
-      'Read a file from the project. Use relative paths from project root (e.g., "src/bot/commands/ask.ts")',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        path: { type: 'string', description: 'Relative file path' },
-      },
+/** Tool definitions in OpenAI format */
+function devTool(
+  name: string,
+  description: string,
+  parameters: Record<string, unknown>,
+): OpenAI.ChatCompletionTool {
+  return { type: 'function', function: { name, description, parameters } };
+}
+
+const DEV_TOOLS: OpenAI.ChatCompletionTool[] = [
+  devTool(
+    'read_file',
+    'Read a file from the project. Use relative paths from project root (e.g., "src/bot/commands/ask.ts")',
+    {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Relative file path' } },
       required: ['path'],
     },
-  },
-  {
-    name: 'write_file',
-    description:
-      'Write content to a file. Creates parent directories if needed. Use for creating new files or fully replacing existing ones.',
-    input_schema: {
-      type: 'object' as const,
+  ),
+  devTool(
+    'write_file',
+    'Write content to a file. Creates parent directories if needed. Use for creating new files or fully replacing existing ones.',
+    {
+      type: 'object',
       properties: {
         path: { type: 'string', description: 'Relative file path' },
         content: { type: 'string', description: 'Full file content' },
       },
       required: ['path', 'content'],
     },
-  },
-  {
-    name: 'list_directory',
-    description: 'List files and directories. Use to explore the project structure.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        path: { type: 'string', description: 'Relative directory path (default: ".")' },
-      },
-    },
-  },
-  {
-    name: 'search_code',
-    description:
-      'Search for a regex pattern across source files. Returns matching lines with file paths.',
-    input_schema: {
-      type: 'object' as const,
+  ),
+  devTool('list_directory', 'List files and directories. Use to explore the project structure.', {
+    type: 'object',
+    properties: { path: { type: 'string', description: 'Relative directory path (default: ".")' } },
+  }),
+  devTool(
+    'search_code',
+    'Search for a regex pattern across source files. Returns matching lines with file paths.',
+    {
+      type: 'object',
       properties: {
         pattern: { type: 'string', description: 'Regex pattern to search for' },
         glob: { type: 'string', description: 'Optional file glob filter (e.g., "*.ts")' },
       },
       required: ['pattern'],
     },
-  },
-  {
-    name: 'file_exists',
-    description: 'Check if a file exists.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        path: { type: 'string', description: 'Relative file path' },
-      },
+  ),
+  devTool('file_exists', 'Check if a file exists.', {
+    type: 'object',
+    properties: { path: { type: 'string', description: 'Relative file path' } },
+    required: ['path'],
+  }),
+  devTool('delete_file', 'Delete a file from the project.', {
+    type: 'object',
+    properties: { path: { type: 'string', description: 'Relative file path' } },
+    required: ['path'],
+  }),
+  devTool(
+    'revert_file',
+    'Revert a file to its original version from main branch. Use this when you modified a file that is NOT part of your task and it caused test failures. If the file did not exist on main, it will be deleted.',
+    {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Relative file path to revert' } },
       required: ['path'],
     },
-  },
-  {
-    name: 'delete_file',
-    description: 'Delete a file from the project.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        path: { type: 'string', description: 'Relative file path' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'revert_file',
-    description:
-      'Revert a file to its original version from main branch. Use this when you modified a file that is NOT part of your task and it caused test failures. If the file did not exist on main, it will be deleted.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        path: { type: 'string', description: 'Relative file path to revert' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'commit',
-    description: 'Stage and commit all current changes.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        message: { type: 'string', description: 'Commit message' },
-      },
-      required: ['message'],
-    },
-  },
-  {
-    name: 'manage_packages',
-    description:
-      'Install or remove npm packages in the project. Use this when your implementation requires a new dependency or when replacing one library with another.',
-    input_schema: {
-      type: 'object' as const,
+  ),
+  devTool('commit', 'Stage and commit all current changes.', {
+    type: 'object',
+    properties: { message: { type: 'string', description: 'Commit message' } },
+    required: ['message'],
+  }),
+  devTool(
+    'manage_packages',
+    'Install or remove npm packages in the project. Use this when your implementation requires a new dependency or when replacing one library with another.',
+    {
+      type: 'object',
       properties: {
         action: {
           type: 'string',
@@ -122,7 +97,7 @@ const DEV_TOOLS: Anthropic.Tool[] = [
       },
       required: ['action', 'packages'],
     },
-  },
+  ),
 ];
 
 const MAX_ROUNDS = 500;
@@ -137,34 +112,24 @@ export class AgentAbortedError extends Error {
 }
 
 export class DevAgent {
-  private anthropic: Anthropic;
   private worktreePath: string;
-
   private externalAbort: AbortController | null = null;
   private aborted = false;
 
   constructor(worktreePath: string) {
-    this.anthropic = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-      baseURL: AI_BASE_URL,
-    });
     this.worktreePath = worktreePath;
   }
 
-  /**
-   * Abort the running agent from outside (e.g. user cancelled).
-   */
   abort(): void {
     this.aborted = true;
     this.externalAbort?.abort();
   }
 
-  /**
-   * Run agent with a system prompt and user message.
-   * Returns the final text response.
-   */
   async run(systemPrompt: string, userMessage: string): Promise<string> {
-    const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }];
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ];
 
     const controller = new AbortController();
     this.externalAbort = controller;
@@ -178,23 +143,15 @@ export class DevAgent {
         round++;
         logger.info(`[DEV-AGENT] Round ${round}/${MAX_ROUNDS}`);
 
-        let response: Anthropic.Message;
+        let result: Awaited<ReturnType<typeof aiComplete>>;
         try {
-          response = await this.anthropic.messages.create(
-            {
-              model: AI_MODEL,
-              max_tokens: 8192,
-              system: systemPrompt,
-              messages,
-              tools: DEV_TOOLS,
-            },
-            { signal: controller.signal },
-          );
+          result = await aiComplete({
+            messages,
+            maxTokens: 8192,
+            tools: DEV_TOOLS,
+          });
         } catch (err: unknown) {
-          if (
-            (err instanceof Error && err.name === 'APIUserAbortError') ||
-            controller.signal.aborted
-          ) {
+          if ((err instanceof Error && err.name === 'AbortError') || controller.signal.aborted) {
             if (this.aborted) {
               throw new AgentAbortedError();
             }
@@ -205,67 +162,47 @@ export class DevAgent {
           throw err;
         }
 
-        // Collect text and tool_use blocks
-        const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-
-        for (const block of response.content) {
-          if (block.type === 'text') {
-            finalText += block.text;
-          } else if (block.type === 'tool_use') {
-            toolCalls.push({
-              id: block.id,
-              name: block.name,
-              input: block.input as Record<string, unknown>,
-            });
-          } else {
-            logger.info(`[DEV-AGENT] Unexpected block type: ${(block as { type: string }).type}`);
-          }
+        // Parse response
+        const toolCalls = result.toolCalls ?? [];
+        if (result.text) {
+          finalText += result.text;
         }
 
         logger.info(
-          `[DEV-AGENT] stop_reason=${response.stop_reason} toolCalls=${toolCalls.length} textLen=${finalText.length}`,
+          `[DEV-AGENT] finish=${result.finishReason} toolCalls=${toolCalls.length} textLen=${finalText.length}`,
         );
 
-        if (toolCalls.length === 0 || response.stop_reason === 'end_turn') {
+        if (toolCalls.length === 0 || result.finishReason === 'stop') {
           break;
         }
 
-        // Execute tools and build results
-        messages.push({ role: 'assistant', content: response.content });
+        // Build assistant message with tool calls for history
+        messages.push({
+          role: 'assistant',
+          content: result.text || null,
+          tool_calls: toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        });
 
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        // Execute tools and add results
         for (const call of toolCalls) {
-          logger.info(`[DEV-AGENT] Tool: ${call.name} ${JSON.stringify(call.input).slice(0, 200)}`);
-          const result = await this.executeTool(call.name, call.input);
-          logger.info(`[DEV-AGENT] Result: ${result.slice(0, 200)}`);
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: call.id,
-            content: result,
-          });
+          const input = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+          logger.info(`[DEV-AGENT] Tool: ${call.name} ${JSON.stringify(input).slice(0, 200)}`);
+          const toolResult = await this.executeTool(call.name, input);
+          logger.info(`[DEV-AGENT] Result: ${toolResult.slice(0, 200)}`);
+          messages.push({ role: 'tool', tool_call_id: call.id, content: toolResult });
         }
-
-        messages.push({ role: 'user', content: toolResults });
       }
 
-      // If the loop ended without any text output, nudge the model to write its answer.
+      // Nudge for final answer if no text produced
       if (!finalText.trim() && round < MAX_ROUNDS) {
         logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
         messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
-        const nudgeResponse = await this.anthropic.messages.create(
-          {
-            model: AI_MODEL,
-            max_tokens: 8192,
-            system: systemPrompt,
-            messages,
-          },
-          { signal: controller.signal },
-        );
-        for (const block of nudgeResponse.content) {
-          if (block.type === 'text') {
-            finalText += block.text;
-          }
-        }
+        const nudge = await aiComplete({ messages, maxTokens: 8192 });
+        finalText += nudge.text;
         logger.info(`[DEV-AGENT] Nudge result: textLen=${finalText.length}`);
       }
 

@@ -12,9 +12,24 @@ type TextPart = { type: 'text'; text: string };
 type ImagePart = { type: 'image_url'; image_url: { url: string } };
 type ContentPart = TextPart | ImagePart;
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string | ContentPart[];
+type TextMessage = { role: 'system' | 'user' | 'assistant'; content: string | ContentPart[] };
+type ToolResultMessage = { role: 'tool'; tool_call_id: string; content: string };
+type AssistantToolMessage = {
+  role: 'assistant';
+  content: string | null;
+  tool_calls: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+};
+
+export type ChatMessage = TextMessage | ToolResultMessage | AssistantToolMessage;
+
+export interface ToolCallResult {
+  id: string;
+  name: string;
+  arguments: string;
 }
 
 export interface CompletionResult {
@@ -24,6 +39,8 @@ export interface CompletionResult {
   usage: unknown;
   /** Which model produced the result (e.g. "GLM (glm-5.1)" or "DeepSeek-R1") */
   model: string;
+  /** Tool calls returned by the model (undefined if no tools requested or no calls made) */
+  toolCalls?: ToolCallResult[] | undefined;
 }
 
 export interface CompletionOptions {
@@ -36,6 +53,8 @@ export interface CompletionOptions {
   timeoutMs?: number;
   /** Max retries per model before falling through to the next one (default: 3) */
   maxRetries?: number;
+  /** OpenAI-format tool definitions for function calling */
+  tools?: OpenAI.ChatCompletionTool[];
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -63,6 +82,7 @@ interface RawResponse {
   text: string | null;
   finishReason: string | null;
   usage: unknown;
+  toolCalls?: ToolCallResult[] | undefined;
 }
 
 interface ModelSlot {
@@ -72,6 +92,7 @@ interface ModelSlot {
     maxTokens: number,
     temp: number,
     timeoutMs: number,
+    tools?: OpenAI.ChatCompletionTool[],
   ) => Promise<RawResponse>;
 }
 
@@ -116,18 +137,30 @@ function logError(error: unknown): void {
 // ── OpenAI SDK adapter (z.ai GLM) ──────────────────────────────────────────
 
 function callOpenAI(model: string): ModelSlot['call'] {
-  return async (msgs, maxTokens, temp, _timeoutMs) => {
+  return async (msgs, maxTokens, temp, _timeoutMs, tools) => {
     const response = await openaiClient.chat.completions.create({
       model,
       messages: msgs as OpenAI.ChatCompletionMessageParam[],
       max_tokens: maxTokens,
       temperature: temp,
+      ...(tools && tools.length > 0 ? { tools } : {}),
     });
     const choice = response.choices[0];
+    const toolCalls = choice?.message?.tool_calls
+      ?.filter(
+        (tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: 'function' } =>
+          tc.type === 'function',
+      )
+      .map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      }));
     return {
       text: choice?.message?.content?.trim() ?? null,
       finishReason: choice?.finish_reason ?? null,
       usage: response.usage,
+      toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
     };
   };
 }
@@ -196,19 +229,23 @@ export async function aiComplete(options: CompletionOptions): Promise<Completion
       try {
         logger.info(`[AI] ${slot.name} attempt ${attempt}/${maxRetries}`);
 
-        const raw = await slot.call(messages, maxTokens, temperature, timeoutMs);
+        const raw = await slot.call(messages, maxTokens, temperature, timeoutMs, options.tools);
 
-        if (!raw.text) {
+        // For tool-calling requests, allow empty text (model may only return tool_calls)
+        if (!raw.text && !raw.toolCalls) {
           throw new Error('Empty response from AI');
         }
 
-        logger.info(`[AI] ${slot.name} → ${raw.text.length} chars, finish=${raw.finishReason}`);
+        logger.info(
+          `[AI] ${slot.name} → ${raw.text?.length ?? 0} chars, finish=${raw.finishReason}, tools=${raw.toolCalls?.length ?? 0}`,
+        );
 
         return {
-          text: raw.text,
+          text: raw.text ?? '',
           finishReason: raw.finishReason,
           usage: raw.usage,
           model: slot.name,
+          toolCalls: raw.toolCalls,
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
