@@ -23,9 +23,6 @@ import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
 
-/** Track consecutive sheet write failures per group to suggest /reconnect */
-const sheetFailuresByGroup = new Map<number, number>();
-
 /** Recently-seen user+group pairs — skip redundant DB upserts */
 const recentMemberships = new Set<string>();
 
@@ -37,18 +34,8 @@ export function trackMembership(telegramId: number, groupId: number): void {
   recentMemberships.add(key);
 }
 
-export function getSheetWriteErrorMessage(groupId: number): string {
-  const count = sheetFailuresByGroup.get(groupId) ?? 0;
-  sheetFailuresByGroup.set(groupId, count + 1);
-  if (count >= 1) {
-    return '❌ Не удалось записать расход в Google таблицу. Возможно, авторизация устарела — попробуй /reconnect';
-  }
-  return '❌ Не удалось записать расход в Google таблицу. Попробуй ещё раз.';
-}
-
-export function resetSheetWriteFailures(groupId: number): void {
-  sheetFailuresByGroup.delete(groupId);
-}
+export const SHEET_WRITE_ERROR =
+  '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /connect и повтори попытку.';
 
 /** Build a fallback Telegram deep link (opens in browser on some platforms) */
 function buildGroupDeepLink(telegramGroupId: number): string {
@@ -450,9 +437,7 @@ export async function handleExpenseMessage(
   }
 
   if (batchFailed) {
-    await sendMessage(
-      '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /connect и повтори попытку.',
-    );
+    await sendMessage(SHEET_WRITE_ERROR);
   }
 
   // Send numbered summary when multiple expenses recognized

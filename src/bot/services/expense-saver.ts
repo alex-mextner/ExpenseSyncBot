@@ -12,7 +12,7 @@ import {
   formatAmount,
   getExchangeRate,
 } from '../../services/currency/converter';
-import { appendExpenseRow, googleConn } from '../../services/google/sheets';
+import { appendExpenseRows, type ExpenseRowData, googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from './budget-sync';
@@ -31,13 +31,13 @@ interface ExpenseWriteData {
   eurAmount: number;
 }
 
-// ── Core: sheet write (no DB) ───────────────────────────────────────────────
+// ── Core: prepare row data (no I/O) ─────────────────────────────────────────
 
-/** Append one expense row to Google Sheets. Does NOT touch local DB. */
-async function writeToSheet(
-  group: Group & { spreadsheet_id: string },
+/** Build row data and DB write data from a pending expense. Pure computation. */
+function prepareExpenseRow(
+  group: Group,
   pendingExpense: PendingExpense,
-): Promise<ExpenseWriteData> {
+): { row: ExpenseRowData; write: ExpenseWriteData } {
   const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);
   const currentDate = format(new Date(), 'yyyy-MM-dd');
   const category = pendingExpense.detected_category || 'Без категории';
@@ -49,38 +49,17 @@ async function writeToSheet(
       currency === pendingExpense.parsed_currency ? pendingExpense.parsed_amount : null;
   }
 
-  logger.info(
-    {
-      data: {
-        date: currentDate,
-        category,
-        comment: pendingExpense.comment,
-        amounts,
-        eurAmount,
-      },
-    },
-    `[SAVE] Writing to Google Sheet`,
-  );
-
-  await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
-    date: currentDate,
-    category,
-    comment: pendingExpense.comment,
-    amounts,
-    eurAmount,
-    rate,
-  });
-
-  logger.info('[SAVE] ✅ Successfully wrote to Google Sheet');
-
   return {
-    pendingExpenseId: pendingExpense.id,
-    date: currentDate,
-    category,
-    comment: pendingExpense.comment,
-    amount: pendingExpense.parsed_amount,
-    currency: pendingExpense.parsed_currency,
-    eurAmount,
+    row: { date: currentDate, category, comment: pendingExpense.comment, amounts, eurAmount, rate },
+    write: {
+      pendingExpenseId: pendingExpense.id,
+      date: currentDate,
+      category,
+      comment: pendingExpense.comment,
+      amount: pendingExpense.parsed_amount,
+      currency: pendingExpense.parsed_currency,
+      eurAmount,
+    },
   };
 }
 
@@ -142,8 +121,9 @@ export async function saveExpenseBatch(
   // Sync budgets once before the batch
   await silentSyncBudgets(googleConn(group), group.id);
 
-  // Write all to sheets — if any fails, nothing is committed to DB
-  const written: ExpenseWriteData[] = [];
+  // Prepare all rows (pure computation, no I/O)
+  const rows: ExpenseRowData[] = [];
+  const writes: ExpenseWriteData[] = [];
 
   for (const id of pendingExpenseIds) {
     const pendingExpense = database.pendingExpenses.findById(id);
@@ -151,18 +131,23 @@ export async function saveExpenseBatch(
       throw new Error(`Pending expense ${id} not found`);
     }
 
-    logger.info(`[SAVE] Writing expense ${id} (${written.length + 1}/${pendingExpenseIds.length})`);
-    const data = await writeToSheet(group, pendingExpense);
-    written.push(data);
+    const { row, write } = prepareExpenseRow(group, pendingExpense);
+    rows.push(row);
+    writes.push(write);
   }
 
+  // Write all rows to sheet in one API call (or throw)
+  logger.info(`[SAVE] Writing ${rows.length} expenses to Google Sheet`);
+  await appendExpenseRows(googleConn(group), group.spreadsheet_id, rows);
+  logger.info('[SAVE] ✅ All rows written to Google Sheet');
+
   // All sheets writes succeeded — commit to DB atomically
-  commitExpensesToDb(groupId, userId, written);
-  logger.info(`[SAVE] ✅ Committed ${written.length} expenses to DB`);
+  commitExpensesToDb(groupId, userId, writes);
+  logger.info(`[SAVE] ✅ Committed ${writes.length} expenses to DB`);
 
   // Check budgets for affected categories (deduplicated)
   const checkedCategories = new Set<string>();
-  for (const e of written) {
+  for (const e of writes) {
     if (!checkedCategories.has(e.category)) {
       checkedCategories.add(e.category);
       await checkBudgetLimit(groupId, e.category, e.date);
@@ -262,63 +247,67 @@ export async function saveReceiptExpenses(
 
   const currentDate = format(new Date(), 'yyyy-MM-dd');
 
-  // For each category, create one expense with multiple items
-  for (const [category, items] of itemsByCategory.entries()) {
-    if (items.length === 0) {
-      continue;
-    }
+  // Prepare per-category data for sheet writes
+  interface CategoryBatch {
+    category: string;
+    items: typeof confirmedItems;
+    totalAmount: number;
+    currency: CurrencyCode;
+    eurAmount: number;
+    comment: string;
+    amounts: Record<string, number | null>;
+    rate: number;
+  }
+  const batches: CategoryBatch[] = [];
 
-    // Calculate total amount for this category
+  for (const [category, items] of itemsByCategory.entries()) {
+    if (items.length === 0) continue;
+
     const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
     const firstItem = items[0];
-    if (!firstItem) {
-      continue;
-    }
-    const currency = firstItem.currency; // All items should have same currency
+    if (!firstItem) continue;
+    const currency = firstItem.currency;
 
-    // Convert to EUR
     const eurAmount = convertToEUR(totalAmount, currency);
     const rate = getExchangeRate(currency as CurrencyCode);
 
-    // Build comment with item details
     const itemNames = items.map((item) => `${item.name_ru} (${item.quantity}x${item.price})`);
     const comment = `Чек: ${itemNames.join(', ')}`;
 
-    // Prepare amounts for each enabled currency
     const amounts: Record<string, number | null> = {};
     for (const curr of group.enabled_currencies) {
       amounts[curr] = curr === currency ? totalAmount : null;
     }
 
-    // Append to Google Sheet
-    try {
-      await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
-        date: currentDate,
-        category,
-        comment,
-        amounts,
-        eurAmount,
-        rate,
-      });
-    } catch (error) {
-      logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet');
-      continue;
-    }
+    batches.push({ category, items, totalAmount, currency, eurAmount, comment, amounts, rate });
+  }
 
-    // Create expense + items atomically in a transaction
-    database.transaction(() => {
+  // Write all categories to sheet in one API call — if fails, nothing is committed to DB
+  const sheetRows: ExpenseRowData[] = batches.map((batch) => ({
+    date: currentDate,
+    category: batch.category,
+    comment: batch.comment,
+    amounts: batch.amounts,
+    eurAmount: batch.eurAmount,
+    rate: batch.rate,
+  }));
+  await appendExpenseRows(googleConn(group), group.spreadsheet_id, sheetRows);
+
+  // All sheet writes succeeded — commit all to DB in one transaction
+  database.transaction(() => {
+    for (const batch of batches) {
       const expense = database.expenses.create({
         group_id: groupId,
         user_id: userId,
         date: currentDate,
-        category,
-        comment,
-        amount: totalAmount,
-        currency,
-        eur_amount: eurAmount,
+        category: batch.category,
+        comment: batch.comment,
+        amount: batch.totalAmount,
+        currency: batch.currency,
+        eur_amount: batch.eurAmount,
       });
 
-      for (const item of items) {
+      for (const item of batch.items) {
         database.expenseItems.create({
           expense_id: expense.id,
           name_ru: item.name_ru,
@@ -328,9 +317,12 @@ export async function saveReceiptExpenses(
           total: item.total,
         });
       }
-    });
+    }
+  });
 
-    await checkBudgetLimit(groupId, category, currentDate);
+  // Check budgets for affected categories
+  for (const batch of batches) {
+    await checkBudgetLimit(groupId, batch.category, currentDate);
   }
 
   // Delete all processed receipt items (confirmed + skipped)
