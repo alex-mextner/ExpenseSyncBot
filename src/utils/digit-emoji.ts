@@ -1,5 +1,6 @@
 /** Fetches and caches custom emoji IDs for numbered lists and message reactions */
 import type { TelegramReactionType } from '@gramio/types';
+import { TelegramError } from 'gramio';
 import type { BotInstance } from '../bot/types';
 import { createLogger } from './logger.ts';
 
@@ -163,6 +164,60 @@ export function buildExpenseReaction(expenseCount: number): TelegramReactionType
   }
 
   return { type: 'emoji', emoji: '👍' };
+}
+
+/**
+ * Standard emoji fallback for reactions (no Premium required).
+ * 10+ → 💯, otherwise → 👍.
+ */
+function buildStandardReaction(expenseCount: number): TelegramReactionType {
+  if (expenseCount >= 10) {
+    return { type: 'emoji', emoji: '💯' };
+  }
+  return { type: 'emoji', emoji: '👍' };
+}
+
+/**
+ * Set expense reaction on a message with automatic fallback.
+ * Tries custom emoji first (✅, digits, 💯); on REACTION_INVALID falls back to standard emoji.
+ */
+export async function setExpenseReaction(
+  bot: BotInstance,
+  chatId: number | string,
+  messageId: number,
+  expenseCount: number,
+): Promise<void> {
+  const customReaction = buildExpenseReaction(expenseCount);
+
+  // If buildExpenseReaction already returned a standard emoji, just use it
+  if (customReaction.type === 'emoji') {
+    await bot.api.setMessageReaction({
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [customReaction],
+    });
+    return;
+  }
+
+  // Try custom emoji, fall back to standard on REACTION_INVALID
+  try {
+    await bot.api.setMessageReaction({
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [customReaction],
+    });
+  } catch (err) {
+    if (err instanceof TelegramError && err.message.includes('REACTION_INVALID')) {
+      logger.debug('Custom emoji reaction not supported, falling back to standard');
+      await bot.api.setMessageReaction({
+        chat_id: chatId,
+        message_id: messageId,
+        reaction: [buildStandardReaction(expenseCount)],
+      });
+    } else {
+      throw err;
+    }
+  }
 }
 
 /** Check if digit emojis are loaded (for testing) */

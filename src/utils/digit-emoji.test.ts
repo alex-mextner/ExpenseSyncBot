@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 // NODE_ENV=test silences pino globally — no stdout pollution.
 // Logger mock not needed here: we verify behavior via return values.
 
+import { TelegramError } from 'gramio';
 import {
   buildExpenseReaction,
   digitEmoji,
@@ -14,6 +15,7 @@ import {
   loadDigitEmojis,
   loadReactionEmojis,
   resetDigitEmojis,
+  setExpenseReaction,
 } from './digit-emoji';
 
 beforeEach(() => {
@@ -328,5 +330,126 @@ describe('buildExpenseReaction', () => {
       type: 'custom_emoji',
       custom_emoji_id: 'check_id',
     });
+  });
+});
+
+describe('setExpenseReaction', () => {
+  function createFullBot(opts: { reactionFails?: boolean } = {}) {
+    const setMessageReaction = opts.reactionFails
+      ? mock()
+          .mockRejectedValueOnce(
+            new TelegramError(
+              {
+                ok: false,
+                error_code: 400,
+                description: 'Bad Request: REACTION_INVALID',
+                parameters: {},
+              } as never,
+              'setMessageReaction',
+              {} as never,
+            ),
+          )
+          .mockResolvedValueOnce(true)
+      : mock().mockResolvedValue(true);
+
+    return {
+      bot: {
+        api: {
+          getStickerSet: mock().mockResolvedValue({
+            name: 'RestrictedEmoji',
+            stickers: [
+              { emoji: '✅', custom_emoji_id: 'check_id' },
+              { emoji: '💯', custom_emoji_id: 'hundred_id' },
+            ],
+          }),
+          setMessageReaction,
+        },
+      } as unknown as Parameters<typeof setExpenseReaction>[0],
+      setMessageReaction,
+    };
+  }
+
+  test('uses custom emoji when supported', async () => {
+    const { bot, setMessageReaction } = createFullBot();
+    await loadReactionEmojis(bot as unknown as Parameters<typeof loadReactionEmojis>[0]);
+
+    await setExpenseReaction(bot, -123, 456, 1);
+
+    expect(setMessageReaction).toHaveBeenCalledTimes(1);
+    expect(setMessageReaction).toHaveBeenCalledWith({
+      chat_id: -123,
+      message_id: 456,
+      reaction: [{ type: 'custom_emoji', custom_emoji_id: 'check_id' }],
+    });
+  });
+
+  test('falls back to standard emoji on REACTION_INVALID', async () => {
+    const { bot, setMessageReaction } = createFullBot({ reactionFails: true });
+    await loadReactionEmojis(bot as unknown as Parameters<typeof loadReactionEmojis>[0]);
+
+    await setExpenseReaction(bot, -123, 456, 1);
+
+    expect(setMessageReaction).toHaveBeenCalledTimes(2);
+    // Second call should be standard emoji
+    expect(setMessageReaction.mock.calls[1]?.[0]).toEqual({
+      chat_id: -123,
+      message_id: 456,
+      reaction: [{ type: 'emoji', emoji: '👍' }],
+    });
+  });
+
+  test('falls back to 💯 standard for 10+ expenses on REACTION_INVALID', async () => {
+    const { bot, setMessageReaction } = createFullBot({ reactionFails: true });
+    await loadReactionEmojis(bot as unknown as Parameters<typeof loadReactionEmojis>[0]);
+
+    await setExpenseReaction(bot, -123, 456, 15);
+
+    expect(setMessageReaction).toHaveBeenCalledTimes(2);
+    expect(setMessageReaction.mock.calls[1]?.[0]).toEqual({
+      chat_id: -123,
+      message_id: 456,
+      reaction: [{ type: 'emoji', emoji: '💯' }],
+    });
+  });
+
+  test('uses standard emoji directly when no custom loaded', async () => {
+    const { bot, setMessageReaction } = createFullBot();
+    // Don't load reaction emojis — buildExpenseReaction returns standard 👍
+
+    await setExpenseReaction(bot, -123, 456, 1);
+
+    expect(setMessageReaction).toHaveBeenCalledTimes(1);
+    expect(setMessageReaction).toHaveBeenCalledWith({
+      chat_id: -123,
+      message_id: 456,
+      reaction: [{ type: 'emoji', emoji: '👍' }],
+    });
+  });
+
+  test('rethrows non-REACTION_INVALID errors', async () => {
+    const setMessageReaction = mock().mockRejectedValue(
+      new TelegramError(
+        {
+          ok: false,
+          error_code: 403,
+          description: 'Forbidden: bot was blocked by the user',
+          parameters: {},
+        } as never,
+        'setMessageReaction',
+        {} as never,
+      ),
+    );
+    const bot = {
+      api: {
+        getStickerSet: mock().mockResolvedValue({
+          name: 'RestrictedEmoji',
+          stickers: [{ emoji: '✅', custom_emoji_id: 'check_id' }],
+        }),
+        setMessageReaction,
+      },
+    } as unknown as Parameters<typeof setExpenseReaction>[0];
+    await loadReactionEmojis(bot as unknown as Parameters<typeof loadReactionEmojis>[0]);
+
+    await expect(setExpenseReaction(bot, -123, 456, 1)).rejects.toThrow('Forbidden');
   });
 });

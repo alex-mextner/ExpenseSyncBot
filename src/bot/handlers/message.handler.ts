@@ -8,7 +8,7 @@ import { parseExpenseMessage, validateParsedExpense } from '../../services/curre
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
-import { buildExpenseReaction, digitEmoji } from '../../utils/digit-emoji';
+import { digitEmoji, setExpenseReaction } from '../../utils/digit-emoji';
 import { getErrorMessage } from '../../utils/error';
 import { findBestCategoryMatch } from '../../utils/fuzzy-search';
 import { escapeHtml } from '../../utils/html';
@@ -364,13 +364,9 @@ export async function handleExpenseMessage(
   const hasProcessedExpenses = successCount > 0 || newCategories.length > 0;
 
   if (hasProcessedExpenses) {
-    // Set ✅ reaction (+ digit count for multiple expenses)
+    // Set ✅ reaction (+ digit count for multiple expenses), fallback to 👍 if custom emoji unsupported
     try {
-      await bot.api.setMessageReaction({
-        chat_id: telegramGroupId,
-        message_id: messageId,
-        reaction: [buildExpenseReaction(processedExpenses.length)],
-      });
+      await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
     } catch (error) {
       logger.error({ err: error }, '[MSG] Failed to set reaction');
     }
