@@ -1,8 +1,7 @@
-/** AI-powered code review via shared completion utility */
-import { env } from '../../config/env';
+/** AI-powered code review via shared streaming utility */
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete, stripThinkingTags } from '../ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
 
 const logger = createLogger('codex-integration');
 
@@ -14,10 +13,6 @@ export async function runCodexReview(diff: string): Promise<string> {
     return 'No changes to review.';
   }
 
-  if (!env.ANTHROPIC_API_KEY) {
-    return 'Code review skipped: no AI API key configured.';
-  }
-
   const maxDiffLength = 50000;
   const truncatedDiff =
     diff.length > maxDiffLength
@@ -25,7 +20,7 @@ export async function runCodexReview(diff: string): Promise<string> {
       : diff;
 
   try {
-    const { text } = await aiComplete({
+    const { text } = await aiStreamRound({
       messages: [
         {
           role: 'user',
@@ -44,6 +39,7 @@ ${truncatedDiff}
         },
       ],
       maxTokens: 4096,
+      chain: 'smart',
     });
 
     const cleaned = stripThinkingTags(text);

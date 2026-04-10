@@ -63,7 +63,7 @@ ${input.advice.substring(0, 2000)}`;
   try {
     const result = await anthropic.messages.create(
       {
-        model: env.AI_VALIDATION_MODEL,
+        model: env.AI_MODEL,
         max_tokens: VALIDATION_MAX_TOKENS,
         system: ADVICE_VALIDATION_PROMPT,
         messages: [{ role: 'user', content: userContent }],

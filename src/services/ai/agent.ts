@@ -83,9 +83,10 @@ export class ExpenseBotAgent {
         return '';
       }
 
-      // --- Validation pass (only when no tools were called) ---
-      if (toolCallNames.length === 0) {
-        const validation = await validateResponse(env.ANTHROPIC_API_KEY, {
+      // --- Validation pass (always runs when no tools were called AND tools were available) ---
+      // Skip if the model already called tools (data is real) or if no tools existed at all.
+      if (toolCallNames.length === 0 && TOOL_DEFINITIONS.length > 0) {
+        const validation = await validateResponse({
           userMessage,
           toolCalls: toolCallNames,
           response: finalText,
@@ -171,16 +172,24 @@ export class ExpenseBotAgent {
    * Used by smart advice system which wants the final text without side effects.
    */
   async runBatch(userMessage: string): Promise<string> {
-    const { aiComplete } = await import('./completion');
     const systemPrompt = this.buildSystemPrompt();
-    const { text } = await aiComplete({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      maxTokens: 1500,
-    });
-    return text;
+    let result = '';
+    const { text } = await aiStreamRound(
+      {
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        maxTokens: 1500,
+        chain: 'smart',
+      },
+      {
+        onTextDelta: (delta) => {
+          result += delta;
+        },
+      },
+    );
+    return text || result;
   }
 
   /**
@@ -261,7 +270,14 @@ export class ExpenseBotAgent {
       };
 
       const result: StreamRoundResult = await aiStreamRound(
-        { messages, tools: TOOL_DEFINITIONS, maxTokens: 4096, temperature: 0.3, signal },
+        {
+          messages,
+          tools: TOOL_DEFINITIONS,
+          maxTokens: 4096,
+          temperature: 0.3,
+          chain: 'smart',
+          signal,
+        },
         callbacks,
       );
 

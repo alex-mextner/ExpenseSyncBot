@@ -4,7 +4,7 @@ import type { ReceiptItem } from '../../database/types';
 import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete, stripThinkingTags } from '../ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
 
 const logger = createLogger('receipt-summarizer');
 
@@ -146,13 +146,18 @@ export function validateSummaryTotals(newSummary: ReceiptSummary, originalTotal:
 }
 
 /**
- * Apply user correction using AI
+ * Apply user correction using AI.
+ *
+ * Optional `onProgress` callback receives streaming text deltas — caller can
+ * pipe them into a Telegram status message for live progress (10-20s wait
+ * otherwise is silent).
  */
 export async function applyCorrectionWithAI(
   currentSummary: ReceiptSummary,
   userCorrection: string,
   availableCategories: string[],
   correctionHistory: CorrectionEntry[],
+  onProgress?: (delta: string) => void,
 ): Promise<ReceiptSummary> {
   const historyText =
     correctionHistory.length > 0
@@ -194,18 +199,24 @@ ${historyText}
 
   logger.info(`[RECEIPT_SUMMARIZER] Sending correction to AI: "${userCorrection}"`);
 
-  const { text: responseText } = await aiComplete({
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are a JSON processor. Apply user corrections to receipt summaries. Return only valid JSON, no explanations.',
-      },
-      { role: 'user', content: prompt },
-    ],
-    maxTokens: 2000,
-    temperature: 0.3,
-  });
+  const callbacks = onProgress ? { onTextDelta: onProgress } : undefined;
+
+  const { text: responseText } = await aiStreamRound(
+    {
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a JSON processor. Apply user corrections to receipt summaries. Return only valid JSON, no explanations.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      maxTokens: 2000,
+      temperature: 0.3,
+      chain: 'smart',
+    },
+    callbacks,
+  );
 
   const cleanedResponse = stripThinkingTags(responseText);
 

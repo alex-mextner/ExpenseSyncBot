@@ -620,11 +620,16 @@ async function handleBulkCorrectionInput(
     validateSummaryTotals,
   } = await import('../../services/receipt/receipt-summarizer');
   const { createBulkEditKeyboard } = await import('../keyboards');
+  const { StatusWriter } = await import('../../services/receipt/status-writer');
 
   logger.info(`[BULK_CORRECTION] User correction: "${correctionText}" for queue ${queueItem.id}`);
 
-  // Immediately respond that we're processing
-  await sendMessage('⏳ Корректирую...');
+  // Status writer — shows live AI progress while correction is applied.
+  // JSON output → code mode (escape + <code> wrap).
+  const statusWriter = new StatusWriter({
+    header: '🤖 Корректирую сводку...',
+    mode: 'code',
+  });
 
   // Get receipt items
   const items = database.receiptItems.findByPhotoQueueId(queueItem.id);
@@ -665,24 +670,28 @@ async function handleBulkCorrectionInput(
   }
 
   try {
-    // Apply correction using AI
+    // Apply correction using AI — streams live JSON into the status message
     const newSummary = await applyCorrectionWithAI(
       currentSummary,
       correctionText,
       availableCategories,
       correctionHistory,
+      (delta) => statusWriter.append(delta),
     );
 
     // Validate totals match (±1%)
     const originalTotal = items.reduce((sum, i) => sum + i.total, 0);
     if (!validateSummaryTotals(newSummary, originalTotal)) {
-      await sendMessage(
+      await statusWriter.finalize(
         '❌ Суммы не сходятся. AI изменил суммы товаров, что недопустимо.\n\n' +
           'Попробуйте переформулировать корректировку. Например:\n' +
           '<code>перенеси салфетки в Хозтовары</code>',
       );
       return;
     }
+
+    // Status message served its purpose — delete it, the real result follows
+    await statusWriter.close();
 
     // Add to correction history
     correctionHistory.push({
@@ -715,7 +724,7 @@ async function handleBulkCorrectionInput(
     logger.info(`[BULK_CORRECTION] Correction applied successfully`);
   } catch (error) {
     logger.error({ err: error }, '[BULK_CORRECTION] AI correction failed');
-    await sendMessage(
+    await statusWriter.finalize(
       '❌ Не удалось применить корректировку.\n\n' +
         'Попробуйте переформулировать. Например:\n' +
         '<code>перенеси салфетки в Хозтовары</code>\n' +

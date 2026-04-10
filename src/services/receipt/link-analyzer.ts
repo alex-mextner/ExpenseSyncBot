@@ -5,9 +5,9 @@ import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
 import type { AIReceiptItem } from './ai-extractor';
-import { extractExpensesFromReceipt } from './ai-extractor';
 import { saveExtractedItems, showReceiptConfirmationOptions } from './photo-processor';
 import { fetchReceiptData } from './receipt-fetcher';
+import { parseReceipt } from './receipt-parser';
 
 const logger = createLogger('link-analyzer');
 
@@ -102,13 +102,17 @@ async function analyzeLink(
 
     const categories = database.categories.findByGroupId(groupId);
     const categoryExamples = database.expenses.getRecentExamplesByCategory(groupId);
-    const result = await extractExpensesFromReceipt(
+    const result = await parseReceipt(
       content,
       categories.map((c) => c.name),
       categoryExamples,
     );
 
     if (!result.items?.length) return null;
+
+    logger.info(
+      `[LINK] Parsed ${result.items.length} items, sum=${result.computedSum}, verified=${result.sumVerified}, rounds=${result.calculateSumRounds} via ${result.providerUsed}`,
+    );
 
     const group = database.groups.findById(groupId);
     return {

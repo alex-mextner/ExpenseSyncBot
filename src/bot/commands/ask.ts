@@ -3,21 +3,23 @@
  */
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
-import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
+import { BASE_CURRENCY } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
-import { validateAdvice } from '../../services/ai/advice-validator';
 import { ExpenseBotAgent } from '../../services/ai/agent';
-import { stripThinkingTags } from '../../services/ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
-import { computeOverallSeverity } from '../../services/analytics/formatters';
+import {
+  computeOverallSeverity,
+  formatSnapshotForPrompt,
+} from '../../services/analytics/formatters';
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
-import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { StatusWriter } from '../../services/receipt/status-writer';
 import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
@@ -214,105 +216,104 @@ export async function maybeSmartAdvice(groupId: number): Promise<void> {
   }
 }
 
-const TIER_CONFIGS: Record<AdviceTier, { emoji: string; title: string }> = {
-  quick: { emoji: '💡', title: '<b>Инсайт</b>' },
-  alert: { emoji: '⚠️', title: '<b>Финансовый алерт</b>' },
-  deep: { emoji: '📊', title: '<b>Финансовый обзор</b>' },
-};
+/**
+ * Strip <think>...</think> blocks entirely from advice text.
+ * Unlike processThinkTags (which converts to blockquote), this removes thinking completely.
+ */
+function processThinkTagsForAdvice(text: string): string {
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, '<i>Бот думает...</i>\n\n');
+  text = text.replace(/<think>[\s\S]*$/, '');
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
 
 /**
- * Tiered advice system — all tiers use ExpenseBotAgent with full tool access.
- * Agent fetches actual data via tools, then a validation pass checks for errors.
- * Source data summary is appended as a collapsible blockquote.
+ * Tiered advice system:
+ *   Tier 1 (quick): 500 max_tokens, temp 0.5, brief insight
+ *   Tier 2 (alert): 1000 max_tokens, temp 0.5, budget warning
+ *   Tier 3 (deep):  3000 max_tokens, temp 0.6, comprehensive analysis
  */
 async function sendSmartAdvice(
   groupId: number,
   trigger: TriggerResult,
   snapshot: FinancialSnapshot,
 ): Promise<void> {
-  if (!env.ANTHROPIC_API_KEY) {
-    logger.info('[ADVICE] No ANTHROPIC_API_KEY, skipping advice');
-    return;
-  }
-
   try {
     const tier = trigger.tier;
     const severity = computeOverallSeverity(snapshot);
+
+    // Get group for custom prompt and display currency
     const group = database.groups.findById(groupId);
-    const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
+    const snapshotText = formatSnapshotForPrompt(
+      snapshot,
+      groupId,
+      group?.default_currency ?? BASE_CURRENCY,
+    );
+
+    // Get recent advice topics for anti-repetition
+    const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);
+
+    // Build tier-specific prompt
+    const advicePrompt = buildTieredPrompt(tier, severity, snapshotText, recentTopics, trigger);
+
+    // Add custom prompt if set
+    let fullPrompt = advicePrompt;
+    if (group?.custom_prompt) {
+      fullPrompt += `\n\n=== КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ ===\n${group.custom_prompt}`;
+    }
+
+    // Tier-specific parameters
+    const tierConfig = TIER_CONFIGS[tier];
 
     logger.info(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
 
-    // Build agent context (no real chatId/userId — advice is system-initiated)
-    const agentCtx: AgentContext = {
-      groupId,
-      userId: 0,
-      chatId: group?.telegram_group_id ?? 0,
-      userName: 'system',
-      userFullName: 'Smart Advice',
-      customPrompt: group?.custom_prompt ?? null,
-      telegramGroupId: group?.telegram_group_id ?? 0,
-      isMention: true, // prevent [SKIP]
-    };
+    // Live-stream the advice into an editable status message so the user sees
+    // the long-form output building up in real time (3k tokens = 15-30s wait).
+    const header = `${tierConfig.emoji} ${tierConfig.title}`;
+    const writer = new StatusWriter({ header, mode: 'plain' });
 
-    const agent = new ExpenseBotAgent(env.ANTHROPIC_API_KEY, agentCtx);
+    let rawAdvice: string;
+    try {
+      const result = await aiStreamRound(
+        {
+          messages: [{ role: 'user', content: fullPrompt }],
+          maxTokens: tierConfig.max_tokens,
+          chain: 'smart',
+        },
+        { onTextDelta: (delta) => writer.append(delta) },
+      );
+      rawAdvice = result.text;
+    } catch (err) {
+      await writer.close();
+      throw err;
+    }
 
-    // Build tier-specific prompt for the agent
-    const advicePrompt = buildAdvicePrompt(tier, severity, trigger, groupId, displayCurrency);
-
-    // Run agent in batch mode — no streaming, full tool access
-    let advice = stripThinkingTags(await agent.runBatch(advicePrompt));
-
-    if (!advice || advice.length < 10) {
-      logger.info('[ADVICE] Agent produced empty/short response, skipping');
+    if (!rawAdvice) {
+      await writer.close();
       return;
     }
 
-    // Validation pass — check for hallucinations and errors
-    const validation = await validateAdvice(env.ANTHROPIC_API_KEY, {
-      tier,
-      trigger,
-      advice,
-    });
-
-    if (!validation.approved) {
-      logger.info(`[ADVICE] Validation REJECTED: ${validation.reason}`);
-
-      // Retry with validation feedback
-      const retryPrompt = `${advicePrompt}\n\n[SYSTEM] Твой предыдущий ответ был отклонён проверкой. Причина: ${validation.reason}\nИсправь ошибки и перепиши ответ.`;
-      advice = stripThinkingTags(await agent.runBatch(retryPrompt));
-
-      if (!advice || advice.length < 10) {
-        logger.info('[ADVICE] Agent retry produced empty response, skipping');
-        return;
-      }
-    } else {
-      logger.info('[ADVICE] Validation APPROVED');
+    // Clean up think tags
+    const cleanAdvice = processThinkTagsForAdvice(stripThinkingTags(rawAdvice));
+    const sanitizedAdvice = sanitizeHtmlForTelegram(cleanAdvice);
+    if (!sanitizedAdvice || sanitizedAdvice.length < 10) {
+      await writer.close();
+      return;
     }
 
-    // Sanitize HTML (advice is already stripped of thinking tags above)
-    const sanitizedAdvice = sanitizeHtmlForTelegram(advice);
-    if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
-
-    // Build source data blockquote
-    const sourceBlock = buildSourceDataBlock(snapshot, trigger, displayCurrency);
-
-    // Compose final message: header + advice + source data
-    const tierConfig = TIER_CONFIGS[tier];
-    const header = `${tierConfig.emoji} ${tierConfig.title}`;
-    const message = `${header}\n\n${sanitizedAdvice}${sourceBlock}`;
-
+    // Replace the streamed live output with the final cleaned version
+    // (strips <think> tags, finalizes HTML). Single edit, no duplicate message.
+    const finalMessage = `${header}\n\n${sanitizedAdvice}`;
     try {
-      await sendMessage(message);
-    } catch (sendErr: unknown) {
-      if (sendErr instanceof Error && sendErr.message.includes("can't parse entities")) {
-        logger.error('[ADVICE] HTML parse error, falling back to plain text');
-        await sendMessage(
-          `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(advice)}`,
-        );
-      } else {
-        throw sendErr;
-      }
+      await writer.finalize(finalMessage);
+    } catch (finalErr: unknown) {
+      // Edit can fail if the sanitized output differs structurally from what
+      // was streamed — fall back to a fresh plain-text message.
+      logger.error({ err: finalErr }, '[ADVICE] Finalize edit failed, sending plain fallback');
+      await writer.close();
+      await sendMessage(
+        `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
+      );
     }
 
     // Record advice in log and update cooldown
@@ -323,7 +324,7 @@ async function sendSmartAdvice(
       trigger_type: trigger.type,
       trigger_data: JSON.stringify(trigger.data),
       topic: trigger.topic,
-      advice_text: advice,
+      advice_text: cleanAdvice,
     });
 
     logger.info(`[ADVICE] Sent ${tier} advice for group ${groupId}, topic: ${trigger.topic}`);
@@ -333,139 +334,92 @@ async function sendSmartAdvice(
   }
 }
 
+const TIER_CONFIGS: Record<
+  AdviceTier,
+  { max_tokens: number; temperature: number; emoji: string; title: string }
+> = {
+  quick: { max_tokens: 500, temperature: 0.5, emoji: '💡', title: '<b>Инсайт</b>' },
+  alert: { max_tokens: 1000, temperature: 0.5, emoji: '⚠️', title: '<b>Финансовый алерт</b>' },
+  deep: { max_tokens: 3000, temperature: 0.6, emoji: '📊', title: '<b>Финансовый обзор</b>' },
+};
+
 /**
- * Build prompt for the advice agent with tier-specific instructions.
- * The agent will use tools to fetch actual data — no data dump in the prompt.
+ * Build tier-specific prompt with financial data and anti-repetition
  */
-function buildAdvicePrompt(
+function buildTieredPrompt(
   tier: AdviceTier,
   severity: string,
+  snapshotText: string,
+  recentTopics: string[],
   trigger: TriggerResult,
-  groupId: number,
-  displayCurrency: CurrencyCode,
 ): string {
-  const recentTopics = database.adviceLogs.getRecentTopics(groupId, 5);
   const antiRepetition =
     recentTopics.length > 0
       ? `\nПоследние ${recentTopics.length} советов были на темы: ${JSON.stringify(recentTopics)}\nНЕ повторяй эти темы. Найди новый ракурс.\n`
       : '';
 
   const outputRules = `
-ПРАВИЛА:
-- Это проактивное сообщение от бота в группу — пиши от своего лица, не обращайся к конкретному пользователю.
-- Используй ТОЛЬКО HTML теги: <b>, <i>, <code>. НЕ Markdown (**, *, \`, ##).
-- НЕ используй <blockquote> — он зарезервирован для системных элементов.
-- НЕ выдумывай ссылки и URL!
-- Все суммы показывай в ${displayCurrency}.
-- Каждое утверждение ДОЛЖНО быть подкреплено конкретной цифрой из инструментов.
-- ОБЯЗАТЕЛЬНО используй инструменты (get_expenses, get_budgets, get_technical_analysis) для получения актуальных данных. НЕ отвечай по памяти.`;
+ПРАВИЛА ВЫВОДА:
+- Используй ТОЛЬКО HTML теги: <b>, <i>, <code>, <blockquote>. НЕ Markdown (**, *, \`, ##).
+- НЕ выдумывай ссылки! Не используй <a> без реальных URL.
+- Когда упоминаешь аномалию (Nx), ВСЕГДА объясняй простым языком, например: "4.5x — траты в 4.5 раза выше среднего за предыдущие 3 месяца".`;
 
   if (tier === 'quick') {
-    return `Ты — финансовый аналитик. Дай краткий финансовый инсайт для группы.
+    return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
+Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
 
 УРОВЕНЬ СИТУАЦИИ: ${severity}
-ТРИГГЕР: ${trigger.type} — ${JSON.stringify(trigger.data)}
 ${severity === 'good' ? 'Похвали и дай совет по оптимизации.' : 'Начни с самого важного наблюдения.'}
+
+ДАННЫЕ:
+${snapshotText}
 ${antiRepetition}
 ${outputRules}
 
-Используй инструменты, чтобы получить актуальные данные. Затем напиши ОДИН конкретный инсайт — 2-4 предложения с числами и конкретным действием.`;
+Дай ОДИН конкретный финансовый инсайт на основе данных выше.
+Не философствуй. Назови конкретную цифру и конкретное действие.
+Максимум 1-2 предложения.`;
   }
 
   if (tier === 'alert') {
-    return `Ты — финансовый аналитик. Обнаружена ситуация, требующая внимания.
+    return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
+Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
 
 УРОВЕНЬ СИТУАЦИИ: ${severity}
 ТРИГГЕР: ${trigger.type} — ${JSON.stringify(trigger.data)}
+
+ДАННЫЕ:
+${snapshotText}
 ${antiRepetition}
 ${outputRules}
 
-Используй инструменты для получения актуальных данных (расходы, бюджеты, теханализ).
-Опиши проблему с конкретными числами. Предложи 1-2 действия. 3-5 предложений.`;
+Обнаружена финансовая ситуация, требующая внимания.
+Опиши проблему с конкретными числами. Предложи 1-2 действия.
+3-5 предложений максимум.`;
   }
 
   // Tier 3: deep
-  return `Ты — финансовый аналитик. Сделай полный финансовый обзор.
+  return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
+Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
 
 УРОВЕНЬ СИТУАЦИИ: ${severity}
+
+ПРАВИЛА АНАЛИЗА:
+- Burn rate > 100% к текущему дню месяца = перерасход
+- Anomaly > 2x среднего = нужен alert
+- Budget utilization > 90% = concern, > 100% = critical
+- Week-over-week рост > 20% = тренд вверх
+
+ДАННЫЕ:
+${snapshotText}
 ${antiRepetition}
 ${outputRules}
 
-Используй ВСЕ доступные инструменты для получения полных данных:
-- get_expenses (сводка за текущий и прошлый месяц)
-- get_budgets (текущие бюджеты)
-- get_technical_analysis (прогнозы и тренды)
-- get_bank_balances (если есть подключённые банки)
-
-Структура ответа:
-1. <b>Общая картина</b> — расходы vs бюджет
-2. <b>Тренды</b> — что растёт, что падает
-3. <b>Проблемные категории</b> — аномалии, превышения
-4. <b>Прогноз</b> — ожидаемые расходы к концу месяца
-5. <b>Рекомендации</b> — максимум 3, конкретные, с числами`;
-}
-
-/**
- * Build collapsible blockquote with source data for transparency
- */
-function buildSourceDataBlock(
-  snapshot: FinancialSnapshot,
-  trigger: TriggerResult,
-  displayCurrency: CurrencyCode,
-): string {
-  const cv = (eur: number) => convertCurrency(eur, BASE_CURRENCY, displayCurrency);
-  const fmt = (eur: number) => formatAmount(cv(eur), displayCurrency);
-  const lines: string[] = [];
-
-  // Trigger info
-  lines.push(`Триггер: ${trigger.type} (${trigger.tier})`);
-
-  // Budget burn rates (top 3 most concerning)
-  const criticalBudgets = snapshot.burnRates
-    .filter((br) => br.status !== 'on_track')
-    .sort((a, b) => b.projected_total / b.budget_limit - a.projected_total / a.budget_limit)
-    .slice(0, 3);
-  if (criticalBudgets.length > 0) {
-    for (const br of criticalBudgets) {
-      const pct = br.budget_limit > 0 ? Math.round((br.spent / br.budget_limit) * 100) : 0;
-      lines.push(
-        `${br.category}: ${formatAmount(br.spent, br.currency as CurrencyCode)}/${formatAmount(br.budget_limit, br.currency as CurrencyCode)} (${pct}%)`,
-      );
-    }
-  }
-
-  // Anomalies
-  if (snapshot.anomalies.length > 0) {
-    for (const a of snapshot.anomalies.slice(0, 3)) {
-      lines.push(`${a.category}: ${fmt(a.current_month_total)} (норма ~${fmt(a.avg_3_month)})`);
-    }
-  }
-
-  // Monthly projection
-  if (snapshot.projection) {
-    lines.push(`Прогноз на месяц: ${fmt(snapshot.projection.projected_total)}`);
-  }
-
-  // TA forecasts for key categories
-  if (snapshot.technicalAnalysis) {
-    const taCats = snapshot.technicalAnalysis.categories
-      .filter(
-        (c) =>
-          c.anomaly.isAnomaly ||
-          c.trend.direction === 'rising' ||
-          c.currentMonthSpent > c.forecasts.ensemble * 0.8,
-      )
-      .slice(0, 3);
-    for (const cat of taCats) {
-      const trendArrow =
-        cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
-      lines.push(
-        `${cat.category}: текущий ${Math.round(cv(cat.currentMonthSpent))}, прогноз ~${Math.round(cv(cat.forecasts.ensemble))} ${trendArrow}`,
-      );
-    }
-  }
-
-  if (lines.length === 0) return '';
-
-  return `\n\n<blockquote expandable>📋 <b>Данные анализа</b>\n${lines.join('\n')}</blockquote>`;
+Сделай полный финансовый обзор на основе данных.
+Структура:
+1. Общая картина (total spend vs budget, budget utilization)
+2. Тренды (week/month comparison)
+3. Проблемные категории (anomalies, exceeded budgets)
+4. Прогноз на конец месяца
+5. Рекомендации (max 3, конкретные, с числами)`;
 }
