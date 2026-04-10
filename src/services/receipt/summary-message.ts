@@ -1,11 +1,11 @@
 // Shared builder for the Telegram message sent after a receipt is saved.
 // Used by both the bot photo handler flow and the Mini App confirm endpoint
 // so that both paths produce an identical summary format.
-import { getCategoryEmoji } from '../../config/category-emojis';
 import type { CurrencyCode } from '../../config/constants';
 import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { pluralize } from '../../utils/pluralize';
+import { resolveCategoryEmojis } from './category-emoji-resolver';
 
 /**
  * Normalized item shape both receipt flows map to before formatting.
@@ -28,8 +28,10 @@ const MAX_MESSAGE_LENGTH = 4000;
 /**
  * Build the receipt summary message: a header with per-category totals and an
  * expandable blockquote containing every item with quantity × price = total.
+ * Async because category emoji resolution may hit HF for unknown categories
+ * (cached in the category_emoji_cache table after the first lookup).
  */
-export function buildReceiptSummaryMessage(items: ReceiptSummaryItem[]): string {
+export async function buildReceiptSummaryMessage(items: ReceiptSummaryItem[]): Promise<string> {
   if (items.length === 0) return '';
 
   const currency = items[0]?.currency ?? ('EUR' as CurrencyCode);
@@ -42,11 +44,14 @@ export function buildReceiptSummaryMessage(items: ReceiptSummaryItem[]): string 
     byCategory.set(item.category, (byCategory.get(item.category) ?? 0) + item.total);
   }
 
+  // Resolve emojis once per unique category (sync exact match + async HF fallback)
+  const emojiByCategory = await resolveCategoryEmojis(Array.from(byCategory.keys()));
+
   const countWord = pluralize(items.length, 'позиция', 'позиции', 'позиций');
   const lines: string[] = [`🧾 <b>Чек обработан — ${items.length} ${countWord}:</b>`];
 
   for (const [cat, total] of byCategory) {
-    const emoji = getCategoryEmoji(cat);
+    const emoji = emojiByCategory.get(cat) ?? '💰';
     lines.push(`${emoji} ${escapeHtml(cat)}: ${formatAmount(total, currency)}`);
   }
 

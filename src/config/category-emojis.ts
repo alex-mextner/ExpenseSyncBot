@@ -1,51 +1,34 @@
 /**
- * Emoji mappings for common expense categories
- * Used in budget and expense displays
+ * Emoji mappings for common expense categories.
+ * Category names in this project are user-defined per group, so this is just
+ * a best-effort lookup for common Russian/English names. Unknown categories
+ * fall back to the default emoji in getCategoryEmoji().
+ *
+ * Rule of thumb for what belongs here: realistic budget lines users actually
+ * track (Каршеринг, Страховка, Мебель, Ветеринар). Not items or one-off
+ * activities (Фрукты, Завтрак, Экскурсия) — those fall under broader
+ * categories like "Продукты" or "Развлечения".
  */
 export const CATEGORY_EMOJIS: Record<string, string> = {
   // Food & Dining
   Еда: '🍔',
   Продукты: '🛒',
-  Ресторан: '🍽️',
   Кафе: '☕',
+  Ресторан: '🍽️',
   Бар: '🍻',
   Кофе: '☕',
-  Завтрак: '🥐',
-  Обед: '🍲',
-  Ужин: '🍽️',
-  Доставка: '🛵',
-  Фастфуд: '🍟',
-  Сладости: '🍬',
-  Снеки: '🍿',
-  Фрукты: '🍎',
-  Овощи: '🥦',
-  Мясо: '🥩',
-  Рыба: '🐟',
-  Напитки: '🥤',
-  Вода: '💧',
   Алкоголь: '🍷',
+  Доставка: '🛵',
   Food: '🍔',
   Groceries: '🛒',
-  Restaurant: '🍽️',
   Cafe: '☕',
+  Restaurant: '🍽️',
   Bar: '🍻',
   Coffee: '☕',
-  Breakfast: '🥐',
-  Lunch: '🍲',
-  Dinner: '🍽️',
-  Delivery: '🛵',
-  FastFood: '🍟',
-  Sweets: '🍬',
-  Snacks: '🍿',
-  Fruits: '🍎',
-  Vegetables: '🥦',
-  Meat: '🥩',
-  Fish: '🐟',
-  Drinks: '🥤',
-  Water: '💧',
   Alcohol: '🍷',
+  Delivery: '🛵',
 
-  // Transportation
+  // Transport
   Транспорт: '🚗',
   Такси: '🚕',
   Бензин: '⛽',
@@ -53,114 +36,89 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   Авто: '🚗',
   Машина: '🚗',
   Автосервис: '🔧',
+  Каршеринг: '🚙',
   Метро: '🚇',
-  Автобус: '🚌',
-  Поезд: '🚆',
-  Каршеринг: '🚗',
-  Самокат: '🛴',
-  Велосипед: '🚲',
+  'Общественный транспорт': '🚌',
   Transport: '🚗',
   Taxi: '🚕',
   Gas: '⛽',
   Parking: '🅿️',
   Car: '🚗',
   CarService: '🔧',
+  Carsharing: '🚙',
   Metro: '🚇',
-  Bus: '🚌',
-  Train: '🚆',
-  Carsharing: '🚗',
-  Scooter: '🛴',
-  Bike: '🚲',
+  PublicTransport: '🚌',
 
   // Entertainment
   Развлечения: '🎮',
   Кино: '🎬',
   Игры: '🎯',
-  Театр: '🎭',
-  Концерт: '🎤',
-  Музей: '🏛️',
-  Выставка: '🖼️',
-  Клуб: '🪩',
-  Стриминг: '📺',
-  Музыка: '🎵',
   Хобби: '🎨',
+  Подписки: '🔄',
+  Концерт: '🎤',
+  Музыка: '🎵',
   Entertainment: '🎮',
   Movies: '🎬',
   Games: '🎯',
-  Theatre: '🎭',
-  Concert: '🎤',
-  Museum: '🏛️',
-  Exhibition: '🖼️',
-  Club: '🪩',
-  Streaming: '📺',
-  Music: '🎵',
   Hobby: '🎨',
+  Subscriptions: '🔄',
+  Concert: '🎤',
+  Music: '🎵',
 
   // Health
   Здоровье: '💊',
   Аптека: '💊',
   Врач: '⚕️',
+  Стоматолог: '🦷',
   Спорт: '⚽',
   Фитнес: '💪',
-  Йога: '🧘',
-  Стоматолог: '🦷',
-  Анализы: '🧪',
   Health: '💊',
   Pharmacy: '💊',
   Doctor: '⚕️',
-  Sport: '⚽',
-  Gym: '💪',
-  Fitness: '💪',
-  Yoga: '🧘',
   Dentist: '🦷',
-  Lab: '🧪',
+  Sport: '⚽',
+  Fitness: '💪',
+  Gym: '💪',
 
   // Shopping
   Одежда: '👕',
   Обувь: '👟',
   Покупки: '🛍️',
   Аксессуары: '👜',
-  Украшения: '💍',
-  Магазин: '🏬',
   Clothes: '👕',
   Shoes: '👟',
   Shopping: '🛍️',
   Accessories: '👜',
-  Jewelry: '💍',
-  Store: '🏬',
 
   // Housing
+  Жильё: '🏠',
   Жилье: '🏠',
   Дом: '🏠',
   Аренда: '🏡',
-  Коммуналка: '🔌',
+  Коммуналка: '💡',
   Ремонт: '🔧',
   Мебель: '🛋️',
-  'Бытовая техника': '📺',
   Хозтовары: '🧹',
   'Бытовая химия': '🧴',
   Housing: '🏠',
   Home: '🏠',
   Rent: '🏡',
-  Utilities: '🔌',
+  Utilities: '💡',
   Repair: '🔧',
   Furniture: '🛋️',
-  Appliances: '📺',
   Household: '🧹',
 
   // Personal
-  Личное: '👤',
-  Подарки: '🎁',
   Красота: '💄',
+  Подарки: '🎁',
+  Личное: '👤',
   Парикмахер: '💇',
   Салон: '💅',
-  СПА: '🧖',
-  Personal: '👤',
-  Gifts: '🎁',
   Beauty: '💄',
+  Gifts: '🎁',
+  Personal: '👤',
   Hairdresser: '💇',
   Salon: '💅',
-  Spa: '🧖',
 
   // Education
   Образование: '📚',
@@ -168,88 +126,61 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   Курсы: '🎓',
   Школа: '🏫',
   Университет: '🎓',
-  'Детский сад': '🧸',
-  Канцелярия: '📝',
   Education: '📚',
   Books: '📖',
   Courses: '🎓',
   School: '🏫',
   University: '🎓',
-  Kindergarten: '🧸',
-  Stationery: '📝',
 
-  // Technology
+  // Tech & Communication
   Техника: '💻',
   Гаджеты: '📱',
-  Софт: '💿',
   Электроника: '🔌',
-  Подписки: '🔄',
+  Связь: '📱',
   Интернет: '🌐',
-  Связь: '📞',
   Телефон: '📱',
-  Мобильная: '📱',
   Tech: '💻',
   Gadgets: '📱',
-  Software: '💿',
   Electronics: '🔌',
-  Subscriptions: '🔄',
+  Mobile: '📱',
   Internet: '🌐',
   Phone: '📱',
-  Mobile: '📱',
 
   // Travel
   Путешествия: '✈️',
   Отель: '🏨',
-  Билеты: '🎫',
-  Отпуск: '🏖️',
-  Экскурсия: '🗺️',
-  Сувениры: '🎁',
   Travel: '✈️',
   Hotel: '🏨',
-  Tickets: '🎫',
-  Vacation: '🏖️',
-  Tour: '🗺️',
-  Souvenirs: '🎁',
 
-  // Family & Kids
+  // Family & Pets
   Дети: '👶',
   Семья: '👨‍👩‍👧',
   Игрушки: '🧸',
+  Питомцы: '🐾',
+  Ветеринар: '🐾',
   Kids: '👶',
   Family: '👨‍👩‍👧',
   Toys: '🧸',
-
-  // Pets
-  Питомцы: '🐾',
-  Ветеринар: '🐾',
-  'Корм для питомцев': '🐾',
   Pets: '🐾',
   Vet: '🐾',
-  PetFood: '🐾',
 
-  // Finance
-  Налоги: '🧾',
-  Страховка: '🛡️',
-  Инвестиции: '📈',
-  Банк: '🏦',
-  Комиссия: '🏦',
-  Кредит: '💳',
-  Штрафы: '🚨',
-  Благотворительность: '❤️',
-  Taxes: '🧾',
-  Insurance: '🛡️',
-  Investments: '📈',
-  Bank: '🏦',
-  Fee: '🏦',
-  Credit: '💳',
-  Fines: '🚨',
-  Charity: '❤️',
-
-  // Work
+  // Work & Finance
   Работа: '💼',
   Офис: '💼',
+  Банк: '🏦',
+  Налоги: '🧾',
+  Страховка: '🛡️',
+  Кредит: '💳',
+  Инвестиции: '📈',
+  Благотворительность: '❤️',
   Work: '💼',
   Office: '💼',
+  Bank: '🏦',
+  Taxes: '🧾',
+  Insurance: '🛡️',
+  Credit: '💳',
+  Investments: '📈',
+  Charity: '❤️',
 
   // Other
   Другое: '📦',
@@ -260,24 +191,34 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   Uncategorized: '💰',
 };
 
+/** Default emoji returned when no match can be found. */
+export const DEFAULT_CATEGORY_EMOJI = '💰';
+
 /**
- * Get emoji for category name (case-insensitive)
- * Returns default emoji if category not found
+ * Look up emoji for a category name by exact (case-insensitive) match.
+ * Returns null if no exact key matches — lets callers distinguish
+ * "found" from "default fallback".
  */
-export function getCategoryEmoji(category: string): string {
-  // Try exact match first
+function lookupExact(category: string): { emoji: string; key: string } | null {
   if (CATEGORY_EMOJIS[category]) {
-    return CATEGORY_EMOJIS[category];
+    return { emoji: CATEGORY_EMOJIS[category], key: category };
   }
 
-  // Try case-insensitive match
   const lowerCategory = category.toLowerCase();
   for (const [key, emoji] of Object.entries(CATEGORY_EMOJIS)) {
     if (key.toLowerCase() === lowerCategory) {
-      return emoji;
+      return { emoji, key };
     }
   }
 
-  // Default emoji for unknown categories
-  return '💰';
+  return null;
+}
+
+/**
+ * Synchronous emoji lookup by exact match. Falls back to the default emoji.
+ * Used in hot paths (budget, sum commands) where async isn't practical.
+ * For semantic fallback via HF, use resolveCategoryEmoji instead.
+ */
+export function getCategoryEmoji(category: string): string {
+  return lookupExact(category)?.emoji ?? DEFAULT_CATEGORY_EMOJI;
 }

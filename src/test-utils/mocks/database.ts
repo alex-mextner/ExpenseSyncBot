@@ -27,6 +27,7 @@ export function mockDatabase(
     'users',
     'expenses',
     'categories',
+    'categoryEmojiCache',
     'pendingExpenses',
     'budgets',
     'chatMessages',

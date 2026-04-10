@@ -74,7 +74,7 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
  * Note: AI-corrected summaries lose qty/price (only name and total survive
  * the LLM round-trip), so those fields are omitted from the flattened items.
  */
-export function formatSummaryMessage(summary: ReceiptSummary): string {
+export async function formatSummaryMessage(summary: ReceiptSummary): Promise<string> {
   const items: ReceiptSummaryItem[] = summary.categories.flatMap((cat) =>
     cat.items.map((item) => ({
       name: item.name,

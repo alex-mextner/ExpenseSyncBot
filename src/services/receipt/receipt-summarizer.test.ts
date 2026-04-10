@@ -2,8 +2,24 @@
 // formatSummaryMessage, validateSummaryTotals, summaryToCategoryMap
 // applyCorrectionWithAI requires HuggingFace; tested separately via fetch mock
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
+import { getCategoryEmoji } from '../../config/category-emojis';
 import type { ReceiptItem } from '../../database/types';
+
+// Stub the async resolver used by summary-message — these tests care only
+// that the flatten-then-delegate logic works, not about HF or the DB cache.
+mock.module('./category-emoji-resolver', () => ({
+  resolveCategoryEmoji: async (category: string) => getCategoryEmoji(category),
+  resolveCategoryEmojis: async (categories: readonly string[]) => {
+    const map = new Map<string, string>();
+    for (const c of categories) {
+      map.set(c, getCategoryEmoji(c));
+    }
+    return map;
+  },
+  getCategoryEmoji,
+}));
+
 import {
   buildSummaryFromItems,
   formatSummaryMessage,
@@ -145,7 +161,7 @@ describe('formatSummaryMessage', () => {
   // and delegates to buildReceiptSummaryMessage. Detailed formatting behavior
   // is covered by summary-message.test.ts; these tests only verify the
   // flattening + delegation works correctly.
-  it('flattens categories into items and preserves names, totals, currency', () => {
+  it('flattens categories into items and preserves names, totals, currency', async () => {
     const summary: ReceiptSummary = {
       categories: [
         {
@@ -159,7 +175,7 @@ describe('formatSummaryMessage', () => {
       totalAmount: 150,
       currency: 'EUR',
     };
-    const msg = formatSummaryMessage(summary);
+    const msg = await formatSummaryMessage(summary);
     expect(msg).toContain('Еда');
     expect(msg).toContain('Молоко');
     expect(msg).toContain('Хлеб');
@@ -167,19 +183,19 @@ describe('formatSummaryMessage', () => {
     expect(msg).toContain('€');
   });
 
-  it('passes currency from summary through to the shared helper', () => {
+  it('passes currency from summary through to the shared helper', async () => {
     const summary: ReceiptSummary = {
       categories: [{ name: 'Еда', items: [{ name: 'Item', total: 10 }] }],
       totalAmount: 10,
       currency: 'RSD',
     };
-    const msg = formatSummaryMessage(summary);
+    const msg = await formatSummaryMessage(summary);
     expect(msg).toContain('RSD');
   });
 
-  it('returns empty string when summary has no categories', () => {
+  it('returns empty string when summary has no categories', async () => {
     const summary: ReceiptSummary = { categories: [], totalAmount: 0, currency: 'EUR' };
-    expect(formatSummaryMessage(summary)).toBe('');
+    expect(await formatSummaryMessage(summary)).toBe('');
   });
 });
 

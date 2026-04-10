@@ -7,6 +7,7 @@ import { BankCredentialsRepository } from './repositories/bank-credentials.repos
 import { BankTransactionsRepository } from './repositories/bank-transactions.repository';
 import { type BudgetReadRepository, BudgetRepository } from './repositories/budget.repository';
 import { CategoryRepository } from './repositories/category.repository';
+import { CategoryEmojiCacheRepository } from './repositories/category-emoji-cache.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
 import { DevTaskRepository } from './repositories/dev-task.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
@@ -31,6 +32,7 @@ export class DatabaseService {
   public groupSpreadsheets: GroupSpreadsheetRepository;
   public users: UserRepository;
   public categories: CategoryRepository;
+  public categoryEmojiCache: CategoryEmojiCacheRepository;
   public pendingExpenses: PendingExpenseRepository;
   public expenses: ExpenseRepository;
   public budgets: BudgetReadRepository;
@@ -55,6 +57,7 @@ export class DatabaseService {
     this.groupSpreadsheets = new GroupSpreadsheetRepository(this.db);
     this.users = new UserRepository(this.db);
     this.categories = new CategoryRepository(this.db);
+    this.categoryEmojiCache = new CategoryEmojiCacheRepository(this.db);
     this.pendingExpenses = new PendingExpenseRepository(this.db);
     this.expenses = new ExpenseRepository(this.db);
     this._budgetWriter = new BudgetRepository(this.db);

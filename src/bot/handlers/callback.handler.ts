@@ -1350,7 +1350,7 @@ async function handleReceiptBulkEdit(
     );
 
     const summary = buildSummaryFromItems(items);
-    const summaryText = formatSummaryMessage(summary);
+    const summaryText = await formatSummaryMessage(summary);
 
     const message = `${summaryText}\n\n✏️ <i>Напишите корректировку текстом, например:</i>\n<code>перенеси салфетки в Хозтовары</code>`;
 
