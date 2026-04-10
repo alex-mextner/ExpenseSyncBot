@@ -20,6 +20,7 @@ import {
   monthTabExists,
   readMonthBudget,
 } from '../../services/google/sheets';
+import { normalizeCategoryName } from '../../utils/fuzzy-search';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import type { GoogleConnectedGroup } from '../guards';
@@ -316,8 +317,7 @@ async function setBudget(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
-  const normalizedCategory =
-    categoryName.charAt(0).toUpperCase() + categoryName.slice(1).toLowerCase();
+  const normalizedCategory = normalizeCategoryName(categoryName);
 
   const categoryExists = database.categories.exists(group.id, normalizedCategory);
 

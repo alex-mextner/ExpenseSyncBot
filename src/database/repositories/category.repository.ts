@@ -1,5 +1,6 @@
 /** Category repository — stores and retrieves expense category names per group */
 import type { Database } from 'bun:sqlite';
+import { normalizeCategoryName } from '../../utils/fuzzy-search';
 import type { Category, CreateCategoryData } from '../types';
 
 export class CategoryRepository {
@@ -31,21 +32,11 @@ export class CategoryRepository {
   }
 
   /**
-   * Normalize category name - capitalize first letter
-   */
-  private normalizeCategory(name: string): string {
-    // Strip trailing dots/punctuation that cause duplicates (Расходыквартиры. → Расходыквартиры)
-    const trimmed = name.trim().replace(/[.\s]+$/, '');
-    if (!trimmed) return trimmed;
-    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
-  }
-
-  /**
    * Create new category
    */
   create(data: CreateCategoryData): Category {
     // Normalize category name
-    const normalizedName = this.normalizeCategory(data.name);
+    const normalizedName = normalizeCategoryName(data.name);
 
     // Check if category already exists
     const existing = this.findByName(data.group_id, normalizedName);

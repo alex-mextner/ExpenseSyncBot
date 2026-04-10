@@ -1298,3 +1298,207 @@ describe('projectCategory with intervalProfile', () => {
     expect(result).toBeGreaterThanOrEqual(500);
   });
 });
+
+// ============================================================
+// projectCategory — intermittent pattern uses TSB forecast
+// ============================================================
+
+describe('projectCategory — intermittent TSB path', () => {
+  // Intermittent classification requires ADI ≥ 1.32 AND cv² < 0.49.
+  // `[100, 100, 100, 0]` and `[0, 100, 100, 120]` satisfy both:
+  //   zeroMonthRatio=0.25 → adi=1.333
+  //   cv²=0.333 resp. 0.344 < 0.49
+  // The patterns described in the task spec (`[100, 0, 80, 0, 60]` etc.)
+  // happen to classify as "lumpy" because the heavier mix of zeros inflates cv²
+  // above 0.49. Lumpy returns currentSpent unconditionally, so TSB is never
+  // invoked for them. To exercise the TSB code path we use 4-month sequences
+  // with a single zero, which reliably land in the intermittent quadrant.
+
+  const FADING: number[] = [100, 100, 100, 0];
+  const GROWING: number[] = [0, 100, 100, 120];
+
+  function intermittentProfile(monthlyTotals: number[]): {
+    ema: number;
+    cv: number;
+    monthsOfData: number;
+    avgTxPerMonth: number;
+    zeroMonthRatio: number;
+    monthlyTotals: number[];
+  } {
+    const n = monthlyTotals.length;
+    const alpha = 2 / (n + 1);
+    let ema = monthlyTotals[0] ?? 0;
+    for (let i = 1; i < n; i++) {
+      ema = alpha * (monthlyTotals[i] ?? 0) + (1 - alpha) * ema;
+    }
+    const mean = monthlyTotals.reduce((s, v) => s + v, 0) / n;
+    const variance = monthlyTotals.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+    const stddev = Math.sqrt(variance);
+    const cv = mean > 0 ? stddev / mean : 0;
+    const zeroMonthRatio = monthlyTotals.filter((v) => v === 0).length / n;
+    return {
+      ema: Math.round(ema * 100) / 100,
+      cv: Math.round(cv * 1000) / 1000,
+      monthsOfData: n,
+      avgTxPerMonth: 2,
+      zeroMonthRatio: Math.round(zeroMonthRatio * 100) / 100,
+      monthlyTotals,
+    };
+  }
+
+  test('pattern classifies as intermittent', () => {
+    // Sanity check that the chosen sequences hit the intermittent quadrant.
+    const profile = intermittentProfile(FADING);
+    expect(profile.zeroMonthRatio).toBe(0.25);
+    // cv² ≈ 0.333 < 0.49
+    expect(profile.cv * profile.cv).toBeLessThan(0.49);
+    // adi = 1/(1-0.25) ≈ 1.333 ≥ 1.32
+    expect(1 / (1 - profile.zeroMonthRatio)).toBeGreaterThanOrEqual(1.32);
+  });
+
+  test('uses TSB forecast instead of simple EMA × activityProb fallback', () => {
+    // Same pattern, once via the TSB path (monthlyTotals set) and once via the
+    // fallback path (monthlyTotals omitted). TSB for [100,100,100,0] yields
+    // prob·amount = 0.7·100 = 70. The fallback uses EMA=60 × activityProb=0.75 = 45.
+    // At day 5 of 30 with a tiny currentSpent, pace influence is negligible and
+    // the projection tracks whichever expectedTotal branch was taken.
+    const profileWithTotals = intermittentProfile(FADING);
+    const { monthlyTotals: _omit, ...profileWithoutTotals } = profileWithTotals;
+
+    const withTsb = projectCategory(10, 5, 30, profileWithTotals, 0);
+    const withoutTsb = projectCategory(10, 5, 30, profileWithoutTotals, 0);
+
+    // TSB (70) should pull the projection much higher than EMA·activityProb (45).
+    expect(withTsb).toBeGreaterThan(withoutTsb);
+    expect(withTsb).toBeGreaterThan(60);
+    expect(withoutTsb).toBeLessThan(55);
+  });
+
+  test('fading demand projects lower than growing demand', () => {
+    // Same early-month scenario (day 5 of 30, small current spend) for both
+    // intermittent profiles. TSB damps the fading series because the latest
+    // period is zero, whereas the growing series sustains probability ≈ 0.755.
+    const fadingProfile = intermittentProfile(FADING);
+    const growingProfile = intermittentProfile(GROWING);
+
+    const fadingProjection = projectCategory(10, 5, 30, fadingProfile, 0);
+    const growingProjection = projectCategory(10, 5, 30, growingProfile, 0);
+
+    expect(fadingProjection).toBeLessThan(growingProjection);
+  });
+
+  test('growing demand projects higher than the naive EMA × activityProb fallback', () => {
+    // Cross-check the other direction: growing demand also benefits from TSB
+    // (rising recent activity boosts probability) vs the flat EMA fallback.
+    const growing = intermittentProfile(GROWING);
+    const { monthlyTotals: _omit, ...fallback } = growing;
+
+    const withTsb = projectCategory(10, 5, 30, growing, 0);
+    const withoutTsb = projectCategory(10, 5, 30, fallback, 0);
+
+    expect(withTsb).toBeGreaterThan(withoutTsb);
+  });
+});
+
+// ============================================================
+// computeBurnRates — interval profile integration (refueling cycle)
+// ============================================================
+
+describe('computeBurnRates — interval profile integration', () => {
+  test('stable ~20-day interval history drives projection via interval formula, not linear pace', () => {
+    const GID = 30;
+    const CATEGORY = 'Машина';
+    const AMOUNT = 50;
+    const AVG_INTERVAL = 20;
+
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [GID, 303030, 'EUR', '["EUR"]'],
+    );
+
+    // Historical transactions: every 20 days, 50 EUR each. Anchor them to the
+    // current month so the simulation day (day 9) has both enough history
+    // inside the 6-month lookback window and current-month activity.
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const firstOfCurrent = new Date(year, month, 1);
+    // Walk backwards 5 intervals of 20 days from day 1 of current month, so the
+    // history sits in the 3 months preceding the current month.
+    const historicalDates: string[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const d = new Date(firstOfCurrent);
+      d.setDate(d.getDate() - i * AVG_INTERVAL);
+      historicalDates.push(format(d, 'yyyy-MM-dd'));
+    }
+    for (const d of historicalDates) {
+      db.run(
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [GID, USER_ID, d, CATEGORY, 'fuel', AMOUNT, 'EUR', AMOUNT],
+      );
+    }
+
+    // Current month: two same-day transactions on day 5 (total 100 EUR).
+    // Same-day pairs don't add a 0-day interval (filtered in buildIntervalProfiles)
+    // but they satisfy the activity gate (needs >=2 tx for sparse categories).
+    const day5 = format(new Date(year, month, 5), 'yyyy-MM-dd');
+    for (let i = 0; i < 2; i++) {
+      db.run(
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [GID, USER_ID, day5, CATEGORY, 'fuel', AMOUNT, 'EUR', AMOUNT],
+      );
+    }
+
+    // Generous budget so normExceedsBudget doesn't shortcut status logic.
+    db.run(
+      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      [GID, CATEGORY, currentMonth, 1000, 'EUR'],
+    );
+
+    // Simulate day 9 — before the 0.33 month-progress stall boundary so
+    // the stall guard cannot fire.
+    const fakeNow = new Date(year, month, 9);
+    const daysInMonth = getDaysInMonth(fakeNow);
+    const fakeToday = format(fakeNow, 'yyyy-MM-dd');
+    const fakeMonthStart = format(startOfMonth(fakeNow), 'yyyy-MM-dd');
+    const fakeCurrentMonth = format(fakeNow, 'yyyy-MM');
+
+    const burnRates = analytics.testComputeBurnRates(
+      GID,
+      fakeNow,
+      fakeCurrentMonth,
+      fakeMonthStart,
+      fakeToday,
+    );
+
+    const car = burnRates.find((br) => br.category === CATEGORY);
+    if (!car) throw new Error(`${CATEGORY} burn rate missing`);
+
+    // spent = 100 EUR (two same-day 50 EUR tx)
+    expect(car.spent).toBe(100);
+
+    // Interval-based formula at day 9:
+    //   daysSinceLastTx = 9 - 5 = 4
+    //   timeToNextFill = max(0, 20 - 4) = 16
+    //   daysRemaining = daysInMonth - 9
+    //   expectedMoreFills = (16 <= daysRemaining)
+    //     ? 1 + floor((daysRemaining - 16) / 20) : 0
+    //   projected = 100 + expectedMoreFills * 50
+    const daysRemaining = daysInMonth - 9;
+    const timeToNextFill = Math.max(0, AVG_INTERVAL - 4);
+    const expectedMoreFills =
+      timeToNextFill <= daysRemaining
+        ? 1 + Math.floor((daysRemaining - timeToNextFill) / AVG_INTERVAL)
+        : 0;
+    const expectedIntervalProjection = 100 + expectedMoreFills * AMOUNT;
+
+    expect(car.projected_total).toBe(expectedIntervalProjection);
+
+    // Linear extrapolation would give (100/9)*daysInMonth ≈ 333 for 30-day months
+    // and is always at least 300 — far above the interval-based estimate.
+    const linearProjection = Math.round((100 / 9) * daysInMonth * 100) / 100;
+    expect(linearProjection).toBeGreaterThan(car.projected_total);
+    expect(linearProjection - car.projected_total).toBeGreaterThan(50);
+  });
+});

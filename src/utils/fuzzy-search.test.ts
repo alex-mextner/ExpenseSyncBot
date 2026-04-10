@@ -17,12 +17,23 @@ describe('normalizeCategoryName', () => {
   it('handles whitespace only', () => expect(normalizeCategoryName('   ')).toBe(''));
   it('handles single character', () => expect(normalizeCategoryName('f')).toBe('F'));
   it('handles unicode first char', () => expect(normalizeCategoryName('еда')).toBe('Еда'));
-  it('does not alter rest of string casing', () =>
-    expect(normalizeCategoryName('fOOD')).toBe('FOOD'));
+  it('lowercases rest after capitalizing first', () =>
+    expect(normalizeCategoryName('fOOD')).toBe('Food'));
   it('handles already trimmed string', () =>
     expect(normalizeCategoryName('Transport')).toBe('Transport'));
   it('handles multi-word input', () =>
     expect(normalizeCategoryName('food and drink')).toBe('Food and drink'));
+  it('lowercases all-caps latin word', () => expect(normalizeCategoryName('BYTES')).toBe('Bytes'));
+  it('lowercases all-caps Cyrillic word', () =>
+    expect(normalizeCategoryName('РАЗВЛЕЧЕНИЯ')).toBe('Развлечения'));
+  it('is idempotent — applying twice yields the same result', () => {
+    const inputs = ['food', 'FOOD', 'fOoD', 'РАЗВЛЕЧЕНИЯ', '  Еда.  ', 'Transport'];
+    for (const input of inputs) {
+      const once = normalizeCategoryName(input);
+      const twice = normalizeCategoryName(once);
+      expect(twice).toBe(once);
+    }
+  });
 });
 
 describe('normalizePhonetic', () => {

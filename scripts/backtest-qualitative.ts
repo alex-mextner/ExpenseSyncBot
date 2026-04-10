@@ -23,92 +23,16 @@
  */
 
 import { Database } from 'bun:sqlite';
-import type { QualitativeMetrics } from '../src/services/analytics/ta/types';
+import type { CurrencyCode } from '../src/config/constants';
 import { analyzeCategory } from '../src/services/analytics/ta/analyzer';
-
-// ═══════════════════════════════════════════════════════════════
-// Inlined projection functions (avoid env var dependency)
-// ═══════════════════════════════════════════════════════════════
-
-interface CategoryProfile {
-  ema: number;
-  cv: number;
-  monthsOfData: number;
-  avgTxPerMonth: number;
-  zeroMonthRatio: number;
-}
-
-interface IntervalProfile {
-  avgInterval: number;
-  intervalCv: number;
-  avgAmount: number;
-  isStable: boolean;
-}
-
-function buildCategoryProfiles(
-  historyRows: { category: string; month: string; monthly_total: number; tx_count: number }[],
-): Map<string, CategoryProfile> {
-  const byCategory = new Map<string, { totals: number[]; txCounts: number[] }>();
-  for (const row of historyRows) {
-    let entry = byCategory.get(row.category);
-    if (!entry) {
-      entry = { totals: [], txCounts: [] };
-      byCategory.set(row.category, entry);
-    }
-    entry.totals.push(row.monthly_total);
-    entry.txCounts.push(row.tx_count);
-  }
-
-  const profiles = new Map<string, CategoryProfile>();
-  for (const [category, { totals, txCounts }] of byCategory) {
-    const n = totals.length;
-    if (n === 0) continue;
-    const alpha = 2 / (n + 1);
-    let ema = totals[0] ?? 0;
-    for (let i = 1; i < n; i++) {
-      ema = alpha * (totals[i] ?? 0) + (1 - alpha) * ema;
-    }
-    const mean = totals.reduce((s, v) => s + v, 0) / n;
-    const variance = totals.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
-    const stddev = Math.sqrt(variance);
-    const cv = mean > 0 ? stddev / mean : 0;
-    const totalTx = txCounts.reduce((s, v) => s + v, 0);
-    const zeroMonths = totals.filter((v) => v === 0).length;
-    profiles.set(category, {
-      ema: Math.round(ema * 100) / 100,
-      cv: Math.round(cv * 1000) / 1000,
-      monthsOfData: n,
-      avgTxPerMonth: Math.round((totalTx / n) * 10) / 10,
-      zeroMonthRatio: Math.round((zeroMonths / n) * 100) / 100,
-    });
-  }
-  return profiles;
-}
-
-function passesActivityGate(
-  txCount: number,
-  daysElapsed: number,
-  daysInMonth: number,
-  profile: CategoryProfile | null,
-): boolean {
-  if (txCount === 0) return false;
-  if (!profile) return txCount >= 2;
-  if (profile.avgTxPerMonth < 5) return txCount >= 2;
-  const monthProgress = daysElapsed / daysInMonth;
-  const expectedTxSoFar = profile.avgTxPerMonth * monthProgress;
-  return txCount >= Math.max(2, Math.ceil(expectedTxSoFar * 0.3));
-}
-
-type DemandPattern = 'smooth' | 'intermittent' | 'erratic' | 'lumpy';
-
-function classifyDemandPattern(profile: CategoryProfile): DemandPattern {
-  const adi = profile.zeroMonthRatio > 0 ? 1 / (1 - profile.zeroMonthRatio) : 1;
-  const cv2 = profile.cv * profile.cv;
-  if (adi >= 1.32 && cv2 >= 0.49) return 'lumpy';
-  if (adi >= 1.32) return 'intermittent';
-  if (cv2 >= 0.49) return 'erratic';
-  return 'smooth';
-}
+import type { QualitativeMetrics } from '../src/services/analytics/ta/types';
+import {
+  buildCategoryProfiles,
+  passesActivityGate,
+  projectCategory,
+} from '../src/services/analytics/forecast-core';
+import type { IntervalProfile } from '../src/services/analytics/types';
+import { convertCurrency } from '../src/services/currency/converter';
 
 // ═══════════════════════════════════════════════════════════════
 // Cumulative spending profiles (day-of-month based)
@@ -233,70 +157,6 @@ function buildIntervalProfilesFromExpenses(
   }
 
   return profiles;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Hybrid projection with all improvements
-// ═══════════════════════════════════════════════════════════════
-
-function hybridProjection(
-  currentSpent: number,
-  daysElapsed: number,
-  daysInMonth: number,
-  profile: CategoryProfile | null,
-  daysSinceLastTx?: number,
-  intervalProfile?: IntervalProfile,
-): number {
-  if (daysElapsed <= 0) return currentSpent;
-
-  // Stall detection: spending stopped, don't extrapolate
-  const monthProgress = daysElapsed / daysInMonth;
-  if (daysSinceLastTx !== undefined && daysSinceLastTx >= 5 && monthProgress > 0.33) {
-    return currentSpent;
-  }
-
-  // Interval-based cycle projection: highest priority for periodic categories
-  if (intervalProfile?.isStable) {
-    const daysRemaining = daysInMonth - daysElapsed;
-    const daysSinceLast = daysSinceLastTx ?? 0;
-    const timeToNextFill = Math.max(0, intervalProfile.avgInterval - daysSinceLast);
-    const expectedMoreFills = timeToNextFill <= daysRemaining
-      ? 1 + Math.floor((daysRemaining - timeToNextFill) / intervalProfile.avgInterval)
-      : 0;
-    const projected = currentSpent + expectedMoreFills * intervalProfile.avgAmount;
-    return Math.max(currentSpent, Math.round(projected * 100) / 100);
-  }
-
-  // Cumulative profile: used for norm anomaly detection, NOT for projection.
-  // Division by small fractions amplifies noise and causes false alerts.
-
-  if (!profile || profile.monthsOfData < 3) return currentSpent;
-
-  const pattern = classifyDemandPattern(profile);
-
-  if (pattern === 'lumpy') return currentSpent;
-
-  if (pattern === 'intermittent') {
-    let activityProb = 1 - profile.zeroMonthRatio;
-    if (monthProgress > 0.3 && currentSpent < profile.ema * 0.1) {
-      activityProb *= monthProgress;
-    }
-    const expectedTotal = profile.ema * activityProb;
-    const paceBased = (currentSpent / daysElapsed) * daysInMonth;
-    const alpha = monthProgress * monthProgress;
-    const projected = alpha * paceBased + (1 - alpha) * Math.max(currentSpent, expectedTotal);
-    return Math.max(currentSpent, Math.round(projected * 100) / 100);
-  }
-
-  const paceBased = (currentSpent / daysElapsed) * daysInMonth;
-
-  if (pattern === 'erratic') {
-    return Math.max(currentSpent, Math.round(paceBased * 100) / 100);
-  }
-
-  const alpha = Math.min(1, monthProgress * monthProgress * (1 + profile.cv));
-  const historyBased = Math.max(currentSpent, profile.ema);
-  return Math.round((alpha * paceBased + (1 - alpha) * historyBased) * 100) / 100;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -595,21 +455,6 @@ function normalizeMonth(raw: string): string {
   return raw.replace(/-(\d)$/, '-0$1');
 }
 
-/** Hardcoded EUR exchange rates for backtest scripts (avoids importing production converter) */
-const EUR_RATES: Record<string, number> = {
-  EUR: 1,
-  USD: 0.92,
-  RSD: 0.0085,
-  RUB: 0.0095,
-  GBP: 1.17,
-};
-
-/** Convert an amount in any supported currency to EUR */
-function toEur(amount: number, currency: string): number {
-  const rate = EUR_RATES[currency] ?? EUR_RATES[currency.toUpperCase()] ?? 1;
-  return Math.round(amount * rate * 100) / 100;
-}
-
 /**
  * Build a per-month budget lookup from DB rows.
  * Key: "monthIndex:category" → budget amount in EUR.
@@ -623,7 +468,10 @@ function buildBudgetLookup(
   for (const b of budgetRows) {
     const norm = normalizeMonth(b.month);
     const arr = byCat.get(b.category) ?? [];
-    arr.push({ month: norm, amount: toEur(b.limit_amount, b.currency) });
+    arr.push({
+      month: norm,
+      amount: convertCurrency(b.limit_amount, b.currency as CurrencyCode, 'EUR'),
+    });
     byCat.set(b.category, arr);
   }
   for (const arr of byCat.values()) {
@@ -816,7 +664,7 @@ function runQualitativeBacktest(
           }
         } else {
           const hybridProj = hasActivity
-            ? hybridProjection(spentSoFar, day, DAYS_PER_MONTH, profile, daysSinceLastTx, intProfile)
+            ? projectCategory(spentSoFar, day, DAYS_PER_MONTH, profile, daysSinceLastTx, intProfile)
             : spentSoFar;
           const hybridSev = classifySeverityDynamic(spentSoFar, hybridProj, budget, cv);
 
@@ -1167,7 +1015,8 @@ function loadRealData(dbPath: string, groupId: number): {
     return nb.localeCompare(na);
   });
   for (const b of sortedBudgetRows) {
-    if (!latestBudget.has(b.category)) latestBudget.set(b.category, toEur(b.limit_amount, b.currency));
+    if (!latestBudget.has(b.category))
+      latestBudget.set(b.category, convertCurrency(b.limit_amount, b.currency as CurrencyCode, 'EUR'));
   }
 
   const expenses: DailyExpense[] = rows.map((row) => ({

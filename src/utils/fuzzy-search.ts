@@ -11,9 +11,10 @@ const logger = createLogger('fuzzy-search');
  */
 export function normalizeCategoryName(name: string): string {
   // Trim whitespace + trailing dots/punctuation that cause category duplicates
+  // Lowercase the rest + capitalize first letter for consistent casing across all entry points
   const trimmed = name.trim().replace(/[.\s]+$/, '');
   if (!trimmed) return trimmed;
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
 }
 
 /** Check if a category name looks like it has multiple words (spaces inside) */
