@@ -24,6 +24,7 @@
 
 import { Database } from 'bun:sqlite';
 import type { QualitativeMetrics } from '../src/services/analytics/ta/types';
+import { analyzeCategory } from '../src/services/analytics/ta/analyzer';
 
 // ═══════════════════════════════════════════════════════════════
 // Inlined projection functions (avoid env var dependency)
@@ -364,7 +365,7 @@ function generateSpendingData(seed: number): DailyExpense[] {
 // ═══════════════════════════════════════════════════════════════
 
 type Severity = 'none' | 'warning' | 'critical' | 'exceeded';
-type AlertKind = 'factual' | 'prognostic' | 'no_budget' | 'norm_anomaly';
+type AlertKind = 'factual' | 'prognostic' | 'no_budget' | 'norm_anomaly' | 'velocity_spike' | 'ta_anomaly' | 'ta_trend_change';
 
 const SEVERITY_ORDER: Record<Severity, number> = { none: 0, warning: 1, critical: 2, exceeded: 3 };
 
@@ -464,9 +465,11 @@ function computeQualitativeMetrics(
   );
   const noBudgetAlerts = alerts.filter((a) => a.kind === 'no_budget');
   // Deduplicate by category-month (first alert per cat-month)
+  // Exclude informational alert kinds from prognostic precision calculation
+  const informationalKinds: AlertKind[] = ['no_budget', 'norm_anomaly', 'velocity_spike', 'ta_anomaly', 'ta_trend_change'];
   const unique = new Map<string, Alert>();
   for (const a of alerts) {
-    if (a.kind === 'no_budget' || a.kind === 'norm_anomaly') continue;
+    if (informationalKinds.includes(a.kind)) continue;
     const key = `${a.month}:${a.category}`;
     if (!unique.has(key)) unique.set(key, a);
   }
@@ -541,8 +544,9 @@ function computeQualitativeMetrics(
   }
 
   // Alert fatigue penalty: >5 alerts/month = fatigue, users stop reading
+  const informationalCount = alerts.filter((a) => informationalKinds.includes(a.kind)).length;
   const alertsPerMonth = totalMonths > 0
-    ? (alerts.length - noBudgetAlerts.length) / totalMonths
+    ? (alerts.length - informationalCount) / totalMonths
     : 0;
   const fatiguePenalty = Math.max(0, 1 - alertsPerMonth / 10);
 
@@ -684,6 +688,9 @@ function runQualitativeBacktest(
 
   // Cumulative profiles
   const cumulativeProfiles = buildCumulativeProfiles(expenses);
+
+  // TA trend direction from previous month (for trend reversal detection)
+  const prevMonthTrendDirection = new Map<string, 'rising' | 'falling' | 'stable'>();
 
   for (let month = 0; month < months; month++) {
     const monthExpenses = expenses.filter((e) => e.month === month);
@@ -851,7 +858,92 @@ function runQualitativeBacktest(
               });
             }
           }
+
+          // Velocity spike: day-over-day spending acceleration
+          // Max once per category per month
+          if (spentSoFar > 20) {
+            const velocityKey = `velocity:${catKey}`;
+            const alreadyFired = noBudgetLastDay.has(velocityKey);
+            if (!alreadyFired) {
+              const cpIndex = CHECK_DAYS.indexOf(day);
+              if (cpIndex > 0) {
+                const prevDay = CHECK_DAYS[cpIndex - 1]!;
+                const prevSpent = monthExpenses
+                  .filter((e) => e.category === cat.name && e.day <= prevDay)
+                  .reduce((s, e) => s + e.amount, 0);
+                const paceToday = (spentSoFar - prevSpent) / (day - prevDay);
+                const pacePrev = prevDay > 0 ? prevSpent / prevDay : 0;
+                if (pacePrev > 0 && paceToday > pacePrev * 1.5) {
+                  noBudgetLastDay.set(velocityKey, day);
+                  hybridAlerts.push({
+                    month, day, category: cat.name, severity: 'warning',
+                    kind: 'velocity_spike',
+                    projected: Math.round((spentSoFar / day) * DAYS_PER_MONTH),
+                    budget, actualMonthEnd: Math.round(actual),
+                    daysRemaining: DAYS_PER_MONTH - day,
+                    wasCorrect: actual > (profile?.ema ?? budget),
+                    overshootPercent: 0,
+                  });
+                }
+              }
+            }
+          }
+
+          // TA anomaly: multi-method anomaly detection (max once per category per month)
+          if (history.length >= 3) {
+            const taAnomalyKey = `ta_anomaly:${catKey}`;
+            if (!noBudgetLastDay.has(taAnomalyKey)) {
+              const ta = analyzeCategory(cat.name, history, { currentMonthSpent: spentSoFar });
+              if (ta.anomaly.anomalyCount >= 2) {
+                noBudgetLastDay.set(taAnomalyKey, day);
+                hybridAlerts.push({
+                  month, day, category: cat.name, severity: 'warning',
+                  kind: 'ta_anomaly',
+                  projected: Math.round(ta.forecasts.ensemble),
+                  budget, actualMonthEnd: Math.round(actual),
+                  daysRemaining: DAYS_PER_MONTH - day,
+                  wasCorrect: actual > (profile?.ema ?? budget) * 1.3,
+                  overshootPercent: 0,
+                });
+              }
+            }
+          }
+
+          // TA trend change: trend reversal detection (max once per category per month)
+          if (history.length >= 3) {
+            const taTrendKey = `ta_trend:${catKey}`;
+            if (!noBudgetLastDay.has(taTrendKey)) {
+              const ta = analyzeCategory(cat.name, history);
+              const prevDirection = prevMonthTrendDirection.get(cat.name);
+              if (
+                prevDirection !== undefined &&
+                ta.trend.confidence >= 0.6 &&
+                ((prevDirection === 'rising' && ta.trend.direction === 'falling') ||
+                  (prevDirection === 'falling' && ta.trend.direction === 'rising'))
+              ) {
+                noBudgetLastDay.set(taTrendKey, day);
+                hybridAlerts.push({
+                  month, day, category: cat.name, severity: 'warning',
+                  kind: 'ta_trend_change',
+                  projected: Math.round(ta.forecasts.ensemble),
+                  budget, actualMonthEnd: Math.round(actual),
+                  daysRemaining: DAYS_PER_MONTH - day,
+                  wasCorrect: ta.trend.direction === 'rising' ? actual > (profile?.ema ?? 0) : actual < (profile?.ema ?? 0),
+                  overshootPercent: 0,
+                });
+              }
+            }
+          }
         }
+      }
+    }
+
+    // Update trend directions for next month
+    for (const cat of categories) {
+      const catHistory = monthlyHistoryByCat.get(cat.name) ?? [];
+      if (catHistory.length >= 3) {
+        const ta = analyzeCategory(cat.name, catHistory);
+        prevMonthTrendDirection.set(cat.name, ta.trend.direction);
       }
     }
   }
@@ -910,6 +1002,9 @@ function printQualitativeReport(result: QualitativeResult): void {
     ['  Factual (spent>=budget)', String(old.metrics.factualCount), String(hybrid.metrics.factualCount)],
     ['  Prognostic (projected)', String(old.metrics.prognosticCount), String(hybrid.metrics.prognosticCount)],
     ['  Norm anomaly', String(old.alerts.filter(a => a.kind === 'norm_anomaly').length), String(hybrid.alerts.filter(a => a.kind === 'norm_anomaly').length)],
+    ['  Velocity spike', String(old.alerts.filter(a => a.kind === 'velocity_spike').length), String(hybrid.alerts.filter(a => a.kind === 'velocity_spike').length)],
+    ['  TA anomaly', String(old.alerts.filter(a => a.kind === 'ta_anomaly').length), String(hybrid.alerts.filter(a => a.kind === 'ta_anomaly').length)],
+    ['  TA trend change', String(old.alerts.filter(a => a.kind === 'ta_trend_change').length), String(hybrid.alerts.filter(a => a.kind === 'ta_trend_change').length)],
     ['  No-budget recommendations', String(old.metrics.noBudgetCount), String(hybrid.metrics.noBudgetCount)],
     ['Prognostic precision', pct(old.metrics.prognosticPrecision), pct(hybrid.metrics.prognosticPrecision)],
     ['Alert days / month', pct(old.metrics.alertDaysPerMonth), pct(hybrid.metrics.alertDaysPerMonth)],
