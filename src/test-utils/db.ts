@@ -39,6 +39,7 @@ export function clearTestDb(db: Database): void {
     DELETE FROM pending_expenses;
     DELETE FROM photo_processing_queue;
     DELETE FROM users;
+    DELETE FROM group_members;   -- before groups (FK: group_members.group_id → groups.id)
     DELETE FROM group_spreadsheets;
     DELETE FROM groups;
   `);

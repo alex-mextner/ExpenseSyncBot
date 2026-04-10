@@ -68,5 +68,12 @@ export function mockDatabase(
       },
     }) as unknown as MockRepo;
   }
+
+  // _budgetWriter mirrors budgets — BudgetManager uses _budgetWriter() function
+  const budgets = db['budgets'];
+  if (!db['_budgetWriter'] && budgets) {
+    db['_budgetWriter'] = budgets;
+  }
+
   return db;
 }

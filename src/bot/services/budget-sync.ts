@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
+import { getBudgetManager } from '../../services/budget-manager';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   type GoogleConn,
@@ -172,6 +173,8 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
 
   const sheetCategories = new Set<string>(sheetBudgets.map((b) => b.category));
 
+  const mgr = getBudgetManager();
+
   // Wrap all DB reads+writes in a transaction for atomicity
   database.transaction(() => {
     for (const b of sheetBudgets) {
@@ -183,11 +186,11 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
       const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
 
       if (!existing) {
-        database.budgets.setBudget({
-          group_id: groupId,
+        mgr.importFromSheet({
+          groupId,
           category: b.category,
           month: currentMonth,
-          limit_amount: b.limit,
+          amount: b.limit,
           currency: b.currency,
         });
         result.added.push({
@@ -197,11 +200,11 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
           currency: b.currency,
         });
       } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
-        database.budgets.setBudget({
-          group_id: groupId,
+        mgr.importFromSheet({
+          groupId,
           category: b.category,
           month: currentMonth,
-          limit_amount: b.limit,
+          amount: b.limit,
           currency: b.currency,
         });
         result.updated.push({
@@ -219,7 +222,7 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
     const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     for (const db of dbBudgets) {
       if (!sheetCategories.has(db.category)) {
-        database.budgets.delete(db.id);
+        mgr.deleteLocal(db.id);
         result.deleted.push({
           month: db.month,
           category: db.category,
@@ -289,6 +292,8 @@ export async function silentSyncBudgets(conn: GoogleConn, groupId: number): Prom
     const budgetsFromSheet = await readMonthBudget(conn, spreadsheetId, currentMonthAbbr);
     if (budgetsFromSheet.length === 0) return 0;
 
+    const mgr = getBudgetManager();
+
     // Wrap all DB writes in a transaction for atomicity
     const syncedCount = database.transaction(() => {
       let count = 0;
@@ -307,11 +312,11 @@ export async function silentSyncBudgets(conn: GoogleConn, groupId: number): Prom
           !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
 
         if (hasChanged) {
-          database.budgets.setBudget({
-            group_id: groupId,
+          mgr.importFromSheet({
+            groupId,
             category: b.category,
             month: currentMonth,
-            limit_amount: b.limit,
+            amount: b.limit,
             currency: b.currency,
           });
           count++;

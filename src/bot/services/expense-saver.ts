@@ -1,115 +1,173 @@
 /** Saving expenses (manual and receipt) to Google Sheets and local DB */
-import { format } from 'date-fns';
+import { endOfMonth, format, startOfMonth } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
+import { getCategoryEmoji } from '../../config/category-emojis';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
+import type { Group, PendingExpense } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
-import { convertCurrency, formatAmount, getExchangeRate } from '../../services/currency/converter';
-import { googleConn } from '../../services/google/sheets';
+import {
+  convertCurrency,
+  convertToEUR,
+  formatAmount,
+  getExchangeRate,
+} from '../../services/currency/converter';
+import { appendExpenseRow, googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from './budget-sync';
 
 const logger = createLogger('expense-saver');
 
-/**
- * Save expense to Google Sheet
- */
-export async function saveExpenseToSheet(
-  userId: number,
-  groupId: number,
-  pendingExpenseId: number,
-): Promise<void> {
-  logger.info('[SAVE] Starting save to sheet...');
+// ── Internal types ──────────────────────────────────────────────────────────
 
-  const user = database.users.findById(userId);
-  const group = database.groups.findById(groupId);
-  const pendingExpense = database.pendingExpenses.findById(pendingExpenseId);
+interface ExpenseWriteData {
+  pendingExpenseId: number;
+  date: string;
+  category: string;
+  comment: string;
+  amount: number;
+  currency: CurrencyCode;
+  eurAmount: number;
+}
 
-  if (!user || !group || !pendingExpense || !group.spreadsheet_id || !group.google_refresh_token) {
-    logger.error(
-      {
-        data: {
-          user: !!user,
-          group: !!group,
-          pendingExpense: !!pendingExpense,
-          spreadsheet_id: !!group?.spreadsheet_id,
-          refresh_token: !!group?.google_refresh_token,
-        },
-      },
-      `[SAVE] ❌ Validation failed`,
-    );
-    throw new Error('Invalid user, group or pending expense');
-  }
+// ── Core: sheet write (no DB) ───────────────────────────────────────────────
 
-  const { convertToEUR } = await import('../../services/currency/converter');
-  const { appendExpenseRow } = await import('../../services/google/sheets');
-
-  // Silent sync budgets from Google Sheets
-  await silentSyncBudgets(googleConn(group), group.id);
-
-  // Calculate EUR amount
+/** Append one expense row to Google Sheets. Does NOT touch local DB. */
+async function writeToSheet(
+  group: Group & { spreadsheet_id: string },
+  pendingExpense: PendingExpense,
+): Promise<ExpenseWriteData> {
   const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);
+  const currentDate = format(new Date(), 'yyyy-MM-dd');
+  const category = pendingExpense.detected_category || 'Без категории';
+  const rate = getExchangeRate(pendingExpense.parsed_currency);
 
-  logger.info(
-    `[SAVE] Converted ${pendingExpense.parsed_amount} ${pendingExpense.parsed_currency} → ${eurAmount} EUR`,
-  );
-
-  // Prepare amounts for each currency
   const amounts: Record<string, number | null> = {};
   for (const currency of group.enabled_currencies) {
     amounts[currency] =
       currency === pendingExpense.parsed_currency ? pendingExpense.parsed_amount : null;
   }
 
-  // Append to sheet
-  const currentDate = format(new Date(), 'yyyy-MM-dd');
-  const category = pendingExpense.detected_category || 'Без категории';
-
   logger.info(
-    { data: { date: currentDate, category, comment: pendingExpense.comment, amounts, eurAmount } },
+    {
+      data: {
+        date: currentDate,
+        category,
+        comment: pendingExpense.comment,
+        amounts,
+        eurAmount,
+      },
+    },
     `[SAVE] Writing to Google Sheet`,
   );
 
-  const rate = getExchangeRate(pendingExpense.parsed_currency);
+  await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
+    date: currentDate,
+    category,
+    comment: pendingExpense.comment,
+    amounts,
+    eurAmount,
+    rate,
+  });
 
-  try {
-    await appendExpenseRow(googleConn(group), group.spreadsheet_id, {
-      date: currentDate,
-      category,
-      comment: pendingExpense.comment,
-      amounts,
-      eurAmount,
-      rate,
-    });
+  logger.info('[SAVE] ✅ Successfully wrote to Google Sheet');
 
-    logger.info('[SAVE] ✅ Successfully wrote to Google Sheet');
-  } catch (error) {
-    logger.error({ err: error }, '[SAVE] ❌ Failed to write to Google Sheet');
-    throw error;
+  return {
+    pendingExpenseId: pendingExpense.id,
+    date: currentDate,
+    category,
+    comment: pendingExpense.comment,
+    amount: pendingExpense.parsed_amount,
+    currency: pendingExpense.parsed_currency,
+    eurAmount,
+  };
+}
+
+// ── Core: DB commit ─────────────────────────────────────────────────────────
+
+/** Commit written expenses to local DB in a single transaction */
+function commitExpensesToDb(groupId: number, userId: number, expenses: ExpenseWriteData[]): void {
+  database.transaction(() => {
+    for (const e of expenses) {
+      database.expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: e.date,
+        category: e.category,
+        comment: e.comment,
+        amount: e.amount,
+        currency: e.currency,
+        eur_amount: e.eurAmount,
+      });
+      database.pendingExpenses.delete(e.pendingExpenseId);
+    }
+  });
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Save a single expense to Google Sheets + local DB.
+ * Used by callback handler for one-off expense confirmations.
+ */
+export async function saveExpenseToSheet(
+  userId: number,
+  groupId: number,
+  pendingExpenseId: number,
+): Promise<void> {
+  return saveExpenseBatch(userId, groupId, [pendingExpenseId]);
+}
+
+/**
+ * Save batch of expenses atomically:
+ * 1. Sync budgets once
+ * 2. Write all rows to Google Sheets
+ * 3. If all succeed → commit to local DB in one transaction
+ * 4. If any fails → throw, nothing committed to DB
+ */
+export async function saveExpenseBatch(
+  userId: number,
+  groupId: number,
+  pendingExpenseIds: number[],
+): Promise<void> {
+  if (pendingExpenseIds.length === 0) return;
+
+  const groupRaw = database.groups.findById(groupId);
+  if (!groupRaw?.spreadsheet_id || !groupRaw.google_refresh_token) {
+    throw new Error('Group not configured for Google Sheets');
+  }
+  const group = groupRaw as typeof groupRaw & { spreadsheet_id: string };
+
+  // Sync budgets once before the batch
+  await silentSyncBudgets(googleConn(group), group.id);
+
+  // Write all to sheets — if any fails, nothing is committed to DB
+  const written: ExpenseWriteData[] = [];
+
+  for (const id of pendingExpenseIds) {
+    const pendingExpense = database.pendingExpenses.findById(id);
+    if (!pendingExpense) {
+      throw new Error(`Pending expense ${id} not found`);
+    }
+
+    logger.info(`[SAVE] Writing expense ${id} (${written.length + 1}/${pendingExpenseIds.length})`);
+    const data = await writeToSheet(group, pendingExpense);
+    written.push(data);
   }
 
-  // Save to expenses table and delete pending — atomic
-  logger.info('[SAVE] Saving to local database...');
-  database.transaction(() => {
-    database.expenses.create({
-      group_id: groupId,
-      user_id: userId,
-      date: currentDate,
-      category,
-      comment: pendingExpense.comment,
-      amount: pendingExpense.parsed_amount,
-      currency: pendingExpense.parsed_currency,
-      eur_amount: eurAmount,
-    });
+  // All sheets writes succeeded — commit to DB atomically
+  commitExpensesToDb(groupId, userId, written);
+  logger.info(`[SAVE] ✅ Committed ${written.length} expenses to DB`);
 
-    // Delete pending expense
-    database.pendingExpenses.delete(pendingExpenseId);
-  });
-  logger.info(`[SAVE] ✅ Deleted pending expense ${pendingExpenseId}`);
-
-  // Check budget limits (sendMessage reads chat from AsyncLocalStorage)
-  await checkBudgetLimit(groupId, category, currentDate);
+  // Check budgets for affected categories (deduplicated)
+  const checkedCategories = new Set<string>();
+  for (const e of written) {
+    if (!checkedCategories.has(e.category)) {
+      checkedCategories.add(e.category);
+      await checkBudgetLimit(groupId, e.category, e.date);
+    }
+  }
 }
 
 /**
@@ -120,19 +178,14 @@ async function checkBudgetLimit(
   category: string,
   currentDate: string,
 ): Promise<void> {
-  const { startOfMonth, endOfMonth, format } = await import('date-fns');
-  const { getCategoryEmoji } = await import('../../config/category-emojis');
-
   const now = new Date(currentDate);
   const currentMonth = format(now, 'yyyy-MM');
   const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
   const monthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
 
-  // Get budget for category
   const budget = database.budgets.getBudgetForMonth(groupId, category, currentMonth);
 
   if (!budget) {
-    // No budget set for this category
     return;
   }
 
@@ -206,9 +259,6 @@ export async function saveReceiptExpenses(
       categoryItems.push(item);
     }
   }
-
-  const { convertToEUR } = await import('../../services/currency/converter');
-  const { appendExpenseRow } = await import('../../services/google/sheets');
 
   const currentDate = format(new Date(), 'yyyy-MM-dd');
 

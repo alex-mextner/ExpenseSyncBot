@@ -84,11 +84,23 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
 
 /**
  * Returns true if the AI response is a skip signal — bot chose to stay silent.
- * Recognized signals: [SKIP], ..., or empty string.
+ * Strict in the prompt (require [SKIP]), forgiving in parsing (accept variations).
+ * Short responses (≤50 chars) use substring match; longer ones require exact match
+ * to avoid swallowing real replies that quote the marker.
  */
 export function isSkipSignal(text: string): boolean {
-  const t = text.trim();
-  return t === '[SKIP]' || t === '...' || t === '';
+  const trimmed = text.trim();
+  if (trimmed === '' || trimmed === '...' || trimmed === '…') return true;
+  const upper = trimmed.toUpperCase();
+  const hasMarker =
+    upper.includes('[SKIP]') ||
+    upper.includes('[ПРОПУСК]') ||
+    upper.includes('[SKIP') ||
+    upper.includes('ПРОПУСК]');
+  if (!hasMarker) return false;
+  // Short text — definitely a skip signal (possibly with stray whitespace/punctuation)
+  // Long text — the marker is likely quoted inside a real answer
+  return trimmed.length <= 50;
 }
 
 const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat

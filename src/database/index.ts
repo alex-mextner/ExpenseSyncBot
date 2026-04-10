@@ -5,13 +5,14 @@ import { BankAccountsRepository } from './repositories/bank-accounts.repository'
 import { BankConnectionsRepository } from './repositories/bank-connections.repository';
 import { BankCredentialsRepository } from './repositories/bank-credentials.repository';
 import { BankTransactionsRepository } from './repositories/bank-transactions.repository';
-import { BudgetRepository } from './repositories/budget.repository';
+import { type BudgetReadRepository, BudgetRepository } from './repositories/budget.repository';
 import { CategoryRepository } from './repositories/category.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
 import { DevTaskRepository } from './repositories/dev-task.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
 import { ExpenseItemsRepository } from './repositories/expense-items.repository';
 import { GroupRepository } from './repositories/group.repository';
+import { GroupMembersRepository } from './repositories/group-members.repository';
 import { GroupSpreadsheetRepository } from './repositories/group-spreadsheet.repository';
 import { MerchantRulesRepository } from './repositories/merchant-rules.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
@@ -29,12 +30,14 @@ import { setupDatabase } from './schema';
 export class DatabaseService {
   private db: Database;
   public groups: GroupRepository;
+  public groupMembers: GroupMembersRepository;
   public groupSpreadsheets: GroupSpreadsheetRepository;
   public users: UserRepository;
   public categories: CategoryRepository;
   public pendingExpenses: PendingExpenseRepository;
   public expenses: ExpenseRepository;
-  public budgets: BudgetRepository;
+  public budgets: BudgetReadRepository;
+  private _budgetWriter: BudgetRepository;
   public chatMessages: ChatMessageRepository;
   public photoQueue: PhotoQueueRepository;
   public receipts: ReceiptRepository;
@@ -53,12 +56,15 @@ export class DatabaseService {
   constructor(db?: Database) {
     this.db = db ?? setupDatabase();
     this.groups = new GroupRepository(this.db);
+    this.groupMembers = new GroupMembersRepository(this.db);
     this.groupSpreadsheets = new GroupSpreadsheetRepository(this.db);
     this.users = new UserRepository(this.db);
     this.categories = new CategoryRepository(this.db);
     this.pendingExpenses = new PendingExpenseRepository(this.db);
     this.expenses = new ExpenseRepository(this.db);
-    this.budgets = new BudgetRepository(this.db);
+    this._budgetWriter = new BudgetRepository(this.db);
+    this.budgets = this._budgetWriter;
+    _budgetWriterRef = this._budgetWriter;
     this.chatMessages = new ChatMessageRepository(this.db);
     this.photoQueue = new PhotoQueueRepository(this.db);
     this.receipts = new ReceiptRepository(this.db);
@@ -126,8 +132,17 @@ export class DatabaseService {
   }
 }
 
+// Module-level reference to full BudgetRepository (with write methods).
+// Populated during DatabaseService construction, before any consumer can call _budgetWriter().
+let _budgetWriterRef: BudgetRepository;
+
 // Export singleton instance
 export const database = new DatabaseService();
+
+/** @internal — only for BudgetManager. Write access to budgets. */
+export function _budgetWriter(): BudgetRepository {
+  return _budgetWriterRef;
+}
 
 // Re-export types
 export * from './types';

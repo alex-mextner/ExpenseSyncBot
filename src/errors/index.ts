@@ -2,7 +2,7 @@
 
 export {
   AgentError,
-  AnthropicError,
+  AiProviderError,
   AppError,
   GoogleSheetsError,
   HuggingFaceError,

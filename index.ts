@@ -10,6 +10,9 @@ import { startOAuthServer } from './src/web/oauth-callback';
 
 const logger = createLogger('main');
 
+// Module-level ref so shutdown handler can stop the bot.
+let stopBotFn: (() => Promise<void>) | null = null;
+
 /**
  * Main application entry point
  */
@@ -33,6 +36,7 @@ async function main() {
 
     logger.info('Starting Telegram bot...');
     const bot = await startBot();
+    stopBotFn = () => bot.stop(3_000).catch(() => {});
 
     // Run one-time year-split migration (idempotent)
     await createStartupMigration(bot)();
@@ -48,6 +52,19 @@ async function main() {
   }
 }
 
+function gracefulShutdown(signal: string): void {
+  logger.info(`Shutting down (${signal})...`);
+  (async () => {
+    if (stopBotFn) await stopBotFn();
+    database.close();
+    logger.info('Goodbye.');
+    process.exit(0);
+  })().catch((err) => {
+    logger.error({ err }, 'Error during shutdown');
+    process.exit(1);
+  });
+}
+
 // Catch unhandled promise rejections and uncaught exceptions
 process.on('unhandledRejection', (reason) => {
   logger.error(
@@ -61,19 +78,8 @@ process.on('uncaughtException', (error) => {
 });
 
 // Handle graceful shutdown
-process.on('SIGINT', () => {
-  logger.info('Shutting down...');
-  database.close();
-  logger.info('Database closed. Goodbye.');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  logger.info('Shutting down (SIGTERM)...');
-  database.close();
-  logger.info('Database closed. Goodbye.');
-  process.exit(0);
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Start the application
 main();

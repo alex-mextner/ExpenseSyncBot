@@ -3,7 +3,9 @@ import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
 import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
+import { getBudgetManager } from '../../services/budget-manager';
 import {
+  type EurMismatchWarning,
   type GoogleConn,
   googleConn,
   type MultiCurrencyRowError,
@@ -77,6 +79,7 @@ export interface SyncResult {
   }>;
   createdCategories: string[];
   errors: MultiCurrencyRowError[];
+  eurMismatches: EurMismatchWarning[];
 }
 
 /**
@@ -90,10 +93,11 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     throw new Error('Group not configured for Google Sheets');
   }
 
-  const { expenses: sheetExpenses, errors } = await readExpensesFromSheet(
-    googleConn(group),
-    group.spreadsheet_id,
-  );
+  const {
+    expenses: sheetExpenses,
+    errors,
+    eurMismatches,
+  } = await readExpensesFromSheet(googleConn(group), group.spreadsheet_id);
 
   logger.info(`[SYNC] Sheet: ${sheetExpenses.length} expenses, ${errors.length} errors`);
 
@@ -124,6 +128,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     updated: [],
     createdCategories: [],
     errors,
+    eurMismatches,
   };
 
   // Create missing categories
@@ -516,6 +521,24 @@ export async function handleSyncCommand(
       );
     }
 
+    if (result.eurMismatches.length > 0) {
+      // N+2 rule: show all if ≤7, otherwise show 5 + "ещё N" (N≥3)
+      const maxVisible = result.eurMismatches.length <= 7 ? result.eurMismatches.length : 5;
+      const lines = result.eurMismatches
+        .slice(0, maxVisible)
+        .map(
+          (m) =>
+            `• Строка ${m.row}: ${m.date} ${m.category} — таблица: ${m.sheetEur}€, пересчёт: ${m.recalcEur}€`,
+        );
+      const extra =
+        result.eurMismatches.length > maxVisible
+          ? `\n...и ещё ${result.eurMismatches.length - maxVisible}`
+          : '';
+      await sendMessage(
+        `⚠️ EUR формулы в таблице расходились с Rate (в БД используются пересчитанные значения):\n${lines.join('\n')}${extra}`,
+      );
+    }
+
     const msg = formatSyncResult(result);
     const suffix =
       currentExpenses.length > 0 ? '\n\n<i>Если что-то пошло не так — /sync rollback</i>' : '';
@@ -566,13 +589,14 @@ async function handleSyncRollback(groupId: number): Promise<void> {
         });
       }
 
+      const mgr = getBudgetManager();
       for (const budget of budgets) {
-        database.budgets.setBudget({
-          group_id: budget.group_id,
+        mgr.importFromSheet({
+          groupId: budget.group_id,
           category: budget.category,
           month: budget.month,
-          limit_amount: budget.limit_amount,
-          currency: budget.currency,
+          amount: budget.limit_amount,
+          currency: budget.currency as CurrencyCode,
         });
       }
     });

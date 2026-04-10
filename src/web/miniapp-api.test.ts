@@ -56,6 +56,8 @@ function stubGroup(overrides?: Partial<Group>): Group {
   return {
     id: 7,
     telegram_group_id: -1001234567,
+    title: null,
+    invite_link: null,
     default_currency: 'RSD',
     enabled_currencies: ['RSD'],
     google_refresh_token: null,

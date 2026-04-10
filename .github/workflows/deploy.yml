@@ -47,6 +47,16 @@ jobs:
             git pull origin main
             git submodule update --init
 
+            echo "📋 Copying .env.stage to worktrees..."
+            if [ -f .env.stage ]; then
+              for wt in .claude/worktrees/*/; do
+                if [ -d "$wt" ] && [ ! -f "${wt}.env" ]; then
+                  cp .env.stage "${wt}.env"
+                  echo "  → ${wt}.env"
+                fi
+              done
+            fi
+
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
 
@@ -75,6 +85,15 @@ jobs:
 
             echo "🔄 Reloading Caddy..."
             caddy reload --config /etc/caddy/Caddyfile
+
+            echo "📜 Ensuring pm2-logrotate module is installed and configured..."
+            if ! /var/www/.bun/bin/pm2 list 2>/dev/null | grep -q pm2-logrotate; then
+              /var/www/.bun/bin/pm2 install pm2-logrotate
+            fi
+            /var/www/.bun/bin/pm2 set pm2-logrotate:max_size 20M
+            /var/www/.bun/bin/pm2 set pm2-logrotate:retain 14
+            /var/www/.bun/bin/pm2 set pm2-logrotate:compress true
+            /var/www/.bun/bin/pm2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
 
             echo "🔄 Reloading PM2 process..."
             /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env

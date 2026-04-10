@@ -1,6 +1,4 @@
-/**
- * Tests for the response validation pass
- */
+/** Tests for the response validation pass — mocks aiComplete from shared completion */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
@@ -10,31 +8,28 @@ mock.module('../../utils/logger.ts', () => ({
   logger: logMock,
 }));
 
-import type Anthropic from '@anthropic-ai/sdk';
-import { validateResponse } from './response-validator';
-
-// Mock Anthropic SDK
-const mockCreate = mock(
-  (_args: Anthropic.Messages.MessageCreateParamsNonStreaming, _opts?: Anthropic.RequestOptions) =>
-    Promise.resolve({
-      content: [{ type: 'text' as const, text: 'APPROVE' }],
-    }),
+const mockAiComplete = mock(() =>
+  Promise.resolve({ text: 'APPROVE', finishReason: 'stop', usage: {}, model: 'test' }),
 );
 
-mock.module('@anthropic-ai/sdk', () => ({
-  default: class MockAnthropic {
-    messages = { create: mockCreate };
-  },
+mock.module('./completion', () => ({
+  aiComplete: mockAiComplete,
+  stripThinkingTags: (t: string) => t,
 }));
+
+import { validateResponse } from './response-validator';
 
 describe('validateResponse', () => {
   beforeEach(() => {
-    mockCreate.mockClear();
+    mockAiComplete.mockClear();
   });
 
   test('approves valid response', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'APPROVE' }],
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'APPROVE',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     const result = await validateResponse('test-key', {
@@ -47,8 +42,11 @@ describe('validateResponse', () => {
   });
 
   test('rejects response with reason', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'REJECT: Ответ без вызова инструментов' }],
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'REJECT: Ответ без вызова инструментов',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     const result = await validateResponse('test-key', {
@@ -64,7 +62,7 @@ describe('validateResponse', () => {
   });
 
   test('rejects on API error when no tools were called (prevents hallucination)', async () => {
-    mockCreate.mockRejectedValueOnce(new Error('API down'));
+    mockAiComplete.mockRejectedValueOnce(new Error('All AI models failed'));
 
     const result = await validateResponse('test-key', {
       userMessage: 'сколько денег на картах',
@@ -79,7 +77,7 @@ describe('validateResponse', () => {
   });
 
   test('approves on API error when tools were called (fail-open)', async () => {
-    mockCreate.mockRejectedValueOnce(new Error('API down'));
+    mockAiComplete.mockRejectedValueOnce(new Error('All AI models failed'));
 
     const result = await validateResponse('test-key', {
       userMessage: 'сколько я потратил?',
@@ -90,9 +88,12 @@ describe('validateResponse', () => {
     expect(result.approved).toBe(true);
   });
 
-  test('sends correct payload to LLM', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'APPROVE' }],
+  test('sends correct payload to aiComplete', async () => {
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'APPROVE',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     await validateResponse('test-key', {
@@ -101,19 +102,29 @@ describe('validateResponse', () => {
       response: 'Вот расходы...',
     });
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    const call = mockCreate.mock.calls[0];
-    expect(call).toBeDefined();
-    const args = call?.[0];
-    expect(args?.max_tokens).toBe(256);
-    const messages = args?.messages as Array<{ content: string }>;
-    expect(messages[0]?.content).toContain('get_expenses, get_budgets');
-    expect(messages[0]?.content).toContain('покажи расходы');
+    expect(mockAiComplete).toHaveBeenCalledTimes(1);
+    type CallOpts = {
+      maxTokens: number;
+      timeoutMs: number;
+      maxRetries: number;
+      messages: Array<{ role: string; content: string }>;
+    };
+    const opts = (mockAiComplete.mock.calls[0] as unknown as [CallOpts])[0];
+    expect(opts.maxTokens).toBe(256);
+    expect(opts.timeoutMs).toBe(15_000);
+    expect(opts.maxRetries).toBe(1);
+    // User message contains tool calls and original message
+    const userMsg = opts.messages.find((m) => m.role === 'user');
+    expect(userMsg?.content).toContain('get_expenses, get_budgets');
+    expect(userMsg?.content).toContain('покажи расходы');
   });
 
   test('handles empty tool calls list', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'REJECT: No tools called' }],
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'REJECT: No tools called',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     await validateResponse('test-key', {
@@ -122,16 +133,18 @@ describe('validateResponse', () => {
       response: 'Итого 100',
     });
 
-    const call = mockCreate.mock.calls[0];
-    expect(call).toBeDefined();
-    const args = call?.[0];
-    const messages = args?.messages as Array<{ content: string }>;
-    expect(messages[0]?.content).toContain('(none — no tools were called)');
+    type MsgOpts = { messages: Array<{ role: string; content: string }> };
+    const opts = (mockAiComplete.mock.calls[0] as unknown as [MsgOpts])[0];
+    const userMsg = opts.messages.find((m) => m.role === 'user');
+    expect(userMsg?.content).toContain('(none — no tools were called)');
   });
 
   test('validation prompt contains mutation rule', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'APPROVE' }],
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'APPROVE',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     await validateResponse('test-key', {
@@ -140,16 +153,19 @@ describe('validateResponse', () => {
       response: 'Запомнил!',
     });
 
-    const call = mockCreate.mock.calls[0];
-    const args = call?.[0];
-    const system = args?.system as string;
-    expect(system).toContain('mutation requests');
-    expect(system).toContain('set_custom_prompt');
+    type MsgOpts = { messages: Array<{ role: string; content: string }> };
+    const opts = (mockAiComplete.mock.calls[0] as unknown as [MsgOpts])[0];
+    const systemMsg = opts.messages.find((m) => m.role === 'system');
+    expect(systemMsg?.content).toContain('mutation requests');
+    expect(systemMsg?.content).toContain('set_custom_prompt');
   });
 
   test('rejects mutation without tool call', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'REJECT: Ответ без вызова set_custom_prompt' }],
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'REJECT: Ответ без вызова set_custom_prompt',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     const result = await validateResponse('test-key', {
@@ -165,8 +181,11 @@ describe('validateResponse', () => {
   });
 
   test('approves valid mutation with tool call', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text' as const, text: 'APPROVE' }],
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'APPROVE',
+      finishReason: 'stop',
+      usage: {},
+      model: 'GLM',
     });
 
     const result = await validateResponse('test-key', {

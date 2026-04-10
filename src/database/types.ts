@@ -9,6 +9,8 @@ export type OAuthClientType = 'legacy' | 'current';
 export interface Group {
   id: number;
   telegram_group_id: number;
+  title: string | null;
+  invite_link: string | null;
   google_refresh_token: string | null;
   spreadsheet_id: string | null;
   default_currency: CurrencyCode;
@@ -27,6 +29,8 @@ export interface CreateGroupData {
 }
 
 export interface UpdateGroupData {
+  title?: string | null;
+  invite_link?: string | null;
   google_refresh_token?: string;
   spreadsheet_id?: string;
   default_currency?: CurrencyCode;
@@ -150,11 +154,6 @@ export interface CreateBudgetData {
   category: string;
   month: string;
   limit_amount: number;
-  currency?: CurrencyCode;
-}
-
-export interface UpdateBudgetData {
-  limit_amount?: number;
   currency?: CurrencyCode;
 }
 

@@ -1,12 +1,37 @@
 /** Budget repository — CRUD and progress tracking for per-category spending budgets */
 import type { Database } from 'bun:sqlite';
-import type { Budget, BudgetProgress, CreateBudgetData, UpdateBudgetData } from '../types';
+import type { Budget, BudgetProgress, CreateBudgetData } from '../types';
 
-export class BudgetRepository {
+/**
+ * Read-only budget operations.
+ * This is the public interface exposed via database.budgets.
+ * Write operations are internal — use BudgetManager instead.
+ */
+export interface BudgetReadRepository {
+  findById(id: number): Budget | null;
+  findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null;
+  getBudgetForMonth(groupId: number, category: string, month: string): Budget | null;
+  getAllBudgetsForMonth(groupId: number, month: string): Budget[];
+  findByGroupId(groupId: number): Budget[];
+  getBudgetProgress(
+    groupId: number,
+    category: string,
+    month: string,
+    spentAmount: number,
+  ): BudgetProgress | null;
+  hasBudget(groupId: number, category: string): boolean;
+}
+
+/**
+ * Full budget repository including write operations.
+ * Write methods are only for BudgetManager — never use directly in feature code.
+ */
+export class BudgetRepository implements BudgetReadRepository {
   constructor(private db: Database) {}
 
   /**
-   * Set or update budget (UPSERT)
+   * Set or update budget (UPSERT).
+   * INTERNAL — use BudgetManager.set() or BudgetManager.importFromSheet() instead.
    */
   setBudget(data: CreateBudgetData): Budget {
     const currency = data.currency || 'EUR';
@@ -31,9 +56,7 @@ export class BudgetRepository {
     return result;
   }
 
-  /**
-   * Find budget by ID
-   */
+  /** Find budget by ID */
   findById(id: number): Budget | null {
     const query = this.db.query<Budget, [number]>(`
       SELECT * FROM budgets WHERE id = ?
@@ -42,9 +65,7 @@ export class BudgetRepository {
     return query.get(id) || null;
   }
 
-  /**
-   * Find budget for specific group, category and month
-   */
+  /** Find budget for specific group, category and month */
   findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null {
     const query = this.db.query<Budget, [number, string, string]>(`
       SELECT * FROM budgets
@@ -54,16 +75,12 @@ export class BudgetRepository {
     return query.get(groupId, category, month) || null;
   }
 
-  /**
-   * Get budget for exact month — no fallback
-   */
+  /** Get budget for exact month — no fallback */
   getBudgetForMonth(groupId: number, category: string, month: string): Budget | null {
     return this.findByGroupCategoryMonth(groupId, category, month);
   }
 
-  /**
-   * Get all budgets for exact month — no inheritance loop
-   */
+  /** Get all budgets for exact month — no inheritance loop */
   getAllBudgetsForMonth(groupId: number, month: string): Budget[] {
     return this.db
       .query<Budget, [number, string]>(
@@ -72,9 +89,7 @@ export class BudgetRepository {
       .all(groupId, month);
   }
 
-  /**
-   * Get all budgets for a group (all months, all categories)
-   */
+  /** Get all budgets for a group (all months, all categories) */
   findByGroupId(groupId: number): Budget[] {
     const query = this.db.query<Budget, [number]>(`
       SELECT * FROM budgets
@@ -86,7 +101,8 @@ export class BudgetRepository {
   }
 
   /**
-   * Delete budget
+   * Delete budget by id.
+   * INTERNAL — use BudgetManager.deleteLocal() instead.
    */
   delete(id: number): boolean {
     const query = this.db.query<void, [number]>(`
@@ -98,7 +114,8 @@ export class BudgetRepository {
   }
 
   /**
-   * Delete budget by group, category and month
+   * Delete budget by group, category and month.
+   * INTERNAL — use BudgetManager.delete() instead.
    */
   deleteByGroupCategoryMonth(groupId: number, category: string, month: string): boolean {
     const query = this.db.query<void, [number, string, string]>(`
@@ -110,44 +127,7 @@ export class BudgetRepository {
     return true;
   }
 
-  /**
-   * Update budget
-   */
-  update(id: number, data: UpdateBudgetData): Budget | null {
-    const fields: string[] = [];
-    const values: (number | string)[] = [];
-
-    if (data.limit_amount !== undefined) {
-      fields.push('limit_amount = ?');
-      values.push(data.limit_amount);
-    }
-
-    if (data.currency !== undefined) {
-      fields.push('currency = ?');
-      values.push(data.currency);
-    }
-
-    if (fields.length === 0) {
-      return this.findById(id);
-    }
-
-    fields.push('updated_at = CURRENT_TIMESTAMP');
-
-    const query = this.db.query<void, (number | string)[]>(`
-      UPDATE budgets
-      SET ${fields.join(', ')}
-      WHERE id = ?
-    `);
-
-    query.run(...values, id);
-
-    return this.findById(id);
-  }
-
-  /**
-   * Get budget progress with actual spending
-   * Requires expenses data to calculate
-   */
+  /** Get budget progress with actual spending */
   getBudgetProgress(
     groupId: number,
     category: string,
@@ -171,9 +151,7 @@ export class BudgetRepository {
     };
   }
 
-  /**
-   * Check if category exists in any budget for group
-   */
+  /** Check if category exists in any budget for group */
   hasBudget(groupId: number, category: string): boolean {
     const query = this.db.query<{ count: number }, [number, string]>(`
       SELECT COUNT(*) as count FROM budgets

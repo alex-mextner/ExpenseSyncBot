@@ -18,6 +18,8 @@ function makeGroup(id: number, telegramGroupId: number): Group {
   return {
     id,
     telegram_group_id: telegramGroupId,
+    title: null,
+    invite_link: null,
     google_refresh_token: null,
     spreadsheet_id: null,
     default_currency: 'EUR',

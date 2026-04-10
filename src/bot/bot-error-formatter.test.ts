@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
-  AnthropicError,
+  AiProviderError,
   AppError,
   GoogleSheetsError,
   HuggingFaceError,
@@ -83,20 +83,20 @@ describe('formatErrorForUser', () => {
     });
   });
 
-  describe('AnthropicError', () => {
+  describe('AiProviderError', () => {
     it('returns AI service unavailable message', () => {
-      const err = new AnthropicError('rate limit', 'RATE_LIMIT_429');
+      const err = new AiProviderError('rate limit', 'RATE_LIMIT_429');
       const msg = formatErrorForUser(err);
       expect(msg.toLowerCase()).toMatch(/ai|ии|сервис|попробуй/);
     });
 
     it('returns non-empty string', () => {
-      const err = new AnthropicError('overloaded', 'OVERLOADED_529');
+      const err = new AiProviderError('overloaded', 'OVERLOADED_529');
       expect(formatErrorForUser(err).length).toBeGreaterThan(5);
     });
 
-    it('AnthropicError and HuggingFaceError produce same message (both AI services)', () => {
-      const anthropicMsg = formatErrorForUser(new AnthropicError('x', 'y'));
+    it('AiProviderError and HuggingFaceError produce same message (both AI services)', () => {
+      const anthropicMsg = formatErrorForUser(new AiProviderError('x', 'y'));
       const hfMsg = formatErrorForUser(new HuggingFaceError('x', 'y'));
       expect(anthropicMsg).toBe(hfMsg);
     });
@@ -151,7 +151,7 @@ describe('formatErrorForUser', () => {
       new OAuthError('x', 'y'),
       new NetworkError('x', 'y'),
       new HuggingFaceError('x', 'y'),
-      new AnthropicError('x', 'y'),
+      new AiProviderError('x', 'y'),
       new AppError('x', 'y'),
       new Error('x'),
       'some string' as unknown as Error,
@@ -168,7 +168,7 @@ describe('formatErrorForUser', () => {
       new OAuthError('x', 'y'),
       new NetworkError('x', 'y'),
       new HuggingFaceError('x', 'y'),
-      new AnthropicError('x', 'y'),
+      new AiProviderError('x', 'y'),
     ];
     for (const err of errors) {
       const msg = formatErrorForUser(err);

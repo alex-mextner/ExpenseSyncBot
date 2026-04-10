@@ -5,6 +5,7 @@ import { database } from '../../database';
 import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { sendOldTransactionCards, skipOldTransactions } from '../../services/bank/sync-service';
 import { sendMessage } from '../../services/bank/telegram-sender';
+import { getBudgetManager } from '../../services/budget-manager';
 import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
 import {
@@ -43,7 +44,7 @@ import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import type { BotInstance, Ctx } from '../types';
-import { getSheetWriteErrorMessage } from './message.handler';
+import { getSheetWriteErrorMessage, trackMembership } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -68,6 +69,9 @@ function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
     database.users.update(telegramId, { group_id: group.id });
     user = database.users.findByTelegramId(telegramId);
   }
+
+  // Track membership for private chat group buttons
+  trackMembership(telegramId, group.id);
 
   return user ? { user, group } : null;
 }
@@ -733,12 +737,11 @@ async function handleBudgetAction(
       const now = new Date();
       const currentMonth = format(now, 'yyyy-MM');
 
-      // Save to database
-      database.budgets.setBudget({
-        group_id: group.id,
+      await getBudgetManager().set({
+        groupId: group.id,
         category: category ?? '',
         month: currentMonth,
-        limit_amount: amount,
+        amount,
         currency,
       });
 
@@ -775,13 +778,12 @@ async function handleBudgetAction(
       const now = new Date();
       const currentMonth = format(now, 'yyyy-MM');
 
-      // Set budget
-      database.budgets.setBudget({
-        group_id: group.id,
+      await getBudgetManager().set({
+        groupId: group.id,
         category: category ?? '',
         month: currentMonth,
-        limit_amount: amount,
-        currency: currency,
+        amount,
+        currency,
       });
 
       const currencySymbol = getCurrencySymbol(currency);

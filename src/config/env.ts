@@ -14,6 +14,7 @@ interface EnvConfig {
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
   HF_TOKEN: string;
+  GEMINI_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
@@ -50,9 +51,10 @@ function validateEnv(): EnvConfig {
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY', false),
     HF_TOKEN: getEnvVariable('HF_TOKEN', false),
+    GEMINI_API_KEY: getEnvVariable('GEMINI_API_KEY', false),
     ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
     AI_BASE_URL: getEnvVariable('AI_BASE_URL', false) || 'https://api.z.ai/api/anthropic',
-    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-5',
+    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-5.1',
     AI_VALIDATION_MODEL: getEnvVariable('AI_VALIDATION_MODEL', false) || 'glm-4.7-flash',
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']

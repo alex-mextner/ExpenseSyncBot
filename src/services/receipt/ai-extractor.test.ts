@@ -1,6 +1,7 @@
-// Tests for ai-extractor.ts — mocks global fetch (HuggingFace SDK uses fetch internally)
+// Tests for ai-extractor.ts — mocks global fetch (both OpenAI and HuggingFace SDKs use fetch)
 // Tests observable behavior: JSON parsing, think-tag stripping, markdown blocks,
 // decimal separator normalization, category validation, fallback behavior, and error paths.
+// Model order: GLM via z.ai (OpenAI SDK, primary) → DeepSeek-R1 via HF (fallback)
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
@@ -13,44 +14,33 @@ mock.module('../../utils/logger.ts', () => ({
 
 import { extractExpensesFromReceipt, repairTruncatedJson } from './ai-extractor';
 
-// The HuggingFace SDK makes two separate fetch calls for each chat completion:
-// 1. GET /api/models/<model>?expand[]=inferenceProviderMapping — fetches provider metadata
-// 2. POST <provider-api-url> — the actual chat completion request
-//
-// We must return appropriate responses for each URL to avoid "Body already used" errors.
+// --- Fetch mock helpers ---
 
-// Fake provider mapping that satisfies the SDK's validation
+// The primary model (GLM via OpenAI SDK) calls z.ai directly: POST .../chat/completions
+// The fallback model (DeepSeek-R1 via HF SDK) makes two calls:
+//   1. GET /api/models/<model>?expand[]=inferenceProviderMapping — provider metadata
+//   2. POST <provider-api-url> — actual chat completion
+
+/** Fake provider mapping for HuggingFace SDK validation */
 function makeProviderMappingResponse(provider: string, modelId: string): Response {
   return new Response(
     JSON.stringify({
       inferenceProviderMapping: {
-        [provider]: {
-          providerId: modelId,
-          status: 'live',
-          task: 'conversational',
-        },
+        [provider]: { providerId: modelId, status: 'live', task: 'conversational' },
       },
     }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   );
 }
 
-// Return the correct provider for a given model — must match MODELS in ai-extractor.ts
-function providerForModel(modelId: string): string {
-  if (modelId.includes('DeepSeek-R1')) return 'novita';
-  return 'fireworks-ai';
-}
-
-// Build a fake chat completion API response that passes SDK validation.
-// The BaseConversationalTask.getResponse() requires: choices (array), created (number),
-// id (string), model (string), usage (object).
+/** Build a fake OpenAI-compatible chat completion response */
 function makeChatResponse(content: string | null, finishReason = 'stop'): Response {
   return new Response(
     JSON.stringify({
       id: 'test-id-123',
       object: 'chat.completion',
       created: 1700000000,
-      model: 'deepseek-ai/DeepSeek-R1-0528',
+      model: 'test-model',
       choices: [{ index: 0, message: { content, role: 'assistant' }, finish_reason: finishReason }],
       usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
     }),
@@ -58,29 +48,30 @@ function makeChatResponse(content: string | null, finishReason = 'stop'): Respon
   );
 }
 
-// Install a URL-aware fetch mock.
-// Calls to HF Hub (/api/models/) get provider metadata.
-// All other calls get the chat completion content.
+/** URL-aware fetch mock — handles both z.ai (OpenAI SDK) and HF SDK calls */
 function mockFetchWithContent(chatContent: string | null): void {
-  globalThis.fetch = mock(async (url: string | URL): Promise<Response> => {
-    const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
+  globalThis.fetch = mock(async (url: string | URL | Request): Promise<Response> => {
+    const urlStr = url instanceof Request ? url.url : typeof url === 'string' ? url : url.href;
+    // HF SDK: provider mapping prefetch
     if (urlStr.includes('/api/models/')) {
       const match = urlStr.match(/\/api\/models\/([^?]+)/);
       const modelId = match?.[1] ?? 'unknown/model';
-      return makeProviderMappingResponse(providerForModel(modelId), modelId);
+      return makeProviderMappingResponse('novita', modelId);
     }
+    // Both SDKs: chat completion endpoint
     return makeChatResponse(chatContent);
   }) as unknown as typeof globalThis.fetch;
 }
 
-// Install a URL-aware fetch mock that throws on chat API calls
+/** URL-aware fetch mock that throws on API calls (both SDKs) */
 function mockFetchWithError(error: Error): void {
-  globalThis.fetch = mock(async (url: string | URL): Promise<Response> => {
-    const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
+  globalThis.fetch = mock(async (url: string | URL | Request): Promise<Response> => {
+    const urlStr = url instanceof Request ? url.url : typeof url === 'string' ? url : url.href;
+    // HF SDK: still need to return provider mapping to avoid premature failure
     if (urlStr.includes('/api/models/')) {
       const match = urlStr.match(/\/api\/models\/([^?]+)/);
       const modelId = match?.[1] ?? 'unknown/model';
-      return makeProviderMappingResponse(providerForModel(modelId), modelId);
+      return makeProviderMappingResponse('novita', modelId);
     }
     throw error;
   }) as unknown as typeof globalThis.fetch;
@@ -188,13 +179,12 @@ describe('extractExpensesFromReceipt', () => {
     {"name_ru": "Хлеб", "quantity": 2, "price": 50, "total": 100, "category": "Еда", "possible_categories": ["Продукты"]},
     {"name_ru": "Обрезанный", "quantity": 1, "price": 200, "tot`;
 
-      // Mock returns truncated response with finish_reason=length
-      globalThis.fetch = mock(async (url: string | URL): Promise<Response> => {
-        const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
+      globalThis.fetch = mock(async (url: string | URL | Request): Promise<Response> => {
+        const urlStr = url instanceof Request ? url.url : typeof url === 'string' ? url : url.href;
         if (urlStr.includes('/api/models/')) {
           const match = urlStr.match(/\/api\/models\/([^?]+)/);
           const modelId = match?.[1] ?? 'unknown/model';
-          return makeProviderMappingResponse(providerForModel(modelId), modelId);
+          return makeProviderMappingResponse('novita', modelId);
         }
         return makeChatResponse(truncatedJson, 'length');
       }) as unknown as typeof globalThis.fetch;
@@ -319,7 +309,6 @@ describe('extractExpensesFromReceipt', () => {
     });
 
     it('fixes European decimal comma (399,99 → 399.99)', async () => {
-      // Craft JSON that uses comma as decimal separator (invalid JSON, but the extractor fixes it)
       const rawJson =
         '{"items":[{"name_ru":"Хлеб","quantity":1,"price":399,99,"total":399,99,"category":"Еда","possible_categories":[]}],"currency":"RSD"}';
       mockFetchWithContent(rawJson);
@@ -476,6 +465,78 @@ describe('extractExpensesFromReceipt', () => {
     });
   });
 
+  describe('prompt leak detection', () => {
+    it('replaces leaked name_ru with name_original', async () => {
+      const leakedJson = JSON.stringify({
+        items: [
+          {
+            name_ru: 'перевод на русский',
+            name_original: 'Banana 1kg',
+            quantity: 1,
+            price: 180,
+            total: 180,
+            category: 'Еда',
+            possible_categories: [],
+          },
+        ],
+        currency: 'RSD',
+      });
+      mockFetchWithContent(leakedJson);
+
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
+      expect(result.items[0]?.name_ru).toBe('Banana 1kg');
+    });
+
+    it('falls back to "Товар (total)" when name_original is null', async () => {
+      const leakedJson = JSON.stringify({
+        items: [
+          {
+            name_ru: 'название товара на русском',
+            name_original: null,
+            quantity: 1.5,
+            price: 180,
+            total: 270,
+            category: 'Еда',
+            possible_categories: [],
+          },
+        ],
+        currency: 'RSD',
+      });
+      mockFetchWithContent(leakedJson);
+
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
+      expect(result.items[0]?.name_ru).toBe('Товар (270)');
+    });
+
+    it('falls back to "Товар (total)" when name_original is also leaked', async () => {
+      const leakedJson = JSON.stringify({
+        items: [
+          {
+            name_ru: 'перевод на русский',
+            name_original: 'оригинальное название товара',
+            quantity: 1,
+            price: 200,
+            total: 200,
+            category: 'Еда',
+            possible_categories: [],
+          },
+        ],
+        currency: 'RSD',
+      });
+      mockFetchWithContent(leakedJson);
+
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
+      expect(result.items[0]?.name_ru).toBe('Товар (200)');
+    });
+
+    it('does not flag normal product names', async () => {
+      mockFetchWithContent(VALID_ITEMS_JSON);
+
+      const result = await extractExpensesFromReceipt('Receipt', [], undefined, 1);
+      expect(result.items[0]?.name_ru).toBe('Молоко');
+    });
+  });
+
   describe('error paths', () => {
     it('throws when AI returns null content', async () => {
       mockFetchWithContent(null);
@@ -527,12 +588,13 @@ describe('extractExpensesFromReceipt', () => {
 
     it('respects maxRetries — each model is tried the given number of times', async () => {
       let apiCallCount = 0;
-      globalThis.fetch = mock(async (url: string | URL): Promise<Response> => {
-        const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
+      globalThis.fetch = mock(async (url: string | URL | Request): Promise<Response> => {
+        const urlStr = url instanceof Request ? url.url : typeof url === 'string' ? url : url.href;
+        // HF SDK: provider mapping prefetch
         if (urlStr.includes('/api/models/')) {
           const match = urlStr.match(/\/api\/models\/([^?]+)/);
           const modelId = match?.[1] ?? 'unknown/model';
-          return makeProviderMappingResponse(providerForModel(modelId), modelId);
+          return makeProviderMappingResponse('novita', modelId);
         }
         apiCallCount++;
         throw new Error('always fails');

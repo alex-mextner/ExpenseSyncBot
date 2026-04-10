@@ -110,11 +110,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   withChatContext,
 }));
 mock.module('../../database', () => ({ database: db }));
-const sendToChat = mock((text: string, options?: Record<string, unknown>) => {
-  sentMessages.push({ text, options });
-  return Promise.resolve({ message_id: 1 } as TelegramMessage);
-});
-mock.module('../send', () => ({ sendToChat }));
+mock.module('./budget-sync', () => ({ silentSyncBudgets: mock(() => Promise.resolve(0)) }));
 
 import { saveReceiptExpenses } from './expense-saver';
 

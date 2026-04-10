@@ -3,6 +3,7 @@ import { database } from '../../database';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
+import { trackMembership } from './message.handler';
 
 const logger = createLogger('photo.handler');
 
@@ -63,6 +64,8 @@ export async function handlePhotoMessage(ctx: Ctx['Message']): Promise<void> {
       group_id: group.id,
     });
   }
+
+  trackMembership(telegramId, group.id);
 
   // Get the largest photo (last element in array)
   // ctx.photo is an array of different sizes of the same image

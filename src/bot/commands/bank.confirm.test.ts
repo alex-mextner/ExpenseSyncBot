@@ -189,6 +189,8 @@ afterEach(() => {
 const group: Group = {
   id: 1,
   telegram_group_id: 100,
+  title: null,
+  invite_link: null,
   google_refresh_token: null,
   spreadsheet_id: null,
   default_currency: 'EUR',

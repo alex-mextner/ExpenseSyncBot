@@ -4,7 +4,7 @@
 
 ExpenseSyncBot is a Telegram bot for tracking expenses and syncing them to Google Sheets. It supports multi-currency expenses, AI-powered expense analysis, category detection, and budget management.
 
-**Tech Stack:** Bun runtime, GramIO (Telegram), SQLite (bun:sqlite), googleapis, Hugging Face inference API, pino (logging), Biome (linting), Lefthook (git hooks)
+**Tech Stack:** Bun runtime, GramIO (Telegram), SQLite (bun:sqlite), googleapis, Anthropic Claude SDK (AI agent with tool calling), node-cron, marked, pino (logging), Biome (linting), Lefthook (git hooks)
 
 ## Common Commands
 
@@ -64,7 +64,11 @@ sqlite3 ./data/expenses.db
 ```plain
 index.ts (entry point)
 ├── src/database/ (initializes on import)
-├── src/web/oauth-callback.ts (OAuth server on port 3000)
+├── src/web/ (HTTP server: OAuth callback, Mini App API, SSE, temp images)
+├── src/services/bank/sync-service.ts (bank sync cron every 30 min)
+├── src/services/receipt/photo-processor.ts (receipt photo background worker)
+├── src/bot/cron.ts (scheduled tasks: exchange rates, budget tab cloning)
+├── src/services/broadcast.ts (scheduled news broadcasts)
 └── src/bot/ (Telegram bot)
 ```
 
@@ -77,12 +81,25 @@ All database operations go through repositories in `src/database/repositories/`:
 - `group.repository.ts` - Group (chat) management
 - `user.repository.ts` - User accounts and auth tokens
 - `expense.repository.ts` - Expense records
+- `expense-items.repository.ts` - Receipt line items per expense
 - `category.repository.ts` - Expense categories
 - `pending-expense.repository.ts` - Expenses awaiting confirmation
 - `budget.repository.ts` - Budget tracking
 - `chat-message.repository.ts` - AI conversation history
+- `bank-connections.repository.ts` - Bank plugin connections (ZenPlugins)
+- `bank-accounts.repository.ts` - Bank accounts from sync
+- `bank-transactions.repository.ts` - Bank transactions from sync
+- `bank-credentials.repository.ts` - Encrypted bank credentials
+- `merchant-rules.repository.ts` - Merchant name → category mapping rules
+- `photo-queue.repository.ts` - Receipt photo processing queue
+- `receipt-items.repository.ts` - Parsed receipt line items
+- `advice-log.repository.ts` - AI daily advice history
+- `group-spreadsheet.repository.ts` - Group → spreadsheet mappings
+- `sync-snapshot.repository.ts` - Sync state snapshots
+- `recurring-pattern.repository.ts` - Detected recurring expense patterns
+- `dev-task.repository.ts` - Dev pipeline task tracking
 
-Access via singleton: `database.users`, `database.expenses`, etc.
+Access via singleton: `database.users`, `database.expenses`, `database.bankConnections`, etc.
 
 #### 2. Google OAuth Flow
 
@@ -99,6 +116,9 @@ Access via singleton: `database.users`, `database.expenses`, etc.
 - [src/services/google/oauth.ts](src/services/google/oauth.ts) - OAuth client, token encryption/decryption
 - [src/services/google/sheets.ts](src/services/google/sheets.ts) - Google Sheets API operations
 - [src/web/oauth-callback.ts](src/web/oauth-callback.ts) - HTTP server for OAuth callback
+- [src/web/miniapp-api.ts](src/web/miniapp-api.ts) - Mini App REST API endpoints
+- [src/web/sse-emitter.ts](src/web/sse-emitter.ts) - Server-Sent Events for real-time updates
+- [src/web/temp-image.handler.ts](src/web/temp-image.handler.ts) - Temporary image serving (rendered tables)
 
 #### 3. Expense Parsing & Multi-Currency Support
 
@@ -111,28 +131,33 @@ The bot parses expense messages in multiple formats (see README.md for examples)
 - Single letter aliases: `100е` (EUR), `100д` (USD) - Russian keyboard shortcuts
 - Space-separated amounts: `1 900 RSD`
 
-**Exchange rates:** `src/services/currency/converter.ts` - hardcoded exchange rates (updated manually)
+**Exchange rates:** `src/services/currency/converter.ts` - exchange rates auto-updated via cron (`src/bot/cron.ts`)
 
 **Category extraction:** First word after amount+currency is category, rest is comment.
 
-#### 4. AI Integration (Hugging Face)
+**Expense recording:** All expense writes (manual, receipt, bank) go through [src/services/expense-recorder.ts](src/services/expense-recorder.ts) — single entry point for writing to Google Sheets + local DB. Higher-level saving logic (confirmation flow, formatting) in [src/bot/services/expense-saver.ts](src/bot/services/expense-saver.ts). Budget sync with sheets in [src/bot/services/budget-sync.ts](src/bot/services/budget-sync.ts).
 
-Bot can answer questions about expenses when mentioned in groups: `@ExpenseSyncBot question`
+#### 4. AI Agent (Anthropic Claude)
 
-**Implementation:** [src/bot/commands/ask.ts](src/bot/commands/ask.ts)
+Bot has a full AI agent with tool calling, accessible by mentioning `@ExpenseSyncBot` in groups.
 
-- Uses Hugging Face Inference API (Qwen/QwQ-32B-Preview or meta-llama)
+**Architecture:** `src/services/ai/`
+
+- [agent.ts](src/services/ai/agent.ts) - `ExpenseBotAgent` — Anthropic Claude agent with tool calling loop. Streams text to Telegram, executes tools, manages conversation. Only final text responses saved to chat history.
+- [tools.ts](src/services/ai/tools.ts) - Tool definitions (get expenses, budgets, stats, bank balances, etc.)
+- [tool-executor.ts](src/services/ai/tool-executor.ts) - Executes AI tool calls against the database
+- [telegram-stream.ts](src/services/ai/telegram-stream.ts) - Streams AI responses to Telegram in real-time via message editing
+- [response-validator.ts](src/services/ai/response-validator.ts) - Validates AI output (no markdown, no hallucinated links)
+- [debug-logger.ts](src/services/ai/debug-logger.ts) - Full request/response logging to `logs/chats/`
+
+**Features:**
+
 - Stores conversation history per group in `chat_messages` table
-- Context includes: recent chat history, all expenses, all budgets, categories
+- Context includes: recent chat history, all expenses, all budgets, categories, bank balances
 - Uses custom system prompt defined per-group in `/prompt` command
-- Daily advice feature (`/advice`) with scheduling
+- Daily advice feature (`/advice`) with scheduling via `src/services/analytics/advice-triggers.ts`
 
-**AI Guidelines:** [src/bot/commands/ask.ts](src/bot/commands/ask.ts) contains thinking guidelines that enforce:
-
-- No fictitious links/sources
-- HTML formatting only (no markdown)
-- Expense analysis based on actual data
-- Budget awareness and recommendations
+**Configuration:** Uses `ANTHROPIC_API_KEY` and optional `AI_BASE_URL` env vars. Model configured in `agent.ts`.
 
 #### 5. State Management for User Flows
 
@@ -147,6 +172,75 @@ Bot uses callback queries (inline keyboards) and message handlers to manage mult
 - [src/bot/keyboards.ts](src/bot/keyboards.ts) - Inline keyboard builders
 - [src/bot/handlers/callback.handler.ts](src/bot/handlers/callback.handler.ts) - Button click handlers
 - [src/bot/handlers/message.handler.ts](src/bot/handlers/message.handler.ts) - Text message handlers
+
+#### 6. Bank Integration (ZenPlugins)
+
+Automatic bank sync via ZenMoney plugin ecosystem. Syncs accounts and transactions from connected banks every 30 minutes.
+
+**Architecture:** `src/services/bank/`
+
+- [registry.ts](src/services/bank/registry.ts) - Auto-discovers banks from `ZenPlugins/` subdirectories by reading `preferences.xml`. No manual registration needed.
+- [runtime.ts](src/services/bank/runtime.ts) - `ZenMoneyShim` — provides the `globalThis.ZenMoney` interface that plugins expect. Backed by `bank_plugin_state` SQLite table for persistent state.
+- [sync-service.ts](src/services/bank/sync-service.ts) - Main sync loop (cron every 30 min). Upserts accounts/transactions, sends confirmation cards to Telegram. Has per-connection mutex to prevent overlapping syncs. Max 3 consecutive failures before disabling.
+- [otp-manager.ts](src/services/bank/otp-manager.ts) - Handles OTP/readLine requests during sync. When a plugin calls `ZenMoney.readLine()`, execution pauses until user sends the code in Telegram. State in SQLite for cross-process sharing.
+- [otp-hints.ts](src/services/bank/otp-hints.ts) - Human-readable hints for OTP input prompts
+- [panel-builder.ts](src/services/bank/panel-builder.ts) - Builds bank status panel text and inline keyboard
+- [prefill.ts](src/services/bank/prefill.ts) - AI pre-fill: batch-suggests category for bank transactions before showing confirmation card (Anthropic API, up to 10 tx per call)
+- [merchant-agent.ts](src/services/bank/merchant-agent.ts) - AI merchant normalization agent: batch-processes unmatched merchant strings into `pending_review` rules. Admin-only (`BOT_ADMIN_CHAT_ID`).
+- [mcc-labels.ts](src/services/bank/mcc-labels.ts) - Human-readable labels for MCC codes
+- [transaction-summary.ts](src/services/bank/transaction-summary.ts) - Builds summary text for old/missed transactions
+
+**Flow:** `/bank` command → setup wizard (select bank → enter credentials → OTP if needed) → `sync-service` runs every 30 min → new transactions shown as confirmation cards → user confirms → expense saved.
+
+**Key tables:** `bank_connections`, `bank_accounts`, `bank_transactions`, `bank_credentials`, `bank_plugin_state`, `merchant_rules`
+
+#### 7. Receipt Processing
+
+Photo-based receipt recognition: QR scanning, OCR, and AI extraction.
+
+**Architecture:** `src/services/receipt/`
+
+- [photo-processor.ts](src/services/receipt/photo-processor.ts) - Background worker that dequeues photos from `photo_queue`, runs QR scan + OCR + AI extraction, sends parsed results as confirmation cards
+- [qr-scanner.ts](src/services/receipt/qr-scanner.ts) - QR code scanning from receipt images
+- [ocr-extractor.ts](src/services/receipt/ocr-extractor.ts) - OCR text extraction from images
+- [ai-extractor.ts](src/services/receipt/ai-extractor.ts) - AI-powered extraction of structured expense data from receipt text
+- [receipt-summarizer.ts](src/services/receipt/receipt-summarizer.ts) - Summarizes parsed receipt data
+- [receipt-fetcher.ts](src/services/receipt/receipt-fetcher.ts) - Fetches receipt data from URLs
+- [link-analyzer.ts](src/services/receipt/link-analyzer.ts) - Analyzes links in messages for receipt URLs
+- [url-validator.ts](src/services/receipt/url-validator.ts) - Validates and sanitizes URLs
+
+**Flow:** User sends photo → `photo.handler.ts` queues it → `photo-processor` picks up → QR scan → OCR → AI extraction → confirmation card with parsed items.
+
+#### 8. Spending Analytics
+
+Financial analytics engine used by AI agent tools and `/stats`.
+
+**Architecture:** `src/services/analytics/`
+
+- [spending-analytics.ts](src/services/analytics/spending-analytics.ts) - Computes financial snapshots: trends, anomalies, budget burn rates, day-of-week patterns, category projections
+- [formatters.ts](src/services/analytics/formatters.ts) - Formats analytics data for AI context and display
+- [recurring-detector.ts](src/services/analytics/recurring-detector.ts) - Detects recurring expense patterns (subscriptions, regular payments) from history
+- [recurring-matcher.ts](src/services/analytics/recurring-matcher.ts) - Matches new expenses against known recurring patterns
+- [advice-triggers.ts](src/services/analytics/advice-triggers.ts) - Scheduling and triggers for AI daily advice
+
+#### 9. Render Service
+
+Server-side rendering of complex data as images (for Telegram messages where text formatting is insufficient).
+
+- [src/services/render/md-table-html.ts](src/services/render/md-table-html.ts) - Generates styled HTML from markdown tables for screenshot rendering
+- [src/services/render/table-renderer.ts](src/services/render/table-renderer.ts) - Table rendering orchestration
+
+#### 10. Polling Handoff (Blue-Green Deploys)
+
+- [src/utils/polling-handoff.ts](src/utils/polling-handoff.ts) - Coordinates long-polling handoff between old and new instances during deploy. Two alternating ports — the incoming instance signals the running one to stop, then takes over. Prevents Telegram 409 Conflict errors.
+
+#### 11. Mini App
+
+Telegram Mini App for expense input with receipt scanning. Located in `miniapp/` — separate Vite + React app.
+
+- Configured via BotFather `MenuButton`
+- Served via Caddy reverse proxy
+- Uses Telegram SDK for native features (QR scanning, theme)
 
 ## Key Implementation Details
 
@@ -194,6 +288,8 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 
 - `/start` - Welcome & setup status
 - `/connect` - OAuth & initial setup
+- `/disconnect` - Disconnect from Google Sheets
+- `/reconnect` - Refresh OAuth
 - `/spreadsheet` - View spreadsheet URL
 - `/stats` - Expense statistics
 - `/sum` (alias: `/total`) - Sum expenses by filters
@@ -201,9 +297,16 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 - `/budget` - Manage budgets
 - `/categories` - List categories
 - `/settings` - View settings
-- `/reconnect` - Refresh OAuth
+- `/bank` - Bank connection setup wizard, status panel, confirmation flow
+- `/scan` - Receipt scanning (photo/link)
 - `/advice` - Get AI daily advice (groups only)
 - `/prompt` - Manage AI system prompt (groups only)
+- `/topic` - Topic management
+- `/push` - Push expenses
+- `/feedback` - Send feedback to admin
+- `/help` - Help text
+- `/ping` - Health check
+- `/dev` - Dev pipeline management
 
 ### Group-Only Mode
 
@@ -216,6 +319,17 @@ Bot works **only in groups** (group / supergroup). Personal chat redirects user 
 Check chat type: `ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'`
 
 ## Important Patterns & Conventions
+
+### Budget Operations — BudgetManager
+
+All budget writes go through `BudgetManager` ([src/services/budget-manager.ts](src/services/budget-manager.ts)). `database.budgets` is read-only at the type level — write methods are inaccessible. Write access via `_budgetWriter()` (internal, underscore-prefixed).
+
+| Method | Direction | Sheets sync? |
+|--------|-----------|-------------|
+| `set()` | User/AI → DB → Sheets | Yes |
+| `delete()` | User/AI → DB → Sheets (zeros out) | Yes |
+| `importFromSheet()` | Sheets → DB | No |
+| `deleteLocal()` | Sheets → DB (removal) | No |
 
 ### Error Handling
 
@@ -303,7 +417,6 @@ const percentage = budget.limit_amount > 0
 Banned alternatives:
 - **`ctx.send()`** — in `CallbackQueryContext` it sends to private chat, not group. Silent bug.
 - **`bot.api.sendMessage()`** — bypasses `AsyncLocalStorage` context, loses `message_thread_id` injection. Messages go to General instead of the topic.
-- **`sendToChat`** — removed, was a redundant wrapper.
 
 ```ts
 import { sendMessage } from '../../services/bank/telegram-sender';
@@ -354,11 +467,7 @@ await withChatContext(group.telegram_group_id, threadId, async () => {
 
 ### Testing
 
-Currently minimal tests. Test file example: [src/services/currency/parser.test.ts](src/services/currency/parser.test.ts)
-
-```bash
-bun test
-```
+Tests run via isolated parallel runner (`scripts/test-runner.ts`): `bun run test`. See Development Philosophy > Testing section for full rules.
 
 ## Environment Variables
 
@@ -369,13 +478,16 @@ Optional features that depend on an env var must deactivate gracefully when the 
 Required in `.env` (see [.env.example](.env.example)):
 
 - `BOT_TOKEN` - from @BotFather
+- `BOT_USERNAME` - bot username without @ (default: `ExpenseSyncBot`)
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` - from Google Cloud Console
 - `GOOGLE_REDIRECT_URI` - OAuth callback URL
 - `OAUTH_SERVER_PORT` - default 3000
 - `DATABASE_PATH` - SQLite database path
 - `ENCRYPTION_KEY` - 32-byte hex (generate: `openssl rand -hex 32`)
 - `NODE_ENV` - development/production
-- `HF_TOKEN` - Hugging Face API token (for AI features)
+- `ANTHROPIC_API_KEY` - Anthropic API key (for AI agent)
+- `AI_BASE_URL` - optional, custom Anthropic API base URL
+- `BOT_ADMIN_CHAT_ID` - admin Telegram chat ID (for merchant-agent notifications, feedback forwarding)
 
 ## Production Deployment
 
@@ -420,7 +532,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
-12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendToChat()` from `src/bot/send.ts`. See "Sending Messages" section above.
+12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendMessage()` from `src/services/bank/telegram-sender.ts`. See "Sending Messages" section above.
 13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
 
 ## When Modifying Code
@@ -429,7 +541,9 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 - **Database changes:** Add migration in [src/database/schema.ts](src/database/schema.ts), never modify existing migrations
 - **New repositories:** Add to [src/database/index.ts](src/database/index.ts) and create in `src/database/repositories/`
 - **Google Sheets changes:** Test locally first, ensure backward compatibility with existing sheets
-- **AI prompt changes:** Update in [src/bot/commands/ask.ts](src/bot/commands/ask.ts), consider existing user prompts in database
+- **AI changes:** Agent logic in `src/services/ai/`, tool definitions in `tools.ts`, tool execution in `tool-executor.ts`. System prompt per group stored in DB (`/prompt` command).
+- **Bank plugin changes:** Add ZenPlugins subdirectory, `registry.ts` auto-discovers it. Bank flow in `src/services/bank/`, command handler in `src/bot/commands/bank.ts`.
+- **Receipt processing changes:** Pipeline in `src/services/receipt/`, photo handler in `src/bot/handlers/photo.handler.ts`
 
 ---
 

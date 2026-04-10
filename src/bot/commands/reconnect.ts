@@ -5,6 +5,8 @@ import { google } from 'googleapis';
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
+import { sendMessage } from '../../services/bank/telegram-sender';
+import { getBudgetManager } from '../../services/budget-manager';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
 import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
@@ -21,7 +23,6 @@ import {
 } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
-import { sendToChat } from '../send';
 import type { Ctx } from '../types';
 import { importExpensesFromSheet } from './sync';
 
@@ -37,18 +38,18 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
   const isGroup = chatType === 'group' || chatType === 'supergroup';
 
   if (!chatId || !isGroup) {
-    await sendToChat('❌ Эта команда работает только в группах.');
+    await sendMessage('❌ Эта команда работает только в группах.');
     return;
   }
 
   const group = database.groups.findByTelegramGroupId(chatId);
   if (!group) {
-    await sendToChat('❌ Группа не настроена. Используй /connect');
+    await sendMessage('❌ Группа не настроена. Используй /connect');
     return;
   }
 
   if (!group.spreadsheet_id) {
-    await sendToChat('❌ Таблица не создана. Используй /connect для первоначальной настройки.');
+    await sendMessage('❌ Таблица не создана. Используй /connect для первоначальной настройки.');
     return;
   }
 
@@ -57,7 +58,9 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
   const authUrl = generateAuthUrl(group.id);
   const authKeyboard = new InlineKeyboard().url('🔐 Переподключить Google', authUrl);
 
-  await sendToChat(
+  // Critical send: if this fails the user has no way to recover.
+  // sendMessage returns null on error (telegram-sender swallows + logs).
+  const sent = await sendMessage(
     '🔄 <b>Переподключение Google аккаунта</b>\n\n' +
       'Таблица и данные сохранятся — обновится только авторизация.\n\n' +
       '1. Нажми на кнопку ниже\n' +
@@ -65,6 +68,11 @@ export async function handleReconnectCommand(ctx: Ctx['Command']): Promise<void>
       '3. Вернись сюда — бот синхронизирует данные',
     { reply_markup: authKeyboard },
   );
+
+  if (!sent) {
+    logger.error(`[CMD] Failed to deliver /reconnect OAuth prompt for group ${group.id}`);
+    return;
+  }
 
   // OAuth flow continues asynchronously: the callback server saves the token to DB,
   // then notifies the group. After that, fullSyncAfterReconnect can be triggered
@@ -111,11 +119,11 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
   };
 
   try {
-    await sendToChat('🔄 Полная синхронизация...');
+    await sendMessage('🔄 Полная синхронизация...');
 
     const freshGroup = database.groups.findById(groupId);
     if (!freshGroup?.google_refresh_token || !freshGroup.spreadsheet_id) {
-      await sendToChat('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
+      await sendMessage('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
       return;
     }
 
@@ -150,10 +158,10 @@ export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: numbe
     report.budgetTabsCreated = budgetResult.tabsCreated;
     report.budgetRowsWritten = budgetResult.rowsWritten;
 
-    await sendToChat(formatFullSyncReport(report));
+    await sendMessage(formatFullSyncReport(report));
   } catch (err) {
     logger.error({ err }, '[RECONNECT] Full sync failed');
-    await sendToChat(
+    await sendMessage(
       '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' + 'Попробуй /sync вручную позже.',
     );
   }
@@ -322,11 +330,11 @@ async function importBudgetsFromSheet(group: Group): Promise<number> {
         !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
 
       if (hasChanged) {
-        database.budgets.setBudget({
-          group_id: group.id,
+        getBudgetManager().importFromSheet({
+          groupId: group.id,
           category: b.category,
           month: monthStr,
-          limit_amount: b.limit,
+          amount: b.limit,
           currency: b.currency,
         });
         imported++;

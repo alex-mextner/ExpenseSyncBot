@@ -52,6 +52,8 @@ const CONN: BankConnection = {
 const GROUP: Group = {
   id: 1,
   telegram_group_id: -1001234,
+  title: null,
+  invite_link: null,
   default_currency: 'RSD',
   enabled_currencies: ['RSD', 'EUR'],
   custom_prompt: null,

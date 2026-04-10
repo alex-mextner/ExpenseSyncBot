@@ -48,6 +48,45 @@ expense-sync-bot.invntrm.ru {
 	}
 }
 
+expense-sync-stage-bot.invntrm.ru {
+	@backend path /callback* /health /api/*
+	handle @backend {
+		reverse_proxy localhost:3312 {
+			lb_try_duration 10s
+			lb_try_interval 500ms
+		}
+	}
+
+	handle {
+		respond "Stage Bot" 200
+	}
+
+	log {
+		output file /var/log/caddy/expensesyncbot-stage.log
+		format console
+	}
+}
+
+expense-sync-stage-bot-app.invntrm.ru {
+	handle /api/* {
+		reverse_proxy localhost:3312 {
+			lb_try_duration 10s
+			lb_try_interval 500ms
+		}
+	}
+
+	handle {
+		root * /var/www/ExpenseSyncBot/miniapp/dist
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output file /var/log/caddy/miniapp-stage.log
+		format console
+	}
+}
+
 expense-sync-bot-app.invntrm.ru {
 	# API requests proxied to the Bun server — retry during PM2 reload
 	# Must be in a separate handle block BEFORE the SPA catch-all,

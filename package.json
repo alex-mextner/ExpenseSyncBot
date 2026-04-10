@@ -28,8 +28,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
-    "@huggingface/inference": "^4.13.3",
     "@octokit/rest": "^22.0.1",
     "big.js": "^7.0.1",
     "currency.js": "^2.0.4",
@@ -39,6 +37,7 @@
     "jsqr": "^1.4.0",
     "marked": "^17.0.5",
     "node-cron": "^4.2.1",
+    "openai": "^6.34.0",
     "pino": "^10.3.1",
     "playwright": "^1.56.1",
     "qr": "^0.5.2",

@@ -2,9 +2,8 @@
  * Post-response validation: a lightweight LLM pass that checks
  * the agent's answer for hallucinations, missing tool calls, and data integrity.
  */
-import Anthropic from '@anthropic-ai/sdk';
-import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger.ts';
+import { aiComplete } from './completion';
 
 const logger = createLogger('response-validator');
 
@@ -41,7 +40,7 @@ interface ValidationInput {
 export type ValidationResult = { approved: true } | { approved: false; reason: string };
 
 export async function validateResponse(
-  apiKey: string,
+  _apiKey: string,
   input: ValidationInput,
 ): Promise<ValidationResult> {
   const toolCallsSummary =
@@ -54,26 +53,16 @@ TOOL CALLS MADE: ${toolCallsSummary}
 ASSISTANT RESPONSE (first 2000 chars):
 ${input.response.substring(0, 2000)}`;
 
-  const anthropic = new Anthropic({
-    apiKey,
-    baseURL: env.AI_BASE_URL || undefined,
-  });
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), VALIDATION_TIMEOUT_MS);
-
   try {
-    const result = await anthropic.messages.create(
-      {
-        model: env.AI_VALIDATION_MODEL,
-        max_tokens: VALIDATION_MAX_TOKENS,
-        system: VALIDATION_PROMPT,
-        messages: [{ role: 'user', content: userContent }],
-      },
-      { signal: controller.signal },
-    );
-
-    const text = result.content[0]?.type === 'text' ? result.content[0].text.trim() : '';
+    const { text } = await aiComplete({
+      messages: [
+        { role: 'system', content: VALIDATION_PROMPT },
+        { role: 'user', content: userContent },
+      ],
+      maxTokens: VALIDATION_MAX_TOKENS,
+      timeoutMs: VALIDATION_TIMEOUT_MS,
+      maxRetries: 1,
+    });
 
     logger.info(`[VALIDATOR] Result: ${text}`);
 
@@ -94,7 +83,5 @@ ${input.response.substring(0, 2000)}`;
     }
     // Tools were called → data is probably real, approve by default
     return { approved: true };
-  } finally {
-    clearTimeout(timeout);
   }
 }

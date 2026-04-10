@@ -33,6 +33,8 @@ const mockGroups = {
   findById: mock((): Group | null => ({
     id: 1,
     telegram_group_id: 456,
+    title: null,
+    invite_link: null,
     google_refresh_token: null,
     spreadsheet_id: null,
     default_currency: 'EUR',
@@ -91,6 +93,80 @@ const mockBankTransactions = {
   ]),
 };
 
+const BANK_ACCOUNTS_FIXTURE = [
+  {
+    id: 1,
+    connection_id: 10,
+    title: 'TBC Card',
+    balance: 5000,
+    currency: 'GEL',
+    type: 'card',
+    is_excluded: 0,
+  },
+  {
+    id: 2,
+    connection_id: 10,
+    title: 'TBC Savings',
+    balance: 20000,
+    currency: 'GEL',
+    type: 'savings',
+    is_excluded: 0,
+  },
+  {
+    id: 3,
+    connection_id: 20,
+    title: 'Kaspi Card',
+    balance: 100000,
+    currency: 'KZT',
+    type: 'card',
+    is_excluded: 0,
+  },
+  {
+    id: 4,
+    connection_id: 30,
+    title: 'Monobank UAH',
+    balance: 3000,
+    currency: 'UAH',
+    type: 'card',
+    is_excluded: 0,
+  },
+];
+
+const BANK_CONNECTIONS_MAP: Record<
+  number,
+  { id: number; bank_name: string; display_name: string }
+> = {
+  10: { id: 10, bank_name: 'tbc-ge', display_name: 'TBC Bank' },
+  20: { id: 20, bank_name: 'kaspi', display_name: 'Kaspi Bank' },
+  30: { id: 30, bank_name: 'monobank', display_name: 'Monobank' },
+};
+
+const mockBankAccounts = {
+  findByGroupId: mock(() => BANK_ACCOUNTS_FIXTURE),
+};
+
+const mockBankConnections = {
+  findById: mock((id: number) => BANK_CONNECTIONS_MAP[id] ?? null),
+  findActiveByGroupId: mock(() => []),
+};
+
+const mockRecurringPatterns = {
+  findById: mock((id: number) => ({
+    id,
+    group_id: 1,
+    category: `Cat${id}`,
+    expected_amount: 100,
+    currency: 'EUR',
+    expected_day: 1,
+    next_expected_date: null,
+    last_seen_date: null,
+    status: 'active',
+  })),
+  updateStatus: mock(() => {}),
+  delete: mock(() => {}),
+  findAllByGroupId: mock(() => []),
+};
+
 mock.module('../../database', () => ({
   database: mockDatabase({
     expenses: mockExpenses,
@@ -99,6 +175,9 @@ mock.module('../../database', () => ({
     groups: mockGroups,
     users: mockUsers,
     bankTransactions: mockBankTransactions,
+    bankAccounts: mockBankAccounts,
+    bankConnections: mockBankConnections,
+    recurringPatterns: mockRecurringPatterns,
   }),
 }));
 
@@ -116,6 +195,16 @@ mock.module('../google/sheets', () => ({
 const mockRecord = mock(() => Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
 mock.module('../expense-recorder', () => ({
   getExpenseRecorder: () => ({ record: mockRecord }),
+}));
+
+// Mock BudgetManager (used by set_budget and delete_budget tools)
+const mockBudgetManagerSet = mock(() => Promise.resolve({ sheetsSynced: false }));
+const mockBudgetManagerDelete = mock(() => Promise.resolve({ sheetsSynced: false }));
+mock.module('../budget-manager', () => ({
+  getBudgetManager: () => ({
+    set: mockBudgetManagerSet,
+    delete: mockBudgetManagerDelete,
+  }),
 }));
 
 // Mock budget sync — prevents dynamic import from pulling in sheets
@@ -160,6 +249,14 @@ function resetAllMocks() {
   mockBudgets.findByGroupCategoryMonth.mockReset();
   mockBudgets.findByGroupCategoryMonth.mockReturnValue(null);
 
+  mockBudgetManagerSet.mockReset();
+  mockBudgetManagerSet.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
+  mockBudgetManagerDelete.mockReset();
+  mockBudgetManagerDelete.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
+
+  mockRecord.mockReset();
+  mockRecord.mockReturnValue(Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+
   mockCategories.findByGroupId.mockReset();
   mockCategories.findByGroupId.mockReturnValue([]);
   mockCategories.findByName.mockReset();
@@ -177,6 +274,8 @@ function resetAllMocks() {
   mockGroups.findById.mockReturnValue({
     id: 1,
     telegram_group_id: 456,
+    title: null,
+    invite_link: null,
     google_refresh_token: null,
     spreadsheet_id: null,
     default_currency: 'EUR',
@@ -233,6 +332,30 @@ function resetAllMocks() {
       connection_id: 1,
     },
   ]);
+
+  mockBankAccounts.findByGroupId.mockReset();
+  mockBankAccounts.findByGroupId.mockReturnValue(BANK_ACCOUNTS_FIXTURE);
+  mockBankConnections.findById.mockReset();
+  mockBankConnections.findById.mockImplementation((id: number) => BANK_CONNECTIONS_MAP[id] ?? null);
+  mockBankConnections.findActiveByGroupId.mockReset();
+  mockBankConnections.findActiveByGroupId.mockReturnValue([]);
+
+  mockRecurringPatterns.findById.mockReset();
+  mockRecurringPatterns.findById.mockImplementation((id: number) => ({
+    id,
+    group_id: 1,
+    category: `Cat${id}`,
+    expected_amount: 100,
+    currency: 'EUR',
+    expected_day: 1,
+    next_expected_date: null,
+    last_seen_date: null,
+    status: 'active',
+  }));
+  mockRecurringPatterns.updateStatus.mockReset();
+  mockRecurringPatterns.delete.mockReset();
+  mockRecurringPatterns.findAllByGroupId.mockReset();
+  mockRecurringPatterns.findAllByGroupId.mockReturnValue([]);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -284,7 +407,7 @@ describe('executeTool routing', () => {
   test('routes set_budget to correct handler', async () => {
     const result = await executeTool('set_budget', { category: 'Food', amount: 500 }, ctx);
     expect(result.success).toBe(true);
-    expect(mockBudgets.setBudget).toHaveBeenCalled();
+    expect(mockBudgetManagerSet).toHaveBeenCalled();
   });
 
   test('routes delete_expense to correct handler', async () => {
@@ -668,6 +791,76 @@ describe('executeAddExpense', () => {
   });
 });
 
+describe('add_expense batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch add_expense with items array records each expense', async () => {
+    const result = await executeTool(
+      'add_expense',
+      {
+        items: [
+          { amount: 300, category: 'Еда', comment: 'кофе' },
+          { amount: 800, category: 'Еда', comment: 'обед' },
+          { amount: 500, category: 'Транспорт', comment: 'такси' },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockRecord).toHaveBeenCalledTimes(3);
+  });
+
+  test('single add_expense still works (backward compat)', async () => {
+    const result = await executeTool(
+      'add_expense',
+      { amount: 300, category: 'Еда', comment: 'кофе' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(result.output).toContain('Expense added');
+  });
+
+  test('batch over 20 items is rejected', async () => {
+    const items = Array.from({ length: 21 }, (_, i) => ({
+      amount: 100,
+      category: `Cat${i}`,
+    }));
+
+    const result = await executeTool('add_expense', { items }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('20');
+  });
+
+  test('items array takes priority over top-level fields', async () => {
+    const result = await executeTool(
+      'add_expense',
+      {
+        amount: 999,
+        category: 'IGNORED',
+        items: [{ amount: 42, category: 'Real', comment: 'test' }],
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('1/1 succeeded');
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const calls = mockRecord.mock.calls as unknown as Array<
+      [number, number, { category: string; amount: number }]
+    >;
+    expect(calls[0]?.[2].category).toBe('Real');
+    expect(calls[0]?.[2].amount).toBe(42);
+  });
+
+  test('empty items array returns error', async () => {
+    const result = await executeTool('add_expense', { items: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeDeleteExpense', () => {
   beforeEach(resetAllMocks);
 
@@ -722,6 +915,94 @@ describe('executeDeleteExpense', () => {
   });
 });
 
+describe('delete_expense batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch delete with expense_id array', async () => {
+    mockExpenses.findById.mockImplementation(((id: number) => ({
+      id,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: 'test',
+      amount: 10,
+      currency: 'EUR' as const,
+      eur_amount: 10,
+      receipt_id: null,
+      created_at: '',
+    })) as unknown as () => Expense | null);
+
+    const result = await executeTool('delete_expense', { expense_id: [10, 11, 12] }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockExpenses.delete).toHaveBeenCalledTimes(3);
+  });
+
+  test('batch delete rejects expense from another group', async () => {
+    mockExpenses.findById
+      .mockReturnValueOnce({
+        id: 10,
+        group_id: 1,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Food',
+        comment: '',
+        amount: 10,
+        currency: 'EUR',
+        eur_amount: 10,
+        receipt_id: null,
+        created_at: '',
+      })
+      .mockReturnValueOnce({
+        id: 11,
+        group_id: 999,
+        user_id: 123,
+        date: '2026-03-01',
+        category: 'Food',
+        comment: '',
+        amount: 10,
+        currency: 'EUR',
+        eur_amount: 10,
+        receipt_id: null,
+        created_at: '',
+      });
+
+    const result = await executeTool('delete_expense', { expense_id: [10, 11] }, ctx);
+
+    expect(result.output).toContain('1/2 succeeded');
+    expect(result.output).toContain('Access denied');
+  });
+
+  test('single delete still works', async () => {
+    mockExpenses.findById.mockReturnValue({
+      id: 10,
+      group_id: 1,
+      user_id: 123,
+      date: '2026-03-01',
+      category: 'Food',
+      comment: 'lunch',
+      amount: 15,
+      currency: 'EUR',
+      eur_amount: 15,
+      receipt_id: null,
+      created_at: '',
+    });
+
+    const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
+    expect(result.success).toBe(true);
+    expect(mockExpenses.delete).toHaveBeenCalledWith(10);
+    expect(result.output).toContain('Expense 10 deleted');
+  });
+
+  test('empty expense_id array returns error', async () => {
+    const result = await executeTool('delete_expense', { expense_id: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeSetBudget', () => {
   beforeEach(resetAllMocks);
 
@@ -736,12 +1017,12 @@ describe('executeSetBudget', () => {
     expect(result.output).toContain('Food');
     expect(result.output).toContain('500.00 USD');
     expect(result.output).toContain('2026-03');
-    expect(mockBudgets.setBudget).toHaveBeenCalledWith(
+    expect(mockBudgetManagerSet).toHaveBeenCalledWith(
       expect.objectContaining({
-        group_id: 1,
+        groupId: 1,
         category: 'Food',
         month: '2026-03',
-        limit_amount: 500,
+        amount: 500,
         currency: 'USD',
       }),
     );
@@ -751,6 +1032,95 @@ describe('executeSetBudget', () => {
     const result = await executeTool('set_budget', { category: 'Food', amount: -10 }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid');
+  });
+});
+
+describe('set_budget batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch set_budget with items array calls set for each item', async () => {
+    const result = await executeTool(
+      'set_budget',
+      {
+        items: [
+          { category: 'Food', amount: 50000 },
+          { category: 'Transport', amount: 10000 },
+          { category: 'Fun', amount: 20000 },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockBudgetManagerSet).toHaveBeenCalledTimes(3);
+  });
+
+  test('batch set_budget reports partial failure', async () => {
+    mockBudgetManagerSet
+      .mockResolvedValueOnce({ sheetsSynced: false })
+      .mockRejectedValueOnce(new Error('Sheet error'))
+      .mockResolvedValueOnce({ sheetsSynced: false });
+
+    const result = await executeTool(
+      'set_budget',
+      {
+        items: [
+          { category: 'Food', amount: 100 },
+          { category: 'Bad', amount: 200 },
+          { category: 'OK', amount: 300 },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('2/3 succeeded');
+    expect(result.output).toContain('✗');
+  });
+
+  test('batch over 20 items is rejected', async () => {
+    const items = Array.from({ length: 21 }, (_, i) => ({
+      category: `Cat${i}`,
+      amount: 100,
+    }));
+
+    const result = await executeTool('set_budget', { items }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('20');
+  });
+
+  test('single set_budget still works (backward compat)', async () => {
+    const result = await executeTool('set_budget', { category: 'Food', amount: 500 }, ctx);
+    expect(result.success).toBe(true);
+    expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
+    expect(result.output).toContain('Budget set: Food');
+  });
+
+  test('items array takes priority over top-level fields', async () => {
+    const result = await executeTool(
+      'set_budget',
+      {
+        category: 'IGNORED',
+        amount: 999,
+        items: [{ category: 'Real', amount: 100 }],
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('1/1 succeeded');
+    expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
+    const calls = mockBudgetManagerSet.mock.calls as unknown as Array<
+      [{ category: string; amount: number }]
+    >;
+    expect(calls[0]?.[0].category).toBe('Real');
+    expect(calls[0]?.[0].amount).toBe(100);
+  });
+
+  test('empty items array returns error', async () => {
+    const result = await executeTool('set_budget', { items: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
   });
 });
 
@@ -812,6 +1182,8 @@ describe('executeGetGroupSettings', () => {
     mockGroups.findById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
+      title: null,
+      invite_link: null,
       google_refresh_token: null,
       spreadsheet_id: null,
       default_currency: 'EUR',
@@ -863,6 +1235,52 @@ describe('executeManageCategory', () => {
   });
 });
 
+describe('manage_category batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch create with name array', async () => {
+    const result = await executeTool(
+      'manage_category',
+      { action: 'create', name: ['Еда', 'Транспорт', 'Развлечения'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockCategories.create).toHaveBeenCalledTimes(3);
+  });
+
+  test('batch delete with name array', async () => {
+    mockCategories.findByName.mockImplementation(((_gid: number, name: string) => ({
+      id: name.length,
+      group_id: 1,
+      name,
+      created_at: '',
+    })) as unknown as () => Category | null);
+
+    const result = await executeTool(
+      'manage_category',
+      { action: 'delete', name: ['Еда', 'Транспорт'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('2/2 succeeded');
+  });
+
+  test('single manage_category still works', async () => {
+    const result = await executeTool('manage_category', { action: 'create', name: 'Еда' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('created');
+  });
+
+  test('empty name array returns error', async () => {
+    const result = await executeTool('manage_category', { action: 'create', name: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
+  });
+});
+
 describe('executeDeleteBudget', () => {
   beforeEach(resetAllMocks);
 
@@ -871,13 +1289,46 @@ describe('executeDeleteBudget', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Budget deleted');
     expect(result.output).toContain('Food');
-    expect(mockBudgets.deleteByGroupCategoryMonth).toHaveBeenCalledWith(1, 'Food', '2026-03');
+    expect(mockBudgetManagerDelete).toHaveBeenCalledWith({
+      groupId: 1,
+      category: 'Food',
+      month: '2026-03',
+    });
   });
 
   test('rejects missing category', async () => {
     const result = await executeTool('delete_budget', {}, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('category is required');
+  });
+});
+
+describe('delete_budget batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch delete with category array', async () => {
+    const result = await executeTool(
+      'delete_budget',
+      { category: ['Food', 'Transport', 'Fun'] },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockBudgetManagerDelete).toHaveBeenCalledTimes(3);
+  });
+
+  test('single delete still works (backward compat)', async () => {
+    const result = await executeTool('delete_budget', { category: 'Food' }, ctx);
+    expect(result.success).toBe(true);
+    expect(mockBudgetManagerDelete).toHaveBeenCalledTimes(1);
+    expect(result.output).toContain('Budget deleted for Food');
+  });
+
+  test('empty category array returns error', async () => {
+    const result = await executeTool('delete_budget', { category: [] }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
   });
 });
 
@@ -986,6 +1437,42 @@ describe('calculate tool', () => {
     const result = await executeTool('calculate', { expression: '0 - 63000000 / 0.5' }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toMatch(/^-.*e\d+/);
+  });
+});
+
+describe('manage_recurring_pattern batch', () => {
+  beforeEach(resetAllMocks);
+
+  test('batch pause with pattern_id array', async () => {
+    const result = await executeTool(
+      'manage_recurring_pattern',
+      { pattern_id: [1, 2, 3], action: 'pause' },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('3/3 succeeded');
+    expect(mockRecurringPatterns.updateStatus).toHaveBeenCalledTimes(3);
+  });
+
+  test('single pattern still works', async () => {
+    const result = await executeTool(
+      'manage_recurring_pattern',
+      { pattern_id: 1, action: 'pause' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('paused');
+  });
+
+  test('empty pattern_id array returns error', async () => {
+    const result = await executeTool(
+      'manage_recurring_pattern',
+      { pattern_id: [], action: 'pause' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('empty');
   });
 });
 
@@ -1399,5 +1886,50 @@ describe('find_missing_expenses batch', () => {
     expect(mockBankTransactions.findUnmatched).toHaveBeenCalledTimes(2);
     expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-01-01', '2026-01-31');
     expect(mockBankTransactions.findUnmatched).toHaveBeenCalledWith(1, '2026-02-01', '2026-02-28');
+  });
+});
+
+describe('get_bank_balances array bank_name', () => {
+  beforeEach(resetAllMocks);
+
+  test('accepts array of bank names and filters OR-match', async () => {
+    const result = await executeTool('get_bank_balances', { bank_name: ['tbc-ge', 'kaspi'] }, ctx);
+
+    expect(result.success).toBe(true);
+    // Should include TBC (2 accounts) + Kaspi (1 account), exclude Monobank
+    expect(result.data).toHaveLength(3);
+    const bankNames = (result.data as Array<{ bank_name: string }>).map((a) => a.bank_name);
+    expect(bankNames).toContain('tbc-ge');
+    expect(bankNames).toContain('kaspi');
+    expect(bankNames).not.toContain('monobank');
+  });
+
+  test('single string bank_name still works (backward compat)', async () => {
+    const result = await executeTool('get_bank_balances', { bank_name: 'kaspi' }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(1);
+  });
+
+  test('bank_name "all" returns all accounts', async () => {
+    const result = await executeTool('get_bank_balances', { bank_name: 'all' }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(4);
+  });
+
+  test('array with "all" returns all accounts', async () => {
+    const result = await executeTool('get_bank_balances', { bank_name: ['tbc-ge', 'all'] }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(4);
+  });
+
+  test('no matching bank returns helpful error with available banks', async () => {
+    const result = await executeTool('get_bank_balances', { bank_name: ['nonexistent'] }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual([]);
+    expect(result.summary).toContain('tbc-ge');
   });
 });
