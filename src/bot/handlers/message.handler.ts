@@ -18,11 +18,8 @@ import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import {
-  SHEET_WRITE_ERROR,
-  saveExpenseBatch,
-  saveReceiptExpenses,
-} from '../services/expense-saver';
+import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
+import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
@@ -402,7 +399,7 @@ export async function handleExpenseMessage(
   const confirmedIds = processedExpenses
     .filter((e) => e.categoryExists)
     .map((e) => e.pendingExpenseId);
-  let batchFailed = false;
+  let batchError: unknown = null;
 
   if (confirmedIds.length > 0) {
     try {
@@ -415,7 +412,7 @@ export async function handleExpenseMessage(
       for (const id of confirmedIds) {
         database.pendingExpenses.delete(id);
       }
-      batchFailed = true;
+      batchError = error;
     }
   }
 
@@ -423,7 +420,7 @@ export async function handleExpenseMessage(
 
   if (confirmedIds.length > 0) {
     try {
-      if (!batchFailed) {
+      if (!batchError) {
         await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
       } else {
         await bot.api.setMessageReaction({
@@ -437,8 +434,8 @@ export async function handleExpenseMessage(
     }
   }
 
-  if (batchFailed) {
-    await sendMessage(SHEET_WRITE_ERROR);
+  if (batchError) {
+    await sendMessage(getSheetErrorMessage(batchError));
   }
 
   // Send numbered summary when multiple expenses recognized

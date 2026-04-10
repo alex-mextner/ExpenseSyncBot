@@ -225,9 +225,6 @@ export async function appendExpenseRows(
   dataList: ExpenseRowData[],
 ): Promise<void> {
   if (dataList.length === 0) return;
-  if (dataList.length === 1 && dataList[0]) {
-    return appendExpenseRow(conn, spreadsheetId, dataList[0]);
-  }
   return enqueueSheetWrite(spreadsheetId, () =>
     appendExpenseRowsImpl(conn, spreadsheetId, dataList),
   );

@@ -16,12 +16,9 @@ import { appendExpenseRows, type ExpenseRowData, googleConn } from '../../servic
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from './budget-sync';
+import { getSheetErrorMessage } from './sheet-errors';
 
 const logger = createLogger('expense-saver');
-
-/** User-facing error shown when Google Sheets write fails (auth expired, etc.) */
-export const SHEET_WRITE_ERROR =
-  '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /reconnect и повтори попытку.';
 
 // ── Internal types ──────────────────────────────────────────────────────────
 
@@ -303,7 +300,7 @@ export async function saveReceiptExpenses(
     await appendExpenseRows(googleConn(group), group.spreadsheet_id, sheetRows);
   } catch (error) {
     logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet — receipt items kept');
-    await sendMessage(SHEET_WRITE_ERROR);
+    await sendMessage(getSheetErrorMessage(error));
     return;
   }
 

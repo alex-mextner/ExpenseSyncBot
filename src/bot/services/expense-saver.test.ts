@@ -142,7 +142,7 @@ const sendToChat = mock((text: string, options?: Record<string, unknown>) => {
 });
 mock.module('../send', () => ({ sendToChat }));
 
-import { SHEET_WRITE_ERROR, saveExpenseBatch, saveReceiptExpenses } from './expense-saver';
+import { saveExpenseBatch, saveReceiptExpenses } from './expense-saver';
 
 // ── Test data ────────────────────────────────────────────────────────────────
 
@@ -379,9 +379,8 @@ describe('saveReceiptExpenses', () => {
     // Receipt items NOT deleted — user can retry after /reconnect
     expect(mockReceiptItemsDelete).not.toHaveBeenCalled();
     // Error message sent to user
-    const errorMsg = sentMessages.find((m) => m.text.includes('/reconnect'));
+    const errorMsg = sentMessages.find((m) => m.text.includes('Не удалось'));
     expect(errorMsg).toBeDefined();
-    expect(errorMsg?.text).toBe(SHEET_WRITE_ERROR);
   });
 });
 

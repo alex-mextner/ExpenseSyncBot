@@ -41,11 +41,8 @@ import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
-import {
-  SHEET_WRITE_ERROR,
-  saveExpenseToSheet,
-  saveReceiptExpenses,
-} from '../services/expense-saver';
+import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
+import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
 import { trackMembership } from './message.handler';
 
@@ -551,7 +548,7 @@ async function handleCategoryAction(
           logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
           database.pendingExpenses.delete(pending.id);
           if (chatId) {
-            await sendMessage(SHEET_WRITE_ERROR);
+            await sendMessage(getSheetErrorMessage(error));
           }
         }
       }
@@ -635,7 +632,7 @@ async function handleCategoryAction(
         logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
         database.pendingExpenses.delete(pending.id);
         if (chatId) {
-          await sendMessage(SHEET_WRITE_ERROR);
+          await sendMessage(getSheetErrorMessage(error));
         }
       }
       break;
