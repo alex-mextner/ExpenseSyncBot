@@ -36,8 +36,6 @@ export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 60_000;
 const MAX_API_RETRIES = 2; // 3 attempts total (1 initial + 2 retries)
-export const AI_MODEL = env.AI_MODEL;
-export const AI_BASE_URL = env.AI_BASE_URL;
 
 export class ExpenseBotAgent {
   private ctx: AgentContext;
@@ -65,7 +63,7 @@ export class ExpenseBotAgent {
       { role: 'user', content: userMessage },
     ];
 
-    logger.info(`[AGENT] Starting: model=${AI_MODEL}`);
+    logger.info(`[AGENT] Starting: model=${env.AI_MODEL}`);
     logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
     debugCtx?.logSystemPrompt(messages[0]?.content as string);
