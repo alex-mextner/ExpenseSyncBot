@@ -1007,4 +1007,12 @@ describe('isSkipSignal', () => {
   test('parentheses (SKIP)', () => expect(isSkipSignal('(SKIP)')).toBe(false));
   test('random dots', () => expect(isSkipSignal('..')).toBe(false));
   test('actual response', () => expect(isSkipSignal('Итого за месяц: 500€')).toBe(false));
+  test('long reply quoting [SKIP] marker', () =>
+    expect(
+      isSkipSignal('Маркер [SKIP] используется когда бот решает промолчать. Это машинный токен.'),
+    ).toBe(false));
+  test('long reply quoting [ПРОПУСК]', () =>
+    expect(isSkipSignal('Токен [ПРОПУСК] — это устаревший русский вариант маркера молчания.')).toBe(
+      false,
+    ));
 });
