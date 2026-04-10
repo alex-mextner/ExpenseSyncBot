@@ -56,23 +56,37 @@ export async function sendMessage(
   }
 }
 
-/** Edit a message. Reads chatId from context. */
+/**
+ * Edit a message. Reads chatId from context.
+ *
+ * By default swallows all edit errors (log-only) because most callers fire
+ * these as best-effort UI updates where a failed edit shouldn't tank the
+ * whole handler. Callers that actually care about the final edit landing
+ * (e.g. StatusWriter.finalize) can pass `throwOnError: true` to get the
+ * error propagated instead.
+ */
 export async function editMessageText(
   messageId: number,
   text: string,
-  options?: Omit<TelegramParams.EditMessageTextParams, 'chat_id' | 'message_id' | 'text'>,
+  options?: Omit<TelegramParams.EditMessageTextParams, 'chat_id' | 'message_id' | 'text'> & {
+    throwOnError?: boolean;
+  },
 ): Promise<void> {
   const { chatId } = getContext();
+  const { throwOnError, ...telegramOptions } = options ?? {};
   try {
     await getBot().api.editMessageText({
       chat_id: chatId,
       message_id: messageId,
       text,
       parse_mode: 'HTML',
-      ...options,
+      ...telegramOptions,
     });
   } catch (error) {
     logger.warn({ err: error, messageId }, 'editMessageText failed');
+    if (throwOnError) {
+      throw error;
+    }
   }
 }
 

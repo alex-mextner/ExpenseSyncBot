@@ -319,6 +319,12 @@ export async function parseReceipt(
         const legacy = parseLegacyJsonResponse(cleaned, result.finishReason);
         emittedItems = legacy.items;
         emittedCurrency = legacy.currency;
+        // Preserve date from legacy JSON fallback — providers that ignore
+        // tool calling still dump it in the plain JSON response, and dropping
+        // it breaks the bank-transaction matching this parser promises.
+        if (legacy.date && /^\d{4}-\d{2}-\d{2}$/.test(legacy.date)) {
+          emittedDate = legacy.date;
+        }
         break;
       } catch (err) {
         logger.warn(
@@ -397,16 +403,22 @@ export async function parseReceipt(
 
   // Determine if sum was verified. Requires:
   //  - at least one item (meaningless to "verify" an empty receipt)
-  //  - calculate_sum was called (sum is deterministic, not LLM-guessed)
+  //  - calculate_sum was called at least once (forces the model to use the tool)
   //  - claimed total was found on the receipt AND is non-zero
-  //  - computed sum matches claimed total within 1% tolerance
+  //  - sum of ACTUAL emitted items matches claimed total within 1% tolerance
+  //
+  // Critically: we compare against `actualSum` (sum of what the model finally
+  // emitted), not `computedSum` (the last value the model passed to the tool).
+  // A malicious/confused model could calculate_sum([100, 50]) → 150 and then
+  // emit_items([{total: 200}, {total: 200}]) — the tool result is stale and
+  // must not be trusted as proof that the emitted items match.
   const actualSum = Math.round(emittedItems.reduce((a, it) => a + (it.total ?? 0), 0) * 100) / 100;
   const sumVerified =
     emittedItems.length > 0 &&
     sumCallCount > 0 &&
     claimedTotal !== undefined &&
     claimedTotal > 0 &&
-    Math.abs(computedSum - claimedTotal) <= Math.max(claimedTotal * 0.01, 0.5);
+    Math.abs(actualSum - claimedTotal) <= Math.max(claimedTotal * 0.01, 0.5);
 
   if (sumCallCount === 0 && emittedItems.length > 0) {
     logger.warn(
@@ -497,8 +509,10 @@ async function validateAndNormalizeItems(
       typeof item.total !== 'number' ||
       !item.category
     ) {
-      logger.warn(`[RECEIPT_PARSER] Invalid item structure: ${JSON.stringify(item)}`);
-      continue;
+      // Throw instead of continue — leaving a half-formed item in the array
+      // would later crash in saveExtractedItems() where the DB columns are
+      // NOT NULL. Better to fail the parse cleanly here.
+      throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
     }
 
     if (looksLikePromptLeak(item.name_ru)) {

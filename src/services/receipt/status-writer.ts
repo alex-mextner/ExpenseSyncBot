@@ -92,17 +92,22 @@ export class StatusWriter {
   /**
    * Replace the status with a final text and keep the message (no delete).
    * Useful when the status IS the final result (e.g. error notification).
+   *
+   * Throws on edit failure — callers that want to fall back to a plain-text
+   * message (e.g. ask.ts / advice on HTML parse errors) need to know the edit
+   * didn't land. Swallowing the error here would make their fallback
+   * unreachable and leave the chat stuck with the partial streamed output.
    */
   async finalize(finalText: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     const messageId = await this.messageIdPromise;
-    if (messageId === null) return;
-    try {
-      await editMessageText(messageId, finalText);
-    } catch (err) {
-      logger.warn({ err }, '[STATUS_WRITER] Failed to finalize message');
+    if (messageId === null) {
+      throw new Error('[STATUS_WRITER] Cannot finalize — placeholder never sent');
     }
+    // throwOnError: true — the caller explicitly cares about this edit
+    // landing (e.g. error-finalization, advice fallback).
+    await editMessageText(messageId, finalText, { throwOnError: true });
   }
 
   private async flush(force: boolean): Promise<void> {
