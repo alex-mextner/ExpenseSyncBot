@@ -210,7 +210,16 @@ export async function handleMiniAppRequest(
   req: Request,
   corsOrigin: string,
 ): Promise<Response | null> {
-  const url = new URL(req.url);
+  // Defensive URL parsing: port scanners send malformed HTTP that makes Bun
+  // hand us a relative URL, which would otherwise throw TypeError on every
+  // probe and crash the process. The base is only used when req.url is
+  // already relative.
+  let url: URL;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    return null;
+  }
 
   if (!url.pathname.startsWith('/api/')) return null;
 
