@@ -216,7 +216,6 @@ Exit code 0 if all pass, non-zero otherwise. Suitable for CI gating later, but f
 ## Out of scope for this plan
 
 - Consolidating `agent.ts` retry loop into `aiStreamRound` (it has its own `runWithRetry` wrapper for AbortController + tool execution) — keep as-is
-- `polling-handoff` and deploy flow — unrelated
 - Vision for anything other than OCR (e.g. future "send me a photo of a budget" feature) — not a current need
 - Test coverage for OCR validation tool executor (pure functions — trivial to add later)
 - Removing `@anthropic-ai/sdk` dep — already removed (we don't import it anywhere)

@@ -230,11 +230,7 @@ Server-side rendering of complex data as images (for Telegram messages where tex
 - [src/services/render/md-table-html.ts](src/services/render/md-table-html.ts) - Generates styled HTML from markdown tables for screenshot rendering
 - [src/services/render/table-renderer.ts](src/services/render/table-renderer.ts) - Table rendering orchestration
 
-#### 10. Polling Handoff (Blue-Green Deploys)
-
-- [src/utils/polling-handoff.ts](src/utils/polling-handoff.ts) - Coordinates long-polling handoff between old and new instances during deploy. Two alternating ports — the incoming instance signals the running one to stop, then takes over. Prevents Telegram 409 Conflict errors.
-
-#### 11. Mini App
+#### 10. Mini App
 
 Telegram Mini App for expense input with receipt scanning. Located in `miniapp/` — separate Vite + React app.
 
