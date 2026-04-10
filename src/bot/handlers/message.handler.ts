@@ -597,7 +597,7 @@ async function handleBulkCorrectionInput(
     });
 
     // Format result message
-    const summaryText = formatSummaryMessage(newSummary, items.length);
+    const summaryText = formatSummaryMessage(newSummary);
     const message = `${summaryText}\n\n✅ <i>Корректировка применена!</i>`;
 
     // Always send NEW message with result and buttons

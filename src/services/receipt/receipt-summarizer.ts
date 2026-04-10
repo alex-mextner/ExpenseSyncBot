@@ -1,12 +1,10 @@
 /** Receipt summarizer — uses Hugging Face to generate a human-readable summary of receipt items */
 import { InferenceClient } from '@huggingface/inference';
-import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import type { ReceiptItem } from '../../database/types';
-import { formatAmount } from '../../services/currency/converter';
-import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
+import { buildReceiptSummaryMessage, type ReceiptSummaryItem } from './summary-message';
 
 const logger = createLogger('receipt-summarizer');
 
@@ -70,33 +68,22 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
 }
 
 /**
- * Format summary for Telegram message
+ * Format summary for Telegram message.
+ * Delegates to the shared buildReceiptSummaryMessage so both the bot photo
+ * handler flow and the Mini App confirm endpoint produce identical output.
+ * Note: AI-corrected summaries lose qty/price (only name and total survive
+ * the LLM round-trip), so those fields are omitted from the flattened items.
  */
-export function formatSummaryMessage(summary: ReceiptSummary, itemCount: number): string {
-  let message = `🧾 <b>Распознан чек (${itemCount} позиций):</b>\n\n`;
-
-  for (const category of summary.categories) {
-    const emoji = getCategoryEmoji(category.name);
-    const itemNames = category.items.map((i) => i.name);
-
-    // Show max 3 items, then "и еще X позиций"
-    const maxShow = 3;
-    let itemsText: string;
-
-    if (itemNames.length <= maxShow) {
-      itemsText = itemNames.join(', ');
-    } else {
-      const shown = itemNames.slice(0, maxShow).join(', ');
-      const remaining = itemNames.length - maxShow;
-      itemsText = `${shown} и еще ${remaining} позиций`;
-    }
-
-    message += `${emoji} <b>${escapeHtml(category.name)}:</b> ${escapeHtml(itemsText)}\n`;
-  }
-
-  message += `\n💰 <b>Итого:</b> ${formatAmount(summary.totalAmount, summary.currency as CurrencyCode)}`;
-
-  return message;
+export function formatSummaryMessage(summary: ReceiptSummary): string {
+  const items: ReceiptSummaryItem[] = summary.categories.flatMap((cat) =>
+    cat.items.map((item) => ({
+      name: item.name,
+      total: item.total,
+      category: cat.name,
+      currency: summary.currency as CurrencyCode,
+    })),
+  );
+  return buildReceiptSummaryMessage(items);
 }
 
 /**

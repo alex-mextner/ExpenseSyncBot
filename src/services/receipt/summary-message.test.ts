@@ -78,6 +78,21 @@ describe('buildReceiptSummaryMessage', () => {
     expect(msg).toMatch(/Молоко.*2×.*150.*300/);
   });
 
+  it('omits qty × price prefix when qty/price are missing (AI-correction flow)', () => {
+    // ReceiptSummary after AI correction loses qty/price — only name+total survive
+    const msg = buildReceiptSummaryMessage([
+      {
+        name: 'Молоко',
+        total: 300,
+        category: 'Продукты',
+        currency: 'RSD' as CurrencyCode,
+      },
+    ]);
+    // Line should be "• Молоко = 300..." — no "2×150 =" prefix
+    expect(msg).toMatch(/• Молоко = .*300/);
+    expect(msg).not.toMatch(/Молоко.*×/);
+  });
+
   it('emits per-category emoji in the header', () => {
     const msg = buildReceiptSummaryMessage([item({ category: 'Продукты' })]);
     // Продукты → 🛒

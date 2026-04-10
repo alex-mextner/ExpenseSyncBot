@@ -7,11 +7,16 @@ import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { pluralize } from '../../utils/pluralize';
 
-/** Normalized item shape both receipt flows map to before formatting. */
+/**
+ * Normalized item shape both receipt flows map to before formatting.
+ * qty and price are optional because the AI-correction flow in
+ * receipt-summarizer loses them after the round-trip — only name and
+ * total survive. When absent, the item line omits the "qty × price =" prefix.
+ */
 export interface ReceiptSummaryItem {
   name: string;
-  qty: number;
-  price: number;
+  qty?: number;
+  price?: number;
   total: number;
   category: string;
   currency: CurrencyCode;
@@ -50,8 +55,11 @@ export function buildReceiptSummaryMessage(items: ReceiptSummaryItem[]): string 
   // Full item list in an expandable blockquote
   const itemLines = items.map((item) => {
     const name = escapeHtml(item.name);
-    const qtyPart = `${item.qty}×${formatAmount(item.price, currency)}`;
-    return `• ${name} — ${qtyPart} = ${formatAmount(item.total, currency)}`;
+    const totalStr = formatAmount(item.total, currency);
+    if (item.qty !== undefined && item.price !== undefined) {
+      return `• ${name} — ${item.qty}×${formatAmount(item.price, currency)} = ${totalStr}`;
+    }
+    return `• ${name} = ${totalStr}`;
   });
 
   lines.push(`\n<blockquote expandable>${itemLines.join('\n')}</blockquote>`);

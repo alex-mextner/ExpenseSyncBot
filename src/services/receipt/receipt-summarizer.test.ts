@@ -140,145 +140,46 @@ describe('buildSummaryFromItems', () => {
 });
 
 describe('formatSummaryMessage', () => {
-  const simpleSummary: ReceiptSummary = {
-    categories: [
-      {
-        name: 'Еда',
-        items: [
-          { name: 'Молоко', total: 100 },
-          { name: 'Хлеб', total: 50 },
-        ],
-      },
-    ],
-    totalAmount: 150,
-    currency: 'EUR',
-  };
-
-  describe('structure', () => {
-    it('starts with receipt header with item count', () => {
-      const msg = formatSummaryMessage(simpleSummary, 2);
-      expect(msg).toContain('2');
-      expect(msg).toContain('🧾');
-    });
-
-    it('includes total amount at end', () => {
-      const msg = formatSummaryMessage(simpleSummary, 2);
-      expect(msg).toContain('150.00');
-      expect(msg).toContain('€');
-    });
-
-    it('includes category names', () => {
-      const msg = formatSummaryMessage(simpleSummary, 2);
-      expect(msg).toContain('Еда');
-    });
-
-    it('uses HTML bold tags for categories', () => {
-      const msg = formatSummaryMessage(simpleSummary, 2);
-      expect(msg).toContain('<b>');
-      expect(msg).toContain('</b>');
-    });
-
-    it('includes item names', () => {
-      const msg = formatSummaryMessage(simpleSummary, 2);
-      expect(msg).toContain('Молоко');
-      expect(msg).toContain('Хлеб');
-    });
-
-    it('returns a string', () => {
-      const msg = formatSummaryMessage(simpleSummary, 0);
-      expect(typeof msg).toBe('string');
-    });
+  // formatSummaryMessage is a thin wrapper that flattens ReceiptSummary
+  // (which has no qty/price — those are lost after AI correction round-trip)
+  // and delegates to buildReceiptSummaryMessage. Detailed formatting behavior
+  // is covered by summary-message.test.ts; these tests only verify the
+  // flattening + delegation works correctly.
+  it('flattens categories into items and preserves names, totals, currency', () => {
+    const summary: ReceiptSummary = {
+      categories: [
+        {
+          name: 'Еда',
+          items: [
+            { name: 'Молоко', total: 100 },
+            { name: 'Хлеб', total: 50 },
+          ],
+        },
+      ],
+      totalAmount: 150,
+      currency: 'EUR',
+    };
+    const msg = formatSummaryMessage(summary);
+    expect(msg).toContain('Еда');
+    expect(msg).toContain('Молоко');
+    expect(msg).toContain('Хлеб');
+    expect(msg).toContain('150.00');
+    expect(msg).toContain('€');
   });
 
-  describe('item display limits', () => {
-    it('shows all items when 3 or fewer', () => {
-      const summary: ReceiptSummary = {
-        categories: [
-          {
-            name: 'Cat',
-            items: [
-              { name: 'A', total: 1 },
-              { name: 'B', total: 2 },
-              { name: 'C', total: 3 },
-            ],
-          },
-        ],
-        totalAmount: 6,
-        currency: 'EUR',
-      };
-      const msg = formatSummaryMessage(summary, 3);
-      expect(msg).toContain('A');
-      expect(msg).toContain('B');
-      expect(msg).toContain('C');
-      expect(msg).not.toContain('еще');
-    });
-
-    it('truncates to 3 items and shows "и еще N позиций" for more than 3', () => {
-      const summary: ReceiptSummary = {
-        categories: [
-          {
-            name: 'Cat',
-            items: [
-              { name: 'Item1', total: 1 },
-              { name: 'Item2', total: 2 },
-              { name: 'Item3', total: 3 },
-              { name: 'Item4', total: 4 },
-              { name: 'Item5', total: 5 },
-            ],
-          },
-        ],
-        totalAmount: 15,
-        currency: 'EUR',
-      };
-      const msg = formatSummaryMessage(summary, 5);
-      expect(msg).toContain('еще 2');
-    });
+  it('passes currency from summary through to the shared helper', () => {
+    const summary: ReceiptSummary = {
+      categories: [{ name: 'Еда', items: [{ name: 'Item', total: 10 }] }],
+      totalAmount: 10,
+      currency: 'RSD',
+    };
+    const msg = formatSummaryMessage(summary);
+    expect(msg).toContain('RSD');
   });
 
-  describe('HTML escaping', () => {
-    it('escapes < and > in category names', () => {
-      const summary: ReceiptSummary = {
-        categories: [{ name: '<script>', items: [{ name: 'Item', total: 10 }] }],
-        totalAmount: 10,
-        currency: 'EUR',
-      };
-      const msg = formatSummaryMessage(summary, 1);
-      expect(msg).toContain('&lt;script&gt;');
-      expect(msg).not.toContain('<script>');
-    });
-
-    it('escapes & in item names', () => {
-      const summary: ReceiptSummary = {
-        categories: [{ name: 'Cat', items: [{ name: 'Fish & Chips', total: 10 }] }],
-        totalAmount: 10,
-        currency: 'EUR',
-      };
-      const msg = formatSummaryMessage(summary, 1);
-      expect(msg).toContain('Fish &amp; Chips');
-    });
-  });
-
-  describe('category emoji', () => {
-    it('uses food emoji for Еда category', () => {
-      const summary: ReceiptSummary = {
-        categories: [{ name: 'Еда', items: [{ name: 'Item', total: 10 }] }],
-        totalAmount: 10,
-        currency: 'RSD',
-      };
-      const msg = formatSummaryMessage(summary, 1);
-      expect(msg).toContain('🍔');
-    });
-
-    it('uses default emoji for unknown category', () => {
-      const summary: ReceiptSummary = {
-        categories: [{ name: 'Прочее', items: [{ name: 'Item', total: 10 }] }],
-        totalAmount: 10,
-        currency: 'EUR',
-      };
-      const msg = formatSummaryMessage(summary, 1);
-      // Universal getCategoryEmoji default for unknown categories
-      expect(msg).toContain('💰');
-    });
+  it('returns empty string when summary has no categories', () => {
+    const summary: ReceiptSummary = { categories: [], totalAmount: 0, currency: 'EUR' };
+    expect(formatSummaryMessage(summary)).toBe('');
   });
 });
 
