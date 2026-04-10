@@ -37,11 +37,16 @@ mock.module('./clients', () => ({
 }));
 
 import OpenAI from 'openai';
-import { isRetryableError, getBackoffDelay } from './streaming';
+import { getBackoffDelay, isRetryableError } from './streaming';
 
 describe('isRetryableError', () => {
   it('returns true for 429 rate limit', () => {
-    const err = new OpenAI.APIError(429, { message: 'rate limited' }, 'rate limited', new Headers());
+    const err = new OpenAI.APIError(
+      429,
+      { message: 'rate limited' },
+      'rate limited',
+      new Headers(),
+    );
     expect(isRetryableError(err)).toBe(true);
   });
 
@@ -91,8 +96,12 @@ describe('getBackoffDelay', () => {
   it('returns 5000 for 429 (retry-after parsing requires plain object headers)', () => {
     // NOTE: getBackoffDelay reads headers?.['retry-after'] but OpenAI SDK stores
     // Headers object which doesn't support bracket notation. Pre-existing issue.
-    const err = new OpenAI.APIError(429, { message: 'rate limited' }, 'rate limited',
-      new Headers({ 'retry-after': '3' }));
+    const err = new OpenAI.APIError(
+      429,
+      { message: 'rate limited' },
+      'rate limited',
+      new Headers({ 'retry-after': '3' }),
+    );
     expect(getBackoffDelay(0, err)).toBe(5000);
   });
 
@@ -126,7 +135,12 @@ describe('aiStreamRound fallback chain', () => {
         throw new OpenAI.APIError(400, { message: 'bad request' }, 'bad request', new Headers());
       }
       if (params.model === 'gemini-test') {
-        throw new OpenAI.APIError(400, { message: 'bad request too' }, 'bad request too', new Headers());
+        throw new OpenAI.APIError(
+          400,
+          { message: 'bad request too' },
+          'bad request too',
+          new Headers(),
+        );
       }
       // HF succeeds with a simple async iterator
       return {
@@ -182,7 +196,11 @@ describe('aiStreamRound fallback chain', () => {
     await expect(
       streamingModule.aiStreamRound(
         { messages: [{ role: 'user', content: 'hi' }], maxTokens: 100, chain: 'smart' },
-        { onTextDelta: (t: string) => { emittedText += t; } },
+        {
+          onTextDelta: (t: string) => {
+            emittedText += t;
+          },
+        },
       ),
     ).rejects.toThrow('stream died mid-way');
 
