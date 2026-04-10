@@ -96,15 +96,18 @@ interface FullSyncReport {
 }
 
 /**
- * Full bidirectional sync after reconnect:
+ * Full bidirectional sync after reconnect. Runs from the OAuth callback
+ * once the new refresh token has been persisted. Reads chatId/threadId
+ * from the surrounding chatStorage context (caller must wrap in
+ * withChatContext).
+ *
  * 1. Ensure current-year spreadsheet exists
  * 2. Sheet → DB expenses (import only, never deletes)
  * 3. DB → Sheet expenses (push missing)
  * 4. Sheet → DB budgets (import from all month tabs)
  * 5. DB → Sheet budgets (ensure tabs + write rows)
  */
-export async function fullSyncAfterReconnect(ctx: Ctx['Command'], groupId: number): Promise<void> {
-  void ctx;
+export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
   const report: FullSyncReport = {
     snapshotId: null,
     snapshotExpenses: 0,
