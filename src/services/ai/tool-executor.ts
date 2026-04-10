@@ -854,12 +854,13 @@ function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentCo
 
 function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
   const bankNames = normalizeArrayParam(input['bank_name']);
+  const showHidden = input['show_hidden'] === true;
   const isAll = bankNames.length === 0 || bankNames.some((b) => b.toLowerCase() === 'all');
   const filters = isAll
     ? undefined
     : bankNames.map((b) => b.toLowerCase()).filter((b) => b !== 'all');
 
-  const accounts = database.bankAccounts.findByGroupId(ctx.groupId, true);
+  const accounts = database.bankAccounts.findByGroupId(ctx.groupId, showHidden);
   const filtered = filters
     ? accounts.filter((a) => {
         const conn = database.bankConnections.findById(a.connection_id);

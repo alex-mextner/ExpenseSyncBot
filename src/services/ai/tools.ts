@@ -387,7 +387,7 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
   {
     name: 'get_bank_balances',
     description:
-      'Get current account balances from connected banks for this group. Always returns all accounts — hidden/excluded ones are marked with hidden: true.',
+      'Get current account balances from connected banks for this group. By default returns only visible accounts. Use show_hidden: true to include hidden/disabled ones.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -397,10 +397,13 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
             { type: 'array', items: { type: 'string' }, description: 'Array of bank names' },
           ],
           description:
-            'Which bank(s) to show: "all" for all banks, or bank registry key(s) (case-insensitive substring match). Pass an array for multiple banks.',
+            'Which bank(s) to show: "all" for all banks, or bank registry key(s) (case-insensitive substring match). Omit to show all banks.',
+        },
+        show_hidden: {
+          type: 'boolean',
+          description: 'If true, include hidden/disabled accounts in the response. Default: false.',
         },
       },
-      required: ['bank_name'],
     },
   },
   {
