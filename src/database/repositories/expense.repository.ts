@@ -476,6 +476,47 @@ export class ExpenseRepository {
   }
 
   /**
+   * Get the day-of-month of the last transaction per category within a date range.
+   * Used to compute daysSinceLastTx for stall detection in projections.
+   */
+  getLastTransactionDayByCategory(
+    groupId: number,
+    monthStart: string,
+    today: string,
+  ): { category: string; last_day: number }[] {
+    const query = this.db.query<{ category: string; last_day: number }, [number, string, string]>(`
+      SELECT category, MAX(CAST(substr(date, 9, 2) AS INTEGER)) as last_day
+      FROM expenses
+      WHERE group_id = ? AND date >= ? AND date <= ?
+      GROUP BY category
+    `);
+
+    return query.all(groupId, monthStart, today);
+  }
+
+  /**
+   * Get raw transactions with dates for interval profile computation.
+   * Returns date, category, and EUR amount sorted chronologically.
+   */
+  getRecentTransactions(
+    groupId: number,
+    sinceDate: string,
+    untilDate: string,
+  ): { date: string; category: string; amount: number }[] {
+    const query = this.db.query<
+      { date: string; category: string; amount: number },
+      [number, string, string]
+    >(`
+      SELECT date, category, eur_amount as amount
+      FROM expenses
+      WHERE group_id = ? AND date >= ? AND date <= ?
+      ORDER BY date ASC
+    `);
+
+    return query.all(groupId, sinceDate, untilDate);
+  }
+
+  /**
    * Sum eur_amount for a given category and date range (SQL-level aggregation)
    */
   sumByCategory(groupId: number, category: string, dateFrom: string, dateTo: string): number {

@@ -47,12 +47,13 @@ jobs:
             git pull origin main
             git submodule update --init
 
-            echo "📋 Copying .env.stage to worktrees..."
+            echo "📋 Merging .env.stage for worktrees..."
             if [ -f .env.stage ]; then
               for wt in .claude/worktrees/*/; do
-                if [ -d "$wt" ] && [ ! -f "${wt}.env" ]; then
-                  cp .env.stage "${wt}.env"
-                  echo "  → ${wt}.env"
+                if [ -d "$wt" ]; then
+                  mkdir -p "${wt}data"
+                  cat .env .env.stage | grep -v '^#' | grep -v '^$' | awk -F= '{keys[$1]=$0} END {for(k in keys) print keys[k]}' > "${wt}.env"
+                  echo "  → ${wt}.env (merged)"
                 fi
               done
             fi

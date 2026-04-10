@@ -193,6 +193,8 @@ export interface CategoryProfile {
   avgTxPerMonth: number;
   /** Fraction of months with zero spending (for intermittent detection) */
   zeroMonthRatio: number;
+  /** Monthly totals in chronological order — used by TSB/Croston for intermittent categories */
+  monthlyTotals?: number[];
 }
 
 // === Interval Profile (for cycle-based categories like refueling, salon, etc.) ===

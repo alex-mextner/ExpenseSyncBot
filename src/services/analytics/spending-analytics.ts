@@ -14,6 +14,7 @@ import { convertCurrency } from '../currency/converter';
 import type { CategoryTaAnalysis } from './ta/analyzer';
 
 import { analyzeCategory } from './ta/analyzer';
+import { crostonTSB } from './ta/forecasting';
 import { categoryCorrelation } from './ta/pattern';
 import type { CorrelationResult } from './ta/types';
 import type {
@@ -89,6 +90,7 @@ export function buildCategoryProfiles(
       monthsOfData: n,
       avgTxPerMonth: Math.round((totalTx / n) * 10) / 10,
       zeroMonthRatio: Math.round((zeroMonths / n) * 100) / 100,
+      monthlyTotals: [...totals],
     });
   }
 
@@ -132,7 +134,10 @@ export function buildIntervalProfiles(
     const intervals: number[] = [];
     const amounts: number[] = [];
     for (let i = 1; i < txList.length; i++) {
-      const days = differenceInDays(parseISO(txList[i]!.date), parseISO(txList[i - 1]!.date));
+      const curr = txList[i];
+      const prev = txList[i - 1];
+      if (!curr || !prev) continue;
+      const days = differenceInDays(parseISO(curr.date), parseISO(prev.date));
       // Filter out outlier gaps (e.g., category not used for 3+ months)
       if (days > MAX_INTERVAL_DAYS) continue;
       // Filter out same-day transactions (multiple items on one receipt)
@@ -278,11 +283,16 @@ export function projectCategory(
   if (pattern === 'lumpy') return currentSpent;
 
   if (pattern === 'intermittent') {
-    let activityProb = 1 - profile.zeroMonthRatio;
-    if (monthProgress > 0.3 && currentSpent < profile.ema * 0.1) {
-      activityProb *= monthProgress;
+    // TSB handles fading demand: if category stops being used, forecast decays to 0
+    // Classical Croston keeps forecasting same amount forever — bad for dying categories
+    // Fallback to EMA-based activity probability if monthlyTotals not provided
+    let expectedTotal: number;
+    if (profile.monthlyTotals && profile.monthlyTotals.length > 0) {
+      expectedTotal = crostonTSB(profile.monthlyTotals).forecast;
+    } else {
+      const activityProb = 1 - profile.zeroMonthRatio;
+      expectedTotal = profile.ema * activityProb;
     }
-    const expectedTotal = profile.ema * activityProb;
     const paceBased = (currentSpent / daysElapsed) * daysInMonth;
     const alpha = monthProgress * monthProgress;
     const projected = alpha * paceBased + (1 - alpha) * Math.max(currentSpent, expectedTotal);
@@ -383,6 +393,20 @@ export class SpendingAnalytics {
     const daysElapsed = dayOfMonth; // 1-indexed: day 1 = 1 day elapsed
     const daysRemaining = daysInMonth - daysElapsed;
 
+    // Last transaction day per category — for stall detection
+    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
+      groupId,
+      monthStart,
+      today,
+    );
+    const lastTxByCategory: Record<string, number> = {};
+    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
+
+    // Interval profiles — for cycle-based projection (refueling, salon, etc.)
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
+    const intervalProfiles = buildIntervalProfiles(recentTx);
+
     const results: BudgetBurnRate[] = [];
 
     for (const budget of budgets) {
@@ -407,8 +431,18 @@ export class SpendingAnalytics {
 
       // Activity gate: skip projection if not enough transactions
       const hasEnoughActivity = passesActivityGate(txCount, daysElapsed, daysInMonth, profile);
+      const lastDay = lastTxByCategory[budget.category];
+      const daysSinceLastTx = lastDay !== undefined ? dayOfMonth - lastDay : undefined;
+      const intervalProfile = intervalProfiles.get(budget.category);
       const projectedTotal = hasEnoughActivity
-        ? projectCategory(spent, daysElapsed, daysInMonth, profile)
+        ? projectCategory(
+            spent,
+            daysElapsed,
+            daysInMonth,
+            profile,
+            daysSinceLastTx,
+            intervalProfile,
+          )
         : spent;
 
       const projectedOvershoot = projectedTotal - budget.limit_amount;
@@ -943,7 +977,7 @@ export class SpendingAnalytics {
       confidence = 'medium';
     }
 
-    // Category projections
+    // Category projections — with stall detection and interval-based projection
     const currentCatTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
     const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     const budgetMap: Record<string, { limit: number; currency: string }> = {};
@@ -951,10 +985,32 @@ export class SpendingAnalytics {
       budgetMap[b.category] = { limit: b.limit_amount, currency: b.currency };
     }
 
+    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
+      groupId,
+      monthStart,
+      today,
+    );
+    const lastTxByCategory: Record<string, number> = {};
+    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
+
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
+    const intervalProfiles = buildIntervalProfiles(recentTx);
+
     const categoryProjections: CategoryProjection[] = [];
     for (const cat of currentCatTotals) {
       const catProfile = categoryProfiles.get(cat.category) ?? null;
-      const catProjected = projectCategory(cat.total, daysElapsed, daysInMonth, catProfile);
+      const catLastDay = lastTxByCategory[cat.category];
+      const catDaysSince = catLastDay !== undefined ? daysElapsed - catLastDay : undefined;
+      const catInterval = intervalProfiles.get(cat.category);
+      const catProjected = projectCategory(
+        cat.total,
+        daysElapsed,
+        daysInMonth,
+        catProfile,
+        catDaysSince,
+        catInterval,
+      );
       const budget = budgetMap[cat.category];
 
       let budgetLimitEur: number | null = null;

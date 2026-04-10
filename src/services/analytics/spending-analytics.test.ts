@@ -453,6 +453,182 @@ describe('computeBurnRates', () => {
   });
 });
 
+describe('computeBurnRates — normExceedsBudget suppresses warning/critical', () => {
+  const GID = 20;
+
+  test('category with EMA > budget gets on_track even if projection > budget', () => {
+    // Setup: group 20 with a category that historically spends 500 EUR/month
+    // but budget is set to 200 EUR — normExceedsBudget should suppress warning/critical
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [GID, 202020, 'EUR', '["EUR"]'],
+    );
+
+    // 6 months of history: 500 EUR each month → EMA will be ~500
+    for (let m = 1; m <= 6; m++) {
+      const monthDate = format(
+        new Date(subMonths(now, m).getFullYear(), subMonths(now, m).getMonth(), 15),
+        'yyyy-MM-dd',
+      );
+      db.run(
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [GID, USER_ID, monthDate, 'Gym', 'monthly', 500, 'EUR', 500],
+      );
+    }
+
+    // Current month: 100 EUR spent (< budget 200), but pace extrapolates higher
+    const day3 = format(new Date(now.getFullYear(), now.getMonth(), 3), 'yyyy-MM-dd');
+    db.run(
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [GID, USER_ID, day3, 'Gym', 'session', 100, 'EUR', 100],
+    );
+
+    // Budget: 200 EUR for Gym (less than historical EMA of ~500)
+    db.run(
+      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      [GID, 'Gym', currentMonth, 200, 'EUR'],
+    );
+
+    // Use day 15 so we have enough data for projection
+    const fakeNow = new Date(now.getFullYear(), now.getMonth(), 15);
+    const fakeToday = format(fakeNow, 'yyyy-MM-dd');
+    const fakeMonthStart = format(startOfMonth(fakeNow), 'yyyy-MM-dd');
+    const fakeCurrentMonth = format(fakeNow, 'yyyy-MM');
+
+    const burnRates = analytics.testComputeBurnRates(
+      GID,
+      fakeNow,
+      fakeCurrentMonth,
+      fakeMonthStart,
+      fakeToday,
+    );
+
+    const gym = burnRates.find((br) => br.category === 'Gym');
+    if (!gym) throw new Error('Gym burn rate missing');
+    // Spent < budget → not exceeded
+    expect(gym.spent).toBeLessThan(gym.budget_limit);
+    // normExceedsBudget is true (EMA ~500 > budget 200),
+    // so warning/critical should be suppressed → status is on_track
+    expect(gym.status).toBe('on_track');
+  });
+
+  test('exceeded status still fires even when normExceedsBudget is true', () => {
+    const GID2 = 21;
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [GID2, 212121, 'EUR', '["EUR"]'],
+    );
+
+    // 6 months of history: 500 EUR each
+    for (let m = 1; m <= 6; m++) {
+      const monthDate = format(
+        new Date(subMonths(now, m).getFullYear(), subMonths(now, m).getMonth(), 15),
+        'yyyy-MM-dd',
+      );
+      db.run(
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [GID2, USER_ID, monthDate, 'Gym', 'monthly', 500, 'EUR', 500],
+      );
+    }
+
+    // Current month: 250 EUR spent (> budget 200) — exceeded
+    const day5 = format(new Date(now.getFullYear(), now.getMonth(), 5), 'yyyy-MM-dd');
+    db.run(
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [GID2, USER_ID, day5, 'Gym', 'session', 250, 'EUR', 250],
+    );
+
+    db.run(
+      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      [GID2, 'Gym', currentMonth, 200, 'EUR'],
+    );
+
+    const fakeNow = new Date(now.getFullYear(), now.getMonth(), 15);
+    const fakeToday = format(fakeNow, 'yyyy-MM-dd');
+    const fakeMonthStart = format(startOfMonth(fakeNow), 'yyyy-MM-dd');
+    const fakeCurrentMonth = format(fakeNow, 'yyyy-MM');
+
+    const burnRates = analytics.testComputeBurnRates(
+      GID2,
+      fakeNow,
+      fakeCurrentMonth,
+      fakeMonthStart,
+      fakeToday,
+    );
+
+    const gym = burnRates.find((br) => br.category === 'Gym');
+    if (!gym) throw new Error('Gym burn rate missing');
+    // Spent > budget → exceeded regardless of normExceedsBudget
+    expect(gym.status).toBe('exceeded');
+  });
+});
+
+describe('computeBurnRates — stall detection in production path', () => {
+  test('stalled category returns currentSpent as projection', () => {
+    const GID = 22;
+    db.run(
+      `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
+      [GID, 222222, 'EUR', '["EUR"]'],
+    );
+
+    // 4 months of history to establish a profile
+    for (let m = 1; m <= 4; m++) {
+      // Multiple tx per month for activity gate
+      for (let t = 0; t < 3; t++) {
+        const txDate = format(
+          new Date(subMonths(now, m).getFullYear(), subMonths(now, m).getMonth(), 5 + t * 5),
+          'yyyy-MM-dd',
+        );
+        db.run(
+          `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [GID, USER_ID, txDate, 'Taxi', 'ride', 50, 'EUR', 50],
+        );
+      }
+    }
+
+    // Current month: expenses only on days 1-3, then nothing
+    for (let d = 1; d <= 3; d++) {
+      const txDate = format(new Date(now.getFullYear(), now.getMonth(), d), 'yyyy-MM-dd');
+      db.run(
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [GID, USER_ID, txDate, 'Taxi', 'ride', 30, 'EUR', 30],
+      );
+    }
+
+    // Budget for the category
+    db.run(
+      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      [GID, 'Taxi', currentMonth, 500, 'EUR'],
+    );
+
+    // Simulate day 15: daysSinceLastTx = 15 - 3 = 12, monthProgress = 15/30 = 0.5
+    const fakeNow = new Date(now.getFullYear(), now.getMonth(), 15);
+    const fakeToday = format(fakeNow, 'yyyy-MM-dd');
+    const fakeMonthStart = format(startOfMonth(fakeNow), 'yyyy-MM-dd');
+    const fakeCurrentMonth = format(fakeNow, 'yyyy-MM');
+
+    const burnRates = analytics.testComputeBurnRates(
+      GID,
+      fakeNow,
+      fakeCurrentMonth,
+      fakeMonthStart,
+      fakeToday,
+    );
+
+    const taxi = burnRates.find((br) => br.category === 'Taxi');
+    if (!taxi) throw new Error('Taxi burn rate missing');
+    // Stall detection: daysSinceLastTx=12 >= 5, monthProgress=0.5 > 0.33
+    // projected_total should equal spent (no extrapolation)
+    expect(taxi.projected_total).toBe(taxi.spent);
+  });
+});
+
 describe('computeAnomalies', () => {
   test('category spending significantly above 3-month average is flagged', () => {
     // Insert a spike: add a huge Food expense this month to trigger anomaly
