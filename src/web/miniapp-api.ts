@@ -1,17 +1,23 @@
 // Mini App API handler: HMAC initData validation and routing for /api/* endpoints
 import { createHmac } from 'node:crypto';
 import sharp from 'sharp';
-import { getCategoryEmoji } from '../config/category-emojis.ts';
 import { type CurrencyCode, isValidCurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
-import { sendDocumentDirect, sendMessage, withChatContext } from '../services/bank/telegram-sender.ts';
-import { convertCurrency, formatAmount } from '../services/currency/converter.ts';
+import {
+  sendDocumentDirect,
+  sendMessage,
+  withChatContext,
+} from '../services/bank/telegram-sender.ts';
+import { convertCurrency } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
 import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
 import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
-import { escapeHtml } from '../utils/html.ts';
+import {
+  buildReceiptSummaryMessage,
+  type ReceiptSummaryItem,
+} from '../services/receipt/summary-message.ts';
 import { createLogger } from '../utils/logger.ts';
 import { emitForGroup, subscribeGroup } from './sse-emitter.ts';
 
@@ -515,10 +521,14 @@ export async function handleMiniAppRequest(
         logger.warn({ err: emitError }, 'SSE emit failed, continuing');
       }
 
-      // Send brief summary to Telegram chat
-      notifyReceiptConfirmed(ctx.internalGroupId, expenseInputs).catch(
-        (e) => logger.warn({ err: e }, 'Receipt chat notification failed'),
-      );
+      // Send brief summary to Telegram chat. Awaited so errors surface synchronously,
+      // but wrapped in try/catch so a failed notification does not fail the confirm request
+      // (expenses are already saved at this point).
+      try {
+        await notifyReceiptConfirmed(ctx.internalGroupId, expenseInputs);
+      } catch (notifyError) {
+        logger.warn({ err: notifyError }, 'Receipt chat notification failed');
+      }
 
       logger.info({ userId: ctx.userId, created }, 'Receipt confirm completed');
 
@@ -847,47 +857,36 @@ export async function handleMiniAppRequest(
   return errorResponse(404, 'Not Found', 'NOT_FOUND', corsHeaders);
 }
 
-/** Send brief receipt summary to the group chat after mini app confirmation */
+/** Send receipt summary to the group chat after mini app confirmation */
 async function notifyReceiptConfirmed(
   internalGroupId: number,
-  items: { name?: unknown; total?: unknown; category?: unknown; currency?: unknown }[],
+  items: {
+    name?: unknown;
+    total?: unknown;
+    category?: unknown;
+    currency?: unknown;
+    qty?: unknown;
+    price?: unknown;
+  }[],
 ): Promise<void> {
   const group = database.groups.findById(internalGroupId);
   if (!group) return;
 
-  // Aggregate by category
-  const byCategory = new Map<string, { total: number; count: number }>();
-  let grandTotal = 0;
-  let currency: CurrencyCode = 'EUR';
+  const summaryItems: ReceiptSummaryItem[] = items.map((item) => ({
+    name: (item.name as string) ?? '',
+    qty: typeof item.qty === 'number' ? item.qty : 1,
+    price: typeof item.price === 'number' ? item.price : (item.total as number),
+    total: item.total as number,
+    category: item.category as string,
+    currency: item.currency as CurrencyCode,
+  }));
 
-  for (const item of items) {
-    const cat = item.category as string;
-    const total = item.total as number;
-    currency = item.currency as CurrencyCode;
-    grandTotal += total;
-
-    const existing = byCategory.get(cat);
-    if (existing) {
-      existing.total += total;
-      existing.count++;
-    } else {
-      byCategory.set(cat, { total, count: 1 });
-    }
-  }
-
-  // Build message
-  const lines: string[] = [`🧾 <b>Чек из Mini App (${items.length} поз.):</b>`];
-
-  for (const [cat, { total }] of byCategory) {
-    const emoji = getCategoryEmoji(cat);
-    lines.push(`${emoji} ${escapeHtml(cat)}: ${formatAmount(total, currency)}`);
-  }
-
-  lines.push(`\n💰 <b>Итого:</b> ${formatAmount(grandTotal, currency)}`);
+  const text = buildReceiptSummaryMessage(summaryItems);
+  if (!text) return;
 
   const threadId = group.active_topic_id ?? null;
   await withChatContext(group.telegram_group_id, threadId, async () => {
-    await sendMessage(lines.join('\n'));
+    await sendMessage(text);
   });
 }
 

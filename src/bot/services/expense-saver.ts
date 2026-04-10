@@ -6,6 +6,10 @@ import { database } from '../../database';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount, getExchangeRate } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
+import {
+  buildReceiptSummaryMessage,
+  type ReceiptSummaryItem,
+} from '../../services/receipt/summary-message';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from './budget-sync';
@@ -286,9 +290,17 @@ export async function saveReceiptExpenses(
   // Delete all processed receipt items (confirmed + skipped)
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
 
-  // Notify user
-  const totalItems = confirmedItems.length;
-  const totalCategories = itemsByCategory.size;
+  // Notify user using the shared summary builder
+  const summaryItems: ReceiptSummaryItem[] = confirmedItems
+    .filter((item) => item.confirmed_category !== null)
+    .map((item) => ({
+      name: item.name_ru,
+      qty: item.quantity,
+      price: item.price,
+      total: item.total,
+      category: item.confirmed_category as string,
+      currency: item.currency,
+    }));
 
   const miniAppUrl = buildMiniAppUrl('scanner', group.telegram_group_id);
   const scanButton = miniAppUrl
@@ -296,9 +308,11 @@ export async function saveReceiptExpenses(
     : undefined;
 
   await sendMessage(
-    `✅ Чек обработан!\n📦 Товаров: ${totalItems}\n📂 Категорий: ${totalCategories}`,
+    buildReceiptSummaryMessage(summaryItems),
     scanButton ? { reply_markup: scanButton } : undefined,
   );
 
-  logger.info(`[RECEIPT] Saved ${totalItems} items from receipt (${totalCategories} categories)`);
+  logger.info(
+    `[RECEIPT] Saved ${confirmedItems.length} items from receipt (${itemsByCategory.size} categories)`,
+  );
 }

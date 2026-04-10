@@ -1,5 +1,6 @@
 /** Receipt summarizer — uses Hugging Face to generate a human-readable summary of receipt items */
 import { InferenceClient } from '@huggingface/inference';
+import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import type { ReceiptItem } from '../../database/types';
@@ -42,41 +43,6 @@ export interface ReceiptSummary {
 export interface CorrectionEntry {
   user: string;
   result: string;
-}
-
-/**
- * Category emoji map
- */
-const CATEGORY_EMOJIS: Record<string, string> = {
-  Еда: '🍔',
-  Продукты: '🍔',
-  Дом: '🏠',
-  Хозтовары: '🧹',
-  Транспорт: '🚗',
-  Здоровье: '💊',
-  Развлечения: '🎬',
-  Одежда: '👕',
-  Техника: '📱',
-  Разное: '🛒',
-};
-
-/**
- * Get emoji for category
- */
-function getCategoryEmoji(category: string): string {
-  // Try exact match
-  if (CATEGORY_EMOJIS[category]) {
-    return CATEGORY_EMOJIS[category];
-  }
-
-  // Try partial match
-  for (const [key, emoji] of Object.entries(CATEGORY_EMOJIS)) {
-    if (category.toLowerCase().includes(key.toLowerCase())) {
-      return emoji;
-    }
-  }
-
-  return '📦';
 }
 
 /**

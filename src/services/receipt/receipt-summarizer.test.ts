@@ -276,7 +276,8 @@ describe('formatSummaryMessage', () => {
         currency: 'EUR',
       };
       const msg = formatSummaryMessage(summary, 1);
-      expect(msg).toContain('📦');
+      // Universal getCategoryEmoji default for unknown categories
+      expect(msg).toContain('💰');
     });
   });
 });
