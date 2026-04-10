@@ -24,12 +24,17 @@ async function findTestFiles(): Promise<string[]> {
   return files.sort();
 }
 
+let fileCounter = 0;
+
 async function runFile(file: string): Promise<FileResult> {
+  // Each test file gets its own SQLite DB to prevent SQLITE_BUSY_RECOVERY
+  // when 14+ processes fight over the same database file.
+  const dbPath = `/tmp/esb-test-${process.pid}-${fileCounter++}.db`;
   const start = performance.now();
   const proc = Bun.spawn(['bun', 'test', file], {
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, NODE_ENV: 'test', FORCE_COLOR: '1' },
+    env: { ...process.env, NODE_ENV: 'test', FORCE_COLOR: '1', DATABASE_PATH: dbPath },
   });
 
   const [stdout, stderr] = await Promise.all([
@@ -38,6 +43,17 @@ async function runFile(file: string): Promise<FileResult> {
   ]);
   const exitCode = await proc.exited;
   const duration = performance.now() - start;
+
+  // Cleanup temp DB files
+  try {
+    const fs = await import('node:fs/promises');
+    await fs.unlink(dbPath).catch(() => {});
+    await fs.unlink(`${dbPath}-wal`).catch(() => {});
+    await fs.unlink(`${dbPath}-shm`).catch(() => {});
+  } catch {
+    // best-effort cleanup
+  }
+
   const rawOutput = stdout + stderr;
   // Strip ANSI escape codes before parsing — FORCE_COLOR produces them
   const clean = rawOutput.replace(/\x1b\[[0-9;]*m/g, '');
