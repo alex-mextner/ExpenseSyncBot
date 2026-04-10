@@ -23,10 +23,14 @@ function buildMccHistory(groupId: number, mccs: number[]): Map<number, string[]>
   if (mccs.length === 0) return result;
 
   for (const mcc of mccs) {
+    // Join via either link path: matched_expense_id (single expense)
+    // or matched_receipt_id (Variant A 1:N — resolve through expenses.receipt_id).
     const rows = database.queryAll<{ category: string }>(
       `SELECT DISTINCT e.category
        FROM bank_transactions bt
-       JOIN expenses e ON bt.matched_expense_id = e.id
+       JOIN expenses e
+         ON e.id = bt.matched_expense_id
+         OR (bt.matched_receipt_id IS NOT NULL AND e.receipt_id = bt.matched_receipt_id)
        WHERE bt.mcc = ? AND e.group_id = ?
        ORDER BY e.created_at DESC
        LIMIT 5`,

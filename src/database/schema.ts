@@ -1304,6 +1304,67 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Created group_members table');
       },
     },
+    {
+      name: '047_create_receipts_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            photo_queue_id INTEGER REFERENCES photo_processing_queue(id) ON DELETE SET NULL,
+            image_path TEXT,
+            total_amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipts_group_date
+          ON receipts(group_id, date)
+        `);
+        logger.info('✓ Created receipts table');
+
+        // Add receipt_id FK to expenses
+        const hasReceiptId = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('expenses') WHERE name = 'receipt_id'`,
+          )
+          .get();
+        if (hasReceiptId?.count === 0) {
+          db.exec(
+            `ALTER TABLE expenses ADD COLUMN receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL`,
+          );
+          logger.info('✓ Added receipt_id to expenses');
+        }
+      },
+    },
+    {
+      name: '048_add_expenses_receipt_id_index',
+      up: () => {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_receipt_id ON expenses(receipt_id)');
+        logger.info('✓ Created index on expenses.receipt_id');
+      },
+    },
+    {
+      name: '049_add_bank_transactions_matched_receipt_id',
+      up: () => {
+        const hasColumn = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions') WHERE name = 'matched_receipt_id'`,
+          )
+          .get();
+        if (hasColumn?.count === 0) {
+          db.exec(
+            `ALTER TABLE bank_transactions ADD COLUMN matched_receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL`,
+          );
+          db.exec(
+            'CREATE INDEX IF NOT EXISTS idx_bank_transactions_matched_receipt_id ON bank_transactions(matched_receipt_id)',
+          );
+          logger.info('✓ Added matched_receipt_id to bank_transactions');
+        }
+      },
+    },
   ];
 
   // Check and run migrations

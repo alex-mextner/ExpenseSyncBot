@@ -22,6 +22,7 @@ import {
   handleBankMergeCallback,
   handleBankNewCallback,
   handleBankNoCommentCallback,
+  handleBankReceiptCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
   handleBankSettingsCallback,
@@ -177,7 +178,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankConfirmCallback(ctx, bot, txId, chatId);
+        await handleBankConfirmCallback(ctx, txId, chatId);
         break;
       }
 
@@ -197,7 +198,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        await handleBankNoCommentCallback(ctx, txId, chatId);
         break;
       }
 
@@ -208,7 +209,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        await handleBankMergeCallback(ctx, txId, expenseId, chatId);
         break;
       }
 
@@ -219,6 +220,17 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankNewCallback(ctx, txId, chatId);
+        break;
+      }
+
+      case 'bank_receipt': {
+        const txId = Number(params[0]);
+        const receiptId = Number(params[1]);
+        if (!chatId || !txId || !receiptId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankReceiptCallback(ctx, txId, receiptId, chatId);
         break;
       }
 

@@ -1,4 +1,5 @@
 // OAuth callback HTTP server — handles Google OAuth redirects and token exchange.
+import { fullSyncAfterReconnect } from '../bot/commands/reconnect';
 import { createCurrencyKeyboard } from '../bot/keyboards';
 import { MESSAGES } from '../config/constants';
 import { env } from '../config/env';
@@ -24,7 +25,15 @@ export function startOAuthServer(): void {
       const miniAppResponse = await handleMiniAppRequest(req, corsOrigin);
       if (miniAppResponse !== null) return miniAppResponse;
 
-      const url = new URL(req.url);
+      // Defensive: Bun hands us a relative URL for some malformed requests
+      // (port scanners, HTTP/0.9). Parse with a base fallback instead of
+      // letting TypeError escape the fetch handler.
+      let url: URL;
+      try {
+        url = new URL(req.url, 'http://localhost');
+      } catch {
+        return new Response('Bad Request', { status: 400 });
+      }
 
       if (url.pathname === '/callback') {
         return handleOAuthCallback(url);
@@ -188,10 +197,21 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
 
     logger.info(`✓ OAuth successful for group ${groupId}`);
 
-    // Send success message + currency keyboard to Telegram (background, non-blocking for HTTP response)
-    notifyTelegramSuccess(group.telegram_group_id, group.active_topic_id).catch((notifyErr) => {
-      logger.error({ err: notifyErr }, '[OAuth] Failed to send success message to Telegram');
-    });
+    // Branch on whether a spreadsheet already exists:
+    //   - no spreadsheet → /connect flow (new group), send currency picker
+    //   - has spreadsheet → /reconnect flow, run full bidirectional sync
+    // Both run as background operations so the HTTP response is not blocked.
+    if (group.spreadsheet_id) {
+      withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+        fullSyncAfterReconnect(group.id),
+      ).catch((syncErr) => {
+        logger.error({ err: syncErr, groupId: group.id }, '[OAuth] fullSyncAfterReconnect failed');
+      });
+    } else {
+      notifyTelegramSuccess(group.telegram_group_id, group.active_topic_id).catch((notifyErr) => {
+        logger.error({ err: notifyErr }, '[OAuth] Failed to send success message to Telegram');
+      });
+    }
 
     return new Response(
       `
