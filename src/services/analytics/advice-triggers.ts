@@ -45,6 +45,10 @@ export function checkSmartTriggers(
 
   // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
   for (const br of snap.burnRates) {
+    // Skip projection-based alerts (critical/warning) in the first 5 days —
+    // projections are too unreliable with so little data. Only fire if actually exceeded.
+    if (br.status !== 'exceeded' && br.days_elapsed < 5) continue;
+
     if (br.status === 'exceeded' && br.budget_limit > 0) {
       const topic = `budget_threshold:${br.category}:exceeded`;
       if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
@@ -100,6 +104,59 @@ export function checkSmartTriggers(
               ratio: anomaly.deviation_ratio,
             },
           };
+        }
+      }
+    }
+  }
+
+  // === Trigger 2b: TA anomaly (multi-method consensus) ===
+  if (snap.technicalAnalysis) {
+    for (const cat of snap.technicalAnalysis.categories) {
+      if (cat.anomaly.isAnomaly && cat.anomaly.anomalyCount >= 2) {
+        const topic = `ta_anomaly:${cat.category}`;
+        if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+          if (canSendAdvice(groupId, 'alert')) {
+            return {
+              type: 'ta_anomaly',
+              tier: 'alert',
+              topic,
+              data: {
+                category: cat.category,
+                anomaly_count: cat.anomaly.anomalyCount,
+                z_score: cat.anomaly.zScore.zScore,
+                direction: cat.anomaly.zScore.direction,
+              },
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // === Trigger 2c: TA trend change (MACD crossover + high confidence) ===
+  if (snap.technicalAnalysis) {
+    for (const cat of snap.technicalAnalysis.categories) {
+      if (
+        cat.trend.macd.crossover === 'bullish' &&
+        cat.trend.direction === 'rising' &&
+        cat.trend.confidence >= 0.6
+      ) {
+        const topic = `ta_trend_change:${cat.category}:rising`;
+        if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+          if (canSendAdvice(groupId, 'quick')) {
+            return {
+              type: 'ta_trend_change',
+              tier: 'quick',
+              topic,
+              data: {
+                category: cat.category,
+                direction: 'rising',
+                confidence: cat.trend.confidence,
+                ensemble_forecast: cat.forecasts.ensemble,
+                macd_crossover: cat.trend.macd.crossover,
+              },
+            };
+          }
         }
       }
     }

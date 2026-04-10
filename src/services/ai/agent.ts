@@ -168,6 +168,31 @@ export class ExpenseBotAgent {
   }
 
   /**
+   * Run in batch mode — no streaming, no bot, no conversation history.
+   * Used by smart advice system which wants the final text without side effects.
+   */
+  async runBatch(userMessage: string): Promise<string> {
+    const systemPrompt = this.buildSystemPrompt();
+    let result = '';
+    const { text } = await aiStreamRound(
+      {
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        maxTokens: 1500,
+        chain: 'smart',
+      },
+      {
+        onTextDelta: (delta) => {
+          result += delta;
+        },
+      },
+    );
+    return text || result;
+  }
+
+  /**
    * Retry wrapper: runs runAgentLoop with exponential backoff for transient API errors.
    */
   private async runWithRetry(

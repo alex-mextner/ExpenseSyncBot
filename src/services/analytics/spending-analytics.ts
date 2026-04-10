@@ -3,11 +3,22 @@ import { format, getDaysInMonth, startOfMonth, subDays, subMonths } from 'date-f
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { convertCurrency } from '../currency/converter';
+import {
+  buildCategoryProfiles,
+  buildIntervalProfiles,
+  passesActivityGate,
+  projectCategory,
+} from './forecast-core';
+import type { CategoryTaAnalysis } from './ta/analyzer';
+import { analyzeCategory } from './ta/analyzer';
+import { categoryCorrelation } from './ta/pattern';
+import type { CorrelationResult } from './ta/types';
 import type {
   BudgetBurnRate,
   BudgetUtilization,
   CategoryAnomaly,
   CategoryChange,
+  CategoryProfile,
   CategoryProjection,
   DayOfWeekPattern,
   FinancialSnapshot,
@@ -15,9 +26,16 @@ import type {
   SpendingStreak,
   SpendingTrend,
   SpendingVelocity,
+  TechnicalAnalysis,
 } from './types';
 
+// Re-export pure functions for tests and backwards compatibility
+export { buildCategoryProfiles, buildIntervalProfiles, passesActivityGate, projectCategory };
+
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Number of historical months to look back for category profiles */
+const HISTORY_MONTHS = 6;
 
 /**
  * SpendingAnalytics - computes financial metrics from expense data
@@ -34,8 +52,18 @@ export class SpendingAnalytics {
     const currentMonthStr = format(now, 'yyyy-MM');
     const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
 
+    // Compute category profiles once — used by both burnRates and projection
+    const profiles = this.getCategoryProfiles(groupId, now);
+
     return {
-      burnRates: this.computeBurnRates(groupId, now, currentMonthStr, currentMonthStart, today),
+      burnRates: this.computeBurnRates(
+        groupId,
+        now,
+        currentMonthStr,
+        currentMonthStart,
+        today,
+        profiles,
+      ),
       weekTrend: this.computeWeekOverWeek(groupId, today),
       monthTrend: this.computeMonthOverMonth(groupId, now, currentMonthStart, today),
       anomalies: this.computeAnomalies(groupId, now, currentMonthStart, today),
@@ -48,7 +76,15 @@ export class SpendingAnalytics {
         today,
       ),
       streak: this.computeStreak(groupId, today),
-      projection: this.computeProjection(groupId, now, currentMonthStr, currentMonthStart, today),
+      projection: this.computeProjection(
+        groupId,
+        now,
+        currentMonthStr,
+        currentMonthStart,
+        today,
+        profiles,
+      ),
+      technicalAnalysis: this.computeTechnicalAnalysis(groupId, now, currentMonthStart, today),
     };
   }
 
@@ -62,42 +98,99 @@ export class SpendingAnalytics {
     currentMonth: string,
     monthStart: string,
     today: string,
+    profiles?: Map<string, CategoryProfile>,
   ): BudgetBurnRate[] {
     const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     if (budgets.length === 0) return [];
 
     const categoryTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
     const categorySpentEur: Record<string, number> = {};
+    const categoryTxCount: Record<string, number> = {};
     for (const ct of categoryTotals) {
       categorySpentEur[ct.category] = ct.total;
+      categoryTxCount[ct.category] = ct.tx_count;
     }
+
+    const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
 
     const dayOfMonth = now.getDate();
     const daysInMonth = getDaysInMonth(now);
     const daysElapsed = dayOfMonth; // 1-indexed: day 1 = 1 day elapsed
     const daysRemaining = daysInMonth - daysElapsed;
 
+    // Last transaction day per category — for stall detection
+    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
+      groupId,
+      monthStart,
+      today,
+    );
+    const lastTxByCategory: Record<string, number> = {};
+    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
+
+    // Interval profiles — for cycle-based projection (refueling, salon, etc.)
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
+    const intervalProfiles = buildIntervalProfiles(recentTx);
+
     const results: BudgetBurnRate[] = [];
 
     for (const budget of budgets) {
+      // Skip zero-budget categories — no meaningful projection possible
+      if (budget.limit_amount <= 0) continue;
       const currency = budget.currency as CurrencyCode;
       const spentEur = categorySpentEur[budget.category] || 0;
+      const txCount = categoryTxCount[budget.category] || 0;
       // Convert EUR spent to budget currency for comparison
       const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
       const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
-      const projectedTotal = dailyBurnRate * daysInMonth;
+
+      // Profile is in EUR — convert EMA to budget currency for projection
+      const profileEur = categoryProfiles.get(budget.category) ?? null;
+      const profile: CategoryProfile | null = profileEur
+        ? {
+            ...profileEur,
+            ema: convertCurrency(profileEur.ema, BASE_CURRENCY, currency),
+          }
+        : null;
+
+      // Activity gate: skip projection if not enough transactions
+      const hasEnoughActivity = passesActivityGate(txCount, daysElapsed, daysInMonth, profile);
+      const lastDay = lastTxByCategory[budget.category];
+      const daysSinceLastTx = lastDay !== undefined ? dayOfMonth - lastDay : undefined;
+      const intervalProfile = intervalProfiles.get(budget.category);
+      const projectedTotal = hasEnoughActivity
+        ? projectCategory(
+            spent,
+            daysElapsed,
+            daysInMonth,
+            profile,
+            daysSinceLastTx,
+            intervalProfile,
+          )
+        : spent;
+
       const projectedOvershoot = projectedTotal - budget.limit_amount;
       const runwayDays =
         dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
+
+      // Dynamic warning threshold: volatile categories need higher projection before warning
+      // CV=0 → 85%, CV=0.5 → 90%, CV≥1.0 → 95%
+      const cv = profileEur?.cv ?? 0;
+      const warningThreshold = 0.85 + 0.1 * Math.min(1, cv);
+
+      // If historical norm (EMA) exceeds budget, projection-based alerts are meaningless —
+      // the category chronically overspends, so every projection > budget is expected, not a signal.
+      // Only factual exceedance (spent >= budget) should trigger alerts in this case.
+      const normExceedsBudget = profile && profile.ema > budget.limit_amount;
 
       // Determine status: cascade top-down
       let status: BudgetBurnRate['status'];
       if (spent >= budget.limit_amount) {
         status = 'exceeded';
-      } else if (projectedTotal > budget.limit_amount * 1.0) {
+      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount) {
         status = 'critical';
-      } else if (projectedTotal > budget.limit_amount * 0.85) {
+      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount * warningThreshold) {
         status = 'warning';
       } else {
         status = 'on_track';
@@ -119,6 +212,21 @@ export class SpendingAnalytics {
     }
 
     return results;
+  }
+
+  /**
+   * Fetch monthly history and build per-category statistical profiles.
+   * Uses HISTORY_MONTHS of data, excluding the current month.
+   */
+  protected getCategoryProfiles(groupId: number, now: Date): Map<string, CategoryProfile> {
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+    const historyRows = database.expenses.getMonthlyHistoryByCategory(
+      groupId,
+      historyStart,
+      currentMonthStart,
+    );
+    return buildCategoryProfiles(historyRows);
   }
 
   /**
@@ -538,6 +646,7 @@ export class SpendingAnalytics {
     currentMonth: string,
     monthStart: string,
     today: string,
+    profiles?: Map<string, CategoryProfile>,
   ): MonthlyProjection | null {
     const daysElapsed = now.getDate();
     const daysInMonth = getDaysInMonth(now);
@@ -547,7 +656,26 @@ export class SpendingAnalytics {
     const currentTotal = database.expenses.getTotalEurForRange(groupId, monthStart, today);
     if (currentTotal === 0 && daysElapsed < 3) return null;
 
-    const projectedTotal = (currentTotal / daysElapsed) * daysInMonth;
+    // Build aggregate profile across all categories for overall projection
+    const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
+    const profileValues = [...categoryProfiles.values()];
+    const aggregateEma = profileValues.reduce((s, p) => s + p.ema, 0);
+
+    // Fix #2: compute real weighted CV from category profiles instead of hardcoded 0.5
+    const totalEma = aggregateEma || 1;
+    const weightedCv = profileValues.reduce((s, p) => s + p.cv * (p.ema / totalEma), 0);
+
+    const overallProfile: CategoryProfile | null =
+      categoryProfiles.size > 0
+        ? {
+            ema: aggregateEma,
+            cv: Math.round(weightedCv * 1000) / 1000,
+            monthsOfData: Math.max(...profileValues.map((p) => p.monthsOfData)),
+            avgTxPerMonth: profileValues.reduce((s, p) => s + p.avgTxPerMonth, 0),
+            zeroMonthRatio: 0,
+          }
+        : null;
+    const projectedTotal = projectCategory(currentTotal, daysElapsed, daysInMonth, overallProfile);
 
     // Get last month total for comparison
     const prevMonth = subMonths(now, 1);
@@ -574,7 +702,7 @@ export class SpendingAnalytics {
       confidence = 'medium';
     }
 
-    // Category projections
+    // Category projections — with stall detection and interval-based projection
     const currentCatTotals = database.expenses.getCategoryTotals(groupId, monthStart, today);
     const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     const budgetMap: Record<string, { limit: number; currency: string }> = {};
@@ -582,9 +710,32 @@ export class SpendingAnalytics {
       budgetMap[b.category] = { limit: b.limit_amount, currency: b.currency };
     }
 
+    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
+      groupId,
+      monthStart,
+      today,
+    );
+    const lastTxByCategory: Record<string, number> = {};
+    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
+
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
+    const intervalProfiles = buildIntervalProfiles(recentTx);
+
     const categoryProjections: CategoryProjection[] = [];
     for (const cat of currentCatTotals) {
-      const catProjected = (cat.total / daysElapsed) * daysInMonth;
+      const catProfile = categoryProfiles.get(cat.category) ?? null;
+      const catLastDay = lastTxByCategory[cat.category];
+      const catDaysSince = catLastDay !== undefined ? daysElapsed - catLastDay : undefined;
+      const catInterval = intervalProfiles.get(cat.category);
+      const catProjected = projectCategory(
+        cat.total,
+        daysElapsed,
+        daysInMonth,
+        catProfile,
+        catDaysSince,
+        catInterval,
+      );
       const budget = budgetMap[cat.category];
 
       let budgetLimitEur: number | null = null;
@@ -619,6 +770,59 @@ export class SpendingAnalytics {
       confidence,
       category_projections: categoryProjections.slice(0, 15),
     };
+  }
+  /**
+   * Technical analysis: run 47 TA methods per category on monthly history.
+   * Returns per-category analysis + cross-category correlations.
+   */
+  protected computeTechnicalAnalysis(
+    groupId: number,
+    now: Date,
+    currentMonthStart: string,
+    today: string,
+  ): TechnicalAnalysis | null {
+    // Use 12 months of history for TA (more than the 6 used for profiles)
+    const historyStart = format(subMonths(startOfMonth(now), 12), 'yyyy-MM-dd');
+    const historyRows = database.expenses.getMonthlyHistoryByCategory(
+      groupId,
+      historyStart,
+      currentMonthStart,
+    );
+
+    if (historyRows.length === 0) return null;
+
+    // Group history by category → monthly totals array
+    const categoryMonthlyTotals = new Map<string, number[]>();
+    for (const row of historyRows) {
+      let totals = categoryMonthlyTotals.get(row.category);
+      if (!totals) {
+        totals = [];
+        categoryMonthlyTotals.set(row.category, totals);
+      }
+      totals.push(row.monthly_total);
+    }
+
+    // Get current month spending per category for anomaly detection
+    const currentTotals = database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
+    const currentByCategory = new Map<string, number>();
+    for (const row of currentTotals) {
+      currentByCategory.set(row.category, row.total);
+    }
+
+    // Run TA analysis per category
+    const categories: CategoryTaAnalysis[] = [];
+    for (const [category, monthlyTotals] of categoryMonthlyTotals) {
+      if (monthlyTotals.length < 2) continue;
+      const analysis = analyzeCategory(category, monthlyTotals, {
+        currentMonthSpent: currentByCategory.get(category) ?? 0,
+      });
+      categories.push(analysis);
+    }
+
+    // Cross-category correlations
+    const correlations: CorrelationResult[] = categoryCorrelation(categoryMonthlyTotals);
+
+    return { categories, correlations };
   }
 }
 

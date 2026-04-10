@@ -9,6 +9,7 @@ import {
   getCurrencySymbol,
 } from '../../config/constants';
 import { database } from '../../database';
+import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -19,6 +20,7 @@ import {
   monthTabExists,
   readMonthBudget,
 } from '../../services/google/sheets';
+import { normalizeCategoryName } from '../../utils/fuzzy-search';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import type { GoogleConnectedGroup } from '../guards';
@@ -242,6 +244,38 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
+  // Add TA forecast insights for budgeted categories
+  const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
+  if (snapshot.technicalAnalysis) {
+    const taInsights: string[] = [];
+    for (const cat of snapshot.technicalAnalysis.categories) {
+      const bp = budgetProgress.find((b) => b.budget.category === cat.category);
+      if (!bp) continue;
+
+      const forecast = Math.round(
+        convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency),
+      );
+      const trendLabel =
+        cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
+      const forecastPct =
+        bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
+
+      // Only show insights for categories approaching or exceeding budget
+      if (
+        forecastPct >= 80 ||
+        cat.anomaly.isAnomaly ||
+        (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6)
+      ) {
+        let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency)} ${trendLabel}`;
+        if (cat.anomaly.isAnomaly) insight += ' ⚠️';
+        taInsights.push(insight);
+      }
+    }
+    if (taInsights.length > 0) {
+      message += `\nПрогноз на месяц:\n${taInsights.join('\n')}\n`;
+    }
+  }
+
   return { text: message.trim(), hasBudgets: true };
 }
 
@@ -283,8 +317,7 @@ async function setBudget(
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
 
-  const normalizedCategory =
-    categoryName.charAt(0).toUpperCase() + categoryName.slice(1).toLowerCase();
+  const normalizedCategory = normalizeCategoryName(categoryName);
 
   const categoryExists = database.categories.exists(group.id, normalizedCategory);
 

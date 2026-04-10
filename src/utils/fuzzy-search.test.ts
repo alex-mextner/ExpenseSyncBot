@@ -17,12 +17,23 @@ describe('normalizeCategoryName', () => {
   it('handles whitespace only', () => expect(normalizeCategoryName('   ')).toBe(''));
   it('handles single character', () => expect(normalizeCategoryName('f')).toBe('F'));
   it('handles unicode first char', () => expect(normalizeCategoryName('еда')).toBe('Еда'));
-  it('does not alter rest of string casing', () =>
-    expect(normalizeCategoryName('fOOD')).toBe('FOOD'));
+  it('lowercases rest after capitalizing first', () =>
+    expect(normalizeCategoryName('fOOD')).toBe('Food'));
   it('handles already trimmed string', () =>
     expect(normalizeCategoryName('Transport')).toBe('Transport'));
   it('handles multi-word input', () =>
     expect(normalizeCategoryName('food and drink')).toBe('Food and drink'));
+  it('lowercases all-caps latin word', () => expect(normalizeCategoryName('BYTES')).toBe('Bytes'));
+  it('lowercases all-caps Cyrillic word', () =>
+    expect(normalizeCategoryName('РАЗВЛЕЧЕНИЯ')).toBe('Развлечения'));
+  it('is idempotent — applying twice yields the same result', () => {
+    const inputs = ['food', 'FOOD', 'fOoD', 'РАЗВЛЕЧЕНИЯ', '  Еда.  ', 'Transport'];
+    for (const input of inputs) {
+      const once = normalizeCategoryName(input);
+      const twice = normalizeCategoryName(once);
+      expect(twice).toBe(once);
+    }
+  });
 });
 
 describe('normalizePhonetic', () => {
@@ -124,4 +135,32 @@ describe('findBestCategoryMatch', () => {
     const c = ['Food', 'Fast Food', 'Seafood'];
     expect(findBestCategoryMatch('food', c)).toBe('Food');
   });
+
+  it('strips trailing dot: Расходыквартиры. matches Расходыквартиры', () => {
+    const c = ['Расходыквартиры', 'Ремонт', 'Дом'];
+    // Trailing dot: Levenshtein distance 1, should match via startsWith or fuzzy
+    expect(findBestCategoryMatch('Расходыквартиры.', c)).toBe('Расходыквартиры');
+  });
+});
+
+describe('findBestCategoryMatchAsync', () => {
+  // Async version: sync methods should work identically
+  it('returns sync match without calling classifier', async () => {
+    const { findBestCategoryMatchAsync } = await import('./fuzzy-search');
+    const cats = ['Еда', 'Транспорт', 'Развлечения'];
+    expect(await findBestCategoryMatchAsync('еда', cats)).toBe('Еда');
+    expect(await findBestCategoryMatchAsync('транс', cats)).toBe('Транспорт');
+  });
+
+  it('returns null for no match when classifier unavailable', async () => {
+    const { findBestCategoryMatchAsync } = await import('./fuzzy-search');
+    // Without HF_TOKEN, classifier silently returns null
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+});
+
+describe('normalizeCategoryName edge cases', () => {
+  it('strips trailing dots', () => expect(normalizeCategoryName('Еда.')).toBe('Еда'));
+  it('strips trailing multiple dots', () => expect(normalizeCategoryName('Еда...')).toBe('Еда'));
+  it('strips trailing dot+space', () => expect(normalizeCategoryName('Еда. ')).toBe('Еда'));
 });

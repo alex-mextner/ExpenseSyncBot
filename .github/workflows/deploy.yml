@@ -63,6 +63,7 @@ jobs:
               done
             fi
 
+
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
 

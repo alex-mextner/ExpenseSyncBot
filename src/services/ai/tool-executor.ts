@@ -3,7 +3,7 @@
  * Maps tool calls to database operations and services
  */
 import type Big from 'big.js';
-import { endOfMonth, format } from 'date-fns';
+import { endOfMonth, format, getDaysInMonth } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
@@ -12,6 +12,7 @@ import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
+import { spendingAnalytics } from '../analytics/spending-analytics';
 import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
@@ -85,6 +86,8 @@ export async function executeTool(
         return executeGetBankTransactions(input, ctx);
       case 'get_bank_balances':
         return executeGetBankBalances(input, ctx);
+      case 'get_technical_analysis':
+        return executeGetTechnicalAnalysis(input, ctx);
       case 'get_recurring_patterns':
         return executeGetRecurringPatterns(ctx);
       case 'manage_recurring_pattern':
@@ -986,6 +989,156 @@ async function executeFindMissingExpenses(
       ? `${allMissing.length} ${pluralize(allMissing.length, 'транзакция', 'транзакции', 'транзакций')} без записи:\n${summaryParts.join('\n')}`
       : (summaryParts[0] ?? '0 транзакций без записи'),
   };
+}
+
+// === Technical Analysis tool ===
+
+function executeGetTechnicalAnalysis(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): ToolResult {
+  const snapshot = spendingAnalytics.getFinancialSnapshot(ctx.groupId);
+
+  if (!snapshot.technicalAnalysis) {
+    return {
+      success: true,
+      output: 'Недостаточно данных для технического анализа (нужно ≥3 месяцев истории).',
+    };
+  }
+
+  const ta = snapshot.technicalAnalysis;
+  const categoryFilter = input['category'] as string | undefined;
+
+  const categories = categoryFilter
+    ? ta.categories.filter((c) => c.category.toLowerCase() === categoryFilter.toLowerCase())
+    : ta.categories;
+
+  if (categories.length === 0) {
+    return {
+      success: true,
+      output: categoryFilter
+        ? `Нет данных для категории "${categoryFilter}". Доступные: ${ta.categories.map((c) => c.category).join(', ')}`
+        : 'Нет категорий с достаточной историей для анализа.',
+    };
+  }
+
+  const lines: string[] = [];
+
+  for (const cat of categories) {
+    const trendRu =
+      cat.trend.direction === 'rising'
+        ? 'растут'
+        : cat.trend.direction === 'falling'
+          ? 'снижаются'
+          : 'стабильны';
+    const confidencePct = Math.round(cat.trend.confidence * 100);
+    const q = cat.forecasts.quantiles;
+    const bb = cat.volatility.bollingerBands;
+
+    // Current month pace: extrapolate current spending to end of month
+    const now = new Date();
+    const dayOfMonth = now.getDate();
+    const daysInMonth = getDaysInMonth(now);
+    const currentSpent = Math.round(cat.currentMonthSpent);
+    const paceProjection =
+      dayOfMonth > 0 ? Math.round((cat.currentMonthSpent / dayOfMonth) * daysInMonth) : 0;
+
+    const catLines: string[] = [
+      `## ${cat.category} (данные за ${cat.monthsOfData} мес.)`,
+      `Текущий месяц: потрачено ${currentSpent} за ${dayOfMonth} из ${daysInMonth} дней`,
+      `Темп текущего месяца: если так пойдёт дальше → ~${paceProjection} к концу месяца`,
+      `Прогноз по истории: ~${Math.round(cat.forecasts.ensemble)}`,
+      `Тренд: расходы ${trendRu} (уверенность ${confidencePct}%)`,
+      `Обычный коридор: ${Math.round(bb.lower)}–${Math.round(bb.upper)}, в худшем случае до ${Math.round(q.p95)}`,
+    ];
+
+    // Monthly change direction
+    if (cat.forecasts.holt.trend !== 0) {
+      const changePerMonth = Math.abs(cat.forecasts.holt.trend);
+      const changeDir = cat.forecasts.holt.trend > 0 ? 'растут' : 'снижаются';
+      catLines.push(
+        `Динамика: расходы ${changeDir} примерно на ${Math.round(changePerMonth)}/мес.`,
+      );
+    }
+
+    // Anomaly
+    if (cat.anomaly.isAnomaly) {
+      const zAbs = Math.abs(cat.anomaly.zScore.zScore);
+      const severity = zAbs > 3 ? 'сильно' : 'заметно';
+      catLines.push(`⚠️ Необычный расход: текущий месяц ${severity} выбивается из нормы`);
+    }
+
+    // Momentum signals (MACD in user terms)
+    if (cat.trend.macd.crossover === 'bullish') {
+      catLines.push('📈 Расходы начали расти после периода снижения');
+    } else if (cat.trend.macd.crossover === 'bearish') {
+      catLines.push('📉 Расходы начали снижаться после периода роста');
+    }
+
+    // Unusually high/low spending (RSI in user terms)
+    if (cat.trend.rsi.signal === 'overbought') {
+      catLines.push(
+        '🔴 Траты непривычно высокие уже несколько месяцев — стоит проверить, не появились ли лишние расходы',
+      );
+    } else if (cat.trend.rsi.signal === 'oversold') {
+      catLines.push(
+        '🟢 Траты непривычно низкие — возможно, что-то откладывается и потом придёт разом',
+      );
+    }
+
+    // Predictability (Hurst in user terms)
+    if (cat.trend.hurst.type === 'trending') {
+      catLines.push('Характер расходов: стабильный, скорее всего продолжат в том же направлении');
+    } else if (cat.trend.hurst.type === 'mean_reverting') {
+      catLines.push('Характер расходов: после всплесков обычно возвращаются к привычному уровню');
+    } else {
+      catLines.push('Характер расходов: меняются хаотично, сложно предсказать');
+    }
+
+    // Regime changes (change points in user terms)
+    if (cat.trend.changePoints.length > 0) {
+      catLines.push(`За историю было ${cat.trend.changePoints.length} резких смен уровня трат`);
+    }
+
+    // Typical spending bounds (pivot points in user terms)
+    const pp = cat.trend.pivotPoints;
+    catLines.push(
+      `Типичный минимум ~${Math.round(pp.support1)}, типичный максимум ~${Math.round(pp.resistance1)}`,
+    );
+
+    // Intermittent spending (Croston in user terms)
+    if (cat.forecasts.croston) {
+      const cr = cat.forecasts.croston;
+      catLines.push(
+        `Нерегулярные расходы: ~${Math.round(cr.expectedAmount)} примерно раз в ${cr.expectedInterval.toFixed(1)} мес.`,
+      );
+    }
+
+    // Record high (Donchian in user terms)
+    if (cat.volatility.donchian.isBreakoutHigh) {
+      catLines.push('🚨 Расходы достигли исторического максимума!');
+    }
+
+    lines.push(catLines.join('\n'));
+  }
+
+  // Correlations (in user terms)
+  if (ta.correlations.length > 0) {
+    const corrLines = ['## Связи между категориями'];
+    for (const corr of ta.correlations.slice(0, 10)) {
+      const direction = corr.correlation > 0 ? 'растут вместе' : 'одна растёт — другая падает';
+      const strengthRu =
+        corr.strength === 'strong_positive' || corr.strength === 'strong_negative'
+          ? 'сильная'
+          : corr.strength === 'moderate_positive' || corr.strength === 'moderate_negative'
+            ? 'заметная'
+            : 'слабая';
+      corrLines.push(`${corr.category1} ↔ ${corr.category2}: ${direction} (${strengthRu} связь)`);
+    }
+    lines.push(corrLines.join('\n'));
+  }
+
+  return { success: true, output: lines.join('\n\n') };
 }
 
 // === Recurring pattern tools ===

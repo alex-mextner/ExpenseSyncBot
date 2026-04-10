@@ -307,14 +307,7 @@ function parseAmount(amountStr: string): number | null {
   }
 }
 
-/**
- * Normalize category name - capitalize first letter
- */
-function normalizeCategory(category: string): string {
-  const trimmed = category.trim();
-  if (!trimmed) return trimmed;
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
-}
+import { normalizeCategoryName as normalizeCategory } from '../../utils/fuzzy-search';
 
 /**
  * Parse rest of message (category and comment)

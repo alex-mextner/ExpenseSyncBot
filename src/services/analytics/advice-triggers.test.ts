@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
 import type { BankConnection, BankTransaction } from '../../database/types';
 import { mockDatabase } from '../../test-utils/mocks/database';
-import type { AdviceLog, BudgetBurnRate, CategoryAnomaly, FinancialSnapshot } from './types';
+import type { CategoryTaAnalysis } from './ta/analyzer';
+import type {
+  AdviceLog,
+  BudgetBurnRate,
+  CategoryAnomaly,
+  FinancialSnapshot,
+  TechnicalAnalysis,
+} from './types';
 
 // ── Mock database ──────────────────────────────────────────────────────
 
@@ -94,6 +101,7 @@ function buildNeutralSnapshot(overrides: Partial<FinancialSnapshot> = {}): Finan
       overall_daily_average: 50,
     },
     projection: null,
+    technicalAnalysis: null,
     ...overrides,
   };
 }
@@ -612,6 +620,82 @@ describe('edge cases', () => {
     expect(result?.type).toBe('velocity_spike');
   });
 
+  test('projection-based alert (critical) suppressed in first 5 days', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Car',
+          days_elapsed: 4, // day 4 < 5
+          projected_total: 1200,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9050, snapshot);
+    // Should NOT fire — too early for projection-based alerts
+    expect(result).toBeNull();
+  });
+
+  test('projection-based alert (warning) suppressed in first 5 days', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Car',
+          days_elapsed: 3,
+          projected_total: 450,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9051, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('exceeded status still fires even in first 5 days', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Car',
+          days_elapsed: 3,
+          spent: 600,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9052, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.topic).toContain('exceeded');
+  });
+
+  test('critical alert fires after day 5', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Food',
+          days_elapsed: 10,
+          projected_total: 1200,
+          budget_limit: 500,
+          currency: 'EUR',
+        }),
+      ],
+    });
+    const result = checkSmartTriggers(9053, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+  });
+
   test('budget_limit=0 with status exceeded does NOT trigger (disabled category)', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
     const snapshot = buildNeutralSnapshot({
@@ -708,5 +792,197 @@ describe('edge cases', () => {
     const result = checkSmartTriggers(8018, snapshot);
 
     expect(result).toBeNull();
+  });
+});
+
+// ── TA triggers ───────────────────────────────────────────────────────
+
+/** Builds a minimal CategoryTaAnalysis with overrideable fields used by triggers */
+function buildTaCategory(
+  overrides: {
+    category?: string;
+    isAnomaly?: boolean;
+    anomalyCount?: number;
+    zScore?: number;
+    direction?: 'rising' | 'falling' | 'stable';
+    confidence?: number;
+    macdCrossover?: 'bullish' | 'bearish' | 'none';
+    ensemble?: number;
+  } = {},
+): CategoryTaAnalysis {
+  const z = overrides.zScore ?? 0;
+  return {
+    category: overrides.category ?? 'TestCat',
+    monthsOfData: 6,
+    currentMonthSpent: 0,
+    forecasts: {
+      sma3: 200,
+      wma3: 200,
+      kama: 200,
+      median: 200,
+      holt: { forecast: 200, level: 200, trend: 0 },
+      theta: { forecast: 200 },
+      quantiles: { p50: 190, p75: 220, p90: 250, p95: 270 },
+      croston: null,
+      holtWinters: null,
+      ensemble: overrides.ensemble ?? 200,
+    },
+    volatility: {
+      bollingerBands: { upper: 250, middle: 200, lower: 150, bandwidth: 0.5, percentB: 0.5 },
+      atr: 20,
+      keltner: { upper: 240, lower: 160, middle: 200 },
+      donchian: {
+        upper: 250,
+        lower: 150,
+        middle: 200,
+        isBreakoutHigh: false,
+        isBreakoutLow: false,
+      },
+      historicalVol: 0.1,
+      maEnvelopes: { upper: 220, lower: 180, middle: 200 },
+      percentiles: { p10: 130, p25: 160, p50: 200, p75: 240, p90: 270 },
+    },
+    anomaly: {
+      zScore: {
+        zScore: z,
+        direction: z >= 0 ? 'high' : 'low',
+        isAnomaly: overrides.isAnomaly ?? false,
+      },
+      modifiedZScore: { zScore: z, direction: z >= 0 ? 'high' : 'low', isAnomaly: false },
+      iqr: { q1: 160, q3: 240, iqr: 80, lowerBound: 40, upperBound: 360, isOutlier: false },
+      isAnomaly: overrides.isAnomaly ?? false,
+      anomalyCount: overrides.anomalyCount ?? 0,
+    },
+    trend: {
+      regression: { slope: 0, intercept: 200, r2: 0.5, forecast: 200, monthlyChange: 0 },
+      cusum: { values: [], shiftDetected: false, shiftIndex: -1 },
+      rsi: { value: 50, signal: 'neutral' },
+      macd: { macd: 0, signal: 0, histogram: 0, crossover: overrides.macdCrossover ?? 'none' },
+      roc1: 0,
+      roc3: 0,
+      momentum3: 0,
+      ewmaControl: { outOfControl: false, value: 200 },
+      changePoints: [],
+      hurst: { value: 0.5, type: 'random_walk' },
+      pivotPoints: { support1: 150, support2: 100, pivot: 200, resistance1: 250, resistance2: 300 },
+      direction: overrides.direction ?? 'stable',
+      confidence: overrides.confidence ?? 0.5,
+    },
+  };
+}
+
+function buildTa(categories: CategoryTaAnalysis[]): TechnicalAnalysis {
+  return { categories, correlations: [] };
+}
+
+describe('ta_anomaly trigger', () => {
+  beforeEach(() => {
+    setSystemTime(new Date('2026-03-15T10:00:00Z'));
+    mockAdviceLogs.countToday.mockReturnValue(0);
+    mockAdviceLogs.hasTopicThisMonth.mockReturnValue(false);
+    mockAdviceLogs.getRecent.mockReturnValue([]);
+  });
+
+  test('fires when anomalyCount >= 2', () => {
+    const snapshot = buildNeutralSnapshot({
+      technicalAnalysis: buildTa([
+        buildTaCategory({ category: 'Shopping', isAnomaly: true, anomalyCount: 2, zScore: 2.5 }),
+      ]),
+    });
+
+    const result = checkSmartTriggers(1, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('ta_anomaly');
+    expect(result?.tier).toBe('alert');
+    expect(result?.data['category']).toBe('Shopping');
+  });
+
+  test('does NOT fire when anomalyCount < 2', () => {
+    const snapshot = buildNeutralSnapshot({
+      technicalAnalysis: buildTa([
+        buildTaCategory({ category: 'Food', isAnomaly: true, anomalyCount: 1, zScore: 2.0 }),
+      ]),
+    });
+
+    const result = checkSmartTriggers(1, snapshot);
+    expect(result === null || result.type !== 'ta_anomaly').toBe(true);
+  });
+
+  test('does NOT fire when already sent this month', () => {
+    mockAdviceLogs.hasTopicThisMonth.mockImplementation(
+      // biome-ignore lint/suspicious/noExplicitAny: test mock with extra params
+      ((...args: any[]) => args[1] === 'ta_anomaly:Shopping') as () => boolean,
+    );
+
+    const snapshot = buildNeutralSnapshot({
+      technicalAnalysis: buildTa([
+        buildTaCategory({ category: 'Shopping', isAnomaly: true, anomalyCount: 3, zScore: 3.0 }),
+      ]),
+    });
+
+    const result = checkSmartTriggers(1, snapshot);
+    expect(result === null || result.type !== 'ta_anomaly').toBe(true);
+  });
+});
+
+describe('ta_trend_change trigger', () => {
+  beforeEach(() => {
+    setSystemTime(new Date('2026-03-15T10:00:00Z'));
+    mockAdviceLogs.countToday.mockReturnValue(0);
+    mockAdviceLogs.hasTopicThisMonth.mockReturnValue(false);
+    mockAdviceLogs.getRecent.mockReturnValue([]);
+  });
+
+  test('fires on bullish MACD + rising + high confidence', () => {
+    const snapshot = buildNeutralSnapshot({
+      technicalAnalysis: buildTa([
+        buildTaCategory({
+          category: 'Entertainment',
+          direction: 'rising',
+          confidence: 0.7,
+          macdCrossover: 'bullish',
+          ensemble: 250,
+        }),
+      ]),
+    });
+
+    const result = checkSmartTriggers(1, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('ta_trend_change');
+    expect(result?.tier).toBe('quick');
+    expect(result?.data['category']).toBe('Entertainment');
+    expect(result?.data['direction']).toBe('rising');
+  });
+
+  test('does NOT fire when confidence < 0.6', () => {
+    const snapshot = buildNeutralSnapshot({
+      technicalAnalysis: buildTa([
+        buildTaCategory({
+          category: 'Transport',
+          direction: 'rising',
+          confidence: 0.4,
+          macdCrossover: 'bullish',
+        }),
+      ]),
+    });
+
+    const result = checkSmartTriggers(1, snapshot);
+    expect(result === null || result.type !== 'ta_trend_change').toBe(true);
+  });
+
+  test('does NOT fire on bearish MACD crossover', () => {
+    const snapshot = buildNeutralSnapshot({
+      technicalAnalysis: buildTa([
+        buildTaCategory({
+          category: 'Food',
+          direction: 'rising',
+          confidence: 0.8,
+          macdCrossover: 'bearish',
+        }),
+      ]),
+    });
+
+    const result = checkSmartTriggers(1, snapshot);
+    expect(result === null || result.type !== 'ta_trend_change').toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
+import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
@@ -200,6 +201,33 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
       }
     } else {
       message += `  • Нет категорий\n`;
+    }
+  }
+
+  // Add trend summary for top spending categories
+  const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
+  if (snapshot.technicalAnalysis && snapshot.technicalAnalysis.categories.length > 0) {
+    const taLines: string[] = [];
+    for (const cat of snapshot.technicalAnalysis.categories) {
+      const signals: string[] = [];
+      if (cat.anomaly.isAnomaly) signals.push('⚠️ необычный расход');
+      if (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6) signals.push('↑ растут');
+      else if (cat.trend.direction === 'falling' && cat.trend.confidence >= 0.6)
+        signals.push('↓ снижаются');
+      if (cat.trend.macd.crossover === 'bullish') signals.push('📈 начали расти');
+      else if (cat.trend.macd.crossover === 'bearish') signals.push('📉 пошли на спад');
+      if (cat.volatility.donchian.isBreakoutHigh) signals.push('🚨 рекорд');
+
+      if (signals.length > 0) {
+        const forecast = convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, displayCurrency);
+        const emoji = getCategoryEmoji(cat.category);
+        taLines.push(
+          `  ${emoji} ${cat.category}: ${signals.join(', ')} (прогноз ${formatAmount(forecast, displayCurrency)})`,
+        );
+      }
+    }
+    if (taLines.length > 0) {
+      message += `\n📈 Тренды:\n${taLines.join('\n')}\n`;
     }
   }
 

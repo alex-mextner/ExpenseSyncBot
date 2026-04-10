@@ -176,6 +176,30 @@ describe('BudgetRepository', () => {
       });
       expect(budgetRepo.findByGroupCategoryMonth(groupId, 'Food', '2024-01')).toBeNull();
     });
+
+    test('case-insensitive category match', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Быт',
+        month: '2024-01',
+        limit_amount: 500,
+      });
+      const found = budgetRepo.findByGroupCategoryMonth(groupId, 'быт', '2024-01');
+      expect(found).not.toBeNull();
+      expect(found?.limit_amount).toBe(500);
+    });
+
+    test('case-insensitive match for latin categories', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Food',
+        month: '2024-01',
+        limit_amount: 300,
+      });
+      const found = budgetRepo.findByGroupCategoryMonth(groupId, 'food', '2024-01');
+      expect(found).not.toBeNull();
+      expect(found?.limit_amount).toBe(300);
+    });
   });
 
   describe('getBudgetForMonth (no inheritance)', () => {
@@ -315,6 +339,17 @@ describe('BudgetRepository', () => {
     test('returns true even if no row found', () => {
       expect(budgetRepo.deleteByGroupCategoryMonth(groupId, 'NoCategory', '2024-01')).toBe(true);
     });
+
+    test('case-insensitive category match', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Быт',
+        month: '2024-01',
+        limit_amount: 300,
+      });
+      budgetRepo.deleteByGroupCategoryMonth(groupId, 'быт', '2024-01');
+      expect(budgetRepo.findByGroupCategoryMonth(groupId, 'Быт', '2024-01')).toBeNull();
+    });
   });
 
   describe('getBudgetProgress', () => {
@@ -384,6 +419,18 @@ describe('BudgetRepository', () => {
       const progress = budgetRepo.getBudgetProgress(groupId, 'Zero', '2024-01', 50);
       expect(progress?.percentage).toBe(0);
     });
+
+    test('case-insensitive category match', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Быт',
+        month: '2024-01',
+        limit_amount: 200,
+      });
+      const progress = budgetRepo.getBudgetProgress(groupId, 'быт', '2024-01', 100);
+      expect(progress).not.toBeNull();
+      expect(progress?.percentage).toBe(50);
+    });
   });
 
   describe('hasBudget', () => {
@@ -420,6 +467,16 @@ describe('BudgetRepository', () => {
         limit_amount: 300,
       });
       expect(budgetRepo.hasBudget(groupId, 'Food')).toBe(true);
+    });
+
+    test('case-insensitive category match', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Быт',
+        month: '2024-01',
+        limit_amount: 300,
+      });
+      expect(budgetRepo.hasBudget(groupId, 'быт')).toBe(true);
     });
   });
 

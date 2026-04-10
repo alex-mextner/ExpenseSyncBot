@@ -1,5 +1,6 @@
 /** Budget repository — CRUD and progress tracking for per-category spending budgets */
 import type { Database } from 'bun:sqlite';
+import { findBestCategoryMatch } from '../../utils/fuzzy-search';
 import type { Budget, BudgetProgress, CreateBudgetData } from '../types';
 
 /**
@@ -65,14 +66,21 @@ export class BudgetRepository implements BudgetReadRepository {
     return query.get(id) || null;
   }
 
-  /** Find budget for specific group, category and month */
+  /** Find budget for specific group, category and month.
+   * Uses full fuzzy matching pipeline (exact → case → trim → phonetic → Levenshtein)
+   * to handle typos, case differences, and minor spelling variations. */
   findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null {
-    const query = this.db.query<Budget, [number, string, string]>(`
-      SELECT * FROM budgets
-      WHERE group_id = ? AND category = ? AND month = ?
-    `);
+    const rows = this.db
+      .query<Budget, [number, string]>('SELECT * FROM budgets WHERE group_id = ? AND month = ?')
+      .all(groupId, month);
 
-    return query.get(groupId, category, month) || null;
+    if (rows.length === 0) return null;
+
+    const categories = rows.map((r) => r.category);
+    const matched = findBestCategoryMatch(category, categories);
+    if (!matched) return null;
+
+    return rows.find((r) => r.category === matched) ?? null;
   }
 
   /** Get budget for exact month — no fallback */
@@ -118,12 +126,10 @@ export class BudgetRepository implements BudgetReadRepository {
    * INTERNAL — use BudgetManager.delete() instead.
    */
   deleteByGroupCategoryMonth(groupId: number, category: string, month: string): boolean {
-    const query = this.db.query<void, [number, string, string]>(`
-      DELETE FROM budgets
-      WHERE group_id = ? AND category = ? AND month = ?
-    `);
-
-    query.run(groupId, category, month);
+    const budget = this.findByGroupCategoryMonth(groupId, category, month);
+    if (budget) {
+      this.db.query<void, [number]>('DELETE FROM budgets WHERE id = ?').run(budget.id);
+    }
     return true;
   }
 
@@ -151,14 +157,13 @@ export class BudgetRepository implements BudgetReadRepository {
     };
   }
 
-  /** Check if category exists in any budget for group */
+  /** Check if category exists in any budget for group (fuzzy match) */
   hasBudget(groupId: number, category: string): boolean {
-    const query = this.db.query<{ count: number }, [number, string]>(`
-      SELECT COUNT(*) as count FROM budgets
-      WHERE group_id = ? AND category = ?
-    `);
+    const rows = this.db
+      .query<Budget, [number]>('SELECT DISTINCT category FROM budgets WHERE group_id = ?')
+      .all(groupId);
 
-    const result = query.get(groupId, category);
-    return result ? result.count > 0 : false;
+    const categories = rows.map((r) => r.category);
+    return findBestCategoryMatch(category, categories) !== null;
   }
 }

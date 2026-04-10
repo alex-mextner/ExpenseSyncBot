@@ -3,6 +3,7 @@
 import type { CurrencyCode } from '../config/constants';
 import { _budgetWriter, database } from '../database';
 import type { Group } from '../database/types';
+import { isMultiWordCategory, normalizeCategoryName } from '../utils/fuzzy-search';
 import { createLogger } from '../utils/logger.ts';
 import { monthAbbrFromYYYYMM } from './google/month-abbr';
 import { googleConn, writeMonthBudgetRow } from './google/sheets';
@@ -39,7 +40,8 @@ export interface BudgetWriteResult {
 export class BudgetManager {
   /** Set or update a budget. Writes to DB, then syncs to Sheets. */
   async set(params: SetBudgetParams): Promise<BudgetWriteResult> {
-    const { groupId, category, month, amount, currency } = params;
+    const { groupId, month, amount, currency } = params;
+    const category = normalizeCategoryName(params.category);
 
     // 1. Always write to DB first (atomic, never fails silently)
     _budgetWriter().setBudget({
@@ -85,8 +87,10 @@ export class BudgetManager {
    * Import a budget from Google Sheets into DB. No Sheets write-back.
    * Used by budget-sync, reconnect, and rollback operations.
    */
-  importFromSheet(params: SetBudgetParams): void {
-    const { groupId, category, month, amount, currency } = params;
+  importFromSheet(params: SetBudgetParams): { multiWordWarning?: string } {
+    const { groupId, month, amount, currency } = params;
+    const category = normalizeCategoryName(params.category);
+
     _budgetWriter().setBudget({
       group_id: groupId,
       category,
@@ -94,6 +98,15 @@ export class BudgetManager {
       limit_amount: amount,
       currency,
     });
+
+    if (isMultiWordCategory(category)) {
+      logger.warn({ category, groupId }, 'multi-word category imported from sheet');
+      return {
+        multiWordWarning: `Категория «${category}» содержит пробелы. Бот записывает только первое слово как категорию — остальное уходит в комментарий. Переименуй в таблице на одно слово, или используй /categories чтобы увидеть все категории.`,
+      };
+    }
+
+    return {};
   }
 
   /**
