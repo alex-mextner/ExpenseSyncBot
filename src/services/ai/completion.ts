@@ -54,6 +54,8 @@ export interface CompletionOptions {
   maxRetries?: number;
   /** OpenAI-format tool definitions for function calling */
   tools?: OpenAI.ChatCompletionTool[];
+  /** Abort signal — propagated to the underlying HTTP request */
+  signal?: AbortSignal;
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -120,6 +122,7 @@ interface ModelSlot {
     temp: number,
     timeoutMs: number,
     tools?: OpenAI.ChatCompletionTool[],
+    signal?: AbortSignal,
   ) => Promise<RawResponse>;
 }
 
@@ -140,14 +143,17 @@ function logError(error: unknown): void {
 // ── OpenAI SDK adapter (works for any OpenAI-compatible provider) ───────────
 
 function callProvider(client: OpenAI, model: string): ModelSlot['call'] {
-  return async (msgs, maxTokens, temp, _timeoutMs, tools) => {
-    const response = await client.chat.completions.create({
-      model,
-      messages: msgs as OpenAI.ChatCompletionMessageParam[],
-      max_tokens: maxTokens,
-      temperature: temp,
-      ...(tools && tools.length > 0 ? { tools } : {}),
-    });
+  return async (msgs, maxTokens, temp, _timeoutMs, tools, signal) => {
+    const response = await client.chat.completions.create(
+      {
+        model,
+        messages: msgs as OpenAI.ChatCompletionMessageParam[],
+        max_tokens: maxTokens,
+        temperature: temp,
+        ...(tools && tools.length > 0 ? { tools } : {}),
+      },
+      signal ? { signal } : undefined,
+    );
     const choice = response.choices[0];
     const toolCalls = choice?.message?.tool_calls
       ?.filter(
@@ -210,7 +216,14 @@ export async function aiComplete(options: CompletionOptions): Promise<Completion
       try {
         logger.info(`[AI] ${slot.name} attempt ${attempt}/${maxRetries}`);
 
-        const raw = await slot.call(messages, maxTokens, temperature, timeoutMs, options.tools);
+        const raw = await slot.call(
+          messages,
+          maxTokens,
+          temperature,
+          timeoutMs,
+          options.tools,
+          options.signal,
+        );
 
         // For tool-calling requests, allow empty text (model may only return tool_calls)
         if (!raw.text && !raw.toolCalls) {

@@ -149,6 +149,7 @@ export class DevAgent {
             messages,
             maxTokens: 8192,
             tools: DEV_TOOLS,
+            signal: controller.signal,
           });
         } catch (err: unknown) {
           if ((err instanceof Error && err.name === 'AbortError') || controller.signal.aborted) {
@@ -172,7 +173,7 @@ export class DevAgent {
           `[DEV-AGENT] finish=${result.finishReason} toolCalls=${toolCalls.length} textLen=${finalText.length}`,
         );
 
-        if (toolCalls.length === 0 || result.finishReason === 'stop') {
+        if (toolCalls.length === 0) {
           break;
         }
 
@@ -189,7 +190,20 @@ export class DevAgent {
 
         // Execute tools and add results
         for (const call of toolCalls) {
-          const input = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+          let input: Record<string, unknown>;
+          try {
+            input = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+          } catch {
+            logger.error(
+              `[DEV-AGENT] Malformed tool arguments for ${call.name}: ${call.arguments?.substring(0, 200)}`,
+            );
+            messages.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: `Error: malformed arguments`,
+            });
+            continue;
+          }
           logger.info(`[DEV-AGENT] Tool: ${call.name} ${JSON.stringify(input).slice(0, 200)}`);
           const toolResult = await this.executeTool(call.name, input);
           logger.info(`[DEV-AGENT] Result: ${toolResult.slice(0, 200)}`);

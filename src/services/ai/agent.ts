@@ -252,7 +252,22 @@ export class ExpenseBotAgent {
       const toolResults: ToolCallResult[] = [];
 
       for (const tc of result.toolCalls) {
-        const input = JSON.parse(tc.arguments || '{}');
+        let input: Record<string, unknown>;
+        try {
+          input = JSON.parse(tc.arguments || '{}') as Record<string, unknown>;
+        } catch {
+          logger.error(
+            `[AGENT] Malformed tool arguments for ${tc.name}: ${tc.arguments?.substring(0, 200)}`,
+          );
+          toolResults.push({
+            id: tc.id,
+            result: {
+              success: false,
+              error: `Malformed arguments: ${tc.arguments?.substring(0, 100)}`,
+            },
+          });
+          continue;
+        }
 
         logger.info(`[AGENT] Tool call: ${tc.name} ${JSON.stringify(input)}`);
         debugCtx?.logToolCall(tc.name, input);

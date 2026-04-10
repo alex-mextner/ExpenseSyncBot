@@ -156,6 +156,9 @@ function openaiSlot(model: string): ProviderSlot {
             const existing = toolCalls.get(tc.index);
             if (existing) {
               existing.args += tc.function?.arguments ?? '';
+              // Backfill id/name if they arrive in later chunks
+              if (tc.id && !existing.id) existing.id = tc.id;
+              if (tc.function?.name && !existing.name) existing.name = tc.function.name;
             } else {
               const name = tc.function?.name ?? '';
               if (name) {
@@ -257,14 +260,35 @@ export async function aiStreamRound(
   callbacks: StreamCallbacks = {},
 ): Promise<StreamRoundResult> {
   let lastError: Error | null = null;
+  let textEmitted = false;
+
+  // Wrap callbacks to track whether text was emitted to the user
+  const wrappedCallbacks: StreamCallbacks = {
+    onTextDelta: (text) => {
+      textEmitted = true;
+      callbacks.onTextDelta?.(text);
+    },
+  };
+  if (callbacks.onToolCallStart) {
+    wrappedCallbacks.onToolCallStart = callbacks.onToolCallStart;
+  }
 
   for (const slot of STREAMING_CHAIN) {
     try {
       logger.info(`[AI_STREAM] Trying ${slot.name}`);
-      return await slot.stream(options, callbacks);
+      return await slot.stream(options, wrappedCallbacks);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       logger.error(`[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
+
+      // If text was already sent to the user, we can't splice another model's output.
+      // Propagate the error so the caller can clean up the partial message.
+      if (textEmitted) {
+        logger.error(
+          `[AI_STREAM] ${slot.name} died mid-stream after text was emitted — cannot fallback`,
+        );
+        throw error;
+      }
 
       if (isProviderDown(error)) {
         logger.warn(`[AI_STREAM] ${slot.name} is down, trying next provider`);
