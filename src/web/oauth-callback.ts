@@ -25,7 +25,15 @@ export function startOAuthServer(): void {
       const miniAppResponse = await handleMiniAppRequest(req, corsOrigin);
       if (miniAppResponse !== null) return miniAppResponse;
 
-      const url = new URL(req.url);
+      // Defensive: Bun hands us a relative URL for some malformed requests
+      // (port scanners, HTTP/0.9). Parse with a base fallback instead of
+      // letting TypeError escape the fetch handler.
+      let url: URL;
+      try {
+        url = new URL(req.url, 'http://localhost');
+      } catch {
+        return new Response('Bad Request', { status: 400 });
+      }
 
       if (url.pathname === '/callback') {
         return handleOAuthCallback(url);
