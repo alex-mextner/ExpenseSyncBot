@@ -1,6 +1,6 @@
-/** Integration test: aiComplete vision chain with real receipt image */
+/** Integration test: OCR chain with real receipt image */
 import { readFileSync } from 'node:fs';
-import { aiComplete } from '../src/services/ai/completion';
+import { aiStreamRound } from '../src/services/ai/streaming';
 
 const imagePath = process.argv[2];
 if (!imagePath) {
@@ -16,7 +16,7 @@ console.log('---');
 
 const t0 = Date.now();
 try {
-  const result = await aiComplete({
+  const result = await aiStreamRound({
     messages: [
       {
         role: 'user',
@@ -31,17 +31,17 @@ try {
     ],
     maxTokens: 2000,
     temperature: 0.1,
-    vision: true,
+    chain: 'ocr',
   });
 
   const elapsed = Date.now() - t0;
-  console.log(`✅ Vision OK via ${result.model} (${elapsed}ms)`);
+  console.log(`OK Vision via ${result.providerUsed} (${elapsed}ms)`);
   console.log('---');
   console.log(result.text);
   console.log('---');
-  console.log(`finish: ${result.finishReason}, usage: ${JSON.stringify(result.usage)}`);
+  console.log(`finish: ${result.finishReason}`);
 } catch (error) {
-  console.error('❌ Vision FAILED:');
+  console.error('FAILED:');
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 }

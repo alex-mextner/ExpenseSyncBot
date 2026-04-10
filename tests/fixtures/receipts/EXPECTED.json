@@ -1,0 +1,40 @@
+{
+  "//": "Snapshot expectations for regression testing. Each entry maps a fixture filename to what the full OCR pipeline (ocr-extractor → parseReceipt) should produce. Run via: bun run scripts/run-receipt-snapshots.ts",
+  "//fixtures": "Real Serbian fiscal receipts from MG STOP & SHOP, PEPCO, an unnamed shop, and a clothing store — all paid in RSD, dated 2025-11-24. Kept in the repo so regression tests survive even after debug-images/ is wiped.",
+  "fixtures": {
+    "mg-stop-shop-3items-1759rsd.jpg": {
+      "itemsCount": 3,
+      "currency": "RSD",
+      "claimedTotal": 1759,
+      "computedSum": 1759,
+      "sumVerified": true,
+      "date": "2025-11-24",
+      "expectedItemNames": ["силикон", "шуруп", "texo-flex"]
+    },
+    "pepco-4items-2050rsd.jpg": {
+      "itemsCount": 4,
+      "currency": "RSD",
+      "claimedTotal": 2050,
+      "computedSum": 2050,
+      "sumVerified": true,
+      "date": "2025-11-24",
+      "expectedItemNames": ["бумага", "одеяло", "батарейк", "свеч"]
+    },
+    "shop-3items-847rsd.jpg": {
+      "itemsCount": 3,
+      "currency": "RSD",
+      "claimedTotal": 847,
+      "computedSum": 847,
+      "sumVerified": true,
+      "date": "2025-11-24"
+    },
+    "clothing-1item-1299rsd.jpg": {
+      "itemsCount": 1,
+      "currency": "RSD",
+      "claimedTotal": 1299,
+      "computedSum": 1299,
+      "sumVerified": true,
+      "date": "2025-11-24"
+    }
+  }
+}
