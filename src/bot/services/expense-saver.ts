@@ -251,6 +251,9 @@ export async function saveReceiptExpenses(
 
   const currentDate = format(new Date(), 'yyyy-MM-dd');
 
+  // Look up the receipt record created during photo processing
+  const receipt = database.receipts.findByPhotoQueueId(photoQueueId);
+
   // Prepare per-category data for sheet writes
   interface CategoryBatch {
     category: string;
@@ -316,6 +319,7 @@ export async function saveReceiptExpenses(
         amount: batch.totalAmount,
         currency: batch.currency,
         eur_amount: batch.eurAmount,
+        receipt_id: receipt?.id ?? null,
       });
 
       for (const item of batch.items) {

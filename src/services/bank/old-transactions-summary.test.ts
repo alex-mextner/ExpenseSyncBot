@@ -20,6 +20,7 @@ function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
     mcc: null,
     raw_data: '{}',
     matched_expense_id: null,
+    matched_receipt_id: null,
     telegram_message_id: null,
     edit_in_progress: 0,
     awaiting_comment: 0,

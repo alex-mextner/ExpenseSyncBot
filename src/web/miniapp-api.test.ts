@@ -40,6 +40,7 @@ function stubExpense(
     amount: 10,
     currency: 'EUR',
     eur_amount: 10,
+    receipt_id: null,
     created_at: '2024-01-15',
     ...overrides,
   };
@@ -242,6 +243,21 @@ describe('handleMiniAppRequest — non-API paths', () => {
 
   test('returns null for /health', async () => {
     const result = await handleMiniAppRequest(makeRequest('/health'), CORS_ORIGIN);
+    expect(result).toBeNull();
+  });
+
+  test('does not throw on relative/malformed URL (port-scanner regression)', async () => {
+    // Bun hands us a relative URL for some HTTP/0.9 or malformed probes.
+    // new URL(req.url) without a base would throw TypeError and crash the
+    // process. The defensive parser wraps it with a base fallback.
+    const fake = { url: '/', method: 'GET', headers: new Headers() } as unknown as Request;
+    const result = await handleMiniAppRequest(fake, CORS_ORIGIN);
+    expect(result).toBeNull();
+  });
+
+  test('returns null for unparseable URL input', async () => {
+    const fake = { url: '', method: 'GET', headers: new Headers() } as unknown as Request;
+    const result = await handleMiniAppRequest(fake, CORS_ORIGIN);
     expect(result).toBeNull();
   });
 });

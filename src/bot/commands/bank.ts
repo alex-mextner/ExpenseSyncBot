@@ -11,8 +11,8 @@ import {
 import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
-import { sendMessage } from '../../services/bank/telegram-sender';
-import { convertAnyToEUR } from '../../services/currency/converter';
+import { editMessageText, sendMessage } from '../../services/bank/telegram-sender';
+import { convertAnyToEUR, formatAmount } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
@@ -349,7 +349,6 @@ async function showBankStatus(
 
 export async function handleBankConfirmCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   chatId: number,
 ): Promise<void> {
@@ -402,30 +401,25 @@ export async function handleBankConfirmCallback(
   );
 
   if (exact.length > 0) {
-    // Auto-merge: link the bank transaction to the existing expense silently.
+    // Auto-link: bind the bank transaction to the existing expense silently.
     const existing = exact[0];
     if (!existing) return; // length > 0 guarantees this, but TypeScript needs it
     mergeTransactionWithExpense(claimed, group.id, existing.id);
     database.bankTransactions.setEditInProgress(txId, false);
 
-    await ctx.answerCallbackQuery({ text: '✅ Объединено с существующим расходом' });
+    await ctx.answerCallbackQuery({ text: '✅ Связано с существующим расходом' });
     const messageId = ctx.message?.id;
     if (messageId) {
-      try {
-        await bot.api.editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          text: `✅ Объединено: ${existing.category} (${existing.amount} ${existing.currency})`,
-        });
-      } catch {
-        // message may be too old to edit
-      }
+      await editMessageText(
+        messageId,
+        `✅ Связано: ${existing.category} (${formatAmount(existing.amount, existing.currency)})`,
+      );
     }
     return;
   }
 
   if (fuzzy.length > 0) {
-    // Show merge-or-new prompt — let the user decide.
+    // Show link-or-new prompt — let the user decide.
     const match = fuzzy[0];
     if (!match) return; // length > 0 guarantees this, but TypeScript needs it
     const commentPart = match.comment ? ` — ${match.comment}` : '';
@@ -433,13 +427,47 @@ export async function handleBankConfirmCallback(
 
     const replyToMsgId = claimed.telegram_message_id ?? undefined;
     await sendMessage(
-      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nОбъединить или создать новый?`,
+      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nСвязать или создать новый?`,
       {
         ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '🔗 Объединить', callback_data: `bank_merge:${txId}:${match.id}` },
+              { text: '🔗 Связать', callback_data: `bank_merge:${txId}:${match.id}` },
+              { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
+            ],
+          ],
+        },
+      },
+    );
+    return;
+  }
+
+  // Check for matching receipts (same amount ±5%, date, currency)
+  const receiptMatches = database.receipts.findPotentialMatches(
+    group.id,
+    claimed.date,
+    claimed.amount,
+    claimed.currency,
+  );
+  const receiptMatch = receiptMatches.exact[0] ?? receiptMatches.fuzzy[0];
+  if (receiptMatch) {
+    const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptMatch.id);
+    const categorySummary = receiptExpenses.map((e) => e.category).join(', ') || 'без категорий';
+    await ctx.answerCallbackQuery();
+
+    const replyToMsgId = claimed.telegram_message_id ?? undefined;
+    await sendMessage(
+      `🧾 Найден чек на ${formatAmount(receiptMatch.total_amount, receiptMatch.currency)} от ${receiptMatch.date}\n📋 Категории: ${categorySummary}\n\nСвязать транзакцию с чеком или создать новый расход?`,
+      {
+        ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: '🧾 Связать с чеком',
+                callback_data: `bank_receipt:${txId}:${receiptMatch.id}`,
+              },
               { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
             ],
           ],
@@ -471,11 +499,10 @@ export async function handleBankConfirmCallback(
 }
 
 /**
- * Handles "Объединить" button — links bank transaction to an existing expense.
+ * Handles "Связать" button — links bank transaction to an existing expense.
  */
 export async function handleBankMergeCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   expenseId: number,
   chatId: number,
@@ -494,9 +521,15 @@ export async function handleBankMergeCallback(
     const expense = database.expenses.findById(expenseId);
     if (!expense || expense.group_id !== group.id) return 'expense_missing' as const;
 
+    // Block if another bank_tx already claims this expense directly,
+    // or via the expense's parent receipt (Variant A: receipt-linked txs only
+    // set matched_receipt_id, so we must check that path too).
     const alreadyLinked = database.queryOne<{ n: number }>(
-      'SELECT COUNT(*) as n FROM bank_transactions WHERE matched_expense_id = ?',
+      `SELECT COUNT(*) as n FROM bank_transactions
+       WHERE matched_expense_id = ?
+          OR (matched_receipt_id IS NOT NULL AND matched_receipt_id = ?)`,
       expenseId,
+      expense.receipt_id ?? -1,
     );
     if (alreadyLinked && alreadyLinked.n > 0) return 'expense_taken' as const;
 
@@ -520,18 +553,73 @@ export async function handleBankMergeCallback(
 
   const expense = mergeResult;
 
-  await ctx.answerCallbackQuery({ text: '✅ Объединено' });
+  await ctx.answerCallbackQuery({ text: '✅ Связано' });
   const messageId = ctx.message?.id;
   if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `✅ Объединено: ${expense.category} (${expense.amount} ${expense.currency})`,
-      });
-    } catch {
-      // message may be too old to edit
-    }
+    await editMessageText(
+      messageId,
+      `✅ Связано: ${expense.category} (${formatAmount(expense.amount, expense.currency)})`,
+    );
+  }
+}
+
+/**
+ * Handles "Связать с чеком" button — links bank transaction to all expenses from a receipt.
+ */
+export async function handleBankReceiptCallback(
+  ctx: Ctx['CallbackQuery'],
+  txId: number,
+  receiptId: number,
+  chatId: number,
+): Promise<void> {
+  const group = database.groups.findByTelegramGroupId(chatId);
+  if (!group) {
+    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
+    return;
+  }
+
+  const linkResult = database.transaction(() => {
+    const tx = database.bankTransactions.findById(txId, group.id);
+    if (!tx || tx.status !== 'pending') return 'tx_done' as const;
+
+    const receipt = database.receipts.findById(receiptId);
+    if (!receipt || receipt.group_id !== group.id) return 'receipt_missing' as const;
+
+    const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptId);
+    if (receiptExpenses.length === 0) return 'no_expenses' as const;
+
+    // 1:N link — bank_tx → receipt → N expenses (via expenses.receipt_id).
+    // We set matched_receipt_id only; matched_expense_id stays null because
+    // a single FK cannot express the receipt's multi-expense relationship.
+    database.bankTransactions.updateStatus(tx.id, group.id, 'confirmed');
+    database.bankTransactions.setMatchedReceipt(tx.id, group.id, receiptId);
+    database.bankTransactions.setEditInProgress(txId, false);
+    return { receipt, expenses: receiptExpenses };
+  });
+
+  if (linkResult === 'tx_done') {
+    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
+    return;
+  }
+  if (linkResult === 'receipt_missing') {
+    await ctx.answerCallbackQuery({ text: 'Чек не найден' });
+    return;
+  }
+  if (linkResult === 'no_expenses') {
+    await ctx.answerCallbackQuery({ text: 'У чека нет связанных расходов' });
+    return;
+  }
+
+  const { receipt, expenses } = linkResult;
+  const categorySummary = expenses.map((e) => e.category).join(', ');
+
+  await ctx.answerCallbackQuery({ text: '✅ Связано с чеком' });
+  const messageId = ctx.message?.id;
+  if (messageId) {
+    await editMessageText(
+      messageId,
+      `✅ Связано с чеком: ${formatAmount(receipt.total_amount, receipt.currency)} (${categorySummary})`,
+    );
   }
 }
 
@@ -683,7 +771,6 @@ export async function handleBankEditReply(
  */
 export async function handleBankNoCommentCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   chatId: number,
 ): Promise<void> {
@@ -731,15 +818,10 @@ export async function handleBankNoCommentCallback(
 
   const messageId = ctx.message?.id;
   if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `✅ Записано: ${category} (${tx.amount} ${tx.currency})`,
-      });
-    } catch {
-      // message may be too old to edit
-    }
+    await editMessageText(
+      messageId,
+      `✅ Записано: ${category} (${formatAmount(tx.amount, tx.currency)})`,
+    );
   }
 }
 

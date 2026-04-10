@@ -417,7 +417,6 @@ const percentage = budget.limit_amount > 0
 Banned alternatives:
 - **`ctx.send()`** — in `CallbackQueryContext` it sends to private chat, not group. Silent bug.
 - **`bot.api.sendMessage()`** — bypasses `AsyncLocalStorage` context, loses `message_thread_id` injection. Messages go to General instead of the topic.
-- **`sendToChat`** — removed, was a redundant wrapper.
 
 ```ts
 import { sendMessage } from '../../services/bank/telegram-sender';
@@ -533,7 +532,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
-12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendToChat()` from `src/bot/send.ts`. See "Sending Messages" section above.
+12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendMessage()` from `src/services/bank/telegram-sender.ts`. See "Sending Messages" section above.
 13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
 
 ## When Modifying Code
