@@ -8,7 +8,7 @@ mock.module('../../utils/logger.ts', () => ({
 }));
 
 import { TelegramError } from 'gramio';
-import { TelegramStreamWriter, isSkipSignal } from './telegram-stream';
+import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 
 /**
  * Helper to construct TelegramError instances for tests.
@@ -1008,7 +1008,11 @@ describe('isSkipSignal', () => {
   test('random dots', () => expect(isSkipSignal('..')).toBe(false));
   test('actual response', () => expect(isSkipSignal('Итого за месяц: 500€')).toBe(false));
   test('long reply quoting [SKIP] marker', () =>
-    expect(isSkipSignal('Маркер [SKIP] используется когда бот решает промолчать. Это машинный токен.')).toBe(false));
+    expect(
+      isSkipSignal('Маркер [SKIP] используется когда бот решает промолчать. Это машинный токен.'),
+    ).toBe(false));
   test('long reply quoting [ПРОПУСК]', () =>
-    expect(isSkipSignal('Токен [ПРОПУСК] — это устаревший русский вариант маркера молчания.')).toBe(false));
+    expect(isSkipSignal('Токен [ПРОПУСК] — это устаревший русский вариант маркера молчания.')).toBe(
+      false,
+    ));
 });

@@ -1,7 +1,6 @@
 /**
- * Handles @botname questions in groups (Anthropic agent) and smart financial advice.
+ * Handles @botname questions in groups (OpenAI SDK agent) and smart financial advice.
  */
-import Anthropic from '@anthropic-ai/sdk';
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
 import { BASE_CURRENCY } from '../../config/constants';
@@ -9,7 +8,8 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
-import { AI_BASE_URL, AI_MODEL, ExpenseBotAgent } from '../../services/ai/agent';
+import { ExpenseBotAgent } from '../../services/ai/agent';
+import { aiComplete, stripThinkingTags } from '../../services/ai/completion';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
 import {
@@ -271,24 +271,15 @@ async function sendSmartAdvice(
 
     logger.info(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
 
-    const anthropic = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-      baseURL: AI_BASE_URL,
-    });
-    const response = await anthropic.messages.create({
-      model: AI_MODEL,
-      max_tokens: tierConfig.max_tokens,
+    const { text: rawAdvice } = await aiComplete({
       messages: [{ role: 'user', content: fullPrompt }],
+      maxTokens: tierConfig.max_tokens,
     });
-    let advice = '';
-    for (const block of response.content) {
-      if (block.type === 'text') advice += block.text;
-    }
 
-    if (!advice) return;
+    if (!rawAdvice) return;
 
     // Clean up think tags
-    const cleanAdvice = processThinkTagsForAdvice(advice);
+    const cleanAdvice = processThinkTagsForAdvice(stripThinkingTags(rawAdvice));
     const sanitizedAdvice = sanitizeHtmlForTelegram(cleanAdvice);
     if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
 

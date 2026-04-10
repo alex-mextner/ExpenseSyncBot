@@ -14,8 +14,8 @@ export class AppError extends Error {
 export class GoogleSheetsError extends AppError {}
 // Used for HuggingFace Inference API (OCR, receipt AI services)
 export class HuggingFaceError extends AppError {}
-// Used for Anthropic SDK (main AI agent in src/services/ai/agent.ts)
-export class AnthropicError extends AppError {}
+// Used for AI provider errors (z.ai GLM, HuggingFace, etc.)
+export class AiProviderError extends AppError {}
 export class NetworkError extends AppError {}
 export class OAuthError extends AppError {}
 

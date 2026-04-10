@@ -1,19 +1,13 @@
-/**
- * AI-powered code review using Anthropic/GLM API.
- *
- * Replaced the old Claude CLI approach with direct API calls.
- */
-
-import Anthropic from '@anthropic-ai/sdk';
+/** AI-powered code review via shared completion utility */
 import { env } from '../../config/env';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
-import { AI_BASE_URL, AI_MODEL } from '../ai/agent';
+import { aiComplete, stripThinkingTags } from '../ai/completion';
 
 const logger = createLogger('codex-integration');
 
 /**
- * Run code review using Anthropic/GLM API.
+ * Run code review on a git diff.
  */
 export async function runCodexReview(diff: string): Promise<string> {
   if (!diff.trim()) {
@@ -30,15 +24,8 @@ export async function runCodexReview(diff: string): Promise<string> {
       ? `${diff.slice(0, maxDiffLength)}\n\n[... diff truncated ...]`
       : diff;
 
-  const anthropic = new Anthropic({
-    apiKey: env.ANTHROPIC_API_KEY,
-    baseURL: AI_BASE_URL,
-  });
-
   try {
-    const response = await anthropic.messages.create({
-      model: AI_MODEL,
-      max_tokens: 4096,
+    const { text } = await aiComplete({
       messages: [
         {
           role: 'user',
@@ -56,13 +43,11 @@ ${truncatedDiff}
 \`\`\``,
         },
       ],
+      maxTokens: 4096,
     });
 
-    let review = '';
-    for (const block of response.content) {
-      if (block.type === 'text') review += block.text;
-    }
-    return review.trim() || 'No review comments.';
+    const cleaned = stripThinkingTags(text);
+    return cleaned || 'No review comments.';
   } catch (error) {
     logger.error({ err: error }, '[REVIEW] Failed');
     return `Review failed: ${getErrorMessage(error)}`;
