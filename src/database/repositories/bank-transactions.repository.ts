@@ -226,6 +226,7 @@ export class BankTransactionsRepository {
           AND bt.date >= ? AND bt.date <= ?
           AND bt.sign_type = 'debit'
           AND bt.matched_expense_id IS NULL
+          AND bt.matched_receipt_id IS NULL
           AND bt.status IN ('pending', 'confirmed')
         ORDER BY bt.date DESC
       `)

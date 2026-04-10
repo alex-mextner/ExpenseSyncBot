@@ -521,9 +521,15 @@ export async function handleBankMergeCallback(
     const expense = database.expenses.findById(expenseId);
     if (!expense || expense.group_id !== group.id) return 'expense_missing' as const;
 
+    // Block if another bank_tx already claims this expense directly,
+    // or via the expense's parent receipt (Variant A: receipt-linked txs only
+    // set matched_receipt_id, so we must check that path too).
     const alreadyLinked = database.queryOne<{ n: number }>(
-      'SELECT COUNT(*) as n FROM bank_transactions WHERE matched_expense_id = ?',
+      `SELECT COUNT(*) as n FROM bank_transactions
+       WHERE matched_expense_id = ?
+          OR (matched_receipt_id IS NOT NULL AND matched_receipt_id = ?)`,
       expenseId,
+      expense.receipt_id ?? -1,
     );
     if (alreadyLinked && alreadyLinked.n > 0) return 'expense_taken' as const;
 
@@ -579,16 +585,13 @@ export async function handleBankReceiptCallback(
     const receipt = database.receipts.findById(receiptId);
     if (!receipt || receipt.group_id !== group.id) return 'receipt_missing' as const;
 
-    // Find the first expense linked to this receipt and merge with it
     const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptId);
     if (receiptExpenses.length === 0) return 'no_expenses' as const;
 
-    const firstExpense = receiptExpenses[0];
-    if (!firstExpense) return 'no_expenses' as const;
-
-    mergeTransactionWithExpense(tx, group.id, firstExpense.id);
-    // Link the transaction to the whole receipt so the dedup filter excludes it
-    // even though matched_expense_id only references the first expense.
+    // 1:N link — bank_tx → receipt → N expenses (via expenses.receipt_id).
+    // We set matched_receipt_id only; matched_expense_id stays null because
+    // a single FK cannot express the receipt's multi-expense relationship.
+    database.bankTransactions.updateStatus(tx.id, group.id, 'confirmed');
     database.bankTransactions.setMatchedReceipt(tx.id, group.id, receiptId);
     database.bankTransactions.setEditInProgress(txId, false);
     return { receipt, expenses: receiptExpenses };

@@ -511,6 +511,26 @@ describe('handleBankMergeCallback', () => {
       expect.objectContaining({ text: expect.stringContaining('уже привязан') }),
     );
   });
+
+  test('alreadyLinked check also considers the parent receipt (Variant A)', async () => {
+    // An expense belonging to a receipt that another bank_tx already claims via
+    // matched_receipt_id must be treated as "taken" — even though no bank_tx
+    // points at this expense directly via matched_expense_id.
+    const tx = makeTx({ edit_in_progress: 1 });
+    const expense = makeExpense({ id: 50, receipt_id: 42 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    mockExpenses.findById.mockImplementation(() => expense);
+
+    const ctx = makeCallbackCtx();
+
+    await handleBankMergeCallback(ctx as never, tx.id, expense.id, 100);
+
+    // The guard query must cover both the direct FK and the receipt FK.
+    const [sql, ...params] = mockQueryOne.mock.calls.at(-1) ?? [''];
+    expect(String(sql)).toContain('matched_expense_id');
+    expect(String(sql)).toContain('matched_receipt_id');
+    expect(params).toEqual([expense.id, expense.receipt_id]);
+  });
 });
 
 // ─── Tests: handleBankNewCallback ────────────────────────────────────────────
@@ -812,7 +832,9 @@ describe('handleBankReceiptCallback', () => {
     await handleBankReceiptCallback(ctx as never, tx.id, receipt.id, 100);
 
     expect(mockBankTransactions.updateStatus).toHaveBeenCalledWith(tx.id, group.id, 'confirmed');
-    expect(mockBankTransactions.setMatchedExpense).toHaveBeenCalledWith(tx.id, group.id, 50);
+    // Variant A: receipt link uses matched_receipt_id only. matched_expense_id
+    // stays null because a single FK cannot express the 1:N receipt → expenses relationship.
+    expect(mockBankTransactions.setMatchedExpense).not.toHaveBeenCalled();
     expect(mockBankTransactions.setMatchedReceipt).toHaveBeenCalledWith(
       tx.id,
       group.id,

@@ -532,6 +532,48 @@ describe('ExpenseRepository', () => {
       expect(fuzzy).toHaveLength(0);
     });
 
+    test('excludes expenses linked via receipt (Variant A)', () => {
+      // Receipt expense has no matched_expense_id, but the bank tx holds matched_receipt_id.
+      // The exclusion must follow the receipt FK, not just the direct FK.
+      db.exec(`
+        INSERT INTO receipts (group_id, image_path, total_amount, currency, date, created_at)
+        VALUES (${groupId}, '/tmp/x.jpg', 100, 'EUR', '2024-01-15', '2024-01-15T00:00:00Z')
+      `);
+      const receipt = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get() as {
+        id: number;
+      };
+
+      expenseRepo.create(
+        makeExpense({
+          date: '2024-01-15',
+          amount: 100,
+          currency: 'EUR',
+          receipt_id: receipt.id,
+        }),
+      );
+
+      db.exec(`
+        INSERT INTO bank_connections (group_id, bank_name, display_name, status)
+        VALUES (${groupId}, 'test_bank', 'Test Bank', 'active')
+      `);
+      const conn = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get() as {
+        id: number;
+      };
+      db.exec(`
+        INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, matched_receipt_id, status)
+        VALUES (${conn.id}, 'ext-r', '2024-01-15', 100, 'EUR', '{}', ${receipt.id}, 'confirmed')
+      `);
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(0);
+    });
+
     test('does not return expenses from other groups', () => {
       const group2 = groupRepo.create({ telegram_group_id: Date.now() + 10 });
       const user2 = userRepo.create({ telegram_id: Date.now() + 10, group_id: group2.id });

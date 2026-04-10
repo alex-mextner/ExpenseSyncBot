@@ -65,9 +65,16 @@ export class ExpenseRepository {
     amount: number,
     currency: string,
   ): { exact: Expense[]; fuzzy: Expense[] } {
+    // Exclude expenses already claimed by a bank transaction via either path:
+    //  • direct FK: bt.matched_expense_id = e.id
+    //  • receipt FK: bt.matched_receipt_id = e.receipt_id (Variant A 1:N link)
     const notLinked = `
       AND NOT EXISTS (
         SELECT 1 FROM bank_transactions bt WHERE bt.matched_expense_id = e.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM bank_transactions bt
+        WHERE e.receipt_id IS NOT NULL AND bt.matched_receipt_id = e.receipt_id
       )
     `;
     const amountTolerance = amount * 0.05;
