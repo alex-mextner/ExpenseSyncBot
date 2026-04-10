@@ -47,12 +47,18 @@ jobs:
             git pull origin main
             git submodule update --init
 
-            echo "📋 Copying .env.stage to worktrees..."
+            echo "📋 Copying .env.stage into every git worktree..."
             if [ -f .env.stage ]; then
-              for wt in .claude/worktrees/*/; do
-                if [ -d "$wt" ] && [ ! -f "${wt}.env" ]; then
-                  cp .env.stage "${wt}.env"
-                  echo "  → ${wt}.env"
+              # Use `git worktree list` instead of a shell glob so branches
+              # with slashes (`fix/X`, `feat/X`) — which create nested
+              # directories — are iterated correctly. Skip the primary
+              # checkout so we don't clobber its .env.
+              MAIN_WT="$(pwd)"
+              git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt; do
+                if [ "$wt" = "$MAIN_WT" ]; then continue; fi
+                if [ -d "$wt" ] && [ ! -f "$wt/.env" ]; then
+                  cp .env.stage "$wt/.env"
+                  echo "  → $wt/.env"
                 fi
               done
             fi

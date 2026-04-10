@@ -58,27 +58,62 @@ jobs:
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
 
             BRANCH="${{ github.head_ref }}"
-            WORKTREE="/var/www/ExpenseSyncBot/.claude/worktrees/$BRANCH"
-            ENV_FILE="/var/www/ExpenseSyncBot/.env.stage"
+            MAIN_DIR="/var/www/ExpenseSyncBot"
+            WORKTREE="$MAIN_DIR/.claude/worktrees/$BRANCH"
+            ENV_FILE="$MAIN_DIR/.env.stage"
             PM2="/var/www/.bun/bin/pm2"
             BUN="/var/www/.bun/bin/bun"
 
-            if [ "${{ github.event.action }}" = "closed" ]; then
-              echo "🛑 Stopping stage bot..."
+            # Start stage bot. Uses `bun --env-file` with an absolute path so
+            # the process doesn't depend on a `.env` file being present in
+            # the cwd — works identically for worktree and main checkouts.
+            start_stage_bot() {
+              local cwd="$1"
               $PM2 delete expensesyncbot-stage 2>/dev/null || true
+              $PM2 start "$BUN --env-file=$ENV_FILE index.ts" \
+                   --name expensesyncbot-stage \
+                   --cwd "$cwd"
+
+              sleep 3
+              STATUS=$($PM2 jlist | $BUN -e "
+                const procs = JSON.parse(await Bun.stdin.text());
+                const p = procs.find(p => p.name === 'expensesyncbot-stage');
+                console.log(p?.pm2_env?.status ?? 'not_found');
+              ")
+
+              if [ "$STATUS" != "online" ]; then
+                echo "❌ Stage bot failed to start (status: $STATUS)"
+                echo ""
+                echo "=== Last 80 lines of logs ==="
+                $PM2 logs expensesyncbot-stage --lines 80 --nostream 2>&1 || true
+                return 1
+              fi
+
+              echo "✅ Stage bot online (cwd: $cwd)"
+            }
+
+            if [ "${{ github.event.action }}" = "closed" ]; then
+              echo "🛑 PR closed — tearing down worktree and restarting stage bot from main..."
 
               if [ -d "$WORKTREE" ]; then
-                cd /var/www/ExpenseSyncBot
+                cd "$MAIN_DIR"
                 git worktree remove "$WORKTREE" --force 2>/dev/null || true
               fi
 
-              echo "✅ Stage bot stopped"
+              # Ensure main is up to date before we switch the stage bot to it.
+              cd "$MAIN_DIR"
+              git fetch origin main
+              git pull origin main || true
+              $BUN install
+
+              start_stage_bot "$MAIN_DIR"
+              $PM2 list
               exit 0
             fi
 
             echo "🚀 Deploying stage bot from branch: $BRANCH"
 
-            cd /var/www/ExpenseSyncBot
+            cd "$MAIN_DIR"
             git fetch origin
 
             if [ ! -d "$WORKTREE" ]; then
@@ -94,30 +129,7 @@ jobs:
             cd "$WORKTREE"
             $BUN install
 
-            $PM2 delete expensesyncbot-stage 2>/dev/null || true
-            $PM2 start index.ts \
-                 --name expensesyncbot-stage \
-                 --interpreter $BUN \
-                 --cwd "$WORKTREE" \
-                 -- --env-file $ENV_FILE
-
-            # Wait for bot to start and verify it's alive
-            sleep 3
-            STATUS=$($PM2 jlist | $BUN -e "
-              const procs = JSON.parse(await Bun.stdin.text());
-              const p = procs.find(p => p.name === 'expensesyncbot-stage');
-              console.log(p?.pm2_env?.status ?? 'not_found');
-            ")
-
-            if [ "$STATUS" != "online" ]; then
-              echo "❌ Stage bot failed to start (status: $STATUS)"
-              echo ""
-              echo "=== Last 80 lines of logs ==="
-              $PM2 logs expensesyncbot-stage --lines 80 --nostream 2>&1 || true
-              exit 1
-            fi
-
-            echo "✅ Stage bot deployed and running"
+            start_stage_bot "$WORKTREE"
             $PM2 list
 
       - name: Comment on PR with stage bot link
@@ -169,6 +181,6 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: existing.id,
-                body: `${marker}\n🛑 Stage bot stopped. PR closed.`,
+                body: `${marker}\n🔁 PR closed. Stage bot switched back to \`main\`.`,
               });
             }
