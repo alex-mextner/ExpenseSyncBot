@@ -40,6 +40,7 @@ function stubExpense(
     amount: 10,
     currency: 'EUR',
     eur_amount: 10,
+    receipt_id: null,
     created_at: '2024-01-15',
     ...overrides,
   };

@@ -33,6 +33,7 @@ export function clearTestDb(db: Database): void {
     DELETE FROM chat_messages;
     DELETE FROM dev_tasks;
     DELETE FROM expenses;
+    DELETE FROM receipts;
     DELETE FROM budgets;
     DELETE FROM categories;
     DELETE FROM pending_expenses;

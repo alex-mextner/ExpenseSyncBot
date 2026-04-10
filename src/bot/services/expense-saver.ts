@@ -262,6 +262,9 @@ export async function saveReceiptExpenses(
 
   const currentDate = format(new Date(), 'yyyy-MM-dd');
 
+  // Look up the receipt record created during photo processing
+  const receipt = database.receipts.findByPhotoQueueId(photoQueueId);
+
   // For each category, create one expense with multiple items
   for (const [category, items] of itemsByCategory.entries()) {
     if (items.length === 0) {
@@ -316,6 +319,7 @@ export async function saveReceiptExpenses(
         amount: totalAmount,
         currency,
         eur_amount: eurAmount,
+        receipt_id: receipt?.id ?? null,
       });
 
       for (const item of items) {
