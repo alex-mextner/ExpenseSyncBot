@@ -7,14 +7,12 @@ import { database } from '../../database';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { sendMessage, withChatContext } from '../bank/telegram-sender';
-import {
-  type AIExtractionResult,
-  type AIReceiptItem,
-  extractExpensesFromReceipt,
-} from './ai-extractor';
+import type { AIExtractionResult, AIReceiptItem } from './ai-extractor';
 import { scanQRFromImage } from './qr-scanner';
 import { fetchReceiptData } from './receipt-fetcher';
+import { parseReceipt } from './receipt-parser';
 import { buildSummaryFromItems, formatSummaryMessage } from './receipt-summarizer';
+import { StatusWriter } from './status-writer';
 
 const logger = createLogger('photo-processor');
 
@@ -236,28 +234,68 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     const categoryNames = categories.map((c) => c.name);
     const categoryExamples = database.expenses.getRecentExamplesByCategory(queueItem.group_id);
 
-    // Extract expenses using AI
+    // Parse receipt with a live-updating status message so the user sees progress
+    // during the 30-60s parse. The status writer streams the model's raw JSON output
+    // into a single Telegram message via edit-in-place (throttled to ~1 per 1.5s).
+    // On success → message is deleted, confirmation card takes its place.
+    // On failure → message is finalized with the error text.
     let extractionResult: AIExtractionResult;
+    const groupForStatus = database.groups.findById(queueItem.group_id);
+    if (!groupForStatus) {
+      logger.error({ groupId: queueItem.group_id }, '[PHOTO_PROCESSOR] Group not found');
+      return;
+    }
+    const statusThreadId = queueItem.message_thread_id ?? null;
+
+    const statusWriter = await withChatContext(
+      groupForStatus.telegram_group_id,
+      statusThreadId,
+      () => Promise.resolve(new StatusWriter({ header: '🤖 AI читает чек...' })),
+    );
+
     try {
-      extractionResult = await extractExpensesFromReceipt(
+      const parsed = await parseReceipt(
         receiptData,
         categoryNames,
         categoryExamples,
+        // Progress callback — feed raw text deltas from the model into the status message
+        (delta) => statusWriter.append(delta),
       );
+
+      // Delete the status message — the confirmation card will be sent next as the real result
+      await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
+        statusWriter.close(),
+      );
+
+      extractionResult = { items: parsed.items };
+      if (parsed.currency) {
+        extractionResult.currency = parsed.currency;
+      }
+      if (parsed.date) {
+        extractionResult.date = parsed.date;
+      }
+      logger.info(
+        `[PHOTO_PROCESSOR] Parsed ${parsed.items.length} items, sum=${parsed.computedSum}, claimedTotal=${parsed.claimedTotal ?? 'n/a'}, verified=${parsed.sumVerified}, calc_rounds=${parsed.calculateSumRounds} via ${parsed.providerUsed}`,
+      );
+      if (!parsed.sumVerified && parsed.items.length > 0 && parsed.claimedTotal !== undefined) {
+        logger.warn(
+          `[PHOTO_PROCESSOR] Sum check failed: computed=${parsed.computedSum} vs claimed=${parsed.claimedTotal} — user review advised`,
+        );
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to extract expenses');
+      logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to parse receipt');
+
+      // Finalize the status message with the error text instead of sending a separate
+      // one — keeps the chat clean
+      await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
+        statusWriter.finalize(`❌ AI не распознал чек: ${errorMessage}`),
+      );
+
       database.photoQueue.update(queueItemId, {
         status: 'error',
         error_message: `❌ AI не распознал чек: ${errorMessage}`,
       });
-
-      // Notify user
-      await notifyUser(
-        queueItem.group_id,
-        `❌ AI не распознал чек: ${errorMessage}`,
-        queueItem.message_thread_id,
-      );
       return;
     }
 

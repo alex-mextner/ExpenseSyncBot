@@ -9,7 +9,7 @@ import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
 import { ExpenseBotAgent } from '../../services/ai/agent';
-import { aiComplete, stripThinkingTags } from '../../services/ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
 import {
@@ -19,6 +19,7 @@ import {
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
+import { StatusWriter } from '../../services/receipt/status-writer';
 import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
@@ -237,11 +238,6 @@ async function sendSmartAdvice(
   trigger: TriggerResult,
   snapshot: FinancialSnapshot,
 ): Promise<void> {
-  if (!env.ANTHROPIC_API_KEY) {
-    logger.info('[ADVICE] No ANTHROPIC_API_KEY, skipping advice');
-    return;
-  }
-
   try {
     const tier = trigger.tier;
     const severity = computeOverallSeverity(snapshot);
@@ -271,33 +267,53 @@ async function sendSmartAdvice(
 
     logger.info(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
 
-    const { text: rawAdvice } = await aiComplete({
-      messages: [{ role: 'user', content: fullPrompt }],
-      maxTokens: tierConfig.max_tokens,
-    });
+    // Live-stream the advice into an editable status message so the user sees
+    // the long-form output building up in real time (3k tokens = 15-30s wait).
+    const header = `${tierConfig.emoji} ${tierConfig.title}`;
+    const writer = new StatusWriter({ header, mode: 'plain' });
 
-    if (!rawAdvice) return;
+    let rawAdvice: string;
+    try {
+      const result = await aiStreamRound(
+        {
+          messages: [{ role: 'user', content: fullPrompt }],
+          maxTokens: tierConfig.max_tokens,
+          chain: 'smart',
+        },
+        { onTextDelta: (delta) => writer.append(delta) },
+      );
+      rawAdvice = result.text;
+    } catch (err) {
+      await writer.close();
+      throw err;
+    }
+
+    if (!rawAdvice) {
+      await writer.close();
+      return;
+    }
 
     // Clean up think tags
     const cleanAdvice = processThinkTagsForAdvice(stripThinkingTags(rawAdvice));
     const sanitizedAdvice = sanitizeHtmlForTelegram(cleanAdvice);
-    if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
+    if (!sanitizedAdvice || sanitizedAdvice.length < 10) {
+      await writer.close();
+      return;
+    }
 
-    // Send with tier-appropriate header
-    const header = `${tierConfig.emoji} ${tierConfig.title}`;
-    const message = `\n\n${header}\n\n${sanitizedAdvice}`;
-
+    // Replace the streamed live output with the final cleaned version
+    // (strips <think> tags, finalizes HTML). Single edit, no duplicate message.
+    const finalMessage = `${header}\n\n${sanitizedAdvice}`;
     try {
-      await sendMessage(message);
-    } catch (sendErr: unknown) {
-      if (sendErr instanceof Error && sendErr.message.includes("can't parse entities")) {
-        logger.error('[ADVICE] HTML parse error, falling back to plain text');
-        await sendMessage(
-          `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
-        );
-      } else {
-        throw sendErr;
-      }
+      await writer.finalize(finalMessage);
+    } catch (finalErr: unknown) {
+      // Edit can fail if the sanitized output differs structurally from what
+      // was streamed — fall back to a fresh plain-text message.
+      logger.error({ err: finalErr }, '[ADVICE] Finalize edit failed, sending plain fallback');
+      await writer.close();
+      await sendMessage(
+        `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
+      );
     }
 
     // Record advice in log and update cooldown

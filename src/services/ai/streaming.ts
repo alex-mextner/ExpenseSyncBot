@@ -1,45 +1,38 @@
-/** Streaming AI completion with tool calling and provider fallback — all via OpenAI SDK */
+/**
+ * Unified AI streaming round with automatic provider fallback.
+ *
+ * Three chains, selected via options.chain:
+ *   SMART: z.ai ${AI_MODEL}      → Gemini ${GEMINI_MODEL}      → HF ${HF_MODEL}
+ *   FAST:  z.ai ${AI_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
+ *   OCR:   Gemini ${GEMINI_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
+ *
+ * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
+ * Callers that just want the final text (validator, prefill, merchant-agent) omit callbacks.
+ *
+ * Fallback rules:
+ *  - 5xx / timeout / network errors       → try next provider
+ *  - 429 rate limit                        → try next provider
+ *  - 4xx non-429 (client error)            → propagate immediately
+ *  - Provider streams text then fails      → propagate (cannot splice another model's output)
+ *  - Provider returns 200 OK but empty text AND no tool calls
+ *    (z.ai coding endpoint quirk: returns reasoning_content only for pure text)
+ *                                          → treat as provider failure, try next
+ */
+
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
+import { geminiClient, hfClient, zaiClient } from './clients';
 
 const logger = createLogger('ai-streaming');
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const ZAI_BASE_URL = 'https://api.z.ai/api/paas/v4';
-const HF_BASE_URL = 'https://router.huggingface.co/v1';
-const DEFAULT_TIMEOUT_MS = 60_000;
-
-// ── Clients (all OpenAI SDK, different base URLs) ───────────────────────────
-
-function makeFetchDelegate(): (
-  url: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response> {
-  return async (url, init) => globalThis.fetch(url, init);
-}
-
-// OpenAI SDK throws on empty apiKey at construction — pass placeholder for tests
-const PLACEHOLDER_KEY = 'missing';
-
-const zaiClient = new OpenAI({
-  apiKey: env.ANTHROPIC_API_KEY || PLACEHOLDER_KEY,
-  baseURL: ZAI_BASE_URL,
-  timeout: DEFAULT_TIMEOUT_MS,
-  maxRetries: 0,
-  fetch: makeFetchDelegate(),
-});
-
-const hfClient = new OpenAI({
-  apiKey: env.HF_TOKEN || PLACEHOLDER_KEY,
-  baseURL: HF_BASE_URL,
-  timeout: DEFAULT_TIMEOUT_MS,
-  maxRetries: 0,
-  fetch: makeFetchDelegate(),
-});
+const DEFAULT_TEMPERATURE = 0.3;
 
 // ── Types ───────────────────────────────────────────────────────────────────
+
+export type ChainName = 'smart' | 'fast' | 'ocr';
 
 export interface StreamToolCall {
   id: string;
@@ -53,6 +46,8 @@ export interface StreamRoundResult {
   finishReason: string;
   /** Full assistant message for appending to conversation history */
   assistantMessage: OpenAI.ChatCompletionMessageParam;
+  /** Which provider slot actually produced the result (e.g. "z.ai (glm-5.1)") */
+  providerUsed: string;
 }
 
 export interface StreamRoundOptions {
@@ -60,24 +55,19 @@ export interface StreamRoundOptions {
   tools?: OpenAI.ChatCompletionTool[];
   maxTokens: number;
   temperature?: number;
+  /** Which chain to run. Default: 'smart'. */
+  chain?: ChainName;
   signal?: AbortSignal;
 }
-
-// ── Callbacks ───────────────────────────────────────────────────────────────
 
 export interface StreamCallbacks {
   onTextDelta?: (text: string) => void;
   onToolCallStart?: (name: string) => void;
 }
 
-// ── Provider adapters ───────────────────────────────────────────────────────
+// ── Error helpers (exported for tests) ──────────────────────────────────────
 
-interface ProviderSlot {
-  name: string;
-  stream: (opts: StreamRoundOptions, callbacks: StreamCallbacks) => Promise<StreamRoundResult>;
-}
-
-/** Check if error indicates the provider is down (5xx, timeout, network) */
+/** Provider-down: 5xx, timeout, network. Means "try next", retrying same provider is hopeless. */
 function isProviderDown(error: unknown): boolean {
   if (error instanceof OpenAI.APIError && error.status !== undefined && error.status >= 500) {
     return true;
@@ -95,17 +85,17 @@ function isProviderDown(error: unknown): boolean {
   return false;
 }
 
-/** Transient errors that may resolve on retry */
+/** Retryable: 429, 5xx, timeout, abort. The chain runner uses this to decide fallthrough. */
 export function isRetryableError(error: unknown): boolean {
   if (isProviderDown(error)) return true;
   if (error instanceof Error && error.name === 'AbortError') return true;
   if (error instanceof OpenAI.APIError) {
-    return error.status === 429 || error.status >= 500;
+    return error.status === 429 || (error.status ?? 0) >= 500;
   }
   return false;
 }
 
-/** Exponential backoff: 2s → 6s. For 429, uses retry-after header when available. */
+/** Exponential backoff: 2s → 6s → 18s capped at 30s. 429 uses Retry-After if present. */
 export function getBackoffDelay(attempt: number, error: unknown): number {
   if (error instanceof OpenAI.APIError && error.status === 429) {
     const retryAfter = error.headers?.['retry-after'];
@@ -118,23 +108,36 @@ export function getBackoffDelay(attempt: number, error: unknown): number {
   return Math.min(2000 * 3 ** attempt, 30_000);
 }
 
-// ── OpenAI streaming adapter ────────────────────────────────────────────────
+// ── Provider slots ──────────────────────────────────────────────────────────
 
-function openaiSlot(model: string): ProviderSlot {
+interface ProviderSlot {
+  name: string;
+  stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<StreamRoundResult>;
+}
+
+/**
+ * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
+ * (z.ai, Gemini, HF) via the shared OpenAI SDK.
+ */
+function streamingSlot(name: string, getClient: () => OpenAI, model: string): ProviderSlot {
   return {
-    name: `GLM (${model})`,
-    stream: async (opts, callbacks) => {
+    name,
+    stream: async (opts, cbs) => {
       const params: OpenAI.ChatCompletionCreateParamsStreaming = {
         model,
         messages: opts.messages,
         max_tokens: opts.maxTokens,
-        temperature: opts.temperature ?? 0.3,
+        temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
         stream: true,
       };
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
       }
-      const stream = await zaiClient.chat.completions.create(params, { signal: opts.signal });
+
+      const stream = await getClient().chat.completions.create(
+        params,
+        opts.signal ? { signal: opts.signal } : undefined,
+      );
 
       let text = '';
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
@@ -144,29 +147,24 @@ function openaiSlot(model: string): ProviderSlot {
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
 
-        // Text delta
         if (delta.content) {
           text += delta.content;
-          callbacks.onTextDelta?.(delta.content);
+          cbs.onTextDelta?.(delta.content);
         }
 
-        // Tool call deltas (arguments arrive incrementally)
         if (delta.tool_calls) {
           for (const tc of delta.tool_calls) {
             const existing = toolCalls.get(tc.index);
             if (existing) {
               existing.args += tc.function?.arguments ?? '';
-              // Backfill id/name if they arrive in later chunks
               if (tc.id && !existing.id) existing.id = tc.id;
               if (tc.function?.name && !existing.name) existing.name = tc.function.name;
             } else {
-              const name = tc.function?.name ?? '';
-              if (name) {
-                callbacks.onToolCallStart?.(name);
-              }
+              const tcName = tc.function?.name ?? '';
+              if (tcName) cbs.onToolCallStart?.(tcName);
               toolCalls.set(tc.index, {
                 id: tc.id ?? '',
-                name,
+                name: tcName,
                 args: tc.function?.arguments ?? '',
               });
             }
@@ -184,7 +182,16 @@ function openaiSlot(model: string): ProviderSlot {
         arguments: tc.args,
       }));
 
-      // Build the assistant message for history
+      // z.ai coding endpoint quirk: for pure text responses (no tools) it returns
+      // content='' and populates reasoning_content instead. We can't read
+      // reasoning_content via the OpenAI SDK, so we treat this as a failure and
+      // fall through to the next provider. Tool-calling responses are unaffected.
+      if (!text && toolCallsArray.length === 0) {
+        throw new Error(
+          `Provider ${name} returned empty response (no text, no tool calls) — treating as failure`,
+        );
+      }
+
       const assistantMessage: OpenAI.ChatCompletionMessageParam = {
         role: 'assistant',
         content: text || null,
@@ -199,70 +206,76 @@ function openaiSlot(model: string): ProviderSlot {
           : {}),
       };
 
-      return { text, toolCalls: toolCallsArray, finishReason, assistantMessage };
-    },
-  };
-}
-
-// ── HuggingFace fallback (non-streaming via OpenAI SDK) ─────────────────────
-
-function hfSlot(model: string): ProviderSlot {
-  return {
-    name: model.includes('DeepSeek') ? 'DeepSeek-R1' : model,
-    stream: async (opts, callbacks) => {
-      // HF router doesn't reliably support streaming with tool calling,
-      // so we use non-streaming completion and emit the full text at once.
-      const response = await hfClient.chat.completions.create({
-        model,
-        messages: opts.messages,
-        max_tokens: opts.maxTokens,
-        temperature: opts.temperature ?? 0.3,
-        // HF DeepSeek-R1 doesn't support tool calling — text-only fallback
-      });
-      const choice = response.choices[0];
-      const text = choice?.message?.content?.trim() ?? '';
-
-      if (text) {
-        callbacks.onTextDelta?.(text);
-      }
-
       return {
         text,
-        toolCalls: [],
-        finishReason: choice?.finish_reason ?? 'stop',
-        assistantMessage: { role: 'assistant', content: text || null },
+        toolCalls: toolCallsArray,
+        finishReason,
+        assistantMessage,
+        providerUsed: name,
       };
     },
   };
 }
 
-// ── Model chain ─────────────────────────────────────────────────────────────
+// ── Chain builders ──────────────────────────────────────────────────────────
+// Lazy — read env on each build so tests can mock env per-test.
 
-const STREAMING_CHAIN: ProviderSlot[] = [
-  openaiSlot(env.AI_MODEL),
-  hfSlot('deepseek-ai/DeepSeek-R1-0528'),
-];
+function buildSmartChain(): ProviderSlot[] {
+  return [
+    streamingSlot(`z.ai (${env.AI_MODEL})`, zaiClient, env.AI_MODEL),
+    streamingSlot(`Gemini (${env.GEMINI_MODEL})`, geminiClient, env.GEMINI_MODEL),
+    streamingSlot(`HF (${env.HF_MODEL})`, hfClient, env.HF_MODEL),
+  ];
+}
+
+function buildFastChain(): ProviderSlot[] {
+  return [
+    streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, zaiClient, env.AI_FAST_MODEL),
+    streamingSlot(`Gemini (${env.GEMINI_FAST_MODEL})`, geminiClient, env.GEMINI_FAST_MODEL),
+    streamingSlot(`HF (${env.HF_FAST_MODEL})`, hfClient, env.HF_FAST_MODEL),
+  ];
+}
+
+function buildOcrChain(): ProviderSlot[] {
+  return [
+    streamingSlot(`Gemini (${env.GEMINI_VISION_MODEL})`, geminiClient, env.GEMINI_VISION_MODEL),
+    streamingSlot(`HF (${env.HF_VISION_MODEL})`, hfClient, env.HF_VISION_MODEL),
+  ];
+}
+
+function buildChain(chain: ChainName): ProviderSlot[] {
+  switch (chain) {
+    case 'smart':
+      return buildSmartChain();
+    case 'fast':
+      return buildFastChain();
+    case 'ocr':
+      return buildOcrChain();
+  }
+}
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Execute one streaming round with automatic provider fallback.
+ * Execute one AI round with automatic provider fallback.
  *
- * Tries GLM via z.ai first (with full streaming + tool calling).
- * If the provider is down (5xx/timeout), falls through to DeepSeek-R1 via HF
- * (non-streaming, no tool calling — text-only fallback).
+ * With callbacks: streams text deltas and tool-call starts to the caller
+ * (used by the agent for live Telegram updates).
  *
- * Fallback happens ONLY on provider-down errors before any text is sent.
- * Once streaming starts successfully, errors propagate to the caller.
+ * Without callbacks: collects the full result and returns it at the end
+ * (used by validator, prefill, merchant-agent, OCR).
  */
 export async function aiStreamRound(
   options: StreamRoundOptions,
   callbacks: StreamCallbacks = {},
 ): Promise<StreamRoundResult> {
+  const chainName: ChainName = options.chain ?? 'smart';
+  const chain = buildChain(chainName);
   let lastError: Error | null = null;
   let textEmitted = false;
 
-  // Wrap callbacks to track whether text was emitted to the user
+  // Wrap callbacks to track whether text was actually sent to the user —
+  // if so, we cannot splice another model's output in a fallback.
   const wrappedCallbacks: StreamCallbacks = {
     onTextDelta: (text) => {
       textEmitted = true;
@@ -273,16 +286,14 @@ export async function aiStreamRound(
     wrappedCallbacks.onToolCallStart = callbacks.onToolCallStart;
   }
 
-  for (const slot of STREAMING_CHAIN) {
+  for (const slot of chain) {
     try {
-      logger.info(`[AI_STREAM] Trying ${slot.name}`);
+      logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
       return await slot.stream(options, wrappedCallbacks);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      logger.error(`[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
+      logger.error({ err: lastError }, `[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
 
-      // If text was already sent to the user, we can't splice another model's output.
-      // Propagate the error so the caller can clean up the partial message.
       if (textEmitted) {
         logger.error(
           `[AI_STREAM] ${slot.name} died mid-stream after text was emitted — cannot fallback`,
@@ -290,20 +301,24 @@ export async function aiStreamRound(
         throw error;
       }
 
-      if (isProviderDown(error)) {
-        logger.warn(`[AI_STREAM] ${slot.name} is down, trying next provider`);
+      // Empty-response quirk or retryable error → try next provider
+      const isEmpty = lastError.message.includes('empty response');
+      if (isRetryableError(error) || isEmpty) {
+        logger.warn(`[AI_STREAM] ${slot.name} failed (retryable), trying next provider`);
         continue;
       }
 
-      // Non-provider errors (AbortError, client errors) — propagate immediately
+      // Non-retryable (4xx client error, AbortError, etc.) — propagate
       throw error;
     }
   }
 
-  throw lastError ?? new Error('All streaming providers failed');
+  throw lastError ?? new Error(`All providers in ${chainName} chain failed`);
 }
 
-/** Format an API error into a user-facing message */
+// ── User-facing error formatting ────────────────────────────────────────────
+
+/** Format an API error into a user-facing Telegram message. */
 export function formatApiError(error: unknown): string {
   if (error instanceof OpenAI.APIError) {
     if (error.status === 429) {
@@ -317,4 +332,9 @@ export function formatApiError(error: unknown): string {
     logger.error({ err: error }, `[AI_STREAM] API error: ${error.status}`);
   }
   return '\u274c Ошибка AI. Попробуйте позже.';
+}
+
+/** Strip `<think>…</think>` blocks emitted by reasoning models (DeepSeek-R1, Qwen3). */
+export function stripThinkingTags(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }

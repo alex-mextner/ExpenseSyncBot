@@ -2,9 +2,11 @@
 import type OpenAI from 'openai';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete, type ChatMessage } from '../ai/completion';
+import { aiStreamRound, type StreamRoundResult } from '../ai/streaming';
 import { deleteFile, fileExists, listDirectory, readFile, searchCode, writeFile } from './file-ops';
 import { commitChanges, managePackages, revertFileToMain } from './git-ops';
+
+type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const logger = createLogger('dev-agent');
 
@@ -143,12 +145,13 @@ export class DevAgent {
         round++;
         logger.info(`[DEV-AGENT] Round ${round}/${MAX_ROUNDS}`);
 
-        let result: Awaited<ReturnType<typeof aiComplete>>;
+        let result: StreamRoundResult;
         try {
-          result = await aiComplete({
+          result = await aiStreamRound({
             messages,
             maxTokens: 8192,
             tools: DEV_TOOLS,
+            chain: 'smart',
             signal: controller.signal,
           });
         } catch (err: unknown) {
@@ -215,7 +218,7 @@ export class DevAgent {
       if (!finalText.trim() && round < MAX_ROUNDS) {
         logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
         messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
-        const nudge = await aiComplete({ messages, maxTokens: 8192 });
+        const nudge = await aiStreamRound({ messages, maxTokens: 8192, chain: 'smart' });
         finalText += nudge.text;
         logger.info(`[DEV-AGENT] Nudge result: textLen=${finalText.length}`);
       }
