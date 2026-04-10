@@ -7,7 +7,7 @@
  * indicators and history preservation), this is a minimal "progress indicator".
  */
 
-import { escapeHtml } from '../../utils/html';
+import { escapeHtml, sanitizeHtmlForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { deleteMessage, editMessageText, sendMessage } from '../bank/telegram-sender';
 
@@ -20,6 +20,16 @@ const ERROR_COOLDOWN_MS = 10_000;
 interface StatusWriterOptions {
   /** Header shown above streamed text (e.g. "🤖 AI читает чек...") */
   header: string;
+  /**
+   * How to render the streamed content:
+   *  - 'code' (default): escape HTML special chars, wrap in <code>…</code>.
+   *    Safe for arbitrary model output (raw JSON, random text with < > & chars).
+   *    Used for OCR parsing / structured JSON responses.
+   *  - 'plain': sanitize via sanitizeHtmlForTelegram — allows safe whitelisted
+   *    tags, escapes everything else, closes unmatched tags. Used for long-form
+   *    natural-language output (advice, receipt corrections).
+   */
+  mode?: 'code' | 'plain';
 }
 
 export class StatusWriter {
@@ -125,11 +135,20 @@ export class StatusWriter {
     if (!trimmed) {
       return this.options.header;
     }
-    // Escape all HTML special chars so the streaming output can never produce
-    // malformed markup that Telegram rejects (the stream is arbitrary text from
-    // the LLM — it may contain <, >, &, incomplete entities, etc.).
-    // The resulting <code>...</code> wrapper is guaranteed balanced.
-    return `${this.options.header}\n\n<code>${escapeHtml(trimmed)}</code>`;
+
+    const mode = this.options.mode ?? 'code';
+    if (mode === 'code') {
+      // Escape all HTML special chars so the streaming output can never produce
+      // malformed markup that Telegram rejects. The <code>…</code> wrapper is
+      // guaranteed balanced.
+      return `${this.options.header}\n\n<code>${escapeHtml(trimmed)}</code>`;
+    }
+
+    // Plain mode — sanitize with the full Telegram sanitizer so whitelisted
+    // tags survive and everything else is escaped + unmatched tags are closed.
+    // Safe even on partial mid-stream output.
+    const safeBody = sanitizeHtmlForTelegram(trimmed);
+    return `${this.options.header}\n\n${safeBody}`;
   }
 
   private truncateBuffer(buffer: string): string {
