@@ -7,9 +7,9 @@ import { database } from '../database/index.ts';
 import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
 import { convertCurrency } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
-import { extractExpensesFromReceipt } from '../services/receipt/ai-extractor.ts';
 import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
+import { parseReceipt } from '../services/receipt/receipt-parser.ts';
 import { createLogger } from '../utils/logger.ts';
 import { emitForGroup, subscribeGroup } from './sse-emitter.ts';
 
@@ -261,7 +261,7 @@ export async function handleMiniAppRequest(
       const categoryNames = database.categories
         .findByGroupId(ctx.internalGroupId)
         .map((c) => c.name);
-      const result = await extractExpensesFromReceipt(html, categoryNames);
+      const result = await parseReceipt(html, categoryNames);
 
       const items = result.items.map((item) => ({
         name: item.name_ru,
@@ -271,12 +271,21 @@ export async function handleMiniAppRequest(
         category: item.category,
       }));
 
-      logger.info({ userId: ctx.userId, itemCount: items.length }, 'Receipt QR scan completed');
+      logger.info(
+        {
+          userId: ctx.userId,
+          itemCount: items.length,
+          verified: result.sumVerified,
+          rounds: result.calculateSumRounds,
+        },
+        'Receipt QR scan completed',
+      );
 
       return new Response(
         JSON.stringify({
           items,
           ...(result.currency !== undefined ? { currency: result.currency } : {}),
+          ...(result.date !== undefined ? { date: result.date } : {}),
         }),
         {
           status: 200,
@@ -351,7 +360,7 @@ export async function handleMiniAppRequest(
       const categoryNames = database.categories
         .findByGroupId(ctx.internalGroupId)
         .map((c) => c.name);
-      const result = await extractExpensesFromReceipt(ocrText, categoryNames);
+      const result = await parseReceipt(ocrText, categoryNames);
 
       // Upload image to Telegram to get a file_id for later use in the confirm step
       const tgFormData = new FormData();
@@ -387,12 +396,21 @@ export async function handleMiniAppRequest(
         category: item.category,
       }));
 
-      logger.info({ userId: ctx.userId, itemCount: items.length }, 'Receipt OCR completed');
+      logger.info(
+        {
+          userId: ctx.userId,
+          itemCount: items.length,
+          verified: result.sumVerified,
+          rounds: result.calculateSumRounds,
+        },
+        'Receipt OCR completed',
+      );
 
       return new Response(
         JSON.stringify({
           items,
           ...(result.currency !== undefined ? { currency: result.currency } : {}),
+          ...(result.date !== undefined ? { date: result.date } : {}),
           file_id: fileId,
         }),
         {

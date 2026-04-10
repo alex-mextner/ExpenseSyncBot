@@ -9,7 +9,7 @@ import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
 import { ExpenseBotAgent } from '../../services/ai/agent';
-import { aiComplete, stripThinkingTags } from '../../services/ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
 import {
@@ -271,9 +271,10 @@ async function sendSmartAdvice(
 
     logger.info(`[ADVICE] Generating ${tier} advice (severity: ${severity}) for group ${groupId}`);
 
-    const { text: rawAdvice } = await aiComplete({
+    const { text: rawAdvice } = await aiStreamRound({
       messages: [{ role: 'user', content: fullPrompt }],
       maxTokens: tierConfig.max_tokens,
+      chain: 'smart',
     });
 
     if (!rawAdvice) return;

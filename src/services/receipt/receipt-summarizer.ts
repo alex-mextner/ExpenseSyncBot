@@ -4,7 +4,7 @@ import type { ReceiptItem } from '../../database/types';
 import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete, stripThinkingTags } from '../ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
 
 const logger = createLogger('receipt-summarizer');
 
@@ -194,7 +194,7 @@ ${historyText}
 
   logger.info(`[RECEIPT_SUMMARIZER] Sending correction to AI: "${userCorrection}"`);
 
-  const { text: responseText } = await aiComplete({
+  const { text: responseText } = await aiStreamRound({
     messages: [
       {
         role: 'system',
@@ -205,6 +205,7 @@ ${historyText}
     ],
     maxTokens: 2000,
     temperature: 0.3,
+    chain: 'smart',
   });
 
   const cleanedResponse = stripThinkingTags(responseText);

@@ -12,11 +12,12 @@ import type {
   RecorderApi,
 } from '../services/expense-recorder.ts';
 import * as expenseRecorderModule from '../services/expense-recorder.ts';
-import type { AIExtractionResult, CategoryExample } from '../services/receipt/ai-extractor.ts';
-import * as aiExtractorModule from '../services/receipt/ai-extractor.ts';
+import type { CategoryExample } from '../services/receipt/ai-extractor.ts';
 import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
 import type { BrowserLike } from '../services/receipt/receipt-fetcher.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
+import type { ParseResult } from '../services/receipt/receipt-parser.ts';
+import * as receiptParserModule from '../services/receipt/receipt-parser.ts';
 import { createMockLogger } from '../test-utils/mocks/logger';
 import * as loggerModule from '../utils/logger.ts';
 import type { SseEventType } from './sse-emitter.ts';
@@ -95,13 +96,25 @@ const mockFetchReceiptData = mock(
   (_qrData: string, _getBrowserFn?: () => Promise<BrowserLike>): Promise<string> =>
     Promise.resolve(''),
 );
-const mockExtractExpensesFromReceipt = mock(
+/** Build a ParseResult stub — tests only care about items + currency, fill required fields */
+function stubParseResult(overrides: Partial<ParseResult> = {}): ParseResult {
+  return {
+    items: [],
+    sumVerified: false,
+    computedSum: 0,
+    providerUsed: 'mock',
+    calculateSumRounds: 0,
+    ...overrides,
+  };
+}
+
+const mockParseReceipt = mock(
   (
     _data: string,
     _categories: string[],
     _categoryExamples?: Map<string, CategoryExample[]>,
-    _maxRetries?: number,
-  ): Promise<AIExtractionResult> => Promise.resolve({ items: [] }),
+    _onProgress?: (delta: string) => void,
+  ): Promise<ParseResult> => Promise.resolve(stubParseResult()),
 );
 const mockExtractTextFromImageBuffer = mock(
   (_buf: Buffer): Promise<string> => Promise.resolve('OCR text'),
@@ -160,9 +173,7 @@ spyOn(database, 'queryAll').mockImplementation(mockDbQueryAll as typeof database
 spyOn(database, 'exec').mockImplementation(mockDbExec);
 spyOn(database, 'transaction').mockImplementation(<T>(fn: () => T): T => fn());
 spyOn(receiptFetcherModule, 'fetchReceiptData').mockImplementation(mockFetchReceiptData);
-spyOn(aiExtractorModule, 'extractExpensesFromReceipt').mockImplementation(
-  mockExtractExpensesFromReceipt,
-);
+spyOn(receiptParserModule, 'parseReceipt').mockImplementation(mockParseReceipt);
 spyOn(ocrExtractorModule, 'extractTextFromImageBuffer').mockImplementation(
   mockExtractTextFromImageBuffer,
 );
@@ -274,7 +285,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
     mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
-    mockExtractExpensesFromReceipt.mockReset();
+    mockParseReceipt.mockReset();
     mockExtractTextFromImageBuffer.mockReset();
     mockFetch.mockReset();
   });
@@ -368,7 +379,7 @@ describe('POST /api/receipt/scan', () => {
     mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
-    mockExtractExpensesFromReceipt.mockReset();
+    mockParseReceipt.mockReset();
     mockExtractTextFromImageBuffer.mockReset();
     mockFetch.mockReset();
   });
@@ -440,9 +451,7 @@ describe('POST /api/receipt/scan', () => {
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.reject(new Error('AI extraction failed')),
-    );
+    mockParseReceipt.mockImplementation(() => Promise.reject(new Error('AI extraction failed')));
 
     const initData = buildInitData(42);
     const req = makePostRequest(SCAN_PATH, { qr: 'https://receipt.example.com' }, initData);
@@ -461,20 +470,22 @@ describe('POST /api/receipt/scan', () => {
       stubCategory('Разное'),
     ]);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Молоко 3.2%',
-            quantity: 2,
-            price: 85.5,
-            total: 171.0,
-            category: 'Продукты',
-            possible_categories: ['Разное'],
-          },
-        ],
-        currency: 'RSD',
-      }),
+    mockParseReceipt.mockImplementation(() =>
+      Promise.resolve(
+        stubParseResult({
+          items: [
+            {
+              name_ru: 'Молоко 3.2%',
+              quantity: 2,
+              price: 85.5,
+              total: 171.0,
+              category: 'Продукты',
+              possible_categories: ['Разное'],
+            },
+          ],
+          currency: 'RSD',
+        }),
+      ),
     );
 
     const initData = buildInitData(42);
@@ -508,19 +519,21 @@ describe('POST /api/receipt/scan', () => {
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Хлеб',
-            quantity: 1,
-            price: 50.0,
-            total: 50.0,
-            category: 'Разное',
-            possible_categories: [],
-          },
-        ],
-      }),
+    mockParseReceipt.mockImplementation(() =>
+      Promise.resolve(
+        stubParseResult({
+          items: [
+            {
+              name_ru: 'Хлеб',
+              quantity: 1,
+              price: 50.0,
+              total: 50.0,
+              category: 'Разное',
+              possible_categories: [],
+            },
+          ],
+        }),
+      ),
     );
 
     const initData = buildInitData(42);
@@ -541,20 +554,22 @@ describe('POST /api/receipt/scan', () => {
       stubCategory('Транспорт'),
     ]);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Товар',
-            quantity: 1,
-            price: 10,
-            total: 10,
-            category: 'Еда',
-            possible_categories: [],
-          },
-        ],
-        currency: 'EUR',
-      }),
+    mockParseReceipt.mockImplementation(() =>
+      Promise.resolve(
+        stubParseResult({
+          items: [
+            {
+              name_ru: 'Товар',
+              quantity: 1,
+              price: 10,
+              total: 10,
+              category: 'Еда',
+              possible_categories: [],
+            },
+          ],
+          currency: 'EUR',
+        }),
+      ),
     );
 
     const initData = buildInitData(42);
@@ -563,7 +578,7 @@ describe('POST /api/receipt/scan', () => {
 
     expect(mockCategoriesFindByGroupId.mock.calls.length).toBe(1);
     expect(mockCategoriesFindByGroupId.mock.calls[0]?.[0]).toBe(7); // internalGroupId
-    expect(mockExtractExpensesFromReceipt.mock.calls[0]?.[1]).toEqual(['Еда', 'Транспорт']);
+    expect(mockParseReceipt.mock.calls[0]?.[1]).toEqual(['Еда', 'Транспорт']);
   });
 });
 
@@ -594,7 +609,7 @@ describe('POST /api/receipt/ocr', () => {
     mockFindByTelegramId.mockReset();
     mockDbQueryOne.mockReset();
     mockCategoriesFindByGroupId.mockReset();
-    mockExtractExpensesFromReceipt.mockReset();
+    mockParseReceipt.mockReset();
     mockExtractTextFromImageBuffer.mockReset();
     mockSharpToBuffer.mockReset();
     mockFetch.mockReset();
@@ -692,20 +707,22 @@ describe('POST /api/receipt/ocr', () => {
     mockExtractTextFromImageBuffer.mockImplementation(() =>
       Promise.resolve('Store: TestMart\nMilk 2x85.50'),
     );
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Молоко',
-            quantity: 2,
-            price: 85.5,
-            total: 171.0,
-            category: 'Продукты',
-            possible_categories: [],
-          },
-        ],
-        currency: 'RSD',
-      }),
+    mockParseReceipt.mockImplementation(() =>
+      Promise.resolve(
+        stubParseResult({
+          items: [
+            {
+              name_ru: 'Молоко',
+              quantity: 2,
+              price: 85.5,
+              total: 171.0,
+              category: 'Продукты',
+              possible_categories: [],
+            },
+          ],
+          currency: 'RSD',
+        }),
+      ),
     );
     mockFetch.mockImplementation(() =>
       Promise.resolve(
@@ -745,19 +762,21 @@ describe('POST /api/receipt/ocr', () => {
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockExtractTextFromImageBuffer.mockImplementation(() => Promise.resolve('some receipt text'));
-    mockExtractExpensesFromReceipt.mockImplementation(() =>
-      Promise.resolve({
-        items: [
-          {
-            name_ru: 'Товар',
-            quantity: 1,
-            price: 10,
-            total: 10,
-            category: 'Разное',
-            possible_categories: [],
-          },
-        ],
-      }),
+    mockParseReceipt.mockImplementation(() =>
+      Promise.resolve(
+        stubParseResult({
+          items: [
+            {
+              name_ru: 'Товар',
+              quantity: 1,
+              price: 10,
+              total: 10,
+              category: 'Разное',
+              possible_categories: [],
+            },
+          ],
+        }),
+      ),
     );
     mockFetch.mockImplementation(() => Promise.reject(new Error('network error')));
 

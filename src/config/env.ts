@@ -13,12 +13,27 @@ interface EnvConfig {
   OAUTH_SERVER_PORT: number;
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
-  HF_TOKEN: string;
-  GEMINI_API_KEY: string;
+
+  // z.ai primary provider (kept ANTHROPIC_API_KEY name — it's the z.ai key)
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
-  AI_VALIDATION_MODEL: string;
+  AI_FAST_MODEL: string;
+
+  // HuggingFace Router (fallback + vision)
+  HF_TOKEN: string;
+  HF_BASE_URL: string;
+  HF_MODEL: string;
+  HF_FAST_MODEL: string;
+  HF_VISION_MODEL: string;
+
+  // Google Gemini (fallback + vision primary)
+  GEMINI_API_KEY: string;
+  GEMINI_BASE_URL: string;
+  GEMINI_MODEL: string;
+  GEMINI_FAST_MODEL: string;
+  GEMINI_VISION_MODEL: string;
+
   GITHUB_TOKEN: string;
   BOT_ADMIN_CHAT_ID: number | null;
   LARGE_TX_THRESHOLD_EUR: number;
@@ -50,12 +65,24 @@ function validateEnv(): EnvConfig {
     OAUTH_SERVER_PORT: parseInt(getEnvVariable('OAUTH_SERVER_PORT', false) || '3000', 10),
     DATABASE_PATH: getEnvVariable('DATABASE_PATH', false) || './data/expenses.db',
     ENCRYPTION_KEY: getEnvVariable('ENCRYPTION_KEY', false),
-    HF_TOKEN: getEnvVariable('HF_TOKEN', false),
-    GEMINI_API_KEY: getEnvVariable('GEMINI_API_KEY', false),
-    ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY', false),
-    AI_BASE_URL: getEnvVariable('AI_BASE_URL', false) || 'https://api.z.ai/api/anthropic',
-    AI_MODEL: getEnvVariable('AI_MODEL', false) || 'glm-5.1',
-    AI_VALIDATION_MODEL: getEnvVariable('AI_VALIDATION_MODEL', false) || 'glm-4.7-flash',
+
+    ANTHROPIC_API_KEY: getEnvVariable('ANTHROPIC_API_KEY'),
+    AI_BASE_URL: getEnvVariable('AI_BASE_URL'),
+    AI_MODEL: getEnvVariable('AI_MODEL'),
+    AI_FAST_MODEL: getEnvVariable('AI_FAST_MODEL'),
+
+    HF_TOKEN: getEnvVariable('HF_TOKEN'),
+    HF_BASE_URL: getEnvVariable('HF_BASE_URL'),
+    HF_MODEL: getEnvVariable('HF_MODEL'),
+    HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL'),
+    HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL'),
+
+    GEMINI_API_KEY: getEnvVariable('GEMINI_API_KEY'),
+    GEMINI_BASE_URL: getEnvVariable('GEMINI_BASE_URL'),
+    GEMINI_MODEL: getEnvVariable('GEMINI_MODEL'),
+    GEMINI_FAST_MODEL: getEnvVariable('GEMINI_FAST_MODEL'),
+    GEMINI_VISION_MODEL: getEnvVariable('GEMINI_VISION_MODEL'),
+
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']
       ? parseInt(process.env['BOT_ADMIN_CHAT_ID'], 10)

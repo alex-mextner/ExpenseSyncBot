@@ -5,7 +5,7 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import type { MerchantRuleRequest } from '../../database/types';
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete, stripThinkingTags } from '../ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
 import { sendDirect } from './telegram-sender';
 
 const logger = createLogger('merchant-agent');
@@ -23,7 +23,6 @@ interface AiRuleSuggestion {
  */
 export async function processMerchantRequests(): Promise<void> {
   if (!env.BOT_ADMIN_CHAT_ID) return;
-  if (!env.ANTHROPIC_API_KEY) return;
 
   const requests = database.merchantRules.findUnprocessedRequests();
   if (requests.length === 0) return;
@@ -119,9 +118,10 @@ ${existingList || '(пусто)'}
 Возвращай ровно ${requests.length} объектов в том же порядке.`;
 
   try {
-    const { text } = await aiComplete({
+    const { text } = await aiStreamRound({
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 1000,
+      chain: 'fast',
     });
 
     const cleaned = stripThinkingTags(text);

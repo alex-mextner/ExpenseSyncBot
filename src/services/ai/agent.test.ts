@@ -59,6 +59,7 @@ function makeTextResult(text: string): StreamRoundResult {
     toolCalls: [],
     finishReason: 'stop',
     assistantMessage: { role: 'assistant', content: text },
+    providerUsed: 'mock',
   };
 }
 

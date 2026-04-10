@@ -1,5 +1,5 @@
 // Tests for ocr-extractor.ts — temp cleanup logic and error handling
-// Mocks aiComplete() from the shared completion utility.
+// Mocks aiStreamRound() from the shared streaming utility.
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import path from 'node:path';
@@ -11,17 +11,22 @@ mock.module('../../utils/logger.ts', () => ({
   logger: logMock,
 }));
 
-const mockAiComplete = mock(() =>
-  Promise.resolve({
-    text: 'Store: Test\nItem: Milk - 100 RSD',
+function streamResult(text: string) {
+  return {
+    text,
+    toolCalls: [],
     finishReason: 'stop',
-    usage: {},
-    model: 'test',
-  }),
+    assistantMessage: { role: 'assistant' as const, content: text },
+    providerUsed: 'mock-ocr',
+  };
+}
+
+const mockAiStreamRound = mock(() =>
+  Promise.resolve(streamResult('Store: Test\nItem: Milk - 100 RSD')),
 );
 
-mock.module('../ai/completion', () => ({
-  aiComplete: mockAiComplete,
+mock.module('../ai/streaming', () => ({
+  aiStreamRound: mockAiStreamRound,
   stripThinkingTags: (t: string) => t,
 }));
 
@@ -55,48 +60,33 @@ describe('startTempImageCleanup', () => {
 
 describe('extractTextFromImageBuffer', () => {
   afterEach(() => {
-    mockAiComplete.mockClear();
+    mockAiStreamRound.mockClear();
   });
 
   it('returns extracted text on success', async () => {
-    mockAiComplete.mockResolvedValueOnce({
-      text: 'Store: Mega\nMilk - 100 RSD',
-      finishReason: 'stop',
-      usage: {},
-      model: 'Qwen-VL',
-    });
+    mockAiStreamRound.mockResolvedValueOnce(streamResult('Store: Mega\nMilk - 100 RSD'));
 
     const result = await extractTextFromImageBuffer(Buffer.from('fake-image'));
     expect(result).toBe('Store: Mega\nMilk - 100 RSD');
   });
 
-  it('passes vision: true to aiComplete', async () => {
-    mockAiComplete.mockResolvedValueOnce({
-      text: 'text',
-      finishReason: 'stop',
-      usage: {},
-      model: 'Qwen-VL',
-    });
+  it('passes chain: ocr to aiStreamRound', async () => {
+    mockAiStreamRound.mockResolvedValueOnce(streamResult('text'));
 
     await extractTextFromImageBuffer(Buffer.from('fake'));
 
-    expect(mockAiComplete).toHaveBeenCalledTimes(1);
-    const opts = (mockAiComplete.mock.calls[0] as unknown as [{ vision?: boolean }])[0];
-    expect(opts.vision).toBe(true);
+    expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
+    const opts = (mockAiStreamRound.mock.calls[0] as unknown as [{ chain?: string }])[0];
+    expect(opts.chain).toBe('ocr');
   });
 
   it('passes base64 data URL in message content', async () => {
-    mockAiComplete.mockResolvedValueOnce({
-      text: 'text',
-      finishReason: 'stop',
-      usage: {},
-      model: 'Qwen-VL',
-    });
+    mockAiStreamRound.mockResolvedValueOnce(streamResult('text'));
 
     await extractTextFromImageBuffer(Buffer.from('test-data'));
 
     const opts = (
-      mockAiComplete.mock.calls[0] as unknown as [
+      mockAiStreamRound.mock.calls[0] as unknown as [
         { messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }> },
       ]
     )[0];
@@ -105,8 +95,8 @@ describe('extractTextFromImageBuffer', () => {
     expect(imageBlock?.image_url?.url).toContain('data:image/jpeg;base64,');
   });
 
-  it('throws when aiComplete fails', async () => {
-    mockAiComplete.mockRejectedValueOnce(new Error('All AI models failed'));
+  it('throws when aiStreamRound fails', async () => {
+    mockAiStreamRound.mockRejectedValueOnce(new Error('All providers in ocr chain failed'));
 
     await expect(extractTextFromImageBuffer(Buffer.from('fake'))).rejects.toThrow();
   });
@@ -114,7 +104,7 @@ describe('extractTextFromImageBuffer', () => {
 
 describe('extractTextFromImage', () => {
   afterEach(async () => {
-    mockAiComplete.mockClear();
+    mockAiStreamRound.mockClear();
     const fs = await import('node:fs/promises');
     const tempDir = path.join(process.cwd(), 'temp-images');
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -125,19 +115,14 @@ describe('extractTextFromImage', () => {
   });
 
   it('returns text on success', async () => {
-    mockAiComplete.mockResolvedValueOnce({
-      text: 'Store: Test\nTotal: 500 RSD',
-      finishReason: 'stop',
-      usage: {},
-      model: 'Qwen-VL',
-    });
+    mockAiStreamRound.mockResolvedValueOnce(streamResult('Store: Test\nTotal: 500 RSD'));
 
     const result = await extractTextFromImage(Buffer.from('fake-image'));
     expect(result).toBe('Store: Test\nTotal: 500 RSD');
   });
 
-  it('throws descriptive error when aiComplete fails', async () => {
-    mockAiComplete.mockRejectedValueOnce(new Error('All AI models failed'));
+  it('throws descriptive error when aiStreamRound fails', async () => {
+    mockAiStreamRound.mockRejectedValueOnce(new Error('All providers in ocr chain failed'));
 
     try {
       await extractTextFromImage(Buffer.from('fake'));

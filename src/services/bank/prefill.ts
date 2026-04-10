@@ -1,10 +1,9 @@
 // AI pre-fill for bank transactions — batch-suggests category before showing confirmation card.
 // Processes up to 10 transactions per API call; includes group's actual categories and MCC history.
-import { env } from '../../config/env.ts';
 import { database } from '../../database';
 import type { BankTransaction } from '../../database/types.ts';
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete, stripThinkingTags } from '../ai/completion';
+import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
 import { getMccLabel } from './mcc-labels.ts';
 
 const logger = createLogger('bank-prefill');
@@ -81,9 +80,10 @@ ${txLines}
 Используй только категории из списка. Если подходящей нет — "прочее".`;
 
   try {
-    const { text } = await aiComplete({
+    const { text } = await aiStreamRound({
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 200,
+      chain: 'fast',
     });
 
     const cleaned = stripThinkingTags(text);
@@ -120,10 +120,6 @@ export async function preFillTransactions(
 
   const mccs = [...new Set(txs.map((t) => t.mcc).filter((m): m is number => m !== null))];
   const mccHistory = buildMccHistory(groupId, mccs);
-
-  if (!env.ANTHROPIC_API_KEY) {
-    return txs.map(() => ({ category: 'прочее' }));
-  }
 
   const results: PrefillResult[] = [];
 

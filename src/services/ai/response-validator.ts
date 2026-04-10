@@ -1,9 +1,10 @@
 /**
  * Post-response validation: a lightweight LLM pass that checks
  * the agent's answer for hallucinations, missing tool calls, and data integrity.
+ * Runs on the FAST chain (cheap).
  */
 import { createLogger } from '../../utils/logger.ts';
-import { aiComplete } from './completion';
+import { aiStreamRound } from './streaming';
 
 const logger = createLogger('response-validator');
 
@@ -39,10 +40,7 @@ interface ValidationInput {
 
 export type ValidationResult = { approved: true } | { approved: false; reason: string };
 
-export async function validateResponse(
-  _apiKey: string,
-  input: ValidationInput,
-): Promise<ValidationResult> {
+export async function validateResponse(input: ValidationInput): Promise<ValidationResult> {
   const toolCallsSummary =
     input.toolCalls.length > 0 ? input.toolCalls.join(', ') : '(none — no tools were called)';
 
@@ -54,17 +52,18 @@ ASSISTANT RESPONSE (first 2000 chars):
 ${input.response.substring(0, 2000)}`;
 
   try {
-    const { text } = await aiComplete({
+    const result = await aiStreamRound({
       messages: [
         { role: 'system', content: VALIDATION_PROMPT },
         { role: 'user', content: userContent },
       ],
       maxTokens: VALIDATION_MAX_TOKENS,
-      timeoutMs: VALIDATION_TIMEOUT_MS,
-      maxRetries: 1,
+      chain: 'fast',
+      signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
     });
 
-    logger.info(`[VALIDATOR] Result: ${text}`);
+    const text = result.text.trim();
+    logger.info(`[VALIDATOR] Result: ${text} (via ${result.providerUsed})`);
 
     if (text.startsWith('APPROVE')) {
       return { approved: true };
