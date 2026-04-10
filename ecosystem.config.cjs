@@ -18,9 +18,7 @@ module.exports = {
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       time: true,
-      // Log rotation is handled globally by the pm2-logrotate module.
-      // Install once with `pm2 install pm2-logrotate` and configure via
-      // `pm2 set pm2-logrotate:<option> <value>`.
+      // Log rotation handled by pm2-logrotate (installed/configured by deploy.yml).
     },
     {
       name: 'bank-sync',
