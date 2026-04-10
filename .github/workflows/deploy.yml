@@ -47,6 +47,16 @@ jobs:
             git pull origin main
             git submodule update --init
 
+            echo "📋 Copying .env.stage to worktrees..."
+            if [ -f .env.stage ]; then
+              for wt in .claude/worktrees/*/; do
+                if [ -d "$wt" ] && [ ! -f "${wt}.env" ]; then
+                  cp .env.stage "${wt}.env"
+                  echo "  → ${wt}.env"
+                fi
+              done
+            fi
+
             echo "📦 Installing dependencies..."
             /var/www/.bun/bin/bun install
 
