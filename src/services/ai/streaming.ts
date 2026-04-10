@@ -10,13 +10,9 @@
  * Callers that just want the final text (validator, prefill, merchant-agent) omit callbacks.
  *
  * Fallback rules:
- *  - 5xx / timeout / network errors       → try next provider
- *  - 429 rate limit                        → try next provider
- *  - 4xx non-429 (client error)            → propagate immediately
+ *  - Any error (including 4xx)             → try next provider in the chain
  *  - Provider streams text then fails      → propagate (cannot splice another model's output)
- *  - Provider returns 200 OK but empty text AND no tool calls
- *    (z.ai coding endpoint quirk: returns reasoning_content only for pure text)
- *                                          → treat as provider failure, try next
+ *  - All providers exhausted               → propagate the last error
  */
 
 import OpenAI from 'openai';
@@ -85,10 +81,16 @@ function isProviderDown(error: unknown): boolean {
   return false;
 }
 
-/** Retryable: 429, 5xx, timeout, abort. The chain runner uses this to decide fallthrough. */
+/**
+ * Retryable for same-provider retry (backoff): 429, 5xx, timeout, abort.
+ * NOT used for cross-provider fallback — the chain always tries the next provider.
+ */
 export function isRetryableError(error: unknown): boolean {
   if (isProviderDown(error)) return true;
   if (error instanceof Error && error.name === 'AbortError') return true;
+  // OpenAI SDK v6: APIUserAbortError extends APIError with status=undefined —
+  // catches abort errors that don't set .name to 'AbortError'.
+  if (error instanceof OpenAI.APIError && error.status === undefined) return true;
   if (error instanceof OpenAI.APIError) {
     return error.status === 429 || (error.status ?? 0) >= 500;
   }
@@ -141,6 +143,7 @@ function streamingSlot(name: string, getClient: () => OpenAI, model: string): Pr
 
       let text = '';
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
+      let lastToolCallKey = -1;
       let finishReason = 'stop';
 
       for await (const chunk of stream) {
@@ -154,7 +157,20 @@ function streamingSlot(name: string, getClient: () => OpenAI, model: string): Pr
 
         if (delta.tool_calls) {
           for (const tc of delta.tool_calls) {
-            const existing = toolCalls.get(tc.index);
+            // Resolve index: some providers (HF Router, early Gemini) omit tc.index.
+            // Fallback: new tool call if id/name present, otherwise append to last.
+            let key: number;
+            if (typeof tc.index === 'number') {
+              key = tc.index;
+            } else if (tc.id || tc.function?.name) {
+              key = toolCalls.size;
+            } else if (lastToolCallKey >= 0) {
+              key = lastToolCallKey;
+            } else {
+              continue;
+            }
+
+            const existing = toolCalls.get(key);
             if (existing) {
               existing.args += tc.function?.arguments ?? '';
               if (tc.id && !existing.id) existing.id = tc.id;
@@ -162,11 +178,12 @@ function streamingSlot(name: string, getClient: () => OpenAI, model: string): Pr
             } else {
               const tcName = tc.function?.name ?? '';
               if (tcName) cbs.onToolCallStart?.(tcName);
-              toolCalls.set(tc.index, {
+              toolCalls.set(key, {
                 id: tc.id ?? '',
                 name: tcName,
                 args: tc.function?.arguments ?? '',
               });
+              lastToolCallKey = key;
             }
           }
         }
@@ -294,6 +311,7 @@ export async function aiStreamRound(
       lastError = error instanceof Error ? error : new Error(String(error));
       logger.error({ err: lastError }, `[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
 
+      // Text already sent to user — can't splice another model's output
       if (textEmitted) {
         logger.error(
           `[AI_STREAM] ${slot.name} died mid-stream after text was emitted — cannot fallback`,
@@ -301,15 +319,10 @@ export async function aiStreamRound(
         throw error;
       }
 
-      // Empty-response quirk or retryable error → try next provider
-      const isEmpty = lastError.message.includes('empty response');
-      if (isRetryableError(error) || isEmpty) {
-        logger.warn(`[AI_STREAM] ${slot.name} failed (retryable), trying next provider`);
-        continue;
-      }
-
-      // Non-retryable (4xx client error, AbortError, etc.) — propagate
-      throw error;
+      // Always try the next provider in the chain.
+      // isRetryableError is for same-provider retry (backoff), not for fallback decisions.
+      // Different providers have different quirks — one may fail where another succeeds.
+      logger.warn(`[AI_STREAM] ${slot.name} failed, trying next provider`);
     }
   }
 

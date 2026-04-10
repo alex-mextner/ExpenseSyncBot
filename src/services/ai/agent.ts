@@ -314,8 +314,22 @@ export class ExpenseBotAgent {
       if (toolResults.length > 0) {
         writer.commitIntermediate();
 
-        // Add assistant message with tool calls to history
-        messages.push(result.assistantMessage);
+        // Sanitize tool_calls before pushing to history — some providers
+        // (Gemini) generate malformed JSON arguments that break subsequent
+        // rounds when the next provider tries to parse the history.
+        const sanitized = { ...result.assistantMessage };
+        if ('tool_calls' in sanitized && Array.isArray(sanitized.tool_calls)) {
+          sanitized.tool_calls = sanitized.tool_calls.map((tc) => {
+            if (!('function' in tc)) return tc;
+            try {
+              JSON.parse(tc.function.arguments);
+              return tc;
+            } catch {
+              return { ...tc, function: { ...tc.function, arguments: '{}' } };
+            }
+          });
+        }
+        messages.push(sanitized);
 
         // Add tool results (OpenAI format: role=tool)
         for (const tr of toolResults) {
