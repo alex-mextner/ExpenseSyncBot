@@ -47,7 +47,7 @@ jobs:
             git pull origin main
             git submodule update --init
 
-            echo "📋 Merging .env.stage into every git worktree..."
+            echo "📋 Copying .env.stage into every git worktree..."
             if [ -f .env.stage ]; then
               # Use `git worktree list` instead of a shell glob so branches
               # with slashes (`fix/X`, `feat/X`) — which create nested
@@ -56,11 +56,9 @@ jobs:
               MAIN_WT="$(pwd)"
               git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt; do
                 if [ "$wt" = "$MAIN_WT" ]; then continue; fi
-                if [ -d "$wt" ]; then
-                  mkdir -p "$wt/data"
-                  # Merge .env base with .env.stage overrides (always — not just on first deploy)
-                  cat .env .env.stage | grep -v '^#' | grep -v '^$' | awk -F= '{keys[$1]=$0} END {for(k in keys) print keys[k]}' > "$wt/.env"
-                  echo "  → $wt/.env (merged)"
+                if [ -d "$wt" ] && [ ! -f "$wt/.env" ]; then
+                  cp .env.stage "$wt/.env"
+                  echo "  → $wt/.env"
                 fi
               done
             fi
