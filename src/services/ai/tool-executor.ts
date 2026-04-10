@@ -18,6 +18,7 @@ import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
+import { executeBatchItems, isBatchInput } from './batch';
 import {
   computeExpenseStats,
   type ExpenseStats,
@@ -70,7 +71,7 @@ export async function executeTool(
       case 'add_expense':
         return await executeAddExpense(input, ctx);
       case 'delete_expense':
-        return executeDeleteExpense(input, ctx);
+        return await executeDeleteExpense(input, ctx);
       case 'sync_from_sheets':
         return await executeSyncFromSheets(ctx);
       case 'sync_budgets':
@@ -78,7 +79,7 @@ export async function executeTool(
       case 'set_custom_prompt':
         return executeSetCustomPrompt(input, ctx);
       case 'manage_category':
-        return executeManageCategory(input, ctx);
+        return await executeManageCategory(input, ctx);
       case 'calculate':
         return executeCalculate(input, ctx);
       case 'get_bank_transactions':
@@ -90,7 +91,7 @@ export async function executeTool(
       case 'get_recurring_patterns':
         return executeGetRecurringPatterns(ctx);
       case 'manage_recurring_pattern':
-        return executeManageRecurringPattern(input, ctx);
+        return await executeManageRecurringPattern(input, ctx);
       case 'find_missing_expenses':
         return await executeFindMissingExpenses(input, ctx);
       case 'render_table':
@@ -421,6 +422,22 @@ async function executeSetBudget(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
+  if (isBatchInput(input['items'])) {
+    const items = input['items'] as Array<Record<string, unknown>>;
+    return executeBatchItems(items, 'set_budget', (item) => executeSetBudgetSingle(item, ctx));
+  }
+
+  if (Array.isArray(input['items'])) {
+    return { success: false, error: 'items array is empty' };
+  }
+
+  return executeSetBudgetSingle(input, ctx);
+}
+
+async function executeSetBudgetSingle(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const category = input['category'] as string;
   const amount = input['amount'] as number;
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
@@ -475,9 +492,29 @@ async function executeDeleteBudget(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const category = input['category'] as string;
+  const rawCategory = input['category'];
   const month = (input['month'] as string) || format(new Date(), 'yyyy-MM');
 
+  if (isBatchInput(rawCategory)) {
+    const categories = rawCategory as string[];
+    return executeBatchItems(categories, 'delete_budget', (category) =>
+      executeDeleteBudgetSingle(category, month, ctx),
+    );
+  }
+
+  if (Array.isArray(rawCategory)) {
+    return { success: false, error: 'category array is empty' };
+  }
+
+  const category = rawCategory as string;
+  return executeDeleteBudgetSingle(category, month, ctx);
+}
+
+async function executeDeleteBudgetSingle(
+  category: string,
+  month: string,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   if (!category) {
     return { success: false, error: 'category is required' };
   }
@@ -491,6 +528,22 @@ async function executeDeleteBudget(
 }
 
 async function executeAddExpense(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  if (isBatchInput(input['items'])) {
+    const items = input['items'] as Array<Record<string, unknown>>;
+    return executeBatchItems(items, 'add_expense', (item) => executeAddExpenseSingle(item, ctx));
+  }
+
+  if (Array.isArray(input['items'])) {
+    return { success: false, error: 'items array is empty' };
+  }
+
+  return executeAddExpenseSingle(input, ctx);
+}
+
+async function executeAddExpenseSingle(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
@@ -541,9 +594,27 @@ async function executeAddExpense(
   }
 }
 
-function executeDeleteExpense(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const expenseId = input['expense_id'] as number;
+async function executeDeleteExpense(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  const rawId = input['expense_id'];
 
+  if (isBatchInput(rawId)) {
+    const ids = rawId as number[];
+    return executeBatchItems(ids, 'delete_expense', async (id) =>
+      executeDeleteExpenseSingle(id, ctx),
+    );
+  }
+
+  if (Array.isArray(rawId)) {
+    return { success: false, error: 'expense_id array is empty' };
+  }
+
+  return executeDeleteExpenseSingle(rawId as number, ctx);
+}
+
+function executeDeleteExpenseSingle(expenseId: number, ctx: AgentContext): ToolResult {
   if (!expenseId) {
     return { success: false, error: 'expense_id is required' };
   }
@@ -639,12 +710,34 @@ function executeSetCustomPrompt(input: Record<string, unknown>, ctx: AgentContex
   };
 }
 
-function executeManageCategory(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+async function executeManageCategory(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const action = input['action'] as string;
-  const name = input['name'] as string;
+  const rawName = input['name'];
 
-  if (!action || !name) {
-    return { success: false, error: 'action and name are required' };
+  if (!action) {
+    return { success: false, error: 'action is required' };
+  }
+
+  if (isBatchInput(rawName)) {
+    const names = rawName as string[];
+    return executeBatchItems(names, 'manage_category', async (name) =>
+      executeManageCategorySingle(action, name, ctx),
+    );
+  }
+
+  if (Array.isArray(rawName)) {
+    return { success: false, error: 'name array is empty' };
+  }
+
+  return executeManageCategorySingle(action, rawName as string, ctx);
+}
+
+function executeManageCategorySingle(action: string, name: string, ctx: AgentContext): ToolResult {
+  if (!name) {
+    return { success: false, error: 'name is required' };
   }
 
   if (action === 'create') {
@@ -763,21 +856,25 @@ function executeGetBankTransactions(input: Record<string, unknown>, ctx: AgentCo
 }
 
 function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  const rawBankName =
-    typeof input['bank_name'] === 'string' ? input['bank_name'].toLowerCase() : '';
-  const bankNameFilter = rawBankName === 'all' || rawBankName === '' ? undefined : rawBankName;
+  const bankNames = normalizeArrayParam(input['bank_name']);
+  const showHidden = input['show_hidden'] === true;
+  const isAll = bankNames.length === 0 || bankNames.some((b) => b.toLowerCase() === 'all');
+  const filters = isAll
+    ? undefined
+    : bankNames.map((b) => b.toLowerCase()).filter((b) => b !== 'all');
 
-  const accounts = database.bankAccounts.findByGroupId(ctx.groupId, true);
-  const filtered = bankNameFilter
+  const accounts = database.bankAccounts.findByGroupId(ctx.groupId, showHidden);
+  const filtered = filters
     ? accounts.filter((a) => {
         const conn = database.bankConnections.findById(a.connection_id);
-        return conn?.bank_name?.toLowerCase().includes(bankNameFilter) ?? false;
+        const bankName = conn?.bank_name?.toLowerCase() ?? '';
+        return filters.some((f) => bankName.includes(f));
       })
     : accounts;
 
   if (filtered.length === 0) {
     // Check if there are accounts at all (ignoring the bank_name filter)
-    if (bankNameFilter) {
+    if (filters) {
       if (accounts.length > 0) {
         const availableBanks = [
           ...new Set(
@@ -789,7 +886,7 @@ function executeGetBankBalances(input: Record<string, unknown>, ctx: AgentContex
         return {
           success: true,
           data: [],
-          summary: `No accounts found matching bank_name filter "${bankNameFilter}". Available bank keys: ${availableBanks}. Retry with bank_name: "all" to see all accounts.`,
+          summary: `No accounts found matching bank_name filter "${filters.join(', ')}". Available bank keys: ${availableBanks}. Retry with bank_name: "all" to see all accounts.`,
         };
       }
     }
@@ -1064,15 +1161,38 @@ function executeGetRecurringPatterns(ctx: AgentContext): ToolResult {
   return { success: true, output: lines.join('\n') };
 }
 
-function executeManageRecurringPattern(
+async function executeManageRecurringPattern(
   input: Record<string, unknown>,
   ctx: AgentContext,
-): ToolResult {
-  const patternId = input['pattern_id'] as number;
+): Promise<ToolResult> {
+  const rawPatternId = input['pattern_id'];
   const action = input['action'] as string;
 
-  if (!patternId || !action) {
-    return { success: false, error: 'pattern_id and action are required' };
+  if (!action) {
+    return { success: false, error: 'action is required' };
+  }
+
+  if (isBatchInput(rawPatternId)) {
+    const ids = rawPatternId as number[];
+    return executeBatchItems(ids, 'manage_recurring_pattern', async (id) =>
+      executeManageRecurringPatternSingle(id, action, ctx),
+    );
+  }
+
+  if (Array.isArray(rawPatternId)) {
+    return { success: false, error: 'pattern_id array is empty' };
+  }
+
+  return executeManageRecurringPatternSingle(rawPatternId as number, action, ctx);
+}
+
+function executeManageRecurringPatternSingle(
+  patternId: number,
+  action: string,
+  ctx: AgentContext,
+): ToolResult {
+  if (!patternId) {
+    return { success: false, error: 'pattern_id is required' };
   }
 
   const pattern = database.recurringPatterns.findById(patternId);

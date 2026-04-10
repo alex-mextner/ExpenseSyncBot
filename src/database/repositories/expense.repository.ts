@@ -56,7 +56,7 @@ export class ExpenseRepository {
 
   /**
    * Find expenses that may be duplicates of a bank transaction.
-   * Returns exact matches (same date, ±1% amount, same currency) and fuzzy matches (±1 day).
+   * Returns exact matches (same date, ±5% amount, same currency) and fuzzy matches (±1 day).
    * Only considers expenses not already linked to a bank transaction.
    */
   findPotentialDuplicates(
@@ -65,12 +65,19 @@ export class ExpenseRepository {
     amount: number,
     currency: string,
   ): { exact: Expense[]; fuzzy: Expense[] } {
+    // Exclude expenses already claimed by a bank transaction via either path:
+    //  • direct FK: bt.matched_expense_id = e.id
+    //  • receipt FK: bt.matched_receipt_id = e.receipt_id (Variant A 1:N link)
     const notLinked = `
       AND NOT EXISTS (
         SELECT 1 FROM bank_transactions bt WHERE bt.matched_expense_id = e.id
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM bank_transactions bt
+        WHERE e.receipt_id IS NOT NULL AND bt.matched_receipt_id = e.receipt_id
+      )
     `;
-    const amountTolerance = amount * 0.01;
+    const amountTolerance = amount * 0.05;
 
     const exact = this.db
       .query<Expense, [number, string, string, number, number]>(`
@@ -114,7 +121,7 @@ export class ExpenseRepository {
   create(data: CreateExpenseData): Expense {
     const query = this.db.query<
       { id: number },
-      [number, number, string, string, string, number, string, number]
+      [number, number, string, string, string, number, string, number, number | null]
     >(`
       INSERT INTO expenses (
         group_id,
@@ -124,9 +131,10 @@ export class ExpenseRepository {
         comment,
         amount,
         currency,
-        eur_amount
+        eur_amount,
+        receipt_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
 
@@ -139,6 +147,7 @@ export class ExpenseRepository {
       data.amount,
       data.currency,
       data.eur_amount,
+      data.receipt_id ?? null,
     );
 
     if (!result) {

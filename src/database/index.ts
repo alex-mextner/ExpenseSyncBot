@@ -12,10 +12,12 @@ import { DevTaskRepository } from './repositories/dev-task.repository';
 import { ExpenseRepository } from './repositories/expense.repository';
 import { ExpenseItemsRepository } from './repositories/expense-items.repository';
 import { GroupRepository } from './repositories/group.repository';
+import { GroupMembersRepository } from './repositories/group-members.repository';
 import { GroupSpreadsheetRepository } from './repositories/group-spreadsheet.repository';
 import { MerchantRulesRepository } from './repositories/merchant-rules.repository';
 import { PendingExpenseRepository } from './repositories/pending-expense.repository';
 import { PhotoQueueRepository } from './repositories/photo-queue.repository';
+import { ReceiptRepository } from './repositories/receipt.repository';
 import { ReceiptItemsRepository } from './repositories/receipt-items.repository';
 import { RecurringPatternRepository } from './repositories/recurring-pattern.repository';
 import { SyncSnapshotRepository } from './repositories/sync-snapshot.repository';
@@ -28,6 +30,7 @@ import { setupDatabase } from './schema';
 export class DatabaseService {
   private db: Database;
   public groups: GroupRepository;
+  public groupMembers: GroupMembersRepository;
   public groupSpreadsheets: GroupSpreadsheetRepository;
   public users: UserRepository;
   public categories: CategoryRepository;
@@ -37,6 +40,7 @@ export class DatabaseService {
   private _budgetWriter: BudgetRepository;
   public chatMessages: ChatMessageRepository;
   public photoQueue: PhotoQueueRepository;
+  public receipts: ReceiptRepository;
   public receiptItems: ReceiptItemsRepository;
   public expenseItems: ExpenseItemsRepository;
   public adviceLogs: AdviceLogRepository;
@@ -52,6 +56,7 @@ export class DatabaseService {
   constructor(db?: Database) {
     this.db = db ?? setupDatabase();
     this.groups = new GroupRepository(this.db);
+    this.groupMembers = new GroupMembersRepository(this.db);
     this.groupSpreadsheets = new GroupSpreadsheetRepository(this.db);
     this.users = new UserRepository(this.db);
     this.categories = new CategoryRepository(this.db);
@@ -62,6 +67,7 @@ export class DatabaseService {
     _budgetWriterRef = this._budgetWriter;
     this.chatMessages = new ChatMessageRepository(this.db);
     this.photoQueue = new PhotoQueueRepository(this.db);
+    this.receipts = new ReceiptRepository(this.db);
     this.receiptItems = new ReceiptItemsRepository(this.db);
     this.expenseItems = new ExpenseItemsRepository(this.db);
     this.adviceLogs = new AdviceLogRepository(this.db);

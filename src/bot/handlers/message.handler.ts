@@ -1,39 +1,109 @@
 /** Text message handler — parses expense messages, handles receipt links, and routes AI mentions */
 import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
-import { sendMessage } from '../../services/bank/telegram-sender';
-import { convertCurrency } from '../../services/currency/converter';
+import { createInviteLink, sendMessage } from '../../services/bank/telegram-sender';
+import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
+import { digitEmoji, setExpenseReaction } from '../../utils/digit-emoji';
 import { getErrorMessage } from '../../utils/error';
 import { findBestCategoryMatch } from '../../utils/fuzzy-search';
+import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
-import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
+import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
+import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
 
-/** Track consecutive sheet write failures per group to suggest /reconnect */
-const sheetFailuresByGroup = new Map<number, number>();
+/** Recently-seen user+group pairs — skip redundant DB upserts */
+const recentMemberships = new Set<string>();
 
-export function getSheetWriteErrorMessage(groupId: number): string {
-  const count = sheetFailuresByGroup.get(groupId) ?? 0;
-  sheetFailuresByGroup.set(groupId, count + 1);
-  if (count >= 1) {
-    return '❌ Не удалось записать расход в Google таблицу. Возможно, авторизация устарела — попробуй /reconnect';
-  }
-  return '❌ Не удалось записать расход в Google таблицу. Попробуй ещё раз.';
+/** Track user membership in a group, skipping DB write if recently seen */
+export function trackMembership(telegramId: number, groupId: number): void {
+  const key = `${telegramId}:${groupId}`;
+  if (recentMemberships.has(key)) return;
+  database.groupMembers.upsert(telegramId, groupId);
+  recentMemberships.add(key);
 }
 
-export function resetSheetWriteFailures(groupId: number): void {
-  sheetFailuresByGroup.delete(groupId);
+/** Build a fallback Telegram deep link (opens in browser on some platforms) */
+function buildGroupDeepLink(telegramGroupId: number): string {
+  const idStr = telegramGroupId.toString();
+  const chatId = idStr.startsWith('-100') ? idStr.slice(4) : idStr.slice(1);
+  return `https://t.me/c/${chatId}`;
+}
+
+/** In-flight invite link requests — prevents duplicate API calls for the same group */
+const pendingInviteLinks = new Map<number, Promise<string | null>>();
+
+/** Lazily fetch and cache a group's invite link via Bot API */
+async function getOrFetchInviteLink(
+  telegramGroupId: number,
+  cachedLink: string | null,
+): Promise<string | null> {
+  if (cachedLink) return cachedLink;
+
+  // Deduplicate concurrent fetches for the same group
+  const pending = pendingInviteLinks.get(telegramGroupId);
+  if (pending) return pending;
+
+  const promise = createInviteLink(telegramGroupId)
+    .then((link) => {
+      if (link) {
+        database.groups.update(telegramGroupId, { invite_link: link });
+      }
+      return link;
+    })
+    .catch((error) => {
+      logger.warn({ err: error, telegramGroupId }, 'Failed to fetch invite link');
+      return null;
+    })
+    .finally(() => {
+      pendingInviteLinks.delete(telegramGroupId);
+    });
+  pendingInviteLinks.set(telegramGroupId, promise);
+  return promise;
+}
+
+/** Send redirect message to user in private chat with buttons to their groups */
+export async function sendPrivateChatRedirect(telegramId: number): Promise<void> {
+  const groups = database.groupMembers.findGroupsByTelegramId(telegramId);
+
+  if (groups.length > 0) {
+    // Resolve invite links for each group (invite links open natively in Telegram)
+    const buttons = await Promise.all(
+      groups.map(async (g) => {
+        const inviteLink = await getOrFetchInviteLink(g.telegramGroupId, g.inviteLink);
+        return [
+          {
+            text: g.title || 'Группа',
+            url: inviteLink || buildGroupDeepLink(g.telegramGroupId),
+          },
+        ];
+      }),
+    );
+
+    await sendMessage('💬 Бот работает только в группах.\n\nДля учета расходов перейди в группу:', {
+      reply_markup: { inline_keyboard: buttons },
+    });
+  } else {
+    await sendMessage('💬 Бот работает только в группах.');
+    await sendMessage(
+      `<b>Как начать:</b>\n\n` +
+        `1. Создай группу в Telegram\n` +
+        `2. Добавь @${env.BOT_USERNAME} в группу\n` +
+        `3. Набери /connect для настройки`,
+    );
+  }
 }
 
 /**
@@ -60,50 +130,12 @@ export async function handleExpenseMessage(
 
   if (!isGroup) {
     logger.info(`[MSG] Message from private chat (user ${telegramId})`);
-
-    // Check if user has associated group
-    const user = database.users.findByTelegramId(telegramId);
-
-    if (user?.group_id) {
-      const group = database.groups.findById(user.group_id);
-
-      if (group?.telegram_group_id) {
-        // Create inline keyboard with link to group
-        // For supergroups: remove -100 prefix, for regular groups: just remove minus
-        const groupIdStr = group.telegram_group_id.toString();
-        const chatId = groupIdStr.startsWith('-100') ? groupIdStr.slice(4) : groupIdStr.slice(1);
-
-        const keyboard = {
-          inline_keyboard: [
-            [
-              {
-                text: '🔗 Перейти в группу',
-                url: `https://t.me/c/${chatId}`,
-              },
-            ],
-          ],
-        };
-
-        await sendMessage(
-          '💬 Бот работает только в группах.\n\nДля учета расходов используй команды в группе:',
-          { reply_markup: keyboard },
-        );
-      } else {
-        await sendMessage(
-          '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
-        );
-      }
-    } else {
-      await sendMessage(
-        '💬 Бот работает только в группах.\n\nДобавь бота в группу и используй команду /connect для настройки.',
-      );
-    }
-
+    await sendPrivateChatRedirect(telegramId);
     return true;
   }
 
   const telegramGroupId = ctx.chat.id;
-  const groupTitle = ctx.chat.title || `Group ${telegramGroupId}`;
+  const groupTitle = ctx.chat.title;
 
   logger.info(`[MSG] Message from group "${groupTitle}" (${telegramGroupId})`);
 
@@ -175,6 +207,12 @@ export async function handleExpenseMessage(
     user = database.users.findByTelegramId(telegramId);
     if (!user) return true;
   }
+
+  // Track group title and user membership for private chat redirect buttons
+  if (groupTitle && groupTitle !== group.title) {
+    database.groups.update(telegramGroupId, { title: groupTitle });
+  }
+  trackMembership(telegramId, group.id);
 
   // Check if we're waiting for design edit or code edit input
   const pendingTaskId = consumePendingDesignEdit(telegramGroupId);
@@ -250,14 +288,26 @@ export async function handleExpenseMessage(
 
   logger.info(`[MSG] Processing ${lines.length} line(s)`);
 
-  let successCount = 0;
   const newCategories: string[] = [];
   const categoryNames = database.categories.getCategoryNames(group.id);
+
+  /** Tracks each recognized expense for the numbered summary */
+  interface ProcessedExpense {
+    amount: number;
+    currency: string;
+    category: string | null;
+    comment: string;
+    saved: boolean;
+    pendingExpenseId: number;
+    categoryExists: boolean;
+  }
+  const processedExpenses: ProcessedExpense[] = [];
+
+  // ── Phase 1: parse all lines and create pending expenses (no network) ──
 
   for (const [index, line] of lines.entries()) {
     logger.info(`[MSG] Processing line ${index + 1}/${lines.length}: "${line}"`);
 
-    // Parse expense
     const parsed = parseExpenseMessage(line, group.default_currency);
 
     if (!parsed) {
@@ -300,7 +350,6 @@ export async function handleExpenseMessage(
 
     logger.info(`[MSG] Line ${index + 1}: category "${parsed.category}" exists: ${categoryExists}`);
 
-    // Create pending expense
     const pendingExpense = database.pendingExpenses.create({
       user_id: user.id,
       message_id: messageId,
@@ -313,39 +362,93 @@ export async function handleExpenseMessage(
 
     logger.info(`[MSG] Line ${index + 1}: created pending expense ${pendingExpense.id}`);
 
-    // If category doesn't exist, track it for confirmation
     if (!categoryExists && parsed.category && !newCategories.includes(parsed.category)) {
       newCategories.push(parsed.category);
     }
 
-    // If category exists, save directly
-    if (categoryExists || !parsed.category) {
-      logger.info(`[MSG] Line ${index + 1}: saving to sheet`);
-      try {
-        await saveExpenseToSheet(user.id, group.id, pendingExpense.id);
-        successCount++;
-      } catch (error) {
-        logger.error({ err: error }, `[MSG] Line ${index + 1}: failed to save to sheet`);
-        database.pendingExpenses.delete(pendingExpense.id);
-        await sendMessage(getSheetWriteErrorMessage(group.id));
+    processedExpenses.push({
+      amount: parsed.amount,
+      currency: parsed.currency,
+      category: parsed.category,
+      comment: parsed.comment,
+      saved: false,
+      pendingExpenseId: pendingExpense.id,
+      categoryExists: categoryExists || !parsed.category,
+    });
+  }
+
+  // ── Phase 2: set 👀 reaction immediately (fire-and-forget, no await) ──
+
+  const hasProcessedExpenses =
+    processedExpenses.some((e) => e.categoryExists) || newCategories.length > 0;
+
+  if (hasProcessedExpenses) {
+    bot.api
+      .setMessageReaction({
+        chat_id: telegramGroupId,
+        message_id: messageId,
+        reaction: [{ type: 'emoji', emoji: '👀' }],
+      })
+      .catch((error) => {
+        logger.error({ err: error }, '[MSG] Failed to set 👀 reaction');
+      });
+  }
+
+  // ── Phase 3: save confirmed expenses atomically (all sheets → one DB transaction) ──
+
+  const confirmedIds = processedExpenses
+    .filter((e) => e.categoryExists)
+    .map((e) => e.pendingExpenseId);
+  let batchError: unknown = null;
+
+  if (confirmedIds.length > 0) {
+    try {
+      await saveExpenseBatch(user.id, group.id, confirmedIds);
+      for (const exp of processedExpenses) {
+        if (exp.categoryExists) exp.saved = true;
       }
+    } catch (error) {
+      logger.error({ err: error }, '[MSG] Batch save failed — no expenses committed');
+      for (const id of confirmedIds) {
+        database.pendingExpenses.delete(id);
+      }
+      batchError = error;
     }
   }
 
-  // Only react if at least one expense was processed
-  const hasProcessedExpenses = successCount > 0 || newCategories.length > 0;
+  // ── Phase 4: replace 👀 with final reaction ──
 
-  if (hasProcessedExpenses) {
-    // Set reaction on user message
+  if (confirmedIds.length > 0) {
     try {
-      await bot.api.setMessageReaction({
-        chat_id: telegramGroupId,
-        message_id: messageId,
-        reaction: [{ type: 'emoji', emoji: '👍' }],
-      });
+      if (!batchError) {
+        await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
+      } else {
+        await bot.api.setMessageReaction({
+          chat_id: telegramGroupId,
+          message_id: messageId,
+          reaction: [{ type: 'emoji', emoji: '👎' }],
+        });
+      }
     } catch (error) {
-      logger.error({ err: error }, '[MSG] Failed to set reaction');
+      logger.error({ err: error }, '[MSG] Failed to set final reaction');
     }
+  }
+
+  if (batchError) {
+    await sendMessage(getSheetErrorMessage(batchError));
+  }
+
+  // Send numbered summary when multiple expenses recognized
+  if (processedExpenses.length > 1) {
+    const summaryLines = processedExpenses.map((exp, i) => {
+      const num = digitEmoji(i + 1);
+      const amount = formatAmount(exp.amount, exp.currency);
+      const cat = escapeHtml(exp.category ?? '');
+      const comment = exp.comment ? ` — ${escapeHtml(exp.comment)}` : '';
+      const status = exp.saved ? '' : ' ❓';
+      return `${num} ${amount} ${cat}${comment}${status}`;
+    });
+    await sendMessage(summaryLines.join('\n'));
   }
 
   // If there are new categories, ask for confirmation
@@ -360,11 +463,8 @@ export async function handleExpenseMessage(
     return true;
   }
 
-  // Success - no need to send message, reaction is enough
+  logger.info(`[MSG] ✅ Processed ${confirmedIds.length}/${lines.length} expenses successfully`);
 
-  logger.info(`[MSG] ✅ Processed ${successCount}/${lines.length} expenses successfully`);
-
-  // Maybe send daily advice (20% probability)
   if (hasProcessedExpenses) {
     await maybeSmartAdvice(group.id);
   }

@@ -12,8 +12,14 @@ const logger = createLogger('schema');
  * Initialize database connection
  */
 export function initDatabase(): Database {
-  mkdirSync(dirname(env.DATABASE_PATH), { recursive: true });
-  const db = new Database(env.DATABASE_PATH, { create: true });
+  // In tests, use in-memory DB to avoid file lock contention between parallel test processes
+  const isTest = process.env.NODE_ENV === 'test';
+  const dbPath = isTest ? ':memory:' : env.DATABASE_PATH;
+
+  if (!isTest) {
+    mkdirSync(dirname(env.DATABASE_PATH), { recursive: true });
+  }
+  const db = new Database(dbPath, { create: true });
 
   // Enable WAL mode for better concurrency
   db.exec('PRAGMA journal_mode = WAL;');
@@ -1191,6 +1197,177 @@ export function runMigrations(db: Database): void {
           db.exec(`ALTER TABLE bank_transactions ADD COLUMN invoice_amount REAL`);
           db.exec(`ALTER TABLE bank_transactions ADD COLUMN invoice_currency TEXT`);
           logger.info('✓ Added invoice_amount/invoice_currency to bank_transactions');
+        }
+      },
+    },
+    {
+      name: '045_fix_corrupted_eur_amounts',
+      up: () => {
+        // Race condition in appendExpenseRow wrote EUR formulas referencing wrong rows.
+        // Sync then imported those wrong EUR values into eur_amount.
+        // Fix: recalculate eur_amount from amount + currency using approximate fallback rates.
+        // These are recovery rates, not the exact rates used at transaction time.
+        const rates: Record<string, number> = {
+          EUR: 1,
+          USD: 0.92,
+          RUB: 0.0093,
+          RSD: 0.0086,
+          GBP: 1.18,
+          BYN: 0.28,
+          CHF: 1.05,
+        };
+
+        // Guard: skip if expenses table doesn't have eur_amount (test DBs with partial schema)
+        const hasEurCol = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('expenses') WHERE name = 'eur_amount'`,
+          )
+          .get();
+        if (!hasEurCol?.count) {
+          logger.info('✓ expenses.eur_amount column not found, skipping');
+          return;
+        }
+
+        // Find expenses where eur_amount is suspiciously constant (the bug marker)
+        // or zero for non-EUR currencies
+        const buggyConst = db
+          .query<{ id: number; amount: number; currency: string; eur_amount: number }, []>(
+            `SELECT id, amount, currency, eur_amount FROM expenses
+             WHERE (ABS(eur_amount - 2.197105278) < 0.001 AND ABS(amount - 258) > 1)
+                OR (eur_amount = 0 AND currency != 'EUR')`,
+          )
+          .all();
+
+        if (buggyConst.length === 0) {
+          logger.info('✓ No corrupted eur_amounts found');
+          return;
+        }
+
+        const updateStmt = db.query<void, [number, number]>(
+          `UPDATE expenses SET eur_amount = ? WHERE id = ?`,
+        );
+
+        let fixed = 0;
+        for (const row of buggyConst) {
+          const rate = rates[row.currency];
+          if (!rate) {
+            logger.warn(`[MIGRATION] No rate for ${row.currency}, skipping expense ${row.id}`);
+            continue;
+          }
+          const correctEur = Math.round(row.amount * rate * 100) / 100;
+          updateStmt.run(correctEur, row.id);
+          fixed++;
+        }
+
+        logger.info(`✓ Fixed ${fixed} corrupted eur_amounts (of ${buggyConst.length} found)`);
+      },
+    },
+    {
+      name: '046_create_group_members',
+      up: () => {
+        // Add title column to groups table
+        const hasTitle = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('groups') WHERE name = 'title'`,
+          )
+          .get();
+        if (hasTitle?.count === 0) {
+          db.exec(`ALTER TABLE groups ADD COLUMN title TEXT`);
+          logger.info('✓ Added title column to groups');
+        }
+
+        // Add invite_link column to groups table for Telegram-native buttons
+        const hasInviteLink = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('groups') WHERE name = 'invite_link'`,
+          )
+          .get();
+        if (hasInviteLink?.count === 0) {
+          db.exec(`ALTER TABLE groups ADD COLUMN invite_link TEXT`);
+          logger.info('✓ Added invite_link column to groups');
+        }
+
+        // Create group_members junction table for tracking all user-group memberships
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS group_members (
+            id INTEGER PRIMARY KEY,
+            telegram_id INTEGER NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(telegram_id, group_id)
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_group_members_telegram_id ON group_members(telegram_id)`,
+        );
+
+        // Backfill from existing users
+        db.exec(`
+          INSERT OR IGNORE INTO group_members (telegram_id, group_id)
+          SELECT telegram_id, group_id FROM users WHERE group_id IS NOT NULL
+        `);
+
+        logger.info('✓ Created group_members table');
+      },
+    },
+    {
+      name: '047_create_receipts_table',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            photo_queue_id INTEGER REFERENCES photo_processing_queue(id) ON DELETE SET NULL,
+            image_path TEXT,
+            total_amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_receipts_group_date
+          ON receipts(group_id, date)
+        `);
+        logger.info('✓ Created receipts table');
+
+        // Add receipt_id FK to expenses
+        const hasReceiptId = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('expenses') WHERE name = 'receipt_id'`,
+          )
+          .get();
+        if (hasReceiptId?.count === 0) {
+          db.exec(
+            `ALTER TABLE expenses ADD COLUMN receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL`,
+          );
+          logger.info('✓ Added receipt_id to expenses');
+        }
+      },
+    },
+    {
+      name: '048_add_expenses_receipt_id_index',
+      up: () => {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_receipt_id ON expenses(receipt_id)');
+        logger.info('✓ Created index on expenses.receipt_id');
+      },
+    },
+    {
+      name: '049_add_bank_transactions_matched_receipt_id',
+      up: () => {
+        const hasColumn = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions') WHERE name = 'matched_receipt_id'`,
+          )
+          .get();
+        if (hasColumn?.count === 0) {
+          db.exec(
+            `ALTER TABLE bank_transactions ADD COLUMN matched_receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL`,
+          );
+          db.exec(
+            'CREATE INDEX IF NOT EXISTS idx_bank_transactions_matched_receipt_id ON bank_transactions(matched_receipt_id)',
+          );
+          logger.info('✓ Added matched_receipt_id to bank_transactions');
         }
       },
     },

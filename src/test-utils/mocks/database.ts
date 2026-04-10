@@ -36,6 +36,7 @@ export function mockDatabase(
     'bankAccounts',
     'bankTransactions',
     'expenseItems',
+    'receipts',
     'receiptItems',
     'merchantRules',
     'photoQueue',

@@ -6,6 +6,7 @@ import { initSender } from '../services/bank/telegram-sender';
 import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
+import { loadDigitEmojis, loadReactionEmojis } from '../utils/digit-emoji';
 import { createLogger } from '../utils/logger.ts';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
@@ -36,7 +37,7 @@ import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
-import type { BotInstance, Ctx } from './types';
+import type { Ctx } from './types';
 
 const logger = createLogger('index');
 
@@ -236,6 +237,10 @@ export async function startBot(): Promise<Bot> {
     logger.error({ err }, 'Failed to verify spreadsheet columns (non-fatal)');
   }
 
+  // Load custom emojis for expense summaries and reactions
+  await loadDigitEmojis(bot);
+  await loadReactionEmojis(bot);
+
   // Start background photo processor
   logger.info('📸 Starting photo processor...');
   await startPhotoProcessor(bot);
@@ -255,7 +260,7 @@ export async function startBot(): Promise<Bot> {
  * current year, create a new current-year spreadsheet, copy current-year rows there,
  * and clean up the old spreadsheet.
  */
-export function createStartupMigration(bot: BotInstance) {
+export function createStartupMigration(bot: Bot) {
   return async function runStartupYearSplitMigration(): Promise<void> {
     const currentYear = new Date().getFullYear();
     const groups = database.groups.findAll();

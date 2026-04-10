@@ -61,6 +61,8 @@ describe('sendFeedback', () => {
     spyOn(database.groups, 'findById').mockReturnValue({
       id: 1,
       telegram_group_id: 123,
+      title: null,
+      invite_link: null,
       default_currency: 'EUR',
       enabled_currencies: ['EUR'],
       custom_prompt: null,
@@ -100,6 +102,8 @@ describe('sendFeedback', () => {
     spyOn(database.groups, 'findById').mockReturnValue({
       id: 1,
       telegram_group_id: 123,
+      title: null,
+      invite_link: null,
       default_currency: 'EUR',
       enabled_currencies: ['EUR'],
       custom_prompt: null,

@@ -22,6 +22,7 @@ import {
   handleBankMergeCallback,
   handleBankNewCallback,
   handleBankNoCommentCallback,
+  handleBankReceiptCallback,
   handleBankReconnectCallback,
   handleBankSettingsBackCallback,
   handleBankSettingsCallback,
@@ -42,8 +43,9 @@ import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/dis
 import { cancelPendingFeedback } from '../commands/feedback';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
+import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
-import { getSheetWriteErrorMessage } from './message.handler';
+import { trackMembership } from './message.handler';
 
 const logger = createLogger('callback.handler');
 
@@ -68,6 +70,9 @@ function ensureUserInGroup(telegramId: number, chatId: number | undefined) {
     database.users.update(telegramId, { group_id: group.id });
     user = database.users.findByTelegramId(telegramId);
   }
+
+  // Track membership for private chat group buttons
+  trackMembership(telegramId, group.id);
 
   return user ? { user, group } : null;
 }
@@ -174,7 +179,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankConfirmCallback(ctx, bot, txId, chatId);
+        await handleBankConfirmCallback(ctx, txId, chatId);
         break;
       }
 
@@ -194,7 +199,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        await handleBankNoCommentCallback(ctx, txId, chatId);
         break;
       }
 
@@ -205,7 +210,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        await handleBankMergeCallback(ctx, txId, expenseId, chatId);
         break;
       }
 
@@ -216,6 +221,17 @@ export async function handleCallbackQuery(
           return;
         }
         await handleBankNewCallback(ctx, txId, chatId);
+        break;
+      }
+
+      case 'bank_receipt': {
+        const txId = Number(params[0]);
+        const receiptId = Number(params[1]);
+        if (!chatId || !txId || !receiptId) {
+          await ctx.answerCallbackQuery({ text: 'Неверные данные' });
+          return;
+        }
+        await handleBankReceiptCallback(ctx, txId, receiptId, chatId);
         break;
       }
 
@@ -544,7 +560,7 @@ async function handleCategoryAction(
           logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
           database.pendingExpenses.delete(pending.id);
           if (chatId) {
-            await sendMessage(getSheetWriteErrorMessage(group.id));
+            await sendMessage(getSheetErrorMessage(error));
           }
         }
       }
@@ -628,7 +644,7 @@ async function handleCategoryAction(
         logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
         database.pendingExpenses.delete(pending.id);
         if (chatId) {
-          await sendMessage(getSheetWriteErrorMessage(group.id));
+          await sendMessage(getSheetErrorMessage(error));
         }
       }
       break;

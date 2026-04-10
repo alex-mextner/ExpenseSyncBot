@@ -9,6 +9,7 @@ import { mockDatabase } from '../../test-utils/mocks/database';
 // ── Mock functions ───────────────────────────────────────────────────────────
 
 const appendExpenseRow = mock(() => Promise.resolve(undefined));
+const appendExpenseRows = mock(() => Promise.resolve(undefined));
 const googleConn = mock(() => ({}));
 
 const convertToEUR = mock(() => 1.72);
@@ -69,6 +70,22 @@ const mockBudgetsGetForMonth = mock(
   } | null => null,
 );
 const mockTransaction = mock((fn: () => void) => fn());
+const mockPendingExpenseFindById = mock(
+  (
+    _id: number,
+  ): {
+    id: number;
+    user_id: number;
+    message_id: number;
+    parsed_amount: number;
+    parsed_currency: CurrencyCode;
+    detected_category: string | null;
+    comment: string;
+    status: 'confirmed';
+    created_at: string;
+  } | null => null,
+);
+const mockPendingExpenseDelete = mock(() => {});
 
 const db = {
   ...mockDatabase({
@@ -89,13 +106,21 @@ const db = {
     budgets: {
       getBudgetForMonth: mockBudgetsGetForMonth,
     },
+    pendingExpenses: {
+      findById: mockPendingExpenseFindById,
+      delete: mockPendingExpenseDelete,
+    },
   }),
   transaction: mockTransaction,
 };
 
 // ── mock.module declarations (must precede module under test import) ─────────
 
-mock.module('../../services/google/sheets', () => ({ appendExpenseRow, googleConn }));
+mock.module('../../services/google/sheets', () => ({
+  appendExpenseRow,
+  appendExpenseRows,
+  googleConn,
+}));
 mock.module('../../services/currency/converter', () => ({
   convertToEUR,
   convertCurrency,
@@ -111,13 +136,8 @@ mock.module('../../services/bank/telegram-sender', () => ({
 }));
 mock.module('../../database', () => ({ database: db }));
 mock.module('./budget-sync', () => ({ silentSyncBudgets: mock(() => Promise.resolve(0)) }));
-const sendToChat = mock((text: string, options?: Record<string, unknown>) => {
-  sentMessages.push({ text, options });
-  return Promise.resolve({ message_id: 1 } as TelegramMessage);
-});
-mock.module('../send', () => ({ sendToChat }));
 
-import { saveReceiptExpenses } from './expense-saver';
+import { saveExpenseBatch, saveReceiptExpenses } from './expense-saver';
 
 // ── Test data ────────────────────────────────────────────────────────────────
 
@@ -169,6 +189,7 @@ beforeEach(() => {
   sentMessages.length = 0;
 
   appendExpenseRow.mockReset().mockResolvedValue(undefined);
+  appendExpenseRows.mockReset().mockResolvedValue(undefined);
   convertToEUR.mockReset().mockReturnValue(1.72);
   convertCurrency.mockReset().mockReturnValue(0);
   formatAmount
@@ -206,6 +227,8 @@ beforeEach(() => {
   mockExpenseItemsCreate.mockReset();
   mockBudgetsGetForMonth.mockReset().mockReturnValue(null);
   mockTransaction.mockReset().mockImplementation((fn: () => void) => fn());
+  mockPendingExpenseFindById.mockReset().mockReturnValue(null);
+  mockPendingExpenseDelete.mockReset();
 });
 
 afterEach(() => {
@@ -220,7 +243,7 @@ describe('saveReceiptExpenses', () => {
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
-    expect(appendExpenseRow).not.toHaveBeenCalled();
+    expect(appendExpenseRows).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -229,7 +252,7 @@ describe('saveReceiptExpenses', () => {
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
-    expect(appendExpenseRow).toHaveBeenCalledTimes(1);
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
     expect(mockExpenseCreate).toHaveBeenCalledTimes(1);
     expect(mockReceiptItemsDelete).toHaveBeenCalledTimes(1);
 
@@ -268,7 +291,7 @@ describe('saveReceiptExpenses', () => {
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // 2 categories → 2 sheet writes
-    expect(appendExpenseRow).toHaveBeenCalledTimes(2);
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
 
     // Budget warning for Продукты (exceeded) via sendMessage
     const budgetMsg = sentMessages.find((m) => m.text.includes('ПРЕВЫШЕН БЮДЖЕТ'));
@@ -330,24 +353,151 @@ describe('saveReceiptExpenses', () => {
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
     // Only 1 category processed (the one with confirmed_category)
-    expect(appendExpenseRow).toHaveBeenCalledTimes(1);
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
   });
 
-  it('continues to next category when sheet write fails', async () => {
+  it('commits nothing to DB when any sheet write fails (atomic)', async () => {
     mockReceiptItemsFind.mockReturnValue([
       makeReceiptItem({ id: 1, confirmed_category: 'Продукты', total: 200 }),
       makeReceiptItem({ id: 2, confirmed_category: 'Транспорт', total: 100 }),
     ]);
 
-    appendExpenseRow
-      .mockRejectedValueOnce(new Error('Sheet error'))
-      .mockResolvedValueOnce(undefined);
+    appendExpenseRows.mockRejectedValueOnce(new Error('Sheet error'));
 
     await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
 
-    // Sheet was attempted for both categories
-    expect(appendExpenseRow).toHaveBeenCalledTimes(2);
-    // But only Транспорт expense was created (Продукты was skipped due to sheet error)
-    expect(mockExpenseCreate).toHaveBeenCalledTimes(1);
+    // Batch write attempted once, failed
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
+    // No DB writes — atomic rollback
+    expect(mockExpenseCreate).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+    // Receipt items NOT deleted — user can retry after /reconnect
+    expect(mockReceiptItemsDelete).not.toHaveBeenCalled();
+    // Error message sent to user
+    const errorMsg = sentMessages.find((m) => m.text.includes('Не удалось'));
+    expect(errorMsg).toBeDefined();
+  });
+});
+
+// ── saveExpenseBatch ────────────────────────────────────────────────────────
+
+function makePendingExpense(id: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    user_id: TEST_USER_ID,
+    message_id: 100,
+    parsed_amount: 500,
+    parsed_currency: 'RSD' as CurrencyCode,
+    detected_category: 'Продукты',
+    comment: 'молоко',
+    status: 'confirmed' as const,
+    created_at: '2024-01-01',
+    ...overrides,
+  };
+}
+
+describe('saveExpenseBatch', () => {
+  beforeEach(() => {
+    mockGroupsFindById.mockReturnValue(makeGroup());
+  });
+
+  it('does nothing for empty array', async () => {
+    await saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, []);
+
+    expect(appendExpenseRows).not.toHaveBeenCalled();
+    expect(mockExpenseCreate).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('writes all expenses to sheet then commits to DB atomically', async () => {
+    const pe1 = makePendingExpense(10, { detected_category: 'Продукты', parsed_amount: 500 });
+    const pe2 = makePendingExpense(11, { detected_category: 'Транспорт', parsed_amount: 300 });
+
+    mockPendingExpenseFindById.mockImplementation((id: number) => {
+      if (id === 10) return pe1;
+      if (id === 11) return pe2;
+      return null;
+    });
+
+    await saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, [10, 11]);
+
+    // Both written to sheet
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
+
+    // One atomic transaction for both DB writes
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockExpenseCreate).toHaveBeenCalledTimes(2);
+    expect(mockPendingExpenseDelete).toHaveBeenCalledTimes(2);
+  });
+
+  it('commits nothing to DB when sheet batch write fails', async () => {
+    const pe1 = makePendingExpense(10);
+    const pe2 = makePendingExpense(11);
+
+    mockPendingExpenseFindById.mockImplementation((id: number) => {
+      if (id === 10) return pe1;
+      if (id === 11) return pe2;
+      return null;
+    });
+
+    appendExpenseRows.mockRejectedValueOnce(new Error('Auth expired'));
+
+    await expect(saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, [10, 11])).rejects.toThrow(
+      'Auth expired',
+    );
+
+    // Batch write attempted once, failed
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
+
+    // No DB writes at all — atomic rollback
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockExpenseCreate).not.toHaveBeenCalled();
+    expect(mockPendingExpenseDelete).not.toHaveBeenCalled();
+  });
+
+  it('throws when group is not configured for Google Sheets', async () => {
+    mockGroupsFindById.mockReturnValue({
+      ...makeGroup(),
+      spreadsheet_id: null as unknown as string,
+    });
+
+    await expect(saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, [10])).rejects.toThrow(
+      'Group not configured',
+    );
+  });
+
+  it('throws when pending expense not found', async () => {
+    mockPendingExpenseFindById.mockReturnValue(null);
+
+    await expect(saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, [999])).rejects.toThrow(
+      'Pending expense 999 not found',
+    );
+  });
+
+  it('checks budget limits after commit (deduplicated by category)', async () => {
+    const pe1 = makePendingExpense(10, { detected_category: 'Продукты' });
+    const pe2 = makePendingExpense(11, { detected_category: 'Продукты' });
+    const pe3 = makePendingExpense(12, { detected_category: 'Транспорт' });
+
+    mockPendingExpenseFindById.mockImplementation((id: number) => {
+      if (id === 10) return pe1;
+      if (id === 11) return pe2;
+      if (id === 12) return pe3;
+      return null;
+    });
+
+    mockBudgetsGetForMonth.mockReturnValue({
+      id: 1,
+      category: 'Продукты',
+      limit_amount: 1000,
+      currency: 'EUR',
+      month: '2024-01',
+    });
+
+    await saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, [10, 11, 12]);
+
+    // 3 expenses but only 2 unique categories → 2 budget checks
+    // (getBudgetForMonth is called once per unique category)
+    expect(mockBudgetsGetForMonth).toHaveBeenCalledTimes(2);
   });
 });

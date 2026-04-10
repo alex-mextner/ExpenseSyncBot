@@ -8,7 +8,7 @@ mock.module('../../utils/logger.ts', () => ({
 }));
 
 import { TelegramError } from 'gramio';
-import { TelegramStreamWriter } from './telegram-stream';
+import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 
 /**
  * Helper to construct TelegramError instances for tests.
@@ -984,4 +984,35 @@ describe('placeholder reuse prevents double-message race', () => {
     // biome-ignore lint/suspicious/noExplicitAny: access private method
     (writer as any).stopTyping();
   });
+});
+
+describe('isSkipSignal', () => {
+  // --- Should match ---
+  test('exact [SKIP]', () => expect(isSkipSignal('[SKIP]')).toBe(true));
+  test('[SKIP] with whitespace', () => expect(isSkipSignal('  [SKIP]  ')).toBe(true));
+  test('[ПРОПУСК] Russian variant', () => expect(isSkipSignal('[ПРОПУСК]')).toBe(true));
+  test('lowercase [skip]', () => expect(isSkipSignal('[skip]')).toBe(true));
+  test('mixed case [Skip]', () => expect(isSkipSignal('[Skip]')).toBe(true));
+  test('broken bracket [SKIP', () => expect(isSkipSignal('[SKIP')).toBe(true));
+  test('broken bracket ПРОПУСК]', () => expect(isSkipSignal('ПРОПУСК]')).toBe(true));
+  test('[SKIP] embedded in text', () => expect(isSkipSignal('ok [SKIP] done')).toBe(true));
+  test('empty string', () => expect(isSkipSignal('')).toBe(true));
+  test('triple dot', () => expect(isSkipSignal('...')).toBe(true));
+  test('ellipsis character', () => expect(isSkipSignal('…')).toBe(true));
+  test('whitespace only', () => expect(isSkipSignal('   ')).toBe(true));
+
+  // --- Should NOT match ---
+  test('normal text', () => expect(isSkipSignal('Привет, как дела?')).toBe(false));
+  test('word skip without brackets', () => expect(isSkipSignal('skip')).toBe(false));
+  test('parentheses (SKIP)', () => expect(isSkipSignal('(SKIP)')).toBe(false));
+  test('random dots', () => expect(isSkipSignal('..')).toBe(false));
+  test('actual response', () => expect(isSkipSignal('Итого за месяц: 500€')).toBe(false));
+  test('long reply quoting [SKIP] marker', () =>
+    expect(
+      isSkipSignal('Маркер [SKIP] используется когда бот решает промолчать. Это машинный токен.'),
+    ).toBe(false));
+  test('long reply quoting [ПРОПУСК]', () =>
+    expect(isSkipSignal('Токен [ПРОПУСК] — это устаревший русский вариант маркера молчания.')).toBe(
+      false,
+    ));
 });

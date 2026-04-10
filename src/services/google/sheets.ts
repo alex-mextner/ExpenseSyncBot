@@ -178,17 +178,196 @@ function colLetter(index: number): string {
  */
 const RATE_COLUMN_HEADER = 'Rate (→EUR)';
 
+// Per-spreadsheet write queue — serializes appends so EUR formula row references are correct
+const sheetWriteQueues = new Map<string, Promise<void>>();
+
+/** Exported for testing — serializes async operations per spreadsheet */
+export function enqueueSheetWrite(spreadsheetId: string, fn: () => Promise<void>): Promise<void> {
+  const prev = sheetWriteQueues.get(spreadsheetId) ?? Promise.resolve();
+  // Chain runs fn after prev settles (success or failure)
+  const chain = prev.catch(() => {}).then(fn);
+  // Store the settled chain (never rejects) so next enqueue can chain off it
+  const settled = chain.catch(() => {});
+  sheetWriteQueues.set(spreadsheetId, settled);
+  settled.then(() => {
+    if (sheetWriteQueues.get(spreadsheetId) === settled) {
+      sheetWriteQueues.delete(spreadsheetId);
+    }
+  });
+  // Return the chain that DOES reject on fn failure — caller gets the error
+  return chain;
+}
+
+export interface ExpenseRowData {
+  date: string;
+  category: string;
+  comment: string;
+  amounts: Record<string, number | null>; // Currency -> amount
+  eurAmount: number;
+  rate?: number; // Exchange rate used (1 CURRENCY = rate EUR)
+}
+
 export async function appendExpenseRow(
   conn: GoogleConn,
   spreadsheetId: string,
-  data: {
-    date: string;
-    category: string;
-    comment: string;
-    amounts: Record<string, number | null>; // Currency -> amount
-    eurAmount: number;
-    rate?: number; // Exchange rate used (1 CURRENCY = rate EUR)
-  },
+  data: ExpenseRowData,
+): Promise<void> {
+  return enqueueSheetWrite(spreadsheetId, () => appendExpenseRowImpl(conn, spreadsheetId, data));
+}
+
+/**
+ * Batch append: reads headers once, inserts missing columns once,
+ * appends all rows in one API call, writes EUR formulas in one batchUpdate.
+ */
+export async function appendExpenseRows(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  dataList: ExpenseRowData[],
+): Promise<void> {
+  if (dataList.length === 0) return;
+  return enqueueSheetWrite(spreadsheetId, () =>
+    appendExpenseRowsImpl(conn, spreadsheetId, dataList),
+  );
+}
+
+async function appendExpenseRowsImpl(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  dataList: ExpenseRowData[],
+): Promise<void> {
+  const auth = authClient(conn);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  // Get headers once
+  const headersResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+  });
+
+  let headers: string[] = headersResponse.data.values?.[0] || [];
+  logger.info({ data: headers }, '[SHEETS-BATCH] Headers from spreadsheet');
+
+  // Collect all unique currencies that need columns
+  const allCurrencies = new Set<string>();
+  for (const data of dataList) {
+    const curr = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
+    if (curr) allCurrencies.add(curr);
+  }
+
+  // Insert missing currency columns (once per unique currency)
+  for (const curr of allCurrencies) {
+    const hasCurrencyCol = headers.some((h) => h.startsWith(`${curr} (`));
+    if (!hasCurrencyCol) {
+      headers = await insertCurrencyColumn(sheets, spreadsheetId, headers, curr as CurrencyCode);
+    }
+  }
+
+  // Ensure Rate column exists
+  if (!headers.includes(RATE_COLUMN_HEADER)) {
+    headers = await ensureRateColumn(sheets, spreadsheetId, headers);
+  }
+
+  // Find column indices
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+
+  // Build all rows
+  const rows: (string | number | null)[][] = [];
+  const formulaInfo: Array<{ needsFormula: boolean; amountColIdx: number }> = [];
+
+  for (const data of dataList) {
+    const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
+    let amountColIdx = -1;
+    for (let i = 0; i < headers.length; i++) {
+      if (headers[i]?.split(' ')[0] === expenseCurrency) {
+        amountColIdx = i;
+        break;
+      }
+    }
+
+    const needsFormula =
+      expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
+    formulaInfo.push({ needsFormula, amountColIdx });
+
+    const row: (string | number | null)[] = [];
+    for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+      const header = headers[colIdx];
+      if (header === SPREADSHEET_CONFIG.headers[0]) {
+        row.push(data.date);
+      } else if (header === SPREADSHEET_CONFIG.headers[1]) {
+        row.push(data.category);
+      } else if (header === SPREADSHEET_CONFIG.headers[2]) {
+        row.push(data.comment);
+      } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
+        row.push(data.eurAmount);
+      } else if (header === RATE_COLUMN_HEADER) {
+        row.push(data.rate ?? '');
+      } else {
+        const currencyCode = header?.split(' ')[0] as CurrencyCode;
+        row.push(data.amounts[currencyCode] ?? '');
+      }
+    }
+    rows.push(row);
+  }
+
+  // Append all rows in one API call
+  const response = await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: rows },
+  });
+
+  const updatedRange = response.data.updates?.updatedRange;
+  const updatedRows = response.data.updates?.updatedRows;
+  logger.info(`[SHEETS-BATCH] Appended ${updatedRows} rows, range=${updatedRange}`);
+
+  if (!updatedRows || updatedRows === 0) {
+    logger.error('[SHEETS-BATCH] No rows appended');
+    return;
+  }
+
+  // Parse start row from response (e.g. "Expenses!A5:G7" → 5)
+  const startRowMatch = updatedRange?.match(/!A(\d+)/);
+  if (!startRowMatch?.[1] || eurColIdx === -1) return;
+
+  const startRow = Number.parseInt(startRowMatch[1], 10);
+
+  // Build EUR formula updates for rows that need them
+  const formulaUpdates: Array<{ range: string; values: string[][] }> = [];
+  for (const [i, info] of formulaInfo.entries()) {
+    if (!info.needsFormula) continue;
+
+    const actualRow = startRow + i;
+    const eurCell = `${colLetter(eurColIdx)}${actualRow}`;
+    const amountCell = `${colLetter(info.amountColIdx)}${actualRow}`;
+    const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
+    const formula = `=${amountCell}*${rateCell}`;
+
+    formulaUpdates.push({
+      range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
+      values: [[formula]],
+    });
+  }
+
+  // Write all EUR formulas in one batchUpdate
+  if (formulaUpdates.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: formulaUpdates,
+      },
+    });
+    logger.info(`[SHEETS-BATCH] Wrote ${formulaUpdates.length} EUR formulas`);
+  }
+}
+
+async function appendExpenseRowImpl(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  data: ExpenseRowData,
 ): Promise<void> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
@@ -232,6 +411,9 @@ export async function appendExpenseRow(
     }
   }
 
+  const needsFormula =
+    expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
+
   // Build row values based on header order
   const row: (string | number | null)[] = [];
 
@@ -244,13 +426,8 @@ export async function appendExpenseRow(
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      // EUR(calc) as formula: =AMOUNT*RATE (or static for EUR expenses / missing rate)
-      if (expenseCurrency === 'EUR' || !data.rate || amountColIdx === -1 || rateColIdx === -1) {
-        row.push(data.eurAmount);
-      } else {
-        // Formula placeholder — row number is filled in below after we know nextRow
-        row.push(`__EUR_FORMULA__`);
-      }
+      // Write static EUR first; replaced with formula in a second call if needed
+      row.push(data.eurAmount);
     } else if (header === RATE_COLUMN_HEADER) {
       row.push(data.rate ?? '');
     } else {
@@ -260,27 +437,9 @@ export async function appendExpenseRow(
     }
   }
 
-  // Find last row to compute the target row number for the EUR formula placeholder
-  const dataResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
-  });
-
-  const existingRows = dataResponse.data.values || [];
-  const nextRow = existingRows.length + 1;
-
-  // Replace EUR formula placeholder with actual formula now that we know the row
-  const formulaIdx = row.indexOf('__EUR_FORMULA__');
-  if (formulaIdx !== -1 && amountColIdx !== -1 && rateColIdx !== -1) {
-    const amountCell = `${colLetter(amountColIdx)}${nextRow}`;
-    const rateCell = `${colLetter(rateColIdx)}${nextRow}`;
-    row[formulaIdx] = `=${amountCell}*${rateCell}`;
-  }
-
   logger.info({ data: row }, `[SHEETS] Final row`);
 
-  // Append atomically — the API finds the next empty row and writes in one call,
-  // eliminating the race condition between reading last row and writing.
+  // Append the row — the API finds the next empty row atomically
   const response = await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
@@ -292,15 +451,41 @@ export async function appendExpenseRow(
   });
 
   // Log API response for debugging
+  const updatedRange = response.data.updates?.updatedRange;
   const updatedRows = response.data.updates?.updatedRows;
   logger.info(
-    `[SHEETS] API response: range=${response.data.updates?.updatedRange}, rows=${updatedRows}, cells=${response.data.updates?.updatedCells}`,
+    `[SHEETS] API response: range=${updatedRange}, rows=${updatedRows}, cells=${response.data.updates?.updatedCells}`,
   );
 
   if (!updatedRows || updatedRows === 0) {
     logger.error(
       `[SHEETS] No rows were appended! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
+    return;
+  }
+
+  // Write EUR formula using the ACTUAL row number from the API response
+  if (needsFormula && updatedRange) {
+    const rowMatch = updatedRange.match(/!A(\d+)/);
+    if (rowMatch?.[1]) {
+      const actualRow = Number.parseInt(rowMatch[1], 10);
+      const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+      if (eurColIdx !== -1) {
+        const eurCell = `${colLetter(eurColIdx)}${actualRow}`;
+        const amountCell = `${colLetter(amountColIdx)}${actualRow}`;
+        const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
+        const formula = `=${amountCell}*${rateCell}`;
+
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[formula]] },
+        });
+
+        logger.info(`[SHEETS] EUR formula written: ${eurCell} = ${formula}`);
+      }
+    }
   }
 }
 
@@ -1101,14 +1286,27 @@ export async function deleteExpenseRowsByIndex(
   });
 }
 
+export interface EurMismatchWarning {
+  row: number;
+  date: string;
+  category: string;
+  sheetEur: number;
+  recalcEur: number;
+}
+
 /**
  * Read all expenses from Google Sheet.
- * Returns expenses and any rows with amounts in multiple currency columns (data errors).
+ * Returns expenses, multi-currency errors, and EUR mismatch warnings.
+ * EUR amounts are always recalculated from amount × Rate — sheet EUR(calc) is not trusted.
  */
 export async function readExpensesFromSheet(
   conn: GoogleConn,
   spreadsheetId: string,
-): Promise<{ expenses: SheetRow[]; errors: MultiCurrencyRowError[] }> {
+): Promise<{
+  expenses: SheetRow[];
+  errors: MultiCurrencyRowError[];
+  eurMismatches: EurMismatchWarning[];
+}> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
@@ -1120,7 +1318,7 @@ export async function readExpensesFromSheet(
   const rows = response.data.values || [];
 
   if (rows.length === 0) {
-    return { expenses: [], errors: [] };
+    return { expenses: [], errors: [], eurMismatches: [] };
   }
 
   const headers = rows[0] as string[];
@@ -1157,6 +1355,7 @@ export async function readExpensesFromSheet(
 
   const expenses: SheetRow[] = [];
   const errors: MultiCurrencyRowError[] = [];
+  const eurMismatchRows: EurMismatchWarning[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as string[];
@@ -1215,24 +1414,48 @@ export async function readExpensesFromSheet(
       }
     }
 
-    // EUR amount: from sheet if available, otherwise recalculate
+    // EUR amount: prefer recalculated value; fall back to sheet only for EUR expenses
+    const [firstCurr, firstAmt] = Object.entries(amounts)[0] ?? [];
     let eurAmount: number;
-    if (eurAmountStr && eurAmountStr.trim() !== '') {
-      const parsed = parseFloat(eurAmountStr);
-      eurAmount = !Number.isNaN(parsed) ? parsed : 0;
+
+    if (firstCurr === 'EUR') {
+      // EUR expenses: amount IS eur_amount
+      eurAmount = firstAmt ?? 0;
+    } else if (rate && firstAmt) {
+      // Non-EUR with Rate column: recalculate (Rate stores "1 CURRENCY = rate EUR")
+      eurAmount = Math.round(firstAmt * rate * 100) / 100;
+    } else if (firstCurr && firstAmt) {
+      // No Rate column: use runtime converter
+      eurAmount = convertToEUR(firstAmt, firstCurr as CurrencyCode);
     } else {
-      const [curr, amt] = Object.entries(amounts)[0] ?? [];
-      if (curr && amt) {
-        eurAmount = rate
-          ? Math.round(amt * rate * 100) / 100
-          : convertToEUR(amt, curr as CurrencyCode);
-      } else {
-        eurAmount = 0;
+      eurAmount = 0;
+    }
+
+    // Warn if sheet EUR(calc) diverges significantly from recalculated value
+    if (eurAmountStr && eurAmountStr.trim() !== '' && eurAmount > 0) {
+      const sheetEur = parseFloat(eurAmountStr);
+      if (!Number.isNaN(sheetEur) && sheetEur > 0) {
+        const ratio = sheetEur / eurAmount;
+        if (ratio < 0.5 || ratio > 2.0) {
+          eurMismatchRows.push({
+            row: i + 1,
+            date,
+            category,
+            sheetEur,
+            recalcEur: eurAmount,
+          });
+        }
       }
     }
 
     expenses.push({ date, amounts, eurAmount, rate, category, comment });
   }
 
-  return { expenses, errors };
+  if (eurMismatchRows.length > 0) {
+    logger.warn(
+      `[SHEETS] ${eurMismatchRows.length} rows have EUR mismatch (sheet formula vs recalculated)`,
+    );
+  }
+
+  return { expenses, errors, eurMismatches: eurMismatchRows };
 }

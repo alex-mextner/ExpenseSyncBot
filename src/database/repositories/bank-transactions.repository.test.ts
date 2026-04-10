@@ -161,4 +161,32 @@ describe('BankTransactionsRepository', () => {
 
     expect(claimTx()).toBeNull();
   });
+
+  describe('findUnmatched', () => {
+    test('excludes transactions linked via matched_receipt_id (Variant A)', () => {
+      // Unlinked tx — must appear
+      repo.insertIgnore({
+        ...baseTx,
+        connection_id: connectionId,
+        external_id: 'unlinked',
+      });
+      // Receipt-linked tx — must NOT appear (1:N link via matched_receipt_id only)
+      db.exec(`
+        INSERT INTO receipts (group_id, image_path, total_amount, currency, date, created_at)
+        VALUES (${groupId}, '/tmp/r.jpg', 45, 'GEL', '2026-03-27', '2026-03-27T00:00:00Z')
+      `);
+      const receipt = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get() as {
+        id: number;
+      };
+      db.exec(`
+        INSERT INTO bank_transactions
+          (connection_id, external_id, date, amount, currency, raw_data, status, matched_receipt_id)
+        VALUES (${connectionId}, 'receipt-linked', '2026-03-27', 45, 'GEL', '{}', 'confirmed', ${receipt.id})
+      `);
+
+      const unmatched = repo.findUnmatched(groupId, '2026-03-01', '2026-03-31');
+      expect(unmatched).toHaveLength(1);
+      expect(unmatched[0]?.external_id).toBe('unlinked');
+    });
+  });
 });

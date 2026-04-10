@@ -11,7 +11,7 @@ interface GroupRow extends Omit<Group, 'enabled_currencies'> {
 /** SELECT clause that includes spreadsheet_id via LEFT JOIN on current year */
 const GROUP_JOIN_SELECT = `
   SELECT
-    g.id, g.telegram_group_id, g.google_refresh_token,
+    g.id, g.telegram_group_id, g.title, g.invite_link, g.google_refresh_token,
     g.default_currency, g.enabled_currencies, g.custom_prompt,
     g.active_topic_id, g.bank_panel_summary_message_id,
     g.oauth_client, g.created_at, g.updated_at,
@@ -79,6 +79,14 @@ export class GroupRepository {
     const updates: string[] = [];
     const values: (string | number | null)[] = [];
 
+    if (data.title !== undefined) {
+      updates.push('title = ?');
+      values.push(data.title);
+    }
+    if (data.invite_link !== undefined) {
+      updates.push('invite_link = ?');
+      values.push(data.invite_link);
+    }
     if (data.google_refresh_token !== undefined) {
       updates.push('google_refresh_token = ?');
       values.push(data.google_refresh_token);

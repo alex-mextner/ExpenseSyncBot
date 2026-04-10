@@ -33,11 +33,13 @@ export function clearTestDb(db: Database): void {
     DELETE FROM chat_messages;
     DELETE FROM dev_tasks;
     DELETE FROM expenses;
+    DELETE FROM receipts;
     DELETE FROM budgets;
     DELETE FROM categories;
     DELETE FROM pending_expenses;
     DELETE FROM photo_processing_queue;
     DELETE FROM users;
+    DELETE FROM group_members;   -- before groups (FK: group_members.group_id → groups.id)
     DELETE FROM group_spreadsheets;
     DELETE FROM groups;
   `);

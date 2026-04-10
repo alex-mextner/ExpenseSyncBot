@@ -1,16 +1,8 @@
 // Tests for ocr-extractor.ts — temp cleanup logic and error handling
-// extractTextFromImage uses HuggingFace SDK directly (no DI), so we test:
-// 1. startTempImageCleanup (observable timer behavior)
-// 2. extractTextFromImage error paths via mocked global fetch
+// Mocks aiComplete() from the shared completion utility.
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import path from 'node:path';
-import {
-  mockFetchError,
-  mockFetchJson,
-  mockFetchText,
-  restoreFetch,
-} from '../../test-utils/mocks/fetch';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -19,7 +11,25 @@ mock.module('../../utils/logger.ts', () => ({
   logger: logMock,
 }));
 
-import { startTempImageCleanup } from './ocr-extractor';
+const mockAiComplete = mock(() =>
+  Promise.resolve({
+    text: 'Store: Test\nItem: Milk - 100 RSD',
+    finishReason: 'stop',
+    usage: {},
+    model: 'test',
+  }),
+);
+
+mock.module('../ai/completion', () => ({
+  aiComplete: mockAiComplete,
+  stripThinkingTags: (t: string) => t,
+}));
+
+import {
+  extractTextFromImage,
+  extractTextFromImageBuffer,
+  startTempImageCleanup,
+} from './ocr-extractor';
 
 describe('startTempImageCleanup', () => {
   it('is a function', () => {
@@ -43,101 +53,100 @@ describe('startTempImageCleanup', () => {
   });
 });
 
-describe('extractTextFromImage', () => {
-  // These tests mock global fetch to avoid real HuggingFace API calls.
-  // The HuggingFace SDK uses fetch internally.
-
+describe('extractTextFromImageBuffer', () => {
   afterEach(() => {
-    restoreFetch();
-    // Clean up any temp images created during tests
-    const fs = require('node:fs/promises');
-    const tempDir = path.join(process.cwd(), 'temp-images');
-    fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    mockAiComplete.mockClear();
   });
 
-  it('is a function', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
+  it('returns extracted text on success', async () => {
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'Store: Mega\nMilk - 100 RSD',
+      finishReason: 'stop',
+      usage: {},
+      model: 'Qwen-VL',
+    });
+
+    const result = await extractTextFromImageBuffer(Buffer.from('fake-image'));
+    expect(result).toBe('Store: Mega\nMilk - 100 RSD');
+  });
+
+  it('passes vision: true to aiComplete', async () => {
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'text',
+      finishReason: 'stop',
+      usage: {},
+      model: 'Qwen-VL',
+    });
+
+    await extractTextFromImageBuffer(Buffer.from('fake'));
+
+    expect(mockAiComplete).toHaveBeenCalledTimes(1);
+    const opts = (mockAiComplete.mock.calls[0] as unknown as [{ vision?: boolean }])[0];
+    expect(opts.vision).toBe(true);
+  });
+
+  it('passes base64 data URL in message content', async () => {
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'text',
+      finishReason: 'stop',
+      usage: {},
+      model: 'Qwen-VL',
+    });
+
+    await extractTextFromImageBuffer(Buffer.from('test-data'));
+
+    const opts = (
+      mockAiComplete.mock.calls[0] as unknown as [
+        { messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }> },
+      ]
+    )[0];
+    const imageBlock = opts.messages[0]?.content[0];
+    expect(imageBlock?.type).toBe('image_url');
+    expect(imageBlock?.image_url?.url).toContain('data:image/jpeg;base64,');
+  });
+
+  it('throws when aiComplete fails', async () => {
+    mockAiComplete.mockRejectedValueOnce(new Error('All AI models failed'));
+
+    await expect(extractTextFromImageBuffer(Buffer.from('fake'))).rejects.toThrow();
+  });
+});
+
+describe('extractTextFromImage', () => {
+  afterEach(async () => {
+    mockAiComplete.mockClear();
+    const fs = await import('node:fs/promises');
+    const tempDir = path.join(process.cwd(), 'temp-images');
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('is a function', () => {
     expect(typeof extractTextFromImage).toBe('function');
   });
 
-  it('throws when HuggingFace API returns empty response', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
+  it('returns text on success', async () => {
+    mockAiComplete.mockResolvedValueOnce({
+      text: 'Store: Test\nTotal: 500 RSD',
+      finishReason: 'stop',
+      usage: {},
+      model: 'Qwen-VL',
+    });
 
-    // Mock fetch to return a valid-looking but empty AI response
-    mockFetchJson({ choices: [{ message: { content: null, role: 'assistant' } }] });
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
+    const result = await extractTextFromImage(Buffer.from('fake-image'));
+    expect(result).toBe('Store: Test\nTotal: 500 RSD');
   });
 
-  it('throws when HuggingFace API returns 429 rate limit', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
+  it('throws descriptive error when aiComplete fails', async () => {
+    mockAiComplete.mockRejectedValueOnce(new Error('All AI models failed'));
 
-    mockFetchJson({ error: 'Rate limit exceeded' }, 429);
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws when HuggingFace API returns 503 service unavailable', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchText('Service Unavailable', 503);
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws when network request fails entirely', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchError('network failure');
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();
-  });
-
-  it('throws Error with descriptive message on failure', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    mockFetchError('connection refused');
-
-    const fakeBuffer = Buffer.from('fake-image-data');
     try {
-      await extractTextFromImage(fakeBuffer);
+      await extractTextFromImage(Buffer.from('fake'));
       throw new Error('should have thrown');
     } catch (err) {
       expect(err instanceof Error).toBe(true);
       if (err instanceof Error) {
-        expect(err.message.length).toBeGreaterThan(0);
+        expect(err.message).toContain('OCR extraction failed');
       }
-    }
-  });
-
-  it('accepts Buffer as input', async () => {
-    const { extractTextFromImage } = await import('./ocr-extractor');
-
-    // Mock a successful-looking response (content is non-null)
-    mockFetchJson({
-      choices: [
-        {
-          message: {
-            content: 'Store: Mega Mart\nItem 1: Milk 1L - 100 RSD\nTotal: 100 RSD',
-            role: 'assistant',
-          },
-        },
-      ],
-    });
-
-    const fakeBuffer = Buffer.from('fake-image-data');
-    // If it resolves, the result should be a string
-    try {
-      const result = await extractTextFromImage(fakeBuffer);
-      expect(typeof result).toBe('string');
-      expect(result.length).toBeGreaterThan(0);
-    } catch {
-      // If the mock doesn't match exactly how the SDK fetches, it will throw
-      // That's acceptable — the test verifies the interface accepts Buffer
     }
   });
 });
@@ -147,16 +156,14 @@ describe('temp image file lifecycle', () => {
   const tempDir = path.join(process.cwd(), 'temp-images');
 
   afterEach(async () => {
-    // Clean up temp directory after tests
     try {
       await fs.rm(tempDir, { recursive: true, force: true });
     } catch {
-      // Directory may not exist, that's fine
+      // Directory may not exist
     }
   });
 
   it('temp-images directory path is under cwd', () => {
-    // Verify the path is sensible
     expect(tempDir).toContain('temp-images');
     expect(path.isAbsolute(tempDir)).toBe(true);
   });

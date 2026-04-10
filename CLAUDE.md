@@ -417,7 +417,6 @@ const percentage = budget.limit_amount > 0
 Banned alternatives:
 - **`ctx.send()`** — in `CallbackQueryContext` it sends to private chat, not group. Silent bug.
 - **`bot.api.sendMessage()`** — bypasses `AsyncLocalStorage` context, loses `message_thread_id` injection. Messages go to General instead of the topic.
-- **`sendToChat`** — removed, was a redundant wrapper.
 
 ```ts
 import { sendMessage } from '../../services/bank/telegram-sender';
@@ -533,7 +532,7 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 9. **PM2 on server** - use full path `/var/www/.bun/bin/pm2`, not just `pm2`
 10. **Topic middleware** - never pass `message_thread_id` manually in handler context, middleware does it. Background workers must pass it explicitly.
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
-12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendToChat()` from `src/bot/send.ts`. See "Sending Messages" section above.
+12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendMessage()` from `src/services/bank/telegram-sender.ts`. See "Sending Messages" section above.
 13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
 
 ## When Modifying Code
@@ -626,6 +625,7 @@ Follow this framework for ANY technical issue:
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
 - **`mock.module()` is safe** — each test file runs in its own process via `scripts/test-runner.ts`. Use `mock.module()` freely for mocking dependencies. Use `spyOn` when you need to assert call counts or arguments on a real implementation.
+- **Database in tests uses `:memory:`** — `initDatabase()` detects `NODE_ENV=test` and uses in-memory SQLite instead of file-based `./data/expenses.db`. This prevents `SQLITE_BUSY_RECOVERY` errors when 14 parallel test processes compete for the same database file. Never change this to file-based in tests.
 - **Always run tests via `bun run test`** (isolated runner), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
 - **Coverage**: run `bun run test:coverage` — uses single-process `bun test --coverage` (coverage requires single process). Isolated runner does not collect coverage.
 - **Test logging discipline**: every test that exercises code with logging MUST mock the logger:

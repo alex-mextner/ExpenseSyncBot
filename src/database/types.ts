@@ -9,6 +9,8 @@ export type OAuthClientType = 'legacy' | 'current';
 export interface Group {
   id: number;
   telegram_group_id: number;
+  title: string | null;
+  invite_link: string | null;
   google_refresh_token: string | null;
   spreadsheet_id: string | null;
   default_currency: CurrencyCode;
@@ -27,6 +29,8 @@ export interface CreateGroupData {
 }
 
 export interface UpdateGroupData {
+  title?: string | null;
+  invite_link?: string | null;
   google_refresh_token?: string;
   spreadsheet_id?: string;
   default_currency?: CurrencyCode;
@@ -115,6 +119,7 @@ export interface Expense {
   amount: number;
   currency: CurrencyCode;
   eur_amount: number;
+  receipt_id: number | null;
   created_at: string;
 }
 
@@ -127,6 +132,7 @@ export interface CreateExpenseData {
   amount: number;
   currency: CurrencyCode;
   eur_amount: number;
+  receipt_id?: number | null;
 }
 
 /**
@@ -371,6 +377,7 @@ export interface BankTransaction {
   invoice_amount: number | null;
   invoice_currency: string | null;
   matched_expense_id: number | null;
+  matched_receipt_id: number | null;
   telegram_message_id: number | null;
   edit_in_progress: number;
   awaiting_comment: number;
@@ -515,4 +522,29 @@ export interface CreateRecurringPatternData {
   tolerance_days?: number;
   last_seen_date?: string;
   next_expected_date?: string;
+}
+
+// ─── Receipt Types ─────────────────────────────────────────────────────────
+
+/**
+ * Stored receipt — compressed image + total for dedup matching with bank transactions
+ */
+export interface Receipt {
+  id: number;
+  group_id: number;
+  photo_queue_id: number | null;
+  image_path: string | null;
+  total_amount: number;
+  currency: string;
+  date: string;
+  created_at: string;
+}
+
+export interface CreateReceiptData {
+  group_id: number;
+  photo_queue_id?: number | null;
+  image_path?: string | null;
+  total_amount: number;
+  currency: string;
+  date: string;
 }

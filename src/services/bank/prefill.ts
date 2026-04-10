@@ -1,11 +1,10 @@
 // AI pre-fill for bank transactions — batch-suggests category before showing confirmation card.
 // Processes up to 10 transactions per API call; includes group's actual categories and MCC history.
-import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env.ts';
 import { database } from '../../database';
 import type { BankTransaction } from '../../database/types.ts';
 import { createLogger } from '../../utils/logger.ts';
-import { AI_BASE_URL, AI_MODEL } from '../ai/agent.ts';
+import { aiComplete, stripThinkingTags } from '../ai/completion';
 import { getMccLabel } from './mcc-labels.ts';
 
 const logger = createLogger('bank-prefill');
@@ -16,18 +15,6 @@ export interface PrefillResult {
 
 const BATCH_SIZE = 10;
 
-let client: Anthropic | null = null;
-
-function getClient(): Anthropic {
-  if (!client) {
-    client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-      baseURL: AI_BASE_URL || undefined,
-    });
-  }
-  return client;
-}
-
 /**
  * Build a map of MCC code → categories used for past confirmed transactions in this group.
  * Used to give the AI historical context for better classification.
@@ -37,10 +24,14 @@ function buildMccHistory(groupId: number, mccs: number[]): Map<number, string[]>
   if (mccs.length === 0) return result;
 
   for (const mcc of mccs) {
+    // Join via either link path: matched_expense_id (single expense)
+    // or matched_receipt_id (Variant A 1:N — resolve through expenses.receipt_id).
     const rows = database.queryAll<{ category: string }>(
       `SELECT DISTINCT e.category
        FROM bank_transactions bt
-       JOIN expenses e ON bt.matched_expense_id = e.id
+       JOIN expenses e
+         ON e.id = bt.matched_expense_id
+         OR (bt.matched_receipt_id IS NOT NULL AND e.receipt_id = bt.matched_receipt_id)
        WHERE bt.mcc = ? AND e.group_id = ?
        ORDER BY e.created_at DESC
        LIMIT 5`,
@@ -94,14 +85,13 @@ ${txLines}
 Используй только категории из списка. Если подходящей нет — "прочее".`;
 
   try {
-    const response = await getClient().messages.create({
-      model: AI_MODEL,
-      max_tokens: 200,
+    const { text } = await aiComplete({
       messages: [{ role: 'user', content: prompt }],
+      maxTokens: 200,
     });
 
-    const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
-    const match = text.match(/\[[\s\S]*?\]/);
+    const cleaned = stripThinkingTags(text);
+    const match = cleaned.match(/\[[\s\S]*?\]/);
     if (!match) throw new Error('No JSON array in response');
 
     const parsed = JSON.parse(match[0]) as unknown[];

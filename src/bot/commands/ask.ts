@@ -1,5 +1,5 @@
 /**
- * Handles @botname questions in groups (Anthropic agent) and smart financial advice.
+ * Handles @botname questions in groups (OpenAI SDK agent) and smart financial advice.
  */
 import { format } from 'date-fns';
 import type { Bot } from 'gramio';
@@ -10,6 +10,7 @@ import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
 import { validateAdvice } from '../../services/ai/advice-validator';
 import { ExpenseBotAgent } from '../../services/ai/agent';
+import { stripThinkingTags } from '../../services/ai/completion';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
 import { computeOverallSeverity } from '../../services/analytics/formatters';
@@ -260,7 +261,7 @@ async function sendSmartAdvice(
     const advicePrompt = buildAdvicePrompt(tier, severity, trigger, groupId, displayCurrency);
 
     // Run agent in batch mode — no streaming, full tool access
-    let advice = await agent.runBatch(advicePrompt);
+    let advice = stripThinkingTags(await agent.runBatch(advicePrompt));
 
     if (!advice || advice.length < 10) {
       logger.info('[ADVICE] Agent produced empty/short response, skipping');
@@ -279,7 +280,7 @@ async function sendSmartAdvice(
 
       // Retry with validation feedback
       const retryPrompt = `${advicePrompt}\n\n[SYSTEM] Твой предыдущий ответ был отклонён проверкой. Причина: ${validation.reason}\nИсправь ошибки и перепиши ответ.`;
-      advice = await agent.runBatch(retryPrompt);
+      advice = stripThinkingTags(await agent.runBatch(retryPrompt));
 
       if (!advice || advice.length < 10) {
         logger.info('[ADVICE] Agent retry produced empty response, skipping');
@@ -289,7 +290,7 @@ async function sendSmartAdvice(
       logger.info('[ADVICE] Validation APPROVED');
     }
 
-    // Sanitize HTML
+    // Sanitize HTML (advice is already stripped of thinking tags above)
     const sanitizedAdvice = sanitizeHtmlForTelegram(advice);
     if (!sanitizedAdvice || sanitizedAdvice.length < 10) return;
 

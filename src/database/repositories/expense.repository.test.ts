@@ -559,4 +559,217 @@ describe('ExpenseRepository', () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe('findPotentialDuplicates', () => {
+    test('exact match: same date, amount, currency', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(1);
+      expect(fuzzy).toHaveLength(0);
+    });
+
+    test('exact match: amount within ±5% tolerance', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+
+      // Tolerance is computed from the search amount: searchAmount * 0.05
+      // Search 104: tolerance = 5.2, diff = 4 → match
+      const { exact: match1 } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        104,
+        'EUR',
+      );
+      expect(match1).toHaveLength(1);
+
+      // Search 96: tolerance = 4.8, diff = 4 → match
+      const { exact: match2 } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        96,
+        'EUR',
+      );
+      expect(match2).toHaveLength(1);
+    });
+
+    test('no match when amount exceeds 5% tolerance', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+
+      // Search 106: tolerance = 5.3, diff = 6 → no match
+      const { exact: e1, fuzzy: f1 } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        106,
+        'EUR',
+      );
+      expect(e1).toHaveLength(0);
+      expect(f1).toHaveLength(0);
+
+      // Search 94: tolerance = 4.7, diff = 6 → no match
+      const { exact: e2, fuzzy: f2 } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        94,
+        'EUR',
+      );
+      expect(e2).toHaveLength(0);
+      expect(f2).toHaveLength(0);
+    });
+
+    test('no match for different currency', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'USD' }));
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(0);
+    });
+
+    test('fuzzy match: date ±1 day', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-14', amount: 100, currency: 'EUR' }));
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(1);
+    });
+
+    test('no fuzzy match for date difference > 1 day', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-12', amount: 100, currency: 'EUR' }));
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(0);
+    });
+
+    test('excludes expenses already linked to a bank transaction', () => {
+      const expense = expenseRepo.create(
+        makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }),
+      );
+
+      // Create a bank_connection and bank_transaction linking to the expense
+      db.exec(`
+        INSERT INTO bank_connections (group_id, bank_name, display_name, status)
+        VALUES (${groupId}, 'test_bank', 'Test Bank', 'active')
+      `);
+      const row = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get();
+      expect(row).not.toBeNull();
+      const connId = row?.id;
+      db.exec(`
+        INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, matched_expense_id, status)
+        VALUES (${connId}, 'ext-1', '2024-01-15', 100, 'EUR', '{}', ${expense.id}, 'confirmed')
+      `);
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(0);
+    });
+
+    test('excludes expenses linked via receipt (Variant A)', () => {
+      // Receipt expense has no matched_expense_id, but the bank tx holds matched_receipt_id.
+      // The exclusion must follow the receipt FK, not just the direct FK.
+      db.exec(`
+        INSERT INTO receipts (group_id, image_path, total_amount, currency, date, created_at)
+        VALUES (${groupId}, '/tmp/x.jpg', 100, 'EUR', '2024-01-15', '2024-01-15T00:00:00Z')
+      `);
+      const receipt = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get() as {
+        id: number;
+      };
+
+      expenseRepo.create(
+        makeExpense({
+          date: '2024-01-15',
+          amount: 100,
+          currency: 'EUR',
+          receipt_id: receipt.id,
+        }),
+      );
+
+      db.exec(`
+        INSERT INTO bank_connections (group_id, bank_name, display_name, status)
+        VALUES (${groupId}, 'test_bank', 'Test Bank', 'active')
+      `);
+      const conn = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get() as {
+        id: number;
+      };
+      db.exec(`
+        INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, matched_receipt_id, status)
+        VALUES (${conn.id}, 'ext-r', '2024-01-15', 100, 'EUR', '{}', ${receipt.id}, 'confirmed')
+      `);
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(0);
+    });
+
+    test('does not return expenses from other groups', () => {
+      const group2 = groupRepo.create({ telegram_group_id: Date.now() + 10 });
+      const user2 = userRepo.create({ telegram_id: Date.now() + 10, group_id: group2.id });
+      expenseRepo.create(
+        makeExpense({
+          group_id: group2.id,
+          user_id: user2.id,
+          date: '2024-01-15',
+          amount: 100,
+          currency: 'EUR',
+        }),
+      );
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(0);
+      expect(fuzzy).toHaveLength(0);
+    });
+
+    test('exact matches do not appear in fuzzy results', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-14', amount: 100, currency: 'EUR' }));
+
+      const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
+        groupId,
+        '2024-01-15',
+        100,
+        'EUR',
+      );
+      expect(exact).toHaveLength(1);
+      expect(fuzzy).toHaveLength(1);
+
+      const exactIds = new Set(exact.map((e) => e.id));
+      for (const f of fuzzy) {
+        expect(exactIds.has(f.id)).toBe(false);
+      }
+    });
+  });
 });

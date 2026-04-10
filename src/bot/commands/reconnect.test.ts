@@ -20,11 +20,25 @@ import { ExpenseRepository } from '../../database/repositories/expense.repositor
 import { GroupRepository } from '../../database/repositories/group.repository';
 import { GroupSpreadsheetRepository } from '../../database/repositories/group-spreadsheet.repository';
 import { UserRepository } from '../../database/repositories/user.repository';
+import type { Group } from '../../database/types';
 import { MONTH_ABBREVS } from '../../services/google/month-abbr';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
-import * as sendModule from '../send';
 import type { Ctx } from '../types';
-import { handleReconnectCommand } from './reconnect';
+
+const sendMessageMock = mock(
+  (_text: string, _options?: unknown): Promise<null> => Promise.resolve(null),
+);
+
+mock.module('../../services/bank/telegram-sender', () => ({
+  sendMessage: sendMessageMock,
+  // Passthrough for transitive importers (e.g. ./sync) — reconnect tests never hit the sync path.
+  withChatContext: async <T>(_chatId: number, _threadId: number | null, fn: () => Promise<T>) =>
+    fn(),
+  editMessageText: mock(() => Promise.resolve()),
+  sendDirect: mock(() => Promise.resolve(null)),
+}));
+
+const { handleReconnectCommand } = await import('./reconnect');
 
 let db: SqliteDb;
 let groups: GroupRepository;
@@ -58,15 +72,14 @@ function fakeCtx(chat: { id: number; type: string } | undefined): Ctx['Command']
 }
 
 describe('/reconnect guard conditions', () => {
-  let sendToChat: ReturnType<typeof mock>;
-  let findByTelegramGroupId: ReturnType<typeof mock>;
+  let findByTelegramGroupIdSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
-    sendToChat = spyOn(sendModule, 'sendToChat').mockResolvedValue(
-      undefined as unknown as Awaited<ReturnType<typeof sendModule.sendToChat>>,
+    sendMessageMock.mockReset();
+    sendMessageMock.mockResolvedValue(null);
+    findByTelegramGroupIdSpy = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(
+      null,
     );
-    // Prevent the handler from hitting real DB when the guard passes
-    findByTelegramGroupId = spyOn(database.groups, 'findByTelegramGroupId').mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -76,38 +89,77 @@ describe('/reconnect guard conditions', () => {
   test('rejects private chats with "только в группах" message', async () => {
     await handleReconnectCommand(fakeCtx({ id: 123, type: 'private' }));
 
-    expect(sendToChat).toHaveBeenCalledTimes(1);
-    expect(sendToChat.mock.calls[0]?.[0]).toContain('только в группах');
-    expect(findByTelegramGroupId).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[0]).toContain('только в группах');
+    expect(findByTelegramGroupIdSpy).not.toHaveBeenCalled();
   });
 
   test('rejects when ctx.chat is undefined', async () => {
     await handleReconnectCommand(fakeCtx(undefined));
 
-    expect(sendToChat).toHaveBeenCalledTimes(1);
-    expect(sendToChat.mock.calls[0]?.[0]).toContain('только в группах');
-    expect(findByTelegramGroupId).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[0]).toContain('только в группах');
+    expect(findByTelegramGroupIdSpy).not.toHaveBeenCalled();
   });
 
-  test('passes guard for group chats and proceeds to DB lookup', async () => {
-    await handleReconnectCommand(fakeCtx({ id: -1001234, type: 'group' }));
+  test('sends setup hint when group is not in DB', async () => {
+    await handleReconnectCommand(fakeCtx({ id: -1009999, type: 'group' }));
 
-    expect(findByTelegramGroupId).toHaveBeenCalledWith(-1001234);
-    // Guard passed — rejection message must NOT have been sent
-    const rejectionCall = sendToChat.mock.calls.find((args) =>
-      String(args[0]).includes('только в группах'),
-    );
-    expect(rejectionCall).toBeUndefined();
+    expect(findByTelegramGroupIdSpy).toHaveBeenCalledWith(-1009999);
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[0]).toContain('Группа не настроена');
   });
 
-  test('passes guard for supergroup chats and proceeds to DB lookup', async () => {
+  test('sends setup hint when group has no spreadsheet_id', async () => {
+    findByTelegramGroupIdSpy.mockReturnValue({
+      id: 42,
+      telegram_group_id: -1001234,
+      spreadsheet_id: null,
+      google_refresh_token: null,
+    } as unknown as Group);
+
     await handleReconnectCommand(fakeCtx({ id: -1001234, type: 'supergroup' }));
 
-    expect(findByTelegramGroupId).toHaveBeenCalledWith(-1001234);
-    const rejectionCall = sendToChat.mock.calls.find((args) =>
-      String(args[0]).includes('только в группах'),
-    );
-    expect(rejectionCall).toBeUndefined();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[0]).toContain('Таблица не создана');
+  });
+
+  test('sends OAuth URL keyboard when group is fully configured', async () => {
+    findByTelegramGroupIdSpy.mockReturnValue({
+      id: 42,
+      telegram_group_id: -1001234,
+      spreadsheet_id: 'sheet-abc',
+      google_refresh_token: 'old-token',
+    } as unknown as Group);
+    // Simulate successful delivery (non-null return).
+    sendMessageMock.mockResolvedValue({ message_id: 1 } as unknown as null);
+
+    await expect(
+      handleReconnectCommand(fakeCtx({ id: -1001234, type: 'supergroup' })),
+    ).resolves.toBeUndefined();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const [text, options] = sendMessageMock.mock.calls[0] ?? [];
+    expect(String(text)).toContain('Переподключение Google');
+    expect(options).toMatchObject({ reply_markup: expect.any(Object) });
+  });
+
+  test('handles null return from sendMessage without throwing (send failure)', async () => {
+    findByTelegramGroupIdSpy.mockReturnValue({
+      id: 42,
+      telegram_group_id: -1001234,
+      spreadsheet_id: 'sheet-abc',
+      google_refresh_token: 'old-token',
+    } as unknown as Group);
+    // Simulate Telegram send failure (telegram-sender returns null on error).
+    sendMessageMock.mockResolvedValue(null);
+
+    await expect(
+      handleReconnectCommand(fakeCtx({ id: -1001234, type: 'supergroup' })),
+    ).resolves.toBeUndefined();
+
+    // Still attempted the send exactly once — doesn't retry silently.
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
   });
 });
 
