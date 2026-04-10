@@ -2,6 +2,9 @@
 
 import type { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
 import type { CreateReceiptData } from '../types';
 import { ExpenseRepository } from './expense.repository';
@@ -81,6 +84,12 @@ describe('ReceiptRepository', () => {
       const receipt = receiptRepo.create(makeReceipt());
       expect(receipt.created_at).toBeTruthy();
     });
+
+    test('allows null image_path when disk save failed', () => {
+      const receipt = receiptRepo.create(makeReceipt({ image_path: null }));
+      expect(receipt.id).toBeGreaterThan(0);
+      expect(receipt.image_path).toBeNull();
+    });
   });
 
   describe('findById', () => {
@@ -119,6 +128,33 @@ describe('ReceiptRepository', () => {
     test('deletes receipt', () => {
       const receipt = receiptRepo.create(makeReceipt());
       receiptRepo.delete(receipt.id);
+      expect(receiptRepo.findById(receipt.id)).toBeNull();
+    });
+
+    test('removes image file from disk', () => {
+      const dir = join(tmpdir(), `receipt-test-${Date.now()}`);
+      mkdirSync(dir, { recursive: true });
+      const imagePath = join(dir, 'receipt.jpg');
+      writeFileSync(imagePath, 'fake image bytes');
+      expect(existsSync(imagePath)).toBe(true);
+
+      const receipt = receiptRepo.create(makeReceipt({ image_path: imagePath }));
+      receiptRepo.delete(receipt.id);
+
+      expect(existsSync(imagePath)).toBe(false);
+    });
+
+    test('tolerates missing image file', () => {
+      const missingPath = join(tmpdir(), `receipt-missing-${Date.now()}.jpg`);
+      const receipt = receiptRepo.create(makeReceipt({ image_path: missingPath }));
+      // Should not throw even though the file never existed
+      expect(() => receiptRepo.delete(receipt.id)).not.toThrow();
+      expect(receiptRepo.findById(receipt.id)).toBeNull();
+    });
+
+    test('tolerates null image_path', () => {
+      const receipt = receiptRepo.create(makeReceipt({ image_path: null }));
+      expect(() => receiptRepo.delete(receipt.id)).not.toThrow();
       expect(receiptRepo.findById(receipt.id)).toBeNull();
     });
   });
@@ -199,6 +235,24 @@ describe('ReceiptRepository', () => {
       db.exec(
         `INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, status, matched_expense_id)
          VALUES (${connId?.id ?? 0}, 'ext-1', '2024-06-15', 2500, 'RSD', '{}', 'confirmed', ${expense.id})`,
+      );
+
+      const result = receiptRepo.findPotentialMatches(groupId, '2024-06-15', 2500, 'RSD');
+      expect(result.exact).toHaveLength(0);
+      expect(result.fuzzy).toHaveLength(0);
+    });
+
+    test('excludes receipt linked via matched_receipt_id even without expense', () => {
+      const receipt = receiptRepo.create(makeReceipt({ total_amount: 2500, date: '2024-06-15' }));
+
+      // A confirmed bank tx linked to the receipt via matched_receipt_id only
+      db.exec(
+        `INSERT INTO bank_connections (group_id, bank_name, display_name, status) VALUES (${groupId}, 'test', 'Test Bank', 'active')`,
+      );
+      const connId = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get();
+      db.exec(
+        `INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, status, matched_receipt_id)
+         VALUES (${connId?.id ?? 0}, 'ext-r', '2024-06-15', 2500, 'RSD', '{}', 'confirmed', ${receipt.id})`,
       );
 
       const result = receiptRepo.findPotentialMatches(groupId, '2024-06-15', 2500, 'RSD');

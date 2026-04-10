@@ -162,6 +162,17 @@ export class BankTransactionsRepository {
       .run(expenseId, id, groupId);
   }
 
+  setMatchedReceipt(id: number, groupId: number, receiptId: number): void {
+    this.db
+      .query<void, [number, number, number]>(`
+        UPDATE bank_transactions SET matched_receipt_id = ?
+        WHERE id = ? AND connection_id IN (
+          SELECT id FROM bank_connections WHERE group_id = ?
+        )
+      `)
+      .run(receiptId, id, groupId);
+  }
+
   setTelegramMessageId(id: number, messageId: number): void {
     this.db
       .query<void, [number, number]>(

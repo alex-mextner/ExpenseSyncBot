@@ -174,7 +174,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankConfirmCallback(ctx, bot, txId, chatId);
+        await handleBankConfirmCallback(ctx, txId, chatId);
         break;
       }
 
@@ -194,7 +194,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankNoCommentCallback(ctx, bot, txId, chatId);
+        await handleBankNoCommentCallback(ctx, txId, chatId);
         break;
       }
 
@@ -205,7 +205,7 @@ export async function handleCallbackQuery(
           await ctx.answerCallbackQuery({ text: 'Неверные данные' });
           return;
         }
-        await handleBankMergeCallback(ctx, bot, txId, expenseId, chatId);
+        await handleBankMergeCallback(ctx, txId, expenseId, chatId);
         break;
       }
 

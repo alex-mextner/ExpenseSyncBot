@@ -1202,7 +1202,7 @@ export function runMigrations(db: Database): void {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
             photo_queue_id INTEGER REFERENCES photo_processing_queue(id) ON DELETE SET NULL,
-            image_path TEXT NOT NULL,
+            image_path TEXT,
             total_amount REAL NOT NULL,
             currency TEXT NOT NULL,
             date TEXT NOT NULL,
@@ -1234,6 +1234,25 @@ export function runMigrations(db: Database): void {
       up: () => {
         db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_receipt_id ON expenses(receipt_id)');
         logger.info('✓ Created index on expenses.receipt_id');
+      },
+    },
+    {
+      name: '047_add_bank_transactions_matched_receipt_id',
+      up: () => {
+        const hasColumn = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('bank_transactions') WHERE name = 'matched_receipt_id'`,
+          )
+          .get();
+        if (hasColumn?.count === 0) {
+          db.exec(
+            `ALTER TABLE bank_transactions ADD COLUMN matched_receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL`,
+          );
+          db.exec(
+            'CREATE INDEX IF NOT EXISTS idx_bank_transactions_matched_receipt_id ON bank_transactions(matched_receipt_id)',
+          );
+          logger.info('✓ Added matched_receipt_id to bank_transactions');
+        }
       },
     },
   ];

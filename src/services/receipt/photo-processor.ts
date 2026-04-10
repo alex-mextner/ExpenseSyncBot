@@ -283,22 +283,21 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
     // Save receipt items to database
     saveExtractedItems(queueItemId, extractionResult.items, currency);
 
-    // Create receipt record with compressed image and total amount
-    if (savedReceiptPath) {
-      const totalAmount = extractionResult.items.reduce((sum, item) => sum + item.total, 0);
-      const currentDate = extractionResult.date || new Date().toISOString().split('T')[0] || '';
-      database.receipts.create({
-        group_id: queueItem.group_id,
-        photo_queue_id: queueItemId,
-        image_path: savedReceiptPath,
-        total_amount: totalAmount,
-        currency,
-        date: currentDate,
-      });
-      logger.info(
-        `[PHOTO_PROCESSOR] Receipt record created: ${totalAmount} ${currency} for queue #${queueItemId}`,
-      );
-    }
+    // Create receipt record regardless of whether the image was saved to disk —
+    // the record is needed for bank transaction dedup matching.
+    const totalAmount = extractionResult.items.reduce((sum, item) => sum + item.total, 0);
+    const currentDate = extractionResult.date || new Date().toISOString().split('T')[0] || '';
+    database.receipts.create({
+      group_id: queueItem.group_id,
+      photo_queue_id: queueItemId,
+      image_path: savedReceiptPath,
+      total_amount: totalAmount,
+      currency,
+      date: currentDate,
+    });
+    logger.info(
+      `[PHOTO_PROCESSOR] Receipt record created: ${totalAmount} ${currency} for queue #${queueItemId}`,
+    );
 
     // Show confirmation options (summary for >5 items, item-by-item otherwise)
     await showReceiptConfirmationOptions(queueItem.group_id, queueItemId);

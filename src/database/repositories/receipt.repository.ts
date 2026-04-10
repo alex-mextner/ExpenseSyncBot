@@ -1,6 +1,10 @@
 /** Receipt repository — CRUD and dedup-matching for stored receipt images */
 import type { Database } from 'bun:sqlite';
+import { unlinkSync } from 'node:fs';
+import { createLogger } from '../../utils/logger';
 import type { CreateReceiptData, Receipt } from '../types';
+
+const logger = createLogger('receipt-repository');
 
 export class ReceiptRepository {
   constructor(private db: Database) {}
@@ -19,7 +23,7 @@ export class ReceiptRepository {
 
   create(data: CreateReceiptData): Receipt {
     const result = this.db
-      .query<{ id: number }, [number, number | null, string, number, string, string]>(
+      .query<{ id: number }, [number, number | null, string | null, number, string, string]>(
         `INSERT INTO receipts (group_id, photo_queue_id, image_path, total_amount, currency, date)
          VALUES (?, ?, ?, ?, ?, ?)
          RETURNING id`,
@@ -27,7 +31,7 @@ export class ReceiptRepository {
       .get(
         data.group_id,
         data.photo_queue_id ?? null,
-        data.image_path,
+        data.image_path ?? null,
         data.total_amount,
         data.currency,
         data.date,
@@ -58,6 +62,10 @@ export class ReceiptRepository {
     const amountTolerance = amount * 0.05;
 
     const linkedFilter = `
+      AND NOT EXISTS (
+        SELECT 1 FROM bank_transactions bt
+        WHERE bt.matched_receipt_id = r.id AND bt.status = 'confirmed'
+      )
       AND NOT EXISTS (
         SELECT 1 FROM expenses e2
         JOIN bank_transactions bt ON bt.matched_expense_id = e2.id
@@ -115,7 +123,18 @@ export class ReceiptRepository {
   }
 
   delete(id: number): boolean {
+    const receipt = this.findById(id);
     this.db.query<void, [number]>('DELETE FROM receipts WHERE id = ?').run(id);
+    if (receipt?.image_path) {
+      try {
+        unlinkSync(receipt.image_path);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') {
+          logger.warn({ err, path: receipt.image_path }, 'Failed to delete receipt image file');
+        }
+      }
+    }
     return true;
   }
 }

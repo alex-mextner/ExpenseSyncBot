@@ -349,7 +349,6 @@ async function showBankStatus(
 
 export async function handleBankConfirmCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   chatId: number,
 ): Promise<void> {
@@ -411,15 +410,10 @@ export async function handleBankConfirmCallback(
     await ctx.answerCallbackQuery({ text: '✅ Связано с существующим расходом' });
     const messageId = ctx.message?.id;
     if (messageId) {
-      try {
-        await bot.api.editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          text: `✅ Связано: ${existing.category} (${existing.amount} ${existing.currency})`,
-        });
-      } catch {
-        // message may be too old to edit
-      }
+      await editMessageText(
+        messageId,
+        `✅ Связано: ${existing.category} (${formatAmount(existing.amount, existing.currency)})`,
+      );
     }
     return;
   }
@@ -509,7 +503,6 @@ export async function handleBankConfirmCallback(
  */
 export async function handleBankMergeCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   expenseId: number,
   chatId: number,
@@ -557,15 +550,10 @@ export async function handleBankMergeCallback(
   await ctx.answerCallbackQuery({ text: '✅ Связано' });
   const messageId = ctx.message?.id;
   if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `✅ Связано: ${expense.category} (${expense.amount} ${expense.currency})`,
-      });
-    } catch {
-      // message may be too old to edit
-    }
+    await editMessageText(
+      messageId,
+      `✅ Связано: ${expense.category} (${formatAmount(expense.amount, expense.currency)})`,
+    );
   }
 }
 
@@ -599,6 +587,9 @@ export async function handleBankReceiptCallback(
     if (!firstExpense) return 'no_expenses' as const;
 
     mergeTransactionWithExpense(tx, group.id, firstExpense.id);
+    // Link the transaction to the whole receipt so the dedup filter excludes it
+    // even though matched_expense_id only references the first expense.
+    database.bankTransactions.setMatchedReceipt(tx.id, group.id, receiptId);
     database.bankTransactions.setEditInProgress(txId, false);
     return { receipt, expenses: receiptExpenses };
   });
@@ -777,7 +768,6 @@ export async function handleBankEditReply(
  */
 export async function handleBankNoCommentCallback(
   ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
   txId: number,
   chatId: number,
 ): Promise<void> {
@@ -825,15 +815,10 @@ export async function handleBankNoCommentCallback(
 
   const messageId = ctx.message?.id;
   if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `✅ Записано: ${category} (${tx.amount} ${tx.currency})`,
-      });
-    } catch {
-      // message may be too old to edit
-    }
+    await editMessageText(
+      messageId,
+      `✅ Записано: ${category} (${formatAmount(tx.amount, tx.currency)})`,
+    );
   }
 }
 

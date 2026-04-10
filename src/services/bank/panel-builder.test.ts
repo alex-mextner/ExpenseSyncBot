@@ -128,6 +128,7 @@ describe('buildBankStatusText', () => {
         raw_data: '{}',
         status: 'pending',
         matched_expense_id: null,
+        matched_receipt_id: null,
         telegram_message_id: null,
         prefill_category: null,
         prefill_comment: null,
