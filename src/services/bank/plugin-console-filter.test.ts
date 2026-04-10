@@ -36,6 +36,21 @@ describe('redactSensitive — PAN', () => {
     expect(redactSensitive('123456789012')).toBe('123456789012'); // 12 digits — below threshold
     expect(redactSensitive('amount: 150')).toBe('amount: 150');
   });
+
+  test('13-digit unix-millis pino timestamps are NOT matched (false-positive guard)', () => {
+    // Every pino log line has `"time":1775826999217` — 13 contiguous digits.
+    // The contiguous PAN pattern requires 14+ to leave these alone.
+    expect(redactSensitive('"time":1775826999217')).toBe('"time":1775826999217');
+    expect(redactSensitive('expirationDate: 1775826999217')).toBe('expirationDate: 1775826999217');
+  });
+
+  test('Amex format (4-6-5)', () => {
+    expect(redactSensitive('3782 822463 10005')).toBe('[REDACTED_PAN]');
+  });
+
+  test('Maestro format with extra group', () => {
+    expect(redactSensitive('4276-1234-5678-9012-3456')).toBe('[REDACTED_PAN]');
+  });
 });
 
 describe('redactSensitive — IBAN', () => {

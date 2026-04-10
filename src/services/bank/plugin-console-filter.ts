@@ -172,10 +172,19 @@ const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
   // IBAN (lowercase, alphanumeric BBAN) — contiguous only. Lazy so trailing
   // lowercase prose isn't absorbed.
   [/\b[a-z]{2}\d{2}[a-z0-9]{10,30}?\b/g, '[REDACTED_IBAN]'],
-  // Payment card number / long account number: 13+ digits with optional
-  // separators. Unbounded upper limit so 20-digit account numbers and any
-  // 30+ digit blobs are caught.
-  [/\b\d(?:[ -]?\d){12,}\b/g, '[REDACTED_PAN]'],
+  // Payment card number / long account number — split into two patterns to
+  // avoid false-positiving on 13-digit unix-millis timestamps that appear in
+  // every pino log line (`"time":1775826999217`).
+  //   1. Card-formatted: 4-digit prefix + ≥2 more digit groups separated by
+  //      spaces or dashes (matches Visa/MC `4276 1234 5678 9012`, Amex
+  //      `3782 822463 10005`, Maestro `4276-1234-5678-9012-3456`).
+  //   2. Contiguous form: 14+ digits with no separators (catches contiguous
+  //      16-digit cards and 20-digit Russian/Belarusian account numbers
+  //      while leaving 13-digit unix-millis timestamps alone).
+  // KNOWN GAPS: 13-digit contiguous PANs (some legacy Visa) and unusual
+  // 2-group separator formats (`4276 123456789012`) are not matched.
+  [/\b\d{4}(?:[ -]\d{1,7}){2,}\b/g, '[REDACTED_PAN]'],
+  [/\b\d{14,}\b/g, '[REDACTED_PAN]'],
   // E.164 phone numbers (loose — covers +375..., +7..., +995...).
   [/\+\d{10,15}\b/g, '[REDACTED_PHONE]'],
 ];
