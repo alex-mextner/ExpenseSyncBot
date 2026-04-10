@@ -19,12 +19,10 @@ import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { createCategoryConfirmKeyboard } from '../keyboards';
 import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
+import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
 
 const logger = createLogger('message.handler');
-
-/** Track consecutive sheet write failures per group to suggest /reconnect */
-const sheetFailuresByGroup = new Map<number, number>();
 
 /** Recently-seen user+group pairs — skip redundant DB upserts */
 const recentMemberships = new Set<string>();
@@ -35,19 +33,6 @@ export function trackMembership(telegramId: number, groupId: number): void {
   if (recentMemberships.has(key)) return;
   database.groupMembers.upsert(telegramId, groupId);
   recentMemberships.add(key);
-}
-
-export function getSheetWriteErrorMessage(groupId: number): string {
-  const count = sheetFailuresByGroup.get(groupId) ?? 0;
-  sheetFailuresByGroup.set(groupId, count + 1);
-  if (count >= 1) {
-    return '❌ Не удалось записать расход в Google таблицу. Возможно, авторизация устарела — попробуй /reconnect';
-  }
-  return '❌ Не удалось записать расход в Google таблицу. Попробуй ещё раз.';
-}
-
-export function resetSheetWriteFailures(groupId: number): void {
-  sheetFailuresByGroup.delete(groupId);
 }
 
 /** Build a fallback Telegram deep link (opens in browser on some platforms) */
@@ -414,7 +399,7 @@ export async function handleExpenseMessage(
   const confirmedIds = processedExpenses
     .filter((e) => e.categoryExists)
     .map((e) => e.pendingExpenseId);
-  let batchFailed = false;
+  let batchError: unknown = null;
 
   if (confirmedIds.length > 0) {
     try {
@@ -427,7 +412,7 @@ export async function handleExpenseMessage(
       for (const id of confirmedIds) {
         database.pendingExpenses.delete(id);
       }
-      batchFailed = true;
+      batchError = error;
     }
   }
 
@@ -435,7 +420,7 @@ export async function handleExpenseMessage(
 
   if (confirmedIds.length > 0) {
     try {
-      if (!batchFailed) {
+      if (!batchError) {
         await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
       } else {
         await bot.api.setMessageReaction({
@@ -449,10 +434,8 @@ export async function handleExpenseMessage(
     }
   }
 
-  if (batchFailed) {
-    await sendMessage(
-      '❌ Не удалось записать в Google таблицу — интеграция могла протухнуть. Выполни /connect и повтори попытку.',
-    );
+  if (batchError) {
+    await sendMessage(getSheetErrorMessage(batchError));
   }
 
   // Send numbered summary when multiple expenses recognized

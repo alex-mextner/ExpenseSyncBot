@@ -625,6 +625,7 @@ Follow this framework for ANY technical issue:
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
 - **`mock.module()` is safe** — each test file runs in its own process via `scripts/test-runner.ts`. Use `mock.module()` freely for mocking dependencies. Use `spyOn` when you need to assert call counts or arguments on a real implementation.
+- **Database in tests uses `:memory:`** — `initDatabase()` detects `NODE_ENV=test` and uses in-memory SQLite instead of file-based `./data/expenses.db`. This prevents `SQLITE_BUSY_RECOVERY` errors when 14 parallel test processes compete for the same database file. Never change this to file-based in tests.
 - **Always run tests via `bun run test`** (isolated runner), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
 - **Coverage**: run `bun run test:coverage` — uses single-process `bun test --coverage` (coverage requires single process). Isolated runner does not collect coverage.
 - **Test logging discipline**: every test that exercises code with logging MUST mock the logger:
