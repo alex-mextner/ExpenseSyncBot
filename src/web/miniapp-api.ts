@@ -62,24 +62,55 @@ function validateInitData(rawInitData: string): number | null {
   }
 }
 
-/** Row shape returned by the membership query */
-interface MembershipRow {
-  id: number;
-}
+/**
+ * Resolve a (telegramGroupId, telegramUserId) pair to internal DB ids.
+ *
+ * Steps:
+ * 1. Find the group by `telegram_group_id`. If missing, return `{ ok: false,
+ *    code: 'group_missing' }` — the group was never `/connect`-ed.
+ * 2. Find the user by `telegram_id`. If missing, **create** it linked to the
+ *    group — this covers the first-open-Mini-App flow where the user has a
+ *    valid Telegram identity (HMAC-signed initData) but has never sent a
+ *    message to the bot (so `message.handler` never ran). Creating the user
+ *    here is safe: the Telegram signature guarantees the identity.
+ * 3. If the user exists but belongs to a different group, update its
+ *    `group_id` to the current one — matches the behaviour of
+ *    `message.handler` and `callback.handler::ensureUserInGroup`.
+ */
+type GroupResolution =
+  | { ok: true; internalGroupId: number; internalUserId: number }
+  | { ok: false; code: 'group_missing' };
 
-/** Check that userId is a member of the group identified by telegram_group_id */
-function resolveGroupMembership(telegramGroupId: number, userId: number): number | null {
-  const row = database.queryOne<MembershipRow>(
-    `SELECT g.id FROM groups g
-     WHERE g.telegram_group_id = ? AND EXISTS (
-       SELECT 1 FROM users u
-       WHERE u.telegram_id = ? AND u.group_id = g.id
-     )`,
-    telegramGroupId,
-    userId,
-  );
+function resolveGroupAndEnsureUser(
+  telegramGroupId: number,
+  telegramUserId: number,
+): GroupResolution {
+  const group = database.groups.findByTelegramGroupId(telegramGroupId);
+  if (!group) {
+    return { ok: false, code: 'group_missing' };
+  }
 
-  return row ? row.id : null;
+  let user = database.users.findByTelegramId(telegramUserId);
+  if (!user) {
+    logger.info(
+      { telegramUserId, internalGroupId: group.id },
+      'Auto-creating user on Mini App first open',
+    );
+    user = database.users.create({
+      telegram_id: telegramUserId,
+      group_id: group.id,
+    });
+  } else if (user.group_id !== group.id) {
+    logger.info(
+      { telegramUserId, from: user.group_id, to: group.id },
+      'Updating user group_id from Mini App auth',
+    );
+    database.users.update(telegramUserId, { group_id: group.id });
+    const refreshed = database.users.findByTelegramId(telegramUserId);
+    if (refreshed) user = refreshed;
+  }
+
+  return { ok: true, internalGroupId: group.id, internalUserId: user.id };
 }
 
 /** Build CORS headers for a given allowed origin */
@@ -174,30 +205,28 @@ export async function validateAndResolveContext(
     };
   }
 
-  const user = database.users.findByTelegramId(userId);
-  if (!user) {
-    logger.warn({ userId, telegramGroupId }, 'Auth rejected: user not found in DB');
+  // HMAC verified → Telegram identity is trusted. Resolve the group and
+  // auto-create the user row if this is the first time we see them.
+  const resolution = resolveGroupAndEnsureUser(telegramGroupId, userId);
+  if (!resolution.ok) {
+    logger.warn({ userId, telegramGroupId }, 'Auth rejected: group not found');
     return {
       ok: false,
-      response: errorResponse(401, 'User not found', 'INVALID_INIT_DATA', corsHeaders),
-    };
-  }
-
-  const internalGroupId = resolveGroupMembership(telegramGroupId, userId);
-  if (internalGroupId === null) {
-    logger.warn({ userId, telegramGroupId }, 'Auth rejected: user not a member of group');
-    return {
-      ok: false,
-      response: errorResponse(403, 'Forbidden', 'FORBIDDEN_GROUP', corsHeaders),
+      response: errorResponse(
+        403,
+        'Group not configured — run /connect in the group first',
+        'FORBIDDEN_GROUP',
+        corsHeaders,
+      ),
     };
   }
 
   return {
     ok: true,
     userId,
-    internalUserId: user.id,
+    internalUserId: resolution.internalUserId,
     groupId: telegramGroupId,
-    internalGroupId,
+    internalGroupId: resolution.internalGroupId,
     corsHeaders,
   };
 }

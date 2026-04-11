@@ -50,7 +50,8 @@ function friendlyErrorMessage(err: unknown): string {
 	if (err instanceof ApiError) {
 		if (err.code === 'INIT_DATA_EXPIRED') return 'Сессия истекла. Закрой и открой Mini App заново.';
 		if (err.code === 'INVALID_INIT_DATA') return 'Ошибка авторизации. Закрой и открой Mini App заново.';
-		if (err.code === 'FORBIDDEN_GROUP') return 'Нет доступа к этой группе.';
+		if (err.code === 'FORBIDDEN_GROUP')
+			return 'Группа ещё не подключена к Google Sheets. Запусти /connect в чате с ботом.';
 		if (err.code === 'SCAN_FAILED') return 'Не удалось распознать чек. Попробуй ещё раз.';
 		if (err.code === 'OCR_FAILED') return 'Не удалось распознать фото. Попробуй другое фото.';
 		if (err.code === 'CONFIRM_FAILED') return 'Не удалось сохранить расходы. Попробуй ещё раз.';
