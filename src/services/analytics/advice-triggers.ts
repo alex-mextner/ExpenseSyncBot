@@ -41,6 +41,16 @@ export function checkSmartTriggers(
   const snap = snapshot || spendingAnalytics.getFinancialSnapshot(groupId);
   const monthStart = `${format(startOfMonth(now), 'yyyy-MM-dd')}T00:00:00`;
 
+  // Projection-based triggers (warning/critical burn rate) rely on linear
+  // extrapolation — one lumpy expense early in the month (e.g. car repair on
+  // day 2) explodes the projection and produces a false "critical" alert.
+  // The spec (docs/specs/2026-03-09-smart-advice.md, review note #10) gates
+  // these triggers on the projection's confidence level: when
+  // `days_elapsed < 7` the projection is marked `'low'` and must NOT fire
+  // automatic alerts. `exceeded` is a fact (spent >= limit), not a projection,
+  // so it stays unconditional.
+  const projectionConfident = snap.projection != null && snap.projection.confidence !== 'low';
+
   // Priority order: budget_threshold > anomaly > velocity_spike > weekly_check > first_expense_of_month
 
   // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
@@ -62,7 +72,11 @@ export function checkSmartTriggers(
           };
         }
       }
-    } else if ((br.status === 'critical' || br.status === 'warning') && br.budget_limit > 0) {
+    } else if (
+      (br.status === 'critical' || br.status === 'warning') &&
+      br.budget_limit > 0 &&
+      projectionConfident
+    ) {
       const threshold = br.status === 'critical' ? '100' : '80';
       const topic = `budget_threshold:${br.category}:${threshold}`;
       if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {

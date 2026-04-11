@@ -124,6 +124,7 @@ mock.module('../../services/ai/streaming', () => ({
 const writerCalls = {
   appended: [] as string[],
   finalized: [] as string[],
+  finalizedErrors: [] as string[],
   closed: 0,
 };
 
@@ -136,6 +137,9 @@ class StubStatusWriter {
   }
   async finalize(finalText: string): Promise<void> {
     writerCalls.finalized.push(finalText);
+  }
+  async finalizeError(errorSuffix: string): Promise<void> {
+    writerCalls.finalizedErrors.push(errorSuffix);
   }
   async close(): Promise<void> {
     writerCalls.closed += 1;
@@ -199,6 +203,7 @@ describe('handleAdviceCommand — stream abort safety', () => {
     mockAdviceLogs.create.mockClear();
     writerCalls.appended.length = 0;
     writerCalls.finalized.length = 0;
+    writerCalls.finalizedErrors.length = 0;
     writerCalls.closed = 0;
   });
 
@@ -216,7 +221,7 @@ describe('handleAdviceCommand — stream abort safety', () => {
     expect(opts.signal?.aborted).toBe(false);
   });
 
-  test('uses the smart chain for deep-tier analysis', async () => {
+  test('uses the smart chain and deep-tier budget + temperature from TIER_CONFIGS', async () => {
     successfulStream(['ok']);
 
     await handleAdviceCommand(fakeCtx(), fakeGroup());
@@ -224,6 +229,9 @@ describe('handleAdviceCommand — stream abort safety', () => {
     const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
     expect(opts.chain).toBe('smart');
     expect(opts.maxTokens).toBe(3000); // deep tier budget
+    // Deep tier uses a higher temperature (0.6) for more exploratory analysis —
+    // previously this was silently dropped and defaulted to 0.3 in streaming.ts.
+    expect(opts.temperature).toBe(0.6);
   });
 
   test('propagates text deltas to the status writer and finalizes the cleaned advice', async () => {
@@ -237,7 +245,7 @@ describe('handleAdviceCommand — stream abort safety', () => {
     expect(writerCalls.finalized[0]).toContain('Ситуация нормальная');
   });
 
-  test('closes the status writer when aiStreamRound rejects (aborted / errored stream)', async () => {
+  test('preserves partial content via finalizeError when aiStreamRound rejects mid-stream', async () => {
     mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
       // Emit a partial delta, then fail — simulates a stream that starts writing
       // and then dies mid-way (abort, network drop, provider hang timing out).
@@ -248,10 +256,12 @@ describe('handleAdviceCommand — stream abort safety', () => {
     await handleAdviceCommand(fakeCtx(), fakeGroup());
 
     expect(writerCalls.appended).toEqual(['Critical situati']);
-    // The inner catch must tear down the writer instead of leaving the orphan
-    // message visible to the user.
-    expect(writerCalls.closed).toBeGreaterThanOrEqual(1);
+    // Do NOT delete the partial message — pin an error indicator on it instead,
+    // so the user sees what was generated so far plus a clear failure marker.
+    expect(writerCalls.closed).toBe(0);
     expect(writerCalls.finalized).toHaveLength(0);
+    expect(writerCalls.finalizedErrors).toHaveLength(1);
+    expect(writerCalls.finalizedErrors[0]).toContain('Генерация прервана');
     // Outer catch in sendSmartAdvice logs the failure but does not throw.
     expect(logMock.error).toHaveBeenCalled();
   });

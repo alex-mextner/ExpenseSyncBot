@@ -110,6 +110,27 @@ export class StatusWriter {
     await editMessageText(messageId, finalText, { throwOnError: true });
   }
 
+  /**
+   * Preserve whatever was already streamed and append an error suffix in place.
+   * Unlike `close()` (which deletes the message), this keeps the partial output
+   * visible so the user can see how far the generator got before it failed —
+   * much friendlier UX for "stream aborted mid-flight" cases than watching the
+   * message silently disappear. Edit failures are log-only (best-effort).
+   */
+  async finalizeError(errorSuffix: string): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    const messageId = await this.messageIdPromise;
+    if (messageId === null) return;
+    const body = this.formatDisplay(this.buffer);
+    const finalText = `${body}\n\n${errorSuffix}`;
+    try {
+      await editMessageText(messageId, finalText);
+    } catch (err) {
+      logger.warn({ err }, '[STATUS_WRITER] finalizeError edit failed');
+    }
+  }
+
   private async flush(force: boolean): Promise<void> {
     const now = Date.now();
     if (now - this.lastErrorTime < ERROR_COOLDOWN_MS) return;

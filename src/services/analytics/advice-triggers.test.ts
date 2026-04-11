@@ -93,7 +93,18 @@ function buildNeutralSnapshot(overrides: Partial<FinancialSnapshot> = {}): Finan
       avg_daily_during_streak: 0,
       overall_daily_average: 50,
     },
-    projection: null,
+    // Default to a non-low-confidence projection so warning/critical burn-rate
+    // tests (which exist independent of the confidence gate) are not suppressed
+    // by it. Tests that specifically exercise the gate override this explicitly.
+    projection: {
+      days_elapsed: 15,
+      days_in_month: 30,
+      current_total: 500,
+      projected_total: 1000,
+      projected_vs_last_month: 100,
+      confidence: 'medium',
+      category_projections: [],
+    },
     ...overrides,
   };
 }
@@ -238,6 +249,166 @@ describe('checkSmartTriggers', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('budget_threshold');
     expect(result?.tier).toBe('alert');
+    expect(result?.topic).toContain('Rent');
+    expect(result?.topic).toContain('100');
+  });
+
+  // ── Projection confidence gate ──────────────────────────────────────
+  // Reproduces the false-alert bug: a lumpy one-off expense early in the
+  // month (e.g. a car repair on day 2) produces a huge linear projection
+  // and used to fire a `critical` budget-threshold alert. The spec says
+  // projection-based triggers must be suppressed at low confidence.
+
+  test('low-confidence projection suppresses critical burn-rate alert (lumpy car expense, day 2)', () => {
+    const snapshot = buildNeutralSnapshot({
+      // One car expense of 300 on day 2 of a 30-day month → linear extrapolation
+      // projects 4500 for the month on a 500 budget. `computeBurnRates` marks
+      // this `critical`, but projection.confidence is `low` (days_elapsed < 7)
+      // so the alert must NOT fire.
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Автомобиль',
+          spent: 300,
+          projected_total: 4500,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 2,
+          days_remaining: 28,
+        }),
+      ],
+      projection: {
+        days_elapsed: 2,
+        days_in_month: 30,
+        current_total: 300,
+        projected_total: 4500,
+        projected_vs_last_month: 900,
+        confidence: 'low',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8001, snapshot);
+    // Either null, or any trigger that is NOT a projection-based budget_threshold.
+    // (weekly_check on Monday is fine; exceeded facts are fine.)
+    if (result && result.type === 'budget_threshold') {
+      expect(result.topic).toContain('exceeded');
+    }
+  });
+
+  test('low-confidence projection suppresses warning burn-rate alert', () => {
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Продукты',
+          projected_total: 450,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 3,
+        }),
+      ],
+      projection: {
+        days_elapsed: 3,
+        days_in_month: 30,
+        current_total: 150,
+        projected_total: 1500,
+        projected_vs_last_month: 300,
+        confidence: 'low',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8002, snapshot);
+    if (result && result.type === 'budget_threshold') {
+      expect(result.topic).toContain('exceeded');
+    }
+  });
+
+  test('low-confidence projection still fires EXCEEDED alert (fact, not projection)', () => {
+    // `exceeded` means spent >= limit — that is a hard fact, no extrapolation
+    // involved. It must still fire even when the month is young, because the
+    // user has already blown past the budget regardless of projection math.
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Developer',
+          spent: 600,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 2,
+        }),
+      ],
+      projection: {
+        days_elapsed: 2,
+        days_in_month: 30,
+        current_total: 600,
+        projected_total: 9000,
+        projected_vs_last_month: 1500,
+        confidence: 'low',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8003, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.topic).toContain('exceeded');
+    expect(result?.data['spent']).toBe(600);
+  });
+
+  test('null projection (too early in month) suppresses warning/critical alerts', () => {
+    // When projection is null (day 1, no data yet) the code should fall back
+    // to "not confident" and skip projection-based alerts.
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Транспорт',
+          projected_total: 3000,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 1,
+        }),
+      ],
+      projection: null,
+    });
+
+    const result = checkSmartTriggers(8004, snapshot);
+    if (result && result.type === 'budget_threshold') {
+      expect(result.topic).toContain('exceeded');
+    }
+  });
+
+  test('medium-confidence projection allows critical alert to fire', () => {
+    // Past the first week: projection confidence is medium/high, the linear
+    // extrapolation is trustworthy, and the alert should fire normally.
+    const snapshot = buildNeutralSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Rent',
+          projected_total: 1200,
+          budget_limit: 1000,
+          currency: 'USD',
+          days_elapsed: 15,
+        }),
+      ],
+      projection: {
+        days_elapsed: 15,
+        days_in_month: 30,
+        current_total: 600,
+        projected_total: 1200,
+        projected_vs_last_month: 120,
+        confidence: 'medium',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8005, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
     expect(result?.topic).toContain('Rent');
     expect(result?.topic).toContain('100');
   });
