@@ -306,9 +306,12 @@ Mock 429 for all retries → throws, no partial DB state.
 
 ## Non-goals (explicitly deferred)
 
-- **Optimize to 1 API call instead of 2** (append + batchUpdate formulas via INDIRECT). Would halve write quota usage per batch. Not needed for the current bug — 1-2 calls per receipt is already 60×–70× improvement. File a follow-up issue.
 - **Streaming confirmation** (SSE progress for large receipts). Current fix makes confirmation fast enough (1–3 seconds for 70 items) that progress UI is unnecessary.
 - **Merge duplicate items before recording** (3× "Куриное бедро" → qty 3). The grouping path already sums them into one category row. Individual item display in `expense_items` stays granular.
+
+## Additional optimization (done in this PR)
+
+- **1 sheet API call per batch instead of 2**: the EUR formula is baked directly into the row at build time via `=INDIRECT("<amountCol>"&ROW())*INDIRECT("<rateCol>"&ROW())`. `INDIRECT + ROW()` is self-positioning, so the formula works wherever the row lands — no need to look up the absolute row number from the append response and issue a second `values.batchUpdate`. Trade-off: `INDIRECT` is a volatile function (recalculates on any sheet change), but at the ~few thousand rows an expense tracker accumulates this is immeasurable. Net effect: one sheet write per receipt regardless of row count — write quota doubled for the hot path.
 
 ## Acceptance criteria
 

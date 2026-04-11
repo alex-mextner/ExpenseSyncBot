@@ -13,9 +13,6 @@ interface ValuesAppendResponse {
 interface ValuesAppendArgs {
   requestBody: { values: unknown[][] };
 }
-interface ValuesBatchUpdateArgs {
-  requestBody: { data: Array<{ range: string; values: string[][] }> };
-}
 
 const mockValuesGet = mock(
   (..._args: unknown[]): Promise<ValuesGetResponse> => Promise.resolve({ data: { values: [[]] } }),
@@ -154,7 +151,7 @@ describe('appendExpenseRows', () => {
     expect(callArgs.requestBody.values).toHaveLength(2);
   });
 
-  test('writes all EUR formulas in one batchUpdate', async () => {
+  test('bakes EUR formulas into the append payload (no second API call)', async () => {
     mockValuesAppend.mockResolvedValue({
       data: { updates: { updatedRange: 'Expenses!A5:F7', updatedRows: 3 } },
     });
@@ -186,19 +183,24 @@ describe('appendExpenseRows', () => {
       },
     ]);
 
-    // Single batchUpdate for all 3 formulas, not 3 separate update calls
-    expect(mockValuesBatchUpdate).toHaveBeenCalledTimes(1);
+    // No second round-trip: neither batchUpdate nor update are called
+    expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
     expect(mockValuesUpdate).not.toHaveBeenCalled();
 
-    const batchArgs = mockValuesBatchUpdate.mock.calls[0]?.[0] as ValuesBatchUpdateArgs;
-    expect(batchArgs.requestBody.data).toHaveLength(3);
-    // Each formula references the corresponding row
-    expect(batchArgs.requestBody.data[0]?.values[0]?.[0]).toContain('5'); // row 5
-    expect(batchArgs.requestBody.data[1]?.values[0]?.[0]).toContain('6'); // row 6
-    expect(batchArgs.requestBody.data[2]?.values[0]?.[0]).toContain('7'); // row 7
+    // Single append carries the formulas inline — self-positioning via INDIRECT+ROW
+    // Headers: Дата(0) Категория(1) Комментарий(2) EUR(calc)(3) RSD(4) Rate(5)
+    const callArgs = mockValuesAppend.mock.calls[0]?.[0] as ValuesAppendArgs;
+    expect(callArgs.requestBody.values).toHaveLength(3);
+    for (const row of callArgs.requestBody.values) {
+      // EUR (calc) column = index 3
+      const eurCell = row?.[3];
+      expect(typeof eurCell).toBe('string');
+      expect(eurCell).toContain('INDIRECT');
+      expect(eurCell).toContain('ROW()');
+    }
   });
 
-  test('skips formula batchUpdate when all rows are EUR', async () => {
+  test('uses literal EUR value when all rows are EUR-native', async () => {
     mockValuesGet.mockResolvedValue({
       data: { values: [['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'Rate (→EUR)']] },
     });
@@ -211,11 +213,17 @@ describe('appendExpenseRows', () => {
       { date: '2026-04-10', category: 'B', comment: '', amounts: { EUR: 20 }, eurAmount: 20 },
     ]);
 
-    // No formulas needed for EUR-native rows
+    // No formulas needed for EUR-native rows — no second round-trip at all
     expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+    expect(mockValuesUpdate).not.toHaveBeenCalled();
+
+    // EUR column holds the literal amount, not a formula
+    const callArgs = mockValuesAppend.mock.calls[0]?.[0] as ValuesAppendArgs;
+    expect(callArgs.requestBody.values[0]?.[3]).toBe(10);
+    expect(callArgs.requestBody.values[1]?.[3]).toBe(20);
   });
 
-  test('only writes formulas for rows that need them (mixed currencies)', async () => {
+  test('puts formula only on non-EUR rows in a mixed-currency batch', async () => {
     mockValuesAppend.mockResolvedValue({
       data: { updates: { updatedRange: 'Expenses!A5:F7', updatedRows: 3 } },
     });
@@ -240,10 +248,17 @@ describe('appendExpenseRows', () => {
       },
     ]);
 
-    expect(mockValuesBatchUpdate).toHaveBeenCalledTimes(1);
-    const batchArgs = mockValuesBatchUpdate.mock.calls[0]?.[0] as ValuesBatchUpdateArgs;
-    // Only 2 formulas (rows 5 and 7), row 6 is EUR
-    expect(batchArgs.requestBody.data).toHaveLength(2);
+    // Single call, no second round-trip
+    expect(mockValuesAppend).toHaveBeenCalledTimes(1);
+    expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+
+    const callArgs = mockValuesAppend.mock.calls[0]?.[0] as ValuesAppendArgs;
+    // Row 1 (RSD) — formula
+    expect(String(callArgs.requestBody.values[0]?.[3])).toContain('INDIRECT');
+    // Row 2 (EUR) — literal
+    expect(callArgs.requestBody.values[1]?.[3]).toBe(5);
+    // Row 3 (RSD) — formula
+    expect(String(callArgs.requestBody.values[2]?.[3])).toContain('INDIRECT');
   });
 
   test('handles single-row batch', async () => {
@@ -277,10 +292,12 @@ describe('appendExpenseRows', () => {
     const callArgs = mockValuesAppend.mock.calls[0]?.[0] as ValuesAppendArgs;
     const row = callArgs.requestBody.values[0];
     // Headers: ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)']
+    //           A=0      B=1         C=2             D=3            E=4           F=5
     expect(row?.[0]).toBe('2026-04-10');
     expect(row?.[1]).toBe('Еда');
     expect(row?.[2]).toBe('lunch');
-    expect(row?.[3]).toBe(4.3); // EUR amount
+    // EUR column holds a self-positioning formula: amount col (E) × rate col (F)
+    expect(row?.[3]).toBe('=INDIRECT("E"&ROW())*INDIRECT("F"&ROW())');
     expect(row?.[4]).toBe(500); // RSD amount
     expect(row?.[5]).toBe(0.0086); // rate
   });

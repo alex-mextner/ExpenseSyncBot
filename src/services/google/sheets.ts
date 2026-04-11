@@ -342,11 +342,16 @@ async function appendExpenseRowsImpl(
 
   // Find column indices
   const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
-  const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
 
-  // Build all rows
-  const rows: (string | number | null)[][] = [];
-  const formulaInfo: Array<{ needsFormula: boolean; amountColIdx: number }> = [];
+  // Build all rows. EUR formulas for non-EUR rows are baked in via
+  // `=INDIRECT("<amountCol>"&ROW())*INDIRECT("<rateCol>"&ROW())` — a
+  // self-positioning formula that doesn't need to know its absolute row
+  // number. This lets us put the formula inside the first append call
+  // instead of doing a second values.batchUpdate, halving write quota usage.
+  //
+  // Trade-off: INDIRECT is volatile — it recalculates on any sheet change.
+  // Immeasurable on the few-thousand rows an expense tracker accumulates.
+  const rows: (string | number | string)[][] = [];
 
   for (const data of dataList) {
     const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
@@ -360,9 +365,11 @@ async function appendExpenseRowsImpl(
 
     const needsFormula =
       expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
-    formulaInfo.push({ needsFormula, amountColIdx });
+    const eurFormula = needsFormula
+      ? `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`
+      : null;
 
-    const row: (string | number | null)[] = [];
+    const row: (string | number)[] = [];
     for (let colIdx = 0; colIdx < headers.length; colIdx++) {
       const header = headers[colIdx];
       if (header === SPREADSHEET_CONFIG.headers[0]) {
@@ -372,7 +379,8 @@ async function appendExpenseRowsImpl(
       } else if (header === SPREADSHEET_CONFIG.headers[2]) {
         row.push(data.comment);
       } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-        row.push(data.eurAmount);
+        // Formula when we can derive EUR from amount*rate, otherwise literal
+        row.push(eurFormula ?? data.eurAmount);
       } else if (header === RATE_COLUMN_HEADER) {
         row.push(data.rate ?? '');
       } else {
@@ -383,7 +391,7 @@ async function appendExpenseRowsImpl(
     rows.push(row);
   }
 
-  // Append all rows in one API call (with 429 retry)
+  // Single append call — rows contain their own EUR formulas (no second round-trip)
   const response = await withSheetsRetry(
     () =>
       sheets.spreadsheets.values.append({
@@ -402,46 +410,6 @@ async function appendExpenseRowsImpl(
 
   if (!updatedRows || updatedRows === 0) {
     logger.error('[SHEETS-BATCH] No rows appended');
-    return;
-  }
-
-  // Parse start row from response (e.g. "Expenses!A5:G7" → 5)
-  const startRowMatch = updatedRange?.match(/!A(\d+)/);
-  if (!startRowMatch?.[1] || eurColIdx === -1) return;
-
-  const startRow = Number.parseInt(startRowMatch[1], 10);
-
-  // Build EUR formula updates for rows that need them
-  const formulaUpdates: Array<{ range: string; values: string[][] }> = [];
-  for (const [i, info] of formulaInfo.entries()) {
-    if (!info.needsFormula) continue;
-
-    const actualRow = startRow + i;
-    const eurCell = `${colLetter(eurColIdx)}${actualRow}`;
-    const amountCell = `${colLetter(info.amountColIdx)}${actualRow}`;
-    const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
-    const formula = `=${amountCell}*${rateCell}`;
-
-    formulaUpdates.push({
-      range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
-      values: [[formula]],
-    });
-  }
-
-  // Write all EUR formulas in one batchUpdate (with 429 retry)
-  if (formulaUpdates.length > 0) {
-    await withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId,
-          requestBody: {
-            valueInputOption: 'USER_ENTERED',
-            data: formulaUpdates,
-          },
-        }),
-      'appendExpenseRows.batchUpdate',
-    );
-    logger.info(`[SHEETS-BATCH] Wrote ${formulaUpdates.length} EUR formulas`);
   }
 }
 
@@ -495,8 +463,14 @@ async function appendExpenseRowImpl(
   const needsFormula =
     expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
 
+  // Self-positioning EUR formula — see appendExpenseRowsImpl for rationale.
+  // One append call, no second round-trip to attach the formula afterwards.
+  const eurFormula = needsFormula
+    ? `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`
+    : null;
+
   // Build row values based on header order
-  const row: (string | number | null)[] = [];
+  const row: (string | number)[] = [];
 
   for (let colIdx = 0; colIdx < headers.length; colIdx++) {
     const header = headers[colIdx];
@@ -507,8 +481,7 @@ async function appendExpenseRowImpl(
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      // Write static EUR first; replaced with formula in a second call if needed
-      row.push(data.eurAmount);
+      row.push(eurFormula ?? data.eurAmount);
     } else if (header === RATE_COLUMN_HEADER) {
       row.push(data.rate ?? '');
     } else {
@@ -520,7 +493,7 @@ async function appendExpenseRowImpl(
 
   logger.info({ data: row }, `[SHEETS] Final row`);
 
-  // Append the row — the API finds the next empty row atomically (with 429 retry)
+  // Single append call — row already carries its own EUR formula
   const response = await withSheetsRetry(
     () =>
       sheets.spreadsheets.values.append({
@@ -535,7 +508,6 @@ async function appendExpenseRowImpl(
     'appendExpenseRow.append',
   );
 
-  // Log API response for debugging
   const updatedRange = response.data.updates?.updatedRange;
   const updatedRows = response.data.updates?.updatedRows;
   logger.info(
@@ -546,35 +518,6 @@ async function appendExpenseRowImpl(
     logger.error(
       `[SHEETS] No rows were appended! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
-    return;
-  }
-
-  // Write EUR formula using the ACTUAL row number from the API response
-  if (needsFormula && updatedRange) {
-    const rowMatch = updatedRange.match(/!A(\d+)/);
-    if (rowMatch?.[1]) {
-      const actualRow = Number.parseInt(rowMatch[1], 10);
-      const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
-      if (eurColIdx !== -1) {
-        const eurCell = `${colLetter(eurColIdx)}${actualRow}`;
-        const amountCell = `${colLetter(amountColIdx)}${actualRow}`;
-        const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
-        const formula = `=${amountCell}*${rateCell}`;
-
-        await withSheetsRetry(
-          () =>
-            sheets.spreadsheets.values.update({
-              spreadsheetId,
-              range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
-              valueInputOption: 'USER_ENTERED',
-              requestBody: { values: [[formula]] },
-            }),
-          'appendExpenseRow.update',
-        );
-
-        logger.info(`[SHEETS] EUR formula written: ${eurCell} = ${formula}`);
-      }
-    }
   }
 }
 
