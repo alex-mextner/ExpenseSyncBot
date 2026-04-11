@@ -178,6 +178,79 @@ function colLetter(index: number): string {
  */
 const RATE_COLUMN_HEADER = 'Rate (→EUR)';
 
+/**
+ * Google Sheets API hard limits (write side — this bot's hot path).
+ * Source: https://developers.google.com/workspace/sheets/api/limits
+ *
+ * Per-user and per-project limits are both enforced. We care about the
+ * per-user limit because a single OAuth user writing a 70-item receipt can
+ * exhaust it on its own without touching the project budget.
+ */
+export const GOOGLE_SHEETS_LIMITS = {
+  writeRequestsPerMinutePerUser: 60,
+  writeRequestsPerMinutePerProject: 300,
+  readRequestsPerMinutePerUser: 60,
+  readRequestsPerMinutePerProject: 300,
+  /** Google's own recommended maximum backoff for 429 retries */
+  maxBackoffMs: 32_000,
+  /** Give up after this many attempts (original + retries) */
+  maxAttempts: 6,
+} as const;
+
+/**
+ * Sleep helper — isolated so tests can mock `setTimeout` without touching
+ * the global loop
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if a caught error is a Google API 429 (rate limit exceeded)
+ */
+export function isRateLimitError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; status?: unknown; message?: unknown };
+  if (e.code === 429 || e.code === '429' || e.status === 429 || e.status === '429') return true;
+  if (typeof e.message === 'string') {
+    return e.message.includes('Quota exceeded') || e.message.includes('rateLimitExceeded');
+  }
+  return false;
+}
+
+/**
+ * Wrap a Google Sheets API call with exponential backoff on 429. Retries
+ * follow Google's recommended formula: `min(2^n * 1000 + jitter, maxBackoffMs)`.
+ * Non-429 errors are rethrown immediately — we don't want to mask auth or
+ * validation failures.
+ *
+ * The random jitter (`randomFn`) is injectable so tests are deterministic.
+ */
+export async function withSheetsRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  opts?: { sleepFn?: (ms: number) => Promise<void>; randomFn?: () => number },
+): Promise<T> {
+  const sleepFn = opts?.sleepFn ?? sleep;
+  const randomFn = opts?.randomFn ?? Math.random;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < GOOGLE_SHEETS_LIMITS.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRateLimitError(err)) throw err;
+      if (attempt === GOOGLE_SHEETS_LIMITS.maxAttempts - 1) break;
+      const base = Math.min(2 ** attempt * 1000, GOOGLE_SHEETS_LIMITS.maxBackoffMs);
+      const jitter = Math.floor(randomFn() * 1000);
+      const waitMs = base + jitter;
+      logger.warn({ label, attempt: attempt + 1, waitMs }, '[SHEETS] 429 rate limit, backing off');
+      await sleepFn(waitMs);
+    }
+  }
+  throw lastErr;
+}
+
 // Per-spreadsheet write queue — serializes appends so EUR formula row references are correct
 const sheetWriteQueues = new Map<string, Promise<void>>();
 
@@ -310,14 +383,18 @@ async function appendExpenseRowsImpl(
     rows.push(row);
   }
 
-  // Append all rows in one API call
-  const response = await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: rows },
-  });
+  // Append all rows in one API call (with 429 retry)
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: rows },
+      }),
+    'appendExpenseRows.append',
+  );
 
   const updatedRange = response.data.updates?.updatedRange;
   const updatedRows = response.data.updates?.updatedRows;
@@ -351,15 +428,19 @@ async function appendExpenseRowsImpl(
     });
   }
 
-  // Write all EUR formulas in one batchUpdate
+  // Write all EUR formulas in one batchUpdate (with 429 retry)
   if (formulaUpdates.length > 0) {
-    await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        valueInputOption: 'USER_ENTERED',
-        data: formulaUpdates,
-      },
-    });
+    await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            valueInputOption: 'USER_ENTERED',
+            data: formulaUpdates,
+          },
+        }),
+      'appendExpenseRows.batchUpdate',
+    );
     logger.info(`[SHEETS-BATCH] Wrote ${formulaUpdates.length} EUR formulas`);
   }
 }
@@ -439,16 +520,20 @@ async function appendExpenseRowImpl(
 
   logger.info({ data: row }, `[SHEETS] Final row`);
 
-  // Append the row — the API finds the next empty row atomically
-  const response = await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: {
-      values: [row],
-    },
-  });
+  // Append the row — the API finds the next empty row atomically (with 429 retry)
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [row],
+        },
+      }),
+    'appendExpenseRow.append',
+  );
 
   // Log API response for debugging
   const updatedRange = response.data.updates?.updatedRange;
@@ -476,12 +561,16 @@ async function appendExpenseRowImpl(
         const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
         const formula = `=${amountCell}*${rateCell}`;
 
-        await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [[formula]] },
-        });
+        await withSheetsRetry(
+          () =>
+            sheets.spreadsheets.values.update({
+              spreadsheetId,
+              range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
+              valueInputOption: 'USER_ENTERED',
+              requestBody: { values: [[formula]] },
+            }),
+          'appendExpenseRow.update',
+        );
 
         logger.info(`[SHEETS] EUR formula written: ${eurCell} = ${formula}`);
       }

@@ -12,6 +12,7 @@ import {
   formatAmount,
   getExchangeRate,
 } from '../../services/currency/converter';
+import { getExpenseRecorder, type RecordReceiptItem } from '../../services/expense-recorder';
 import { appendExpenseRows, type ExpenseRowData, googleConn } from '../../services/google/sheets';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
@@ -212,7 +213,9 @@ async function checkBudgetLimit(
 }
 
 /**
- * Save all confirmed receipt items as expenses
+ * Save all confirmed receipt items as expenses. Delegates the write to
+ * `ExpenseRecorder.recordReceipt` so the bot and Mini App flows share one
+ * batched write path.
  */
 export async function saveReceiptExpenses(
   photoQueueId: number,
@@ -232,120 +235,51 @@ export async function saveReceiptExpenses(
     return;
   }
 
-  // Group items by category
-  const itemsByCategory: Map<string, typeof confirmedItems> = new Map();
+  // Skip items with no confirmed category (defensive — shouldn't happen)
+  const itemsWithCategory = confirmedItems.filter((i) => i.confirmed_category);
 
-  for (const item of confirmedItems) {
-    const category = item.confirmed_category;
-    if (!category) {
-      continue;
-    }
-    if (!itemsByCategory.has(category)) {
-      itemsByCategory.set(category, []);
-    }
-    const categoryItems = itemsByCategory.get(category);
-    if (categoryItems) {
-      categoryItems.push(item);
-    }
-  }
-
-  const currentDate = format(new Date(), 'yyyy-MM-dd');
-
-  // Look up the receipt record created during photo processing
-  const receipt = database.receipts.findByPhotoQueueId(photoQueueId);
-
-  // Prepare per-category data for sheet writes
-  interface CategoryBatch {
-    category: string;
-    items: typeof confirmedItems;
-    totalAmount: number;
-    currency: CurrencyCode;
-    eurAmount: number;
-    comment: string;
-    amounts: Record<string, number | null>;
-    rate: number;
-  }
-  const batches: CategoryBatch[] = [];
-
-  for (const [category, items] of itemsByCategory.entries()) {
-    if (items.length === 0) continue;
-
-    const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
-    const firstItem = items[0];
-    if (!firstItem) continue;
-    const currency = firstItem.currency;
-
-    const eurAmount = convertToEUR(totalAmount, currency);
-    const rate = getExchangeRate(currency as CurrencyCode);
-
-    const itemNames = items.map((item) => `${item.name_ru} (${item.quantity}x${item.price})`);
-    const comment = `Чек: ${itemNames.join(', ')}`;
-
-    const amounts: Record<string, number | null> = {};
-    for (const curr of group.enabled_currencies) {
-      amounts[curr] = curr === currency ? totalAmount : null;
-    }
-
-    batches.push({ category, items, totalAmount, currency, eurAmount, comment, amounts, rate });
-  }
-
-  // Write all categories to sheet in one API call — if fails, nothing is committed to DB
-  const sheetRows: ExpenseRowData[] = batches.map((batch) => ({
-    date: currentDate,
-    category: batch.category,
-    comment: batch.comment,
-    amounts: batch.amounts,
-    eurAmount: batch.eurAmount,
-    rate: batch.rate,
+  // Convert DB rows to the recorder's input shape
+  const recordItems: RecordReceiptItem[] = itemsWithCategory.map((i) => ({
+    name: i.name_ru,
+    nameOriginal: i.name_original ?? null,
+    quantity: i.quantity,
+    price: i.price,
+    total: i.total,
+    currency: i.currency as CurrencyCode,
+    // confirmed_category is guaranteed non-null by the filter above
+    category: i.confirmed_category as string,
   }));
 
+  // Use the receipt's actual date if available, fall back to today
+  const receipt = database.receipts.findByPhotoQueueId(photoQueueId);
+  const date = receipt?.date ?? format(new Date(), 'yyyy-MM-dd');
+
+  const recorder = getExpenseRecorder();
+
+  let result: Awaited<ReturnType<typeof recorder.recordReceipt>>;
   try {
-    await appendExpenseRows(googleConn(group), group.spreadsheet_id, sheetRows);
+    result = await recorder.recordReceipt(groupId, userId, {
+      date,
+      items: recordItems,
+      receiptId: receipt?.id ?? null,
+    });
   } catch (error) {
     logger.error({ err: error }, '[RECEIPT] Failed to write to Google Sheet — receipt items kept');
     await sendMessage(getSheetErrorMessage(error));
     return;
   }
 
-  // All sheet writes succeeded — commit all to DB in one transaction
-  database.transaction(() => {
-    for (const batch of batches) {
-      const expense = database.expenses.create({
-        group_id: groupId,
-        user_id: userId,
-        date: currentDate,
-        category: batch.category,
-        comment: batch.comment,
-        amount: batch.totalAmount,
-        currency: batch.currency,
-        eur_amount: batch.eurAmount,
-        receipt_id: receipt?.id ?? null,
-      });
-
-      for (const item of batch.items) {
-        database.expenseItems.create({
-          expense_id: expense.id,
-          name_ru: item.name_ru,
-          name_original: item.name_original || null,
-          quantity: item.quantity,
-          price: item.price,
-          total: item.total,
-        });
-      }
-    }
-  });
-
-  // Check budgets for affected categories
-  for (const batch of batches) {
-    await checkBudgetLimit(groupId, batch.category, currentDate);
-  }
-
   // Delete all processed receipt items (confirmed + skipped)
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
 
+  // Check budgets for affected categories
+  for (const category of result.categoriesAffected) {
+    await checkBudgetLimit(groupId, category, date);
+  }
+
   // Notify user
-  const totalItems = confirmedItems.length;
-  const totalCategories = itemsByCategory.size;
+  const totalItems = itemsWithCategory.length;
+  const totalCategories = result.categoriesAffected.length;
 
   const miniAppUrl = buildMiniAppUrl('scanner', group.telegram_group_id);
   const scanButton = miniAppUrl

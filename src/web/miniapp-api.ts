@@ -445,6 +445,7 @@ export async function handleMiniAppRequest(
     let body: {
       groupId?: unknown;
       fileId?: unknown;
+      date?: unknown;
       expenses?: unknown;
     };
     try {
@@ -463,19 +464,18 @@ export async function handleMiniAppRequest(
       return errorResponse(400, 'Missing or empty expenses array', 'BAD_REQUEST', corsHeaders);
     }
 
-    /** Expected shape of each expense item from client */
-    interface ConfirmExpenseInput {
+    /** Expected shape of each receipt item from the Mini App client */
+    interface ConfirmItemInput {
       name?: unknown;
       total?: unknown;
       category?: unknown;
       currency?: unknown;
-      date?: unknown;
       qty?: unknown;
       price?: unknown;
     }
 
-    const expenseInputs = body.expenses as ConfirmExpenseInput[];
-    for (const item of expenseInputs) {
+    const itemInputs = body.expenses as ConfirmItemInput[];
+    for (const item of itemInputs) {
       if (
         typeof item.name !== 'string' ||
         typeof item.total !== 'number' ||
@@ -487,7 +487,7 @@ export async function handleMiniAppRequest(
       ) {
         return errorResponse(
           400,
-          'Each expense must have name (string), total (positive finite number), category (string), currency (valid ISO code)',
+          'Each item must have name (string), total (positive finite number), category (string), currency (valid ISO code)',
           'BAD_REQUEST',
           corsHeaders,
         );
@@ -499,40 +499,38 @@ export async function handleMiniAppRequest(
 
     const fileId = typeof body.fileId === 'string' ? body.fileId : null;
 
+    // Receipt date (one for the whole receipt, not per item). Fall back to today.
+    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const date =
+      typeof body.date === 'string' && ISO_DATE_RE.test(body.date)
+        ? body.date
+        : new Date().toISOString().slice(0, 10);
+
     logger.info(
-      { userId: ctx.userId, groupId: telegramGroupId, expenseCount: expenseInputs.length },
+      {
+        userId: ctx.userId,
+        groupId: telegramGroupId,
+        itemCount: itemInputs.length,
+        date,
+        hasFileId: fileId !== null,
+      },
       'Receipt confirm started',
     );
 
     try {
       const recorder = getExpenseRecorder();
-      let created = 0;
-
-      for (const item of expenseInputs) {
-        const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-        const date =
-          typeof item.date === 'string' && ISO_DATE_RE.test(item.date)
-            ? item.date
-            : new Date().toISOString().slice(0, 10);
-
-        const result = await recorder.record(ctx.internalGroupId, ctx.internalUserId, {
-          date,
-          category: item.category as string,
-          comment: item.name as string,
-          amount: item.total as number,
+      const result = await recorder.recordReceipt(ctx.internalGroupId, ctx.internalUserId, {
+        date,
+        receiptFileId: fileId,
+        items: itemInputs.map((item) => ({
+          name: item.name as string,
+          quantity: typeof item.qty === 'number' && item.qty > 0 ? item.qty : 1,
+          price: typeof item.price === 'number' ? item.price : (item.total as number),
+          total: item.total as number,
           currency: item.currency as CurrencyCode,
-        });
-
-        if (fileId) {
-          database.exec(
-            'UPDATE expenses SET receipt_file_id = ? WHERE id = ?',
-            fileId,
-            result.expense.id,
-          );
-        }
-
-        created++;
-      }
+          category: item.category as string,
+        })),
+      });
 
       try {
         emitForGroup(ctx.internalGroupId, 'expense_added');
@@ -540,9 +538,16 @@ export async function handleMiniAppRequest(
         logger.warn({ err: emitError }, 'SSE emit failed, continuing');
       }
 
-      logger.info({ userId: ctx.userId, created }, 'Receipt confirm completed');
+      logger.info(
+        {
+          userId: ctx.userId,
+          created: result.expenses.length,
+          categories: result.categoriesAffected.length,
+        },
+        'Receipt confirm completed',
+      );
 
-      return new Response(JSON.stringify({ created }), {
+      return new Response(JSON.stringify({ created: result.expenses.length }), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
       });

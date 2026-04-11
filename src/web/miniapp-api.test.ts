@@ -10,6 +10,8 @@ import type {
   RecordExpenseData,
   RecordExpenseResult,
   RecorderApi,
+  RecordReceiptData,
+  RecordReceiptResult,
 } from '../services/expense-recorder.ts';
 import * as expenseRecorderModule from '../services/expense-recorder.ts';
 import type { CategoryExample } from '../services/receipt/ai-extractor.ts';
@@ -42,6 +44,7 @@ function stubExpense(
     currency: 'EUR',
     eur_amount: 10,
     receipt_id: null,
+    receipt_file_id: null,
     created_at: '2024-01-15',
     ...overrides,
   };
@@ -124,10 +127,17 @@ const mockExpenseRecorderRecord = mock(
   (_groupId: number, _userId: number, _data: RecordExpenseData): Promise<RecordExpenseResult> =>
     Promise.resolve({ expense: stubExpense({ id: 99 }), eurAmount: 10 }),
 );
+const mockExpenseRecorderRecordReceipt = mock(
+  (_groupId: number, _userId: number, _data: RecordReceiptData): Promise<RecordReceiptResult> =>
+    Promise.resolve({
+      expenses: [{ expense: stubExpense({ id: 99 }), eurAmount: 10 }],
+      categoriesAffected: [],
+    }),
+);
 const mockGetExpenseRecorder = mock(
   (): RecorderApi => ({
     record: mockExpenseRecorderRecord,
-    recordBatch: () => Promise.resolve([]),
+    recordReceipt: mockExpenseRecorderRecordReceipt,
     pushToSheet: () => Promise.resolve(),
   }),
 );
@@ -819,6 +829,7 @@ describe('POST /api/receipt/confirm', () => {
     mockDbExec.mockReset();
     mockGroupsFindById.mockReset();
     mockExpenseRecorderRecord.mockReset();
+    mockExpenseRecorderRecordReceipt.mockReset();
     mockEmitForGroup.mockReset();
   });
 
@@ -856,11 +867,15 @@ describe('POST /api/receipt/confirm', () => {
     expect(res.status).toBe(401);
   });
 
-  test('success → 200 { created: N }', async () => {
+  test('success → 200 { created: N } with one expense per unique category', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockExpenseRecorderRecord.mockImplementation(() =>
-      Promise.resolve({ expense: stubExpense({ id: 55 }), eurAmount: 8.5 }),
+    // Both items are Food → recordReceipt groups them into one category expense
+    mockExpenseRecorderRecordReceipt.mockImplementation(() =>
+      Promise.resolve({
+        expenses: [{ expense: stubExpense({ id: 55 }), eurAmount: 8.5 }],
+        categoriesAffected: ['Food'],
+      }),
     );
 
     const initData = buildInitData(42);
@@ -869,9 +884,10 @@ describe('POST /api/receipt/confirm', () => {
       {
         groupId: GROUP_ID,
         fileId: null,
+        date: '2025-03-15',
         expenses: [
-          { name: 'Milk', total: 171, category: 'Food', currency: 'RSD', date: '2025-03-15' },
-          { name: 'Bread', total: 85, category: 'Food', currency: 'RSD' },
+          { name: 'Milk', qty: 1, price: 171, total: 171, category: 'Food', currency: 'RSD' },
+          { name: 'Bread', qty: 1, price: 85, total: 85, category: 'Food', currency: 'RSD' },
         ],
       },
       initData,
@@ -880,17 +896,27 @@ describe('POST /api/receipt/confirm', () => {
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(200);
     const body = (await res.json()) as { created: number };
-    expect(body.created).toBe(2);
+    // One category → one expense row in the sheet → `created: 1`
+    expect(body.created).toBe(1);
     expect(mockEmitForGroup.mock.calls.length).toBe(1);
     expect(mockEmitForGroup.mock.calls[0]?.[1]).toBe('expense_added');
+
+    // The receipt date from the request body is passed through
+    const call = mockExpenseRecorderRecordReceipt.mock.calls[0];
+    if (!call) throw new Error('recordReceipt not called');
+    expect(call[2].date).toBe('2025-03-15');
+    expect(call[2].items).toHaveLength(2);
   });
 
-  test('recorder receives internal DB user id, not telegram id', async () => {
+  test('recordReceipt receives internal DB user id, not telegram id', async () => {
     // MOCK_USER.id = 1 (internal), telegram_id = 42
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockExpenseRecorderRecord.mockImplementation(() =>
-      Promise.resolve({ expense: stubExpense({ id: 88 }), eurAmount: 5 }),
+    mockExpenseRecorderRecordReceipt.mockImplementation(() =>
+      Promise.resolve({
+        expenses: [{ expense: stubExpense({ id: 88 }), eurAmount: 5 }],
+        categoriesAffected: ['Food'],
+      }),
     );
 
     const initData = buildInitData(42);
@@ -904,16 +930,19 @@ describe('POST /api/receipt/confirm', () => {
     );
     await handleMiniAppRequest(req, CORS_ORIGIN);
 
-    // Second arg to record() must be internal DB user id (1), not telegram id (42)
-    expect(mockExpenseRecorderRecord.mock.calls[0]?.[1]).toBe(MOCK_USER.id);
-    expect(mockExpenseRecorderRecord.mock.calls[0]?.[1]).not.toBe(42);
+    // Second arg to recordReceipt() must be internal DB user id (1), not telegram id (42)
+    expect(mockExpenseRecorderRecordReceipt.mock.calls[0]?.[1]).toBe(MOCK_USER.id);
+    expect(mockExpenseRecorderRecordReceipt.mock.calls[0]?.[1]).not.toBe(42);
   });
 
-  test('success with fileId → updates receipt_file_id in DB', async () => {
+  test('passes fileId to recordReceipt as receiptFileId', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
-    mockExpenseRecorderRecord.mockImplementation(() =>
-      Promise.resolve({ expense: stubExpense({ id: 77 }), eurAmount: 5 }),
+    mockExpenseRecorderRecordReceipt.mockImplementation(() =>
+      Promise.resolve({
+        expenses: [{ expense: stubExpense({ id: 77 }), eurAmount: 5 }],
+        categoriesAffected: ['Food'],
+      }),
     );
 
     const initData = buildInitData(42);
@@ -929,8 +958,50 @@ describe('POST /api/receipt/confirm', () => {
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
     if (!res) throw new Error('expected Response, got null');
     expect(res.status).toBe(200);
-    // run() should have been called to set receipt_file_id
-    expect(mockDbExec.mock.calls.length).toBeGreaterThan(0);
+
+    // recordReceipt was called once with receiptFileId in the payload
+    const call = mockExpenseRecorderRecordReceipt.mock.calls[0];
+    if (!call) throw new Error('recordReceipt not called');
+    expect(call[2].receiptFileId).toBe('tg_file_abc');
+  });
+
+  test('70 items in one category → ONE recordReceipt call, ONE created (regression)', async () => {
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+    mockExpenseRecorderRecordReceipt.mockImplementation(() =>
+      Promise.resolve({
+        expenses: [{ expense: stubExpense({ id: 100 }), eurAmount: 60 }],
+        categoriesAffected: ['Продукты'],
+      }),
+    );
+
+    const items = Array.from({ length: 70 }, (_, i) => ({
+      name: `Item ${i}`,
+      qty: 1,
+      price: 100,
+      total: 100,
+      category: 'Продукты',
+      currency: 'RSD',
+    }));
+
+    const initData = buildInitData(42);
+    const req = makePostRequest(CONFIRM_PATH, { groupId: GROUP_ID, expenses: items }, initData);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response');
+    expect(res.status).toBe(200);
+
+    // Exactly ONE recordReceipt call with 70 items in its payload
+    expect(mockExpenseRecorderRecordReceipt).toHaveBeenCalledTimes(1);
+    const call = mockExpenseRecorderRecordReceipt.mock.calls[0];
+    if (!call) throw new Error('no call');
+    expect(call[2].items).toHaveLength(70);
+
+    // Response body reports 1 created expense (one category)
+    const body = (await res.json()) as { created: number };
+    expect(body.created).toBe(1);
+
+    // The per-item record() path was NOT used
+    expect(mockExpenseRecorderRecord).not.toHaveBeenCalled();
   });
 });
 

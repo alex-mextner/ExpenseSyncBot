@@ -12,6 +12,7 @@ import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
+import { formatReceiptCommentForTelegram } from '../../utils/receipt-display';
 import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
@@ -300,8 +301,9 @@ function buildDetailOutput(
   }
 
   for (const e of pageItems) {
+    const displayComment = formatReceiptCommentForTelegram(e.comment).trim() || '(no comment)';
     lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${e.comment.trim() || '(no comment)'}`,
+      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${displayComment}`,
     );
   }
 
