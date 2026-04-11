@@ -451,6 +451,62 @@ describe('ExpenseRecorder', () => {
       expect(all).toHaveLength(0);
     });
 
+    it('splits one category with mixed currencies into separate rows (no silent sum)', async () => {
+      const { groupId, userId } = seedGroup();
+
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items: [
+          // Same category, two currencies → must not collapse into one row
+          {
+            name: 'Imported cheese',
+            quantity: 1,
+            price: 10,
+            total: 10,
+            currency: 'EUR',
+            category: 'Продукты',
+          },
+          {
+            name: 'Local bread',
+            quantity: 1,
+            price: 100,
+            total: 100,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+          {
+            name: 'Milk',
+            quantity: 1,
+            price: 200,
+            total: 200,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+        ],
+      });
+
+      // Two rows: one EUR, one RSD — both in "Продукты"
+      expect(result.expenses).toHaveLength(2);
+
+      const eurRow = result.expenses.find((r) => r.expense.currency === 'EUR');
+      const rsdRow = result.expenses.find((r) => r.expense.currency === 'RSD');
+      if (!eurRow || !rsdRow) throw new Error('expected both EUR and RSD rows');
+      expect(eurRow.expense.category).toBe('Продукты');
+      expect(eurRow.expense.amount).toBe(10);
+      expect(rsdRow.expense.category).toBe('Продукты');
+      expect(rsdRow.expense.amount).toBe(300); // 100 + 200
+
+      // Exactly one batched sheet call with TWO rows
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('no call');
+      expect((call[2] as unknown[]).length).toBe(2);
+
+      // categoriesAffected is DEDUPED — Продукты appears once even though it
+      // produced two rows (so downstream budget checks don't run twice)
+      expect(result.categoriesAffected).toEqual(['Продукты']);
+    });
+
     it('preserves duplicate items as separate expense_items', async () => {
       const { groupId, userId } = seedGroup();
 

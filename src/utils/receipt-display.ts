@@ -34,6 +34,13 @@ export function truncateItemsForDisplay(itemNames: string[], maxVisible: number 
  * writes ("Чек: name1 (qty x price), name2 (...), ...") and return just the
  * display form for Telegram.
  *
+ * Item names may contain commas themselves (e.g. weighted products like
+ * "Помидоры черри, 500г"), so we cannot split on ", " alone. Instead we split
+ * on the `), ` delimiter which only appears between items — the qty/price
+ * suffix is always parenthesized and always present. If an entry lacks the
+ * `(qty x price)` suffix (legacy comments, fallback cases), it falls through
+ * to the raw entry.
+ *
  * Returns the original string unchanged if it doesn't match the expected
  * receipt comment shape — this keeps manual-expense comments safe.
  */
@@ -47,13 +54,25 @@ export function formatReceiptCommentForTelegram(
   const body = fullComment.slice(RECEIPT_PREFIX.length);
   if (body.length === 0) return fullComment;
 
-  // Split on ", " — item names in the receipt comment never contain ", "
-  // because they're sanitized upstream (normalizeName in ai-extractor).
-  const names = body.split(', ').map((entry) => {
-    // Strip the "(qty x price)" suffix if present
-    const parenIdx = entry.lastIndexOf(' (');
-    return parenIdx > 0 ? entry.slice(0, parenIdx) : entry;
-  });
+  // Split on the item boundary — "), " only appears between two items,
+  // because it comes from `"(qty x price), "` serialization. Name chars
+  // pass through unchanged, including any internal commas.
+  const entries: string[] = [];
+  let cursor = 0;
+  while (cursor < body.length) {
+    const boundary = body.indexOf('), ', cursor);
+    if (boundary === -1) {
+      entries.push(body.slice(cursor));
+      break;
+    }
+    entries.push(body.slice(cursor, boundary + 1)); // include the closing ")"
+    cursor = boundary + 3; // skip "), "
+  }
+
+  // Strip the "(qty x price)" suffix from each entry, if present. The regex
+  // allows integer or decimal quantity (e.g. "0.5x80.00" for weighed goods).
+  const SUFFIX_RE = /\s\(\d+(?:\.\d+)?x[\d.]+\)$/;
+  const names = entries.map((entry) => entry.replace(SUFFIX_RE, ''));
 
   return `${RECEIPT_PREFIX}${truncateItemsForDisplay(names, maxVisible)}`;
 }

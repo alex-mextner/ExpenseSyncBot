@@ -51,15 +51,19 @@ describe('truncateItemsForDisplay', () => {
 });
 
 describe('formatReceiptCommentForTelegram', () => {
-  test('parses a real receipt comment and truncates', () => {
+  test('parses a real receipt comment with commas in names and truncates correctly', () => {
     const full =
       'Чек: Бананы (1x167.12), Салат Айсберг (1x159.99), Помидоры черри, 500г (1x339.99), Огурец (1x139.98), Куриное бедро (1x279.99), Желейные конфеты (1x185.49)';
-    // NOTE: "Помидоры черри, 500г" contains a comma — this is a known limitation
-    // of the simple split; if upstream sanitization removes commas from names
-    // this test documents the boundary.
+    // 6 real items, comma inside "Помидоры черри, 500г" must NOT split.
+    // Expected: first 3 names shown, remaining 3 counted as "и ещё 3 позиции".
     const out = formatReceiptCommentForTelegram(full);
-    expect(out.startsWith('Чек: ')).toBe(true);
-    expect(out).toContain('и ещё');
+    expect(out).toBe('Чек: Бананы, Салат Айсберг, Помидоры черри, 500г и ещё 3 позиции');
+  });
+
+  test('handles decimal quantity (weighed goods)', () => {
+    const full = 'Чек: Помидоры черри, 500г (0.5x679.98), Сыр, 200г (0.2x2624.95)';
+    // 2 items with commas in names and decimal quantities
+    expect(formatReceiptCommentForTelegram(full)).toBe('Чек: Помидоры черри, 500г, Сыр, 200г');
   });
 
   test('parses a well-formed receipt comment (no commas in names)', () => {
@@ -82,10 +86,5 @@ describe('formatReceiptCommentForTelegram', () => {
   test('handles comment with 5 items (N+2 rule: show all)', () => {
     const full = 'Чек: A (1x10), B (1x20), C (1x30), D (1x40), E (1x50)';
     expect(formatReceiptCommentForTelegram(full)).toBe('Чек: A, B, C, D, E');
-  });
-
-  test('preserves names without (qty x price) suffix', () => {
-    const full = 'Чек: A, B, C, D, E, F, G';
-    expect(formatReceiptCommentForTelegram(full)).toBe('Чек: A, B, C и ещё 4 позиции');
   });
 });

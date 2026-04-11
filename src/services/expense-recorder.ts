@@ -263,18 +263,28 @@ export class ExpenseRecorder implements RecorderApi {
 
     const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
-    // Group items by category, preserving first-seen order
-    const byCategory = new Map<string, RecordReceiptItem[]>();
+    // Group items by (category, currency). We group by both — not category
+    // alone — because a receipt may legitimately contain items in different
+    // currencies under the same category (e.g. duty-free purchases with
+    // mixed EUR/USD prices). Grouping only by category and then picking the
+    // first item's currency would silently sum "10 EUR + 100 RSD" as
+    // "110 EUR" — a real corruption bug. Splitting by currency creates one
+    // sheet row per (category, currency) pair, which is the correct shape.
+    const byKey = new Map<
+      string,
+      { category: string; currency: CurrencyCode; items: RecordReceiptItem[] }
+    >();
     for (const item of data.items) {
-      const existing = byCategory.get(item.category);
+      const key = `${item.category}\u0000${item.currency}`;
+      const existing = byKey.get(key);
       if (existing) {
-        existing.push(item);
+        existing.items.push(item);
       } else {
-        byCategory.set(item.category, [item]);
+        byKey.set(key, { category: item.category, currency: item.currency, items: [item] });
       }
     }
 
-    // Build per-category batches (pure computation, no I/O)
+    // Build per-(category, currency) batches (pure computation, no I/O)
     interface CategoryBatch {
       category: string;
       items: RecordReceiptItem[];
@@ -287,10 +297,7 @@ export class ExpenseRecorder implements RecorderApi {
     }
 
     const batches: CategoryBatch[] = [];
-    for (const [category, items] of byCategory.entries()) {
-      const first = items[0];
-      if (!first) continue;
-      const currency = first.currency;
+    for (const { category, currency, items } of byKey.values()) {
       const totalAmount = items.reduce((sum, i) => sum + i.total, 0);
       const comment = buildReceiptComment(items);
       const rate = this.eurConverter.getExchangeRate(currency);
@@ -370,10 +377,13 @@ export class ExpenseRecorder implements RecorderApi {
       }
     });
 
-    const categoriesAffected = batches.map((b) => b.category);
+    // Dedupe categories — multiple batches can share one category when a
+    // receipt has mixed currencies in the same category, but budget checks
+    // downstream need the distinct category list.
+    const categoriesAffected = Array.from(new Set(batches.map((b) => b.category)));
 
     logger.info(
-      `[RECORD_RECEIPT] Recorded ${results.length} category expenses from ${data.items.length} items`,
+      `[RECORD_RECEIPT] Recorded ${results.length} expense rows from ${data.items.length} items`,
     );
 
     return { expenses: results, categoriesAffected };
