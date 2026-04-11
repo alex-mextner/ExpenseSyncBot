@@ -27,6 +27,15 @@ import type { Ctx } from '../types';
 const logger = createLogger('ask');
 
 /**
+ * Hard cap on how long the advice stream may run before we abort it.
+ * Without this, a provider stream that stalls mid-flight leaves the user
+ * staring at a half-written status message forever (no client-side timeout
+ * otherwise fires — the OpenAI SDK `timeout` only covers request setup).
+ * 60s comfortably covers the deep tier's 3k token budget.
+ */
+const ADVICE_TIMEOUT_MS = 60_000;
+
+/**
  * Handle questions to the bot via @botname question
  */
 export async function handleAskQuestion(
@@ -279,6 +288,7 @@ async function sendSmartAdvice(
           messages: [{ role: 'user', content: fullPrompt }],
           maxTokens: tierConfig.max_tokens,
           chain: 'smart',
+          signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
         },
         { onTextDelta: (delta) => writer.append(delta) },
       );
