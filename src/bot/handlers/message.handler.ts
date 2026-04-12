@@ -11,7 +11,7 @@ import { extractURLsFromText, processPaymentLinks } from '../../services/receipt
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
 import { digitEmoji, setExpenseReaction } from '../../utils/digit-emoji';
 import { getErrorMessage } from '../../utils/error';
-import { findBestCategoryMatch } from '../../utils/fuzzy-search';
+import { findBestCategoryMatchAsync } from '../../utils/fuzzy-search';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
@@ -338,7 +338,7 @@ export async function handleExpenseMessage(
       : false;
 
     if (!categoryExists && parsed.category) {
-      const fuzzyMatch = findBestCategoryMatch(parsed.category, categoryNames);
+      const fuzzyMatch = await findBestCategoryMatchAsync(parsed.category, categoryNames);
       if (fuzzyMatch) {
         logger.info(
           `[MSG] Line ${index + 1}: fuzzy matched "${parsed.category}" → "${fuzzyMatch}"`,
@@ -481,7 +481,9 @@ async function handleCategoryTextInput(
   waitingItem: ReceiptItem,
   groupId: number,
 ): Promise<void> {
-  const { findBestCategoryMatch, normalizeCategoryName } = await import('../../utils/fuzzy-search');
+  const { findBestCategoryMatchAsync, normalizeCategoryName } = await import(
+    '../../utils/fuzzy-search'
+  );
 
   logger.info(
     `[CATEGORY_INPUT] User provided category: "${categoryText}" for item ${waitingItem.id}`,
@@ -495,7 +497,7 @@ async function handleCategoryTextInput(
   const categoryNames = allCategories.map((c) => c.name);
 
   // Try to find best match
-  const bestMatch = findBestCategoryMatch(normalizedCategory, categoryNames);
+  const bestMatch = await findBestCategoryMatchAsync(normalizedCategory, categoryNames);
 
   if (bestMatch) {
     // Check if exact match - use it automatically

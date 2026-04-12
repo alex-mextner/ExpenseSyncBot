@@ -1,9 +1,11 @@
 // Tests for category fuzzy matching and normalization
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { env } from '../config/env';
 import {
   calculateSimilarity,
   findBestCategoryMatch,
+  findBestCategoryMatchAsync,
   levenshteinDistance,
   normalizeCategoryName,
   normalizePhonetic,
@@ -144,17 +146,109 @@ describe('findBestCategoryMatch', () => {
 });
 
 describe('findBestCategoryMatchAsync', () => {
-  // Async version: sync methods should work identically
+  const originalFetch = global.fetch;
+  const originalToken = env.HF_TOKEN;
+
+  beforeEach(() => {
+    (env as { HF_TOKEN: string }).HF_TOKEN = 'test-token';
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (env as { HF_TOKEN: string }).HF_TOKEN = originalToken;
+  });
+
   it('returns sync match without calling classifier', async () => {
-    const { findBestCategoryMatchAsync } = await import('./fuzzy-search');
+    // Sync path short-circuits — fetch must not be called
+    const fetchMock = mock(() => Promise.reject(new Error('should not be called')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
     const cats = ['Еда', 'Транспорт', 'Развлечения'];
     expect(await findBestCategoryMatchAsync('еда', cats)).toBe('Еда');
     expect(await findBestCategoryMatchAsync('транс', cats)).toBe('Транспорт');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('returns null for no match when classifier unavailable', async () => {
-    const { findBestCategoryMatchAsync } = await import('./fuzzy-search');
-    // Without HF_TOKEN, classifier silently returns null
+  it('falls through to classifier when sync methods fail', async () => {
+    const fetchMock = mock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sequence: 'починка авто',
+            labels: ['Транспорт', 'Еда', 'Развлечения'],
+            scores: [0.87, 0.08, 0.05],
+          }),
+        ),
+      ),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const cats = ['Еда', 'Транспорт', 'Развлечения'];
+    const result = await findBestCategoryMatchAsync('починка авто', cats);
+    expect(result).toBe('Транспорт');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null when classifier top score below threshold (0.4)', async () => {
+    const fetchMock = mock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sequence: 'абракадабра',
+            labels: ['Еда'],
+            scores: [0.2],
+          }),
+        ),
+      ),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+
+  it('returns null when HF_TOKEN is missing', async () => {
+    (env as { HF_TOKEN: string }).HF_TOKEN = '';
+    const fetchMock = mock(() => Promise.reject(new Error('should not be called')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null on HTTP error', async () => {
+    const fetchMock = mock(() => Promise.resolve(new Response('forbidden', { status: 403 })));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+
+  it('retries once on 503 cold start then succeeds', async () => {
+    let calls = 0;
+    const fetchMock = mock(() => {
+      calls++;
+      if (calls === 1) {
+        return Promise.resolve(new Response('Model is currently loading', { status: 503 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sequence: 'починка',
+            labels: ['Ремонт'],
+            scores: [0.92],
+          }),
+        ),
+      );
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('починка', ['Ремонт'])).toBe('Ремонт');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null on fetch abort/network error', async () => {
+    const fetchMock = mock(() => Promise.reject(new TypeError('network error')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
     expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
   });
 });

@@ -1,6 +1,5 @@
 /** Fuzzy category matching: phonetic normalization + Levenshtein distance + zero-shot classifier fallback */
 
-import { InferenceClient } from '@huggingface/inference';
 import { env } from '../config/env';
 import { createLogger } from './logger';
 
@@ -145,34 +144,83 @@ export function findBestCategoryMatch(input: string, categories: string[]): stri
 }
 
 const CLASSIFIER_MODEL = 'joeddav/xlm-roberta-large-xnli';
+const CLASSIFIER_ENDPOINT = `https://api-inference.huggingface.co/models/${CLASSIFIER_MODEL}`;
 const CLASSIFIER_MIN_SCORE = 0.4;
+const CLASSIFIER_TIMEOUT_MS = 10_000;
+const CLASSIFIER_MAX_RETRIES = 2;
+
+interface ZeroShotResponse {
+  sequence: string;
+  labels: string[];
+  scores: number[];
+}
 
 /**
- * Zero-shot classifier fallback: asks the model "is this text about category X?"
+ * Zero-shot classifier fallback via HF Inference API (direct fetch, no SDK).
+ * Calls XNLI model entailment endpoint; returns the highest-scored label above threshold.
+ * Retries once on 503 "model loading" (common on cold models).
+ *
  * Used when all string-based methods fail (different wording for same concept).
  * Example: "Расходы на ремонт квартиры" → matches "Ремонт" semantically.
  */
 async function classifyCategory(input: string, categories: string[]): Promise<string | null> {
   if (!env.HF_TOKEN || categories.length === 0) return null;
 
-  try {
-    const client = new InferenceClient(env.HF_TOKEN);
-    const result = await client.zeroShotClassification({
-      model: CLASSIFIER_MODEL,
-      inputs: input,
-      parameters: { candidate_labels: categories },
-    });
+  const body = JSON.stringify({
+    inputs: input,
+    parameters: { candidate_labels: categories },
+  });
 
-    const top = result[0];
-    if (top && top.score >= CLASSIFIER_MIN_SCORE) {
-      logger.debug({ input, match: top.label, score: top.score }, 'classifier match');
-      return top.label;
+  for (let attempt = 0; attempt <= CLASSIFIER_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CLASSIFIER_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(CLASSIFIER_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.HF_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+        signal: controller.signal,
+      });
+
+      // HF returns 503 "Model is currently loading" on cold start — retry once.
+      if (response.status === 503 && attempt < CLASSIFIER_MAX_RETRIES) {
+        const retryText = await response.text();
+        logger.debug({ attempt, retryText }, 'classifier cold start, retrying');
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.warn(
+          { status: response.status, errorText, input },
+          'zero-shot classifier HTTP error',
+        );
+        return null;
+      }
+
+      const result = (await response.json()) as ZeroShotResponse;
+      const topLabel = result.labels[0];
+      const topScore = result.scores[0];
+
+      if (topLabel && topScore !== undefined && topScore >= CLASSIFIER_MIN_SCORE) {
+        logger.debug({ input, match: topLabel, score: topScore }, 'classifier match');
+        return topLabel;
+      }
+      return null;
+    } catch (err) {
+      logger.warn({ err, input, attempt }, 'zero-shot classifier failed');
+      return null;
+    } finally {
+      clearTimeout(timeout);
     }
-    return null;
-  } catch (err) {
-    logger.warn({ err, input }, 'zero-shot classifier failed, skipping');
-    return null;
   }
+
+  return null;
 }
 
 /**
