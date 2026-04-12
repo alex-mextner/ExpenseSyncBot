@@ -24,8 +24,13 @@ mock.module('../../database', () => ({
 }));
 
 // Import AFTER mock is set up
-const { SpendingAnalytics, buildCategoryProfiles, buildIntervalProfiles, projectCategory } =
-  await import('./spending-analytics');
+const {
+  SpendingAnalytics,
+  buildCategoryProfiles,
+  buildIntervalProfiles,
+  passesActivityGate,
+  projectCategory,
+} = await import('./spending-analytics');
 
 class TestableSpendingAnalytics extends SpendingAnalytics {
   testComputeVelocity = (groupId: number, today: string) => this.computeVelocity(groupId, today);
@@ -1273,9 +1278,20 @@ describe('projectCategory with intervalProfile', () => {
     expect(withUndef).toBe(without);
   });
 
-  test('stall detection still works even with interval profile', () => {
-    // daysSinceLastTx = 6, monthProgress > 0.33 → stalled, returns current
+  test('stable interval profile overrides stall detection for long cycles', () => {
+    // daysSinceLastTx = 6, monthProgress > 0.33 → stall would fire,
+    // but stable interval profile runs first: next fill in 10-6=4 days fits
+    // in remaining 15 days → expects 1 + floor((15-4)/10)=2 more fills.
+    // Projected: 100 + 2*50 = 200
     const interval = { avgInterval: 10, intervalCv: 0.1, avgAmount: 50, isStable: true };
+    const result = projectCategory(100, 15, 30, stableProfile, 6, interval);
+    expect(result).toBe(200);
+  });
+
+  test('stall detection fires when interval profile is unstable', () => {
+    // With no stable interval to anchor on, a 6-day gap past monthProgress>0.33
+    // means the category stopped spending mid-month.
+    const interval = { avgInterval: 10, intervalCv: 0.8, avgAmount: 50, isStable: false };
     const result = projectCategory(100, 15, 30, stableProfile, 6, interval);
     expect(result).toBe(100);
   });
@@ -1500,5 +1516,87 @@ describe('computeBurnRates — interval profile integration', () => {
     const linearProjection = Math.round((100 / 9) * daysInMonth * 100) / 100;
     expect(linearProjection).toBeGreaterThan(car.projected_total);
     expect(linearProjection - car.projected_total).toBeGreaterThan(50);
+  });
+});
+
+// ============================================================
+// passesActivityGate — boundary + tier coverage
+// ============================================================
+
+describe('passesActivityGate', () => {
+  test('returns false when no transactions this month', () => {
+    expect(passesActivityGate(0, 15, 30, null)).toBe(false);
+  });
+
+  test('with no profile: requires at least 2 transactions', () => {
+    expect(passesActivityGate(1, 15, 30, null)).toBe(false);
+    expect(passesActivityGate(2, 15, 30, null)).toBe(true);
+  });
+
+  test('sparse tier (avgTxPerMonth < 5): requires at least 2 transactions', () => {
+    const sparseProfile = {
+      ema: 100,
+      cv: 0.2,
+      monthsOfData: 6,
+      avgTxPerMonth: 3, // sparse
+      zeroMonthRatio: 0,
+    };
+    expect(passesActivityGate(1, 15, 30, sparseProfile)).toBe(false);
+    expect(passesActivityGate(2, 15, 30, sparseProfile)).toBe(true);
+    // Sparse tier ignores month progress — 2 tx on day 1 still passes
+    expect(passesActivityGate(2, 1, 30, sparseProfile)).toBe(true);
+  });
+
+  test('sparse/frequent boundary at avgTxPerMonth = 5: frequent tier kicks in', () => {
+    // avgTxPerMonth exactly 5 → frequent tier → needs 30% of expected
+    const boundaryProfile = {
+      ema: 100,
+      cv: 0.2,
+      monthsOfData: 6,
+      avgTxPerMonth: 5,
+      zeroMonthRatio: 0,
+    };
+    // Day 15/30: expected so far = 5 * 0.5 = 2.5; 30% = 0.75 → ceil = 1, max(2, 1) = 2
+    expect(passesActivityGate(1, 15, 30, boundaryProfile)).toBe(false);
+    expect(passesActivityGate(2, 15, 30, boundaryProfile)).toBe(true);
+  });
+
+  test('frequent tier (avgTxPerMonth ≥ 5): scales threshold with month progress', () => {
+    const frequentProfile = {
+      ema: 500,
+      cv: 0.3,
+      monthsOfData: 6,
+      avgTxPerMonth: 20, // frequent
+      zeroMonthRatio: 0,
+    };
+    // Day 15/30: expected so far = 20 * 0.5 = 10; 30% = 3 → max(2, 3) = 3
+    expect(passesActivityGate(2, 15, 30, frequentProfile)).toBe(false);
+    expect(passesActivityGate(3, 15, 30, frequentProfile)).toBe(true);
+  });
+
+  test('frequent tier: late month requires more transactions', () => {
+    const frequentProfile = {
+      ema: 500,
+      cv: 0.3,
+      monthsOfData: 6,
+      avgTxPerMonth: 20,
+      zeroMonthRatio: 0,
+    };
+    // Day 28/30: expected so far = 20 * (28/30) ≈ 18.67; 30% ≈ 5.6 → ceil = 6
+    expect(passesActivityGate(5, 28, 30, frequentProfile)).toBe(false);
+    expect(passesActivityGate(6, 28, 30, frequentProfile)).toBe(true);
+  });
+
+  test('frequent tier: early month still applies minimum-2 floor', () => {
+    const frequentProfile = {
+      ema: 500,
+      cv: 0.3,
+      monthsOfData: 6,
+      avgTxPerMonth: 20,
+      zeroMonthRatio: 0,
+    };
+    // Day 1/30: expected so far ≈ 0.67; 30% ≈ 0.2 → ceil = 1, max(2, 1) = 2
+    expect(passesActivityGate(1, 1, 30, frequentProfile)).toBe(false);
+    expect(passesActivityGate(2, 1, 30, frequentProfile)).toBe(true);
   });
 });

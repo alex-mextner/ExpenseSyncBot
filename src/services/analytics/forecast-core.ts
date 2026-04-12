@@ -202,12 +202,15 @@ export function projectCategory(
 
   const monthProgress = daysElapsed / daysInMonth;
 
-  // Stall detection
-  if (daysSinceLastTx !== undefined && daysSinceLastTx >= 5 && monthProgress > 0.33) {
-    return currentSpent;
-  }
-
-  // Interval-based cycle projection (highest priority)
+  // Interval-based cycle projection (highest priority).
+  //
+  // Must run before stall detection: for categories with a stable long cycle
+  // (refueling every ~20 days, insurance every ~30 days), a 5+ day gap since
+  // the last transaction is normal and expected — it just means the next
+  // fill hasn't happened yet. Stall detection would wrongly mark these as
+  // "stopped spending" and return currentSpent, ignoring the remaining cycles.
+  // The interval math itself handles the "no more fills this month" case by
+  // falling back to currentSpent when expectedMoreFills = 0.
   if (intervalProfile?.isStable) {
     const daysRemaining = daysInMonth - daysElapsed;
     const daysSinceLast = daysSinceLastTx ?? 0;
@@ -218,6 +221,12 @@ export function projectCategory(
         : 0;
     const projected = currentSpent + expectedMoreFills * intervalProfile.avgAmount;
     return Math.max(currentSpent, Math.round(projected * 100) / 100);
+  }
+
+  // Stall detection — only applies when we have no stable interval to fall back on.
+  // Catches categories that silently stopped mid-month (no discernible cycle).
+  if (daysSinceLastTx !== undefined && daysSinceLastTx >= 5 && monthProgress > 0.33) {
+    return currentSpent;
   }
 
   if (!profile || profile.monthsOfData < 3) return currentSpent;

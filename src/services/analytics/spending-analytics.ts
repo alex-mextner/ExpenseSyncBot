@@ -22,6 +22,7 @@ import type {
   CategoryProjection,
   DayOfWeekPattern,
   FinancialSnapshot,
+  IntervalProfile,
   MonthlyProjection,
   SpendingStreak,
   SpendingTrend,
@@ -52,8 +53,11 @@ export class SpendingAnalytics {
     const currentMonthStr = format(now, 'yyyy-MM');
     const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
 
-    // Compute category profiles once — used by both burnRates and projection
+    // Compute category profiles + projection context once —
+    // shared between burnRates and projection to avoid duplicate SQLite reads
+    // and duplicate buildIntervalProfiles invocations.
     const profiles = this.getCategoryProfiles(groupId, now);
+    const projectionCtx = this.getProjectionContext(groupId, now, currentMonthStart, today);
 
     return {
       burnRates: this.computeBurnRates(
@@ -63,6 +67,7 @@ export class SpendingAnalytics {
         currentMonthStart,
         today,
         profiles,
+        projectionCtx,
       ),
       weekTrend: this.computeWeekOverWeek(groupId, today),
       monthTrend: this.computeMonthOverMonth(groupId, now, currentMonthStart, today),
@@ -83,6 +88,7 @@ export class SpendingAnalytics {
         currentMonthStart,
         today,
         profiles,
+        projectionCtx,
       ),
       technicalAnalysis: this.computeTechnicalAnalysis(groupId, now, currentMonthStart, today),
     };
@@ -99,6 +105,10 @@ export class SpendingAnalytics {
     monthStart: string,
     today: string,
     profiles?: Map<string, CategoryProfile>,
+    projectionCtx?: {
+      lastTxByCategory: Record<string, number>;
+      intervalProfiles: Map<string, IntervalProfile>;
+    },
   ): BudgetBurnRate[] {
     const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     if (budgets.length === 0) return [];
@@ -112,25 +122,13 @@ export class SpendingAnalytics {
     }
 
     const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
+    const { lastTxByCategory, intervalProfiles } =
+      projectionCtx ?? this.getProjectionContext(groupId, now, monthStart, today);
 
     const dayOfMonth = now.getDate();
     const daysInMonth = getDaysInMonth(now);
     const daysElapsed = dayOfMonth; // 1-indexed: day 1 = 1 day elapsed
     const daysRemaining = daysInMonth - daysElapsed;
-
-    // Last transaction day per category — for stall detection
-    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
-      groupId,
-      monthStart,
-      today,
-    );
-    const lastTxByCategory: Record<string, number> = {};
-    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
-
-    // Interval profiles — for cycle-based projection (refueling, salon, etc.)
-    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
-    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
-    const intervalProfiles = buildIntervalProfiles(recentTx);
 
     const results: BudgetBurnRate[] = [];
 
@@ -227,6 +225,35 @@ export class SpendingAnalytics {
       currentMonthStart,
     );
     return buildCategoryProfiles(historyRows);
+  }
+
+  /**
+   * Fetch data needed by both burn-rate and projection paths:
+   *   - last-transaction day per category (for stall detection)
+   *   - interval profiles (for cycle-based projection)
+   *
+   * Hoisted into getFinancialSnapshot so computeBurnRates and computeProjection
+   * don't each hit SQLite twice for the same rows and re-run buildIntervalProfiles.
+   */
+  protected getProjectionContext(
+    groupId: number,
+    now: Date,
+    monthStart: string,
+    today: string,
+  ): { lastTxByCategory: Record<string, number>; intervalProfiles: Map<string, IntervalProfile> } {
+    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
+      groupId,
+      monthStart,
+      today,
+    );
+    const lastTxByCategory: Record<string, number> = {};
+    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
+
+    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
+    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
+    const intervalProfiles = buildIntervalProfiles(recentTx);
+
+    return { lastTxByCategory, intervalProfiles };
   }
 
   /**
@@ -647,6 +674,10 @@ export class SpendingAnalytics {
     monthStart: string,
     today: string,
     profiles?: Map<string, CategoryProfile>,
+    projectionCtx?: {
+      lastTxByCategory: Record<string, number>;
+      intervalProfiles: Map<string, IntervalProfile>;
+    },
   ): MonthlyProjection | null {
     const daysElapsed = now.getDate();
     const daysInMonth = getDaysInMonth(now);
@@ -710,17 +741,8 @@ export class SpendingAnalytics {
       budgetMap[b.category] = { limit: b.limit_amount, currency: b.currency };
     }
 
-    const lastTxDays = database.expenses.getLastTransactionDayByCategory(
-      groupId,
-      monthStart,
-      today,
-    );
-    const lastTxByCategory: Record<string, number> = {};
-    for (const r of lastTxDays) lastTxByCategory[r.category] = r.last_day;
-
-    const historyStart = format(subMonths(startOfMonth(now), HISTORY_MONTHS), 'yyyy-MM-dd');
-    const recentTx = database.expenses.getRecentTransactions(groupId, historyStart, today);
-    const intervalProfiles = buildIntervalProfiles(recentTx);
+    const { lastTxByCategory, intervalProfiles } =
+      projectionCtx ?? this.getProjectionContext(groupId, now, monthStart, today);
 
     const categoryProjections: CategoryProjection[] = [];
     for (const cat of currentCatTotals) {
