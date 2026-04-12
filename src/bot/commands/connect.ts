@@ -70,31 +70,42 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
     group = database.groups.create({ telegram_group_id: chatId });
   } else {
     logger.info(`[CMD] Group ${group.id} found`);
+  }
 
-    // If group is already fully configured with Google, don't re-run OAuth
-    if (group.google_refresh_token && group.spreadsheet_id) {
-      logger.info(`[CMD] Group ${group.id} already configured, skipping`);
-      const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${group.spreadsheet_id}`;
-      await sendMessage(
-        `✅ Группа уже подключена к Google Sheets.\n\n` +
-          `📊 <a href="${spreadsheetUrl}">Открыть таблицу</a>\n\n` +
-          `Если нужно переподключить аккаунт, используй /reconnect`,
-      );
-      return;
-    }
+  // Ensure the user who runs /connect has a users row — command handlers
+  // bypass message.handler (which normally creates it) because bot/index.ts
+  // skips commands with `if (ctx.text?.startsWith('/')) return`.
+  let user = database.users.findByTelegramId(telegramId);
+  if (!user) {
+    user = database.users.create({ telegram_id: telegramId, group_id: group.id });
+    logger.info(`[CMD] Created user ${telegramId} in group ${group.id}`);
+  } else if (user.group_id !== group.id) {
+    database.users.update(telegramId, { group_id: group.id });
+  }
 
-    // If group has completed setup without Google, offer to connect Google
-    if (database.groups.hasCompletedSetup(chatId) && !group.google_refresh_token) {
-      const authUrl = generateAuthUrl(group.id);
-      const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
-      await sendMessage(
-        '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
-          'После авторизации вернись сюда — я продолжу настройку.',
-        { reply_markup: authKeyboard },
-      );
-      logger.info(`[CMD] OAuth URL sent for group ${group.id}`);
-      return;
-    }
+  // If group is already fully configured with Google, don't re-run OAuth
+  if (group.google_refresh_token && group.spreadsheet_id) {
+    logger.info(`[CMD] Group ${group.id} already configured, skipping`);
+    const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${group.spreadsheet_id}`;
+    await sendMessage(
+      `✅ Группа уже подключена к Google Sheets.\n\n` +
+        `📊 <a href="${spreadsheetUrl}">Открыть таблицу</a>\n\n` +
+        `Если нужно переподключить аккаунт, используй /reconnect`,
+    );
+    return;
+  }
+
+  // If group has completed setup without Google, offer to connect Google
+  if (database.groups.hasCompletedSetup(chatId) && !group.google_refresh_token) {
+    const authUrl = generateAuthUrl(group.id);
+    const authKeyboard = new InlineKeyboard().url('🔐 Подключить Google', authUrl);
+    await sendMessage(
+      '🔐 Нажми кнопку ниже и разреши доступ к Google Sheets.\n' +
+        'После авторизации вернись сюда — я продолжу настройку.',
+      { reply_markup: authKeyboard },
+    );
+    logger.info(`[CMD] OAuth URL sent for group ${group.id}`);
+    return;
   }
 
   // Show setup message with OAuth URL button directly (no extra click)
