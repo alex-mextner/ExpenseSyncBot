@@ -4,7 +4,7 @@
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { StreamRoundOptions, StreamRoundResult } from '../../services/ai/streaming';
-import type { FinancialSnapshot } from '../../services/analytics/types';
+import { buildNeutralSnapshot } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
@@ -48,45 +48,6 @@ mock.module('../../database', () => ({
   _budgetWriter: () => mockDb['budgets'],
 }));
 
-// ── Analytics snapshot (fed to sendSmartAdvice via spendingAnalytics mock) ──
-function buildNeutralSnapshot(): FinancialSnapshot {
-  return {
-    burnRates: [],
-    weekTrend: {
-      period: 'week',
-      current_total: 0,
-      previous_total: 0,
-      change_percent: 0,
-      direction: 'stable',
-      category_changes: [],
-    },
-    monthTrend: {
-      period: 'month',
-      current_total: 0,
-      previous_total: 0,
-      change_percent: 0,
-      direction: 'stable',
-      category_changes: [],
-    },
-    anomalies: [],
-    dayOfWeekPatterns: [],
-    velocity: {
-      period_1_daily_avg: 0,
-      period_2_daily_avg: 0,
-      acceleration: 0,
-      trend: 'stable',
-    },
-    budgetUtilization: null,
-    streak: {
-      current_streak_days: 0,
-      streak_type: 'no_spending',
-      avg_daily_during_streak: 0,
-      overall_daily_average: 0,
-    },
-    projection: null,
-  };
-}
-
 mock.module('../../services/analytics/spending-analytics', () => ({
   spendingAnalytics: {
     getFinancialSnapshot: mock(() => buildNeutralSnapshot()),
@@ -129,9 +90,6 @@ const writerCalls = {
 };
 
 class StubStatusWriter {
-  constructor(_: { header: string; mode?: 'code' | 'plain' }) {
-    void _;
-  }
   append(delta: string): void {
     writerCalls.appended.push(delta);
   }
