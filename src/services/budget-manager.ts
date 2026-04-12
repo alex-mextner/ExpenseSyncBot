@@ -28,6 +28,13 @@ export interface BudgetWriteResult {
   sheetsSynced: boolean;
 }
 
+export interface BudgetDeleteResult extends BudgetWriteResult {
+  /** True if a matching budget row was found and deleted. */
+  deleted: boolean;
+  /** The actual category name that was deleted (may differ from input after fuzzy resolve). */
+  resolvedCategory?: string;
+}
+
 /**
  * Single entry point for ALL budget write operations.
  *
@@ -63,24 +70,36 @@ export class BudgetManager {
     return { sheetsSynced };
   }
 
-  /** Delete a budget. Removes from DB, then zeros out in Sheets. */
-  async delete(params: DeleteBudgetParams): Promise<BudgetWriteResult> {
+  /**
+   * Delete a budget. Removes from DB, then zeros out in Sheets.
+   *
+   * Resolves the actual stored category name via fuzzy read lookup first,
+   * then deletes by exact SQL match on the resolved name. If no matching row
+   * is found, returns `{ deleted: false }` — nothing is written to Sheets.
+   */
+  async delete(params: DeleteBudgetParams): Promise<BudgetDeleteResult> {
     const { groupId, category, month } = params;
 
-    // 1. Delete from DB
-    _budgetWriter().deleteByGroupCategoryMonth(groupId, category, month);
+    // 1. Resolve the actual stored category name (fuzzy read is safe).
+    const existing = database.budgets.findByGroupCategoryMonth(groupId, category, month);
+    if (!existing) {
+      return { deleted: false, sheetsSynced: false };
+    }
 
-    // 2. Zero out in Sheets (row stays with amount=0)
+    // 2. Delete from DB by exact match on the resolved name.
+    _budgetWriter().deleteByGroupCategoryMonth(groupId, existing.category, month);
+
+    // 3. Zero out in Sheets (row stays with amount=0)
     const group = database.groups.findById(groupId);
     const currency = group?.default_currency ?? ('EUR' as CurrencyCode);
 
     const sheetsSynced = await this.syncToSheets(group, month, {
-      category,
+      category: existing.category,
       limit: 0,
       currency,
     });
 
-    return { sheetsSynced };
+    return { deleted: true, sheetsSynced, resolvedCategory: existing.category };
   }
 
   /**

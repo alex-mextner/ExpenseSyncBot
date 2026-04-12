@@ -77,7 +77,18 @@ function resetAll() {
   mockDeleteByGroupCategoryMonth.mockReset();
   mockDeleteByGroupCategoryMonth.mockReturnValue(true);
   mockFindByGroupCategoryMonth.mockReset();
-  mockFindByGroupCategoryMonth.mockReturnValue(null);
+  // Default: a matching budget exists. Tests that exercise "no budget" or
+  // fuzzy resolution override this explicitly.
+  mockFindByGroupCategoryMonth.mockReturnValue({
+    id: 1,
+    group_id: 1,
+    category: 'Food',
+    month: '2026-04',
+    limit_amount: 500,
+    currency: 'EUR',
+    created_at: '',
+    updated_at: '',
+  });
   mockFindGroupById.mockReset();
   mockFindGroupById.mockReturnValue({
     id: 1,
@@ -367,6 +378,42 @@ describe('BudgetManager.delete', () => {
 
     expect(result.sheetsSynced).toBe(false);
     expect(mockDeleteByGroupCategoryMonth).toHaveBeenCalled();
+  });
+
+  test('returns deleted=false when no matching budget exists', async () => {
+    mockFindByGroupCategoryMonth.mockReturnValue(null);
+
+    const mgr = new BudgetManager();
+    const result = await mgr.delete({ groupId: 1, category: 'Nonexistent', month: '2026-04' });
+
+    expect(result.deleted).toBe(false);
+    expect(result.sheetsSynced).toBe(false);
+    // Must NOT attempt destructive DB write when nothing was found
+    expect(mockDeleteByGroupCategoryMonth).not.toHaveBeenCalled();
+    expect(mockWriteMonthBudgetRow).not.toHaveBeenCalled();
+  });
+
+  test('fuzzy-resolves category name before exact delete', async () => {
+    // User types "food" but the stored category is "Food" — findByGroupCategoryMonth
+    // (fuzzy read) resolves it, and the repo-level delete receives the exact stored name.
+    mockFindByGroupCategoryMonth.mockReturnValue({
+      id: 42,
+      group_id: 1,
+      category: 'Food',
+      month: '2026-04',
+      limit_amount: 500,
+      currency: 'EUR',
+      created_at: '',
+      updated_at: '',
+    });
+
+    const mgr = new BudgetManager();
+    const result = await mgr.delete({ groupId: 1, category: 'food', month: '2026-04' });
+
+    expect(result.deleted).toBe(true);
+    expect(result.resolvedCategory).toBe('Food');
+    // Delete must use the exact stored name, not the user input
+    expect(mockDeleteByGroupCategoryMonth).toHaveBeenCalledWith(1, 'Food', '2026-04');
   });
 });
 

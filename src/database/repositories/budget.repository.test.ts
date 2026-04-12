@@ -340,15 +340,17 @@ describe('BudgetRepository', () => {
       expect(budgetRepo.deleteByGroupCategoryMonth(groupId, 'NoCategory', '2024-01')).toBe(true);
     });
 
-    test('case-insensitive category match', () => {
+    test('exact-match only: case mismatch does not delete', () => {
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Быт',
         month: '2024-01',
         limit_amount: 300,
       });
+      // Destructive ops must use exact SQL match — case mismatch leaves the row alone.
+      // Fuzzy resolution belongs in BudgetManager.delete(), not at the repo layer.
       budgetRepo.deleteByGroupCategoryMonth(groupId, 'быт', '2024-01');
-      expect(budgetRepo.findByGroupCategoryMonth(groupId, 'Быт', '2024-01')).toBeNull();
+      expect(budgetRepo.findByGroupCategoryMonth(groupId, 'Быт', '2024-01')).not.toBeNull();
     });
   });
 

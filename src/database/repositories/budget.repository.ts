@@ -124,12 +124,17 @@ export class BudgetRepository implements BudgetReadRepository {
   /**
    * Delete budget by group, category and month.
    * INTERNAL — use BudgetManager.delete() instead.
+   *
+   * Uses exact SQL match on category (no fuzzy). Destructive ops must never
+   * silently resolve to a nearby budget — the caller must pass the exact name
+   * (usually obtained via findByGroupCategoryMonth first and then re-used).
    */
   deleteByGroupCategoryMonth(groupId: number, category: string, month: string): boolean {
-    const budget = this.findByGroupCategoryMonth(groupId, category, month);
-    if (budget) {
-      this.db.query<void, [number]>('DELETE FROM budgets WHERE id = ?').run(budget.id);
-    }
+    this.db
+      .query<void, [number, string, string]>(
+        'DELETE FROM budgets WHERE group_id = ? AND category = ? AND month = ?',
+      )
+      .run(groupId, category, month);
     return true;
   }
 
