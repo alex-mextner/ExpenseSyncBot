@@ -13,6 +13,8 @@ interface SavedState {
 	items: ReceiptItem[];
 	fileId: string | null;
 	currency: string;
+	/** Date printed on the receipt (ISO YYYY-MM-DD), or null for today */
+	receiptDate: string | null;
 	urlInput: string;
 	scrollY: number;
 	/** Prevents infinite reload loop when reload doesn't refresh initData */
@@ -48,7 +50,8 @@ function friendlyErrorMessage(err: unknown): string {
 	if (err instanceof ApiError) {
 		if (err.code === 'INIT_DATA_EXPIRED') return 'Сессия истекла. Закрой и открой Mini App заново.';
 		if (err.code === 'INVALID_INIT_DATA') return 'Ошибка авторизации. Закрой и открой Mini App заново.';
-		if (err.code === 'FORBIDDEN_GROUP') return 'Нет доступа к этой группе.';
+		if (err.code === 'FORBIDDEN_GROUP')
+			return 'Группа ещё не подключена к Google Sheets. Запусти /connect в чате с ботом.';
 		if (err.code === 'SCAN_FAILED') return 'Не удалось распознать чек. Попробуй ещё раз.';
 		if (err.code === 'OCR_FAILED') return 'Не удалось распознать фото. Попробуй другое фото.';
 		if (err.code === 'CONFIRM_FAILED') return 'Не удалось сохранить расходы. Попробуй ещё раз.';
@@ -82,6 +85,8 @@ export function Scanner({ groupId }: Props) {
 	const [items, setItems] = useState<ReceiptItem[]>([]);
 	const [fileId, setFileId] = useState<string | null>(null);
 	const [currency, setCurrency] = useState<string>('');
+	/** Date printed on the receipt; null means "use today" */
+	const [receiptDate, setReceiptDate] = useState<string | null>(null);
 	const [error, setError] = useState<string>('');
 	const [urlInput, setUrlInput] = useState('');
 	/** true after a reload attempt — prevents infinite reload loop */
@@ -94,6 +99,7 @@ export function Scanner({ groupId }: Props) {
 		setItems(saved.items);
 		setFileId(saved.fileId);
 		setCurrency(saved.currency);
+		setReceiptDate(saved.receiptDate);
 		setUrlInput(saved.urlInput);
 		setReloadAttempted(saved.reloadAttempted);
 		// Restore to the phase before the failed request (not 'loading')
@@ -110,9 +116,9 @@ export function Scanner({ groupId }: Props) {
 				setPhase('error');
 				return;
 			}
-			saveAndReload({ phase: currentPhase, items, fileId, currency, urlInput });
+			saveAndReload({ phase: currentPhase, items, fileId, currency, receiptDate, urlInput });
 		},
-		[reloadAttempted, items, fileId, currency, urlInput],
+		[reloadAttempted, items, fileId, currency, receiptDate, urlInput],
 	);
 
 	const handleQRDetected = useCallback(
@@ -123,6 +129,7 @@ export function Scanner({ groupId }: Props) {
 				const result = await scanQR(groupId, qrData);
 				setItems(result.items);
 				setCurrency(result.currency ?? '');
+				setReceiptDate(result.date ?? null);
 				setPhase('confirm');
 			} catch (e) {
 				if (isExpiredSession(e)) {
@@ -178,6 +185,7 @@ export function Scanner({ groupId }: Props) {
 				setItems(result.items);
 				setFileId(result.file_id);
 				setCurrency(result.currency ?? '');
+				setReceiptDate(result.date ?? null);
 				setPhase('confirm');
 			} catch (uploadErr) {
 				if (isExpiredSession(uploadErr)) {
@@ -204,7 +212,7 @@ export function Scanner({ groupId }: Props) {
 					category: it.category,
 					currency: currency || 'RSD',
 				})),
-				fileId,
+				{ fileId, date: receiptDate },
 			);
 			setPhase('done');
 		} catch (confirmErr) {
@@ -215,7 +223,7 @@ export function Scanner({ groupId }: Props) {
 			setError(friendlyErrorMessage(confirmErr));
 			setPhase('error');
 		}
-	}, [groupId, items, fileId, currency, handleExpiredSession]);
+	}, [groupId, items, fileId, currency, receiptDate, handleExpiredSession]);
 
 	const handleItemChange = (i: number, field: keyof ReceiptItem, value: string | number) => {
 		setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
@@ -229,6 +237,7 @@ export function Scanner({ groupId }: Props) {
 		setItems([]);
 		setFileId(null);
 		setCurrency('');
+		setReceiptDate(null);
 		setError('');
 		setUrlInput('');
 		setPhase('idle');

@@ -303,12 +303,15 @@ export async function aiStreamRound(
     wrappedCallbacks.onToolCallStart = callbacks.onToolCallStart;
   }
 
+  const providerErrors: Array<{ name: string; error: Error }> = [];
+
   for (const slot of chain) {
     try {
       logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
       return await slot.stream(options, wrappedCallbacks);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      providerErrors.push({ name: slot.name, error: lastError });
       logger.error({ err: lastError }, `[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
 
       // Text already sent to user — can't splice another model's output
@@ -326,7 +329,21 @@ export async function aiStreamRound(
     }
   }
 
-  throw lastError ?? new Error(`All providers in ${chainName} chain failed`);
+  // Aggregate all provider errors so the caller (and logs) see the full picture,
+  // not just the last provider's error. The message lists each provider and its
+  // failure reason — much more useful for debugging than "400 (no body)".
+  const summary = providerErrors
+    .map((e) => `${e.name}: ${e.error.message.slice(0, 120)}`)
+    .join('; ');
+  const aggregated = new Error(
+    `All ${providerErrors.length} providers in ${chainName} chain failed: ${summary}`,
+  );
+  // Preserve the last error's properties (status, code, etc.) for upstream
+  // error classification (formatApiError checks error.status).
+  if (lastError) {
+    Object.assign(aggregated, { status: (lastError as { status?: number }).status });
+  }
+  throw aggregated;
 }
 
 // ── User-facing error formatting ────────────────────────────────────────────
