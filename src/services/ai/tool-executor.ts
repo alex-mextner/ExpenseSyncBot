@@ -519,11 +519,18 @@ async function executeDeleteBudgetSingle(
     return { success: false, error: 'category is required' };
   }
 
-  await getBudgetManager().delete({ groupId: ctx.groupId, category, month });
+  const result = await getBudgetManager().delete({ groupId: ctx.groupId, category, month });
+
+  if (!result.deleted) {
+    return {
+      success: false,
+      error: `No budget found for category "${category}" in ${month}`,
+    };
+  }
 
   return {
     success: true,
-    output: `Budget deleted for ${category} in ${month}`,
+    output: `Budget deleted for ${result.resolvedCategory ?? category} in ${month}`,
   };
 }
 
@@ -1006,6 +1013,14 @@ function executeGetTechnicalAnalysis(
     };
   }
 
+  const group = database.groups.findById(ctx.groupId);
+  const displayCurrency: CurrencyCode = group?.default_currency ?? BASE_CURRENCY;
+  // TA snapshot amounts are stored in EUR (eur_amount aggregations).
+  // Convert + format each number for the user's default currency so the AI
+  // surfaces meaningful figures instead of leaking raw EUR.
+  const fmt = (eurAmount: number): string =>
+    formatAmount(convertCurrency(eurAmount, BASE_CURRENCY, displayCurrency), displayCurrency);
+
   const ta = snapshot.technicalAnalysis;
   const categoryFilter = input['category'] as string | undefined;
 
@@ -1039,26 +1054,23 @@ function executeGetTechnicalAnalysis(
     const now = new Date();
     const dayOfMonth = now.getDate();
     const daysInMonth = getDaysInMonth(now);
-    const currentSpent = Math.round(cat.currentMonthSpent);
-    const paceProjection =
-      dayOfMonth > 0 ? Math.round((cat.currentMonthSpent / dayOfMonth) * daysInMonth) : 0;
+    const paceProjectionEur =
+      dayOfMonth > 0 ? (cat.currentMonthSpent / dayOfMonth) * daysInMonth : 0;
 
     const catLines: string[] = [
       `## ${cat.category} (данные за ${cat.monthsOfData} мес.)`,
-      `Текущий месяц: потрачено ${currentSpent} за ${dayOfMonth} из ${daysInMonth} дней`,
-      `Темп текущего месяца: если так пойдёт дальше → ~${paceProjection} к концу месяца`,
-      `Прогноз по истории: ~${Math.round(cat.forecasts.ensemble)}`,
+      `Текущий месяц: потрачено ${fmt(cat.currentMonthSpent)} за ${dayOfMonth} из ${daysInMonth} дней`,
+      `Темп текущего месяца: если так пойдёт дальше → ~${fmt(paceProjectionEur)} к концу месяца`,
+      `Прогноз по истории: ~${fmt(cat.forecasts.ensemble)}`,
       `Тренд: расходы ${trendRu} (уверенность ${confidencePct}%)`,
-      `Обычный коридор: ${Math.round(bb.lower)}–${Math.round(bb.upper)}, в худшем случае до ${Math.round(q.p95)}`,
+      `Обычный коридор: ${fmt(bb.lower)}–${fmt(bb.upper)}, в худшем случае до ${fmt(q.p95)}`,
     ];
 
     // Monthly change direction
     if (cat.forecasts.holt.trend !== 0) {
-      const changePerMonth = Math.abs(cat.forecasts.holt.trend);
+      const changePerMonthEur = Math.abs(cat.forecasts.holt.trend);
       const changeDir = cat.forecasts.holt.trend > 0 ? 'растут' : 'снижаются';
-      catLines.push(
-        `Динамика: расходы ${changeDir} примерно на ${Math.round(changePerMonth)}/мес.`,
-      );
+      catLines.push(`Динамика: расходы ${changeDir} примерно на ${fmt(changePerMonthEur)}/мес.`);
     }
 
     // Anomaly
@@ -1103,14 +1115,14 @@ function executeGetTechnicalAnalysis(
     // Typical spending bounds (pivot points in user terms)
     const pp = cat.trend.pivotPoints;
     catLines.push(
-      `Типичный минимум ~${Math.round(pp.support1)}, типичный максимум ~${Math.round(pp.resistance1)}`,
+      `Типичный минимум ~${fmt(pp.support1)}, типичный максимум ~${fmt(pp.resistance1)}`,
     );
 
     // Intermittent spending (Croston in user terms)
     if (cat.forecasts.croston) {
       const cr = cat.forecasts.croston;
       catLines.push(
-        `Нерегулярные расходы: ~${Math.round(cr.expectedAmount)} примерно раз в ${cr.expectedInterval.toFixed(1)} мес.`,
+        `Нерегулярные расходы: ~${fmt(cr.expectedAmount)} примерно раз в ${cr.expectedInterval.toFixed(1)} мес.`,
       );
     }
 

@@ -199,7 +199,9 @@ mock.module('../expense-recorder', () => ({
 
 // Mock BudgetManager (used by set_budget and delete_budget tools)
 const mockBudgetManagerSet = mock(() => Promise.resolve({ sheetsSynced: false }));
-const mockBudgetManagerDelete = mock(() => Promise.resolve({ sheetsSynced: false }));
+const mockBudgetManagerDelete = mock(() =>
+  Promise.resolve({ deleted: true, sheetsSynced: false, resolvedCategory: undefined }),
+);
 mock.module('../budget-manager', () => ({
   getBudgetManager: () => ({
     set: mockBudgetManagerSet,
@@ -261,7 +263,9 @@ function resetAllMocks() {
   mockBudgetManagerSet.mockReset();
   mockBudgetManagerSet.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
   mockBudgetManagerDelete.mockReset();
-  mockBudgetManagerDelete.mockReturnValue(Promise.resolve({ sheetsSynced: false }));
+  mockBudgetManagerDelete.mockReturnValue(
+    Promise.resolve({ deleted: true, sheetsSynced: false, resolvedCategory: undefined }),
+  );
 
   mockRecord.mockReset();
   mockRecord.mockReturnValue(Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
@@ -2250,6 +2254,178 @@ describe('get_technical_analysis', () => {
     expect(result.output).not.toContain('Donchian');
     expect(result.output).not.toContain('Bollinger');
     expect(result.output).not.toContain('откат');
+  });
+
+  test('amounts are converted from EUR to group default_currency and formatted', async () => {
+    // Group uses RSD — TA snapshot carries EUR, output must be converted + formatted.
+    mockGroups.findById.mockReturnValue({
+      id: 1,
+      telegram_group_id: 456,
+      title: null,
+      invite_link: null,
+      google_refresh_token: 'token',
+      spreadsheet_id: 'sheet',
+      default_currency: 'RSD',
+      enabled_currencies: ['RSD', 'EUR'],
+      custom_prompt: null,
+      active_topic_id: null,
+      oauth_client: 'legacy' as const,
+      bank_panel_summary_message_id: null,
+      created_at: '',
+      updated_at: '',
+    });
+
+    mockGetFinancialSnapshot.mockReturnValue({
+      technicalAnalysis: {
+        categories: [
+          {
+            category: 'Food',
+            monthsOfData: 6,
+            currentMonthSpent: 100, // EUR
+            trend: {
+              direction: 'stable',
+              confidence: 0.5,
+              macd: { crossover: 'none', histogram: 0 },
+              rsi: { value: 50, signal: 'neutral' },
+              hurst: { value: 0.5, type: 'random_walk' },
+              changePoints: [],
+              pivotPoints: {
+                support1: 50,
+                support2: 40,
+                pivot: 80,
+                resistance1: 120,
+                resistance2: 140,
+              },
+            },
+            forecasts: {
+              ensemble: 150,
+              holt: { forecast: 150, trend: 5 },
+              theta: { forecast: 150 },
+              quantiles: { p50: 140, p75: 170, p90: 200, p95: 220 },
+              croston: null,
+            },
+            volatility: {
+              bollingerBands: {
+                upper: 200,
+                middle: 100,
+                lower: 50,
+                bandwidth: 0.5,
+                percentB: 0.5,
+              },
+              atr: 20,
+              historicalVol: 0.1,
+              donchian: {
+                upper: 220,
+                lower: 50,
+                middle: 135,
+                isBreakoutHigh: false,
+                isBreakoutLow: false,
+              },
+            },
+            anomaly: {
+              isAnomaly: false,
+              anomalyCount: 0,
+              zScore: { zScore: 0.5, direction: 'above' },
+            },
+          },
+        ],
+        correlations: [],
+      },
+    });
+
+    const result = await executeTool('get_technical_analysis', {}, ctx);
+    expect(result.success).toBe(true);
+    // Raw EUR values (100, 150, 50, 120, 200) must NOT leak into user output as-is.
+    // RSD values are hundreds of times bigger → converted output contains "RSD".
+    expect(result.output).toContain('RSD');
+    // The raw EUR forecast (150) followed by RSD would be a leak — proper convert
+    // of 150 EUR → RSD is thousands, not 150.
+    const output = result.output ?? '';
+    expect(output).not.toMatch(/Прогноз по истории: ~150 /);
+    expect(output).not.toMatch(/Текущий месяц: потрачено 100 /);
+  });
+
+  test('EUR group output uses EUR currency formatting', async () => {
+    // Sanity: for EUR groups, output is correctly formatted in EUR (no ambiguity).
+    mockGroups.findById.mockReturnValue({
+      id: 1,
+      telegram_group_id: 456,
+      title: null,
+      invite_link: null,
+      google_refresh_token: 'token',
+      spreadsheet_id: 'sheet',
+      default_currency: 'EUR',
+      enabled_currencies: ['EUR'],
+      custom_prompt: null,
+      active_topic_id: null,
+      oauth_client: 'legacy' as const,
+      bank_panel_summary_message_id: null,
+      created_at: '',
+      updated_at: '',
+    });
+
+    mockGetFinancialSnapshot.mockReturnValue({
+      technicalAnalysis: {
+        categories: [
+          {
+            category: 'Food',
+            monthsOfData: 6,
+            currentMonthSpent: 100,
+            trend: {
+              direction: 'stable',
+              confidence: 0.5,
+              macd: { crossover: 'none', histogram: 0 },
+              rsi: { value: 50, signal: 'neutral' },
+              hurst: { value: 0.5, type: 'random_walk' },
+              changePoints: [],
+              pivotPoints: {
+                support1: 50,
+                support2: 40,
+                pivot: 80,
+                resistance1: 120,
+                resistance2: 140,
+              },
+            },
+            forecasts: {
+              ensemble: 150,
+              holt: { forecast: 150, trend: 0 },
+              theta: { forecast: 150 },
+              quantiles: { p50: 140, p75: 170, p90: 200, p95: 220 },
+              croston: null,
+            },
+            volatility: {
+              bollingerBands: {
+                upper: 200,
+                middle: 100,
+                lower: 50,
+                bandwidth: 0.5,
+                percentB: 0.5,
+              },
+              atr: 20,
+              historicalVol: 0.1,
+              donchian: {
+                upper: 220,
+                lower: 50,
+                middle: 135,
+                isBreakoutHigh: false,
+                isBreakoutLow: false,
+              },
+            },
+            anomaly: {
+              isAnomaly: false,
+              anomalyCount: 0,
+              zScore: { zScore: 0.5, direction: 'above' },
+            },
+          },
+        ],
+        correlations: [],
+      },
+    });
+
+    const result = await executeTool('get_technical_analysis', {}, ctx);
+    expect(result.success).toBe(true);
+    // EUR output should include EUR currency markers
+    expect(result.output).toContain('€');
   });
 });
 
