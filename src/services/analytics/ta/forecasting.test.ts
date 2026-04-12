@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   croston,
+  crostonTSB,
   holt,
   holtWinters,
   knnForecast,
@@ -103,6 +104,69 @@ describe('croston', () => {
   test('single non-zero event', () => {
     const result = croston([0, 0, 100, 0, 0]);
     expect(result.expectedAmount).toBe(100);
+  });
+});
+
+describe('crostonTSB', () => {
+  test('returns zero forecast for empty input', () => {
+    const result = crostonTSB([]);
+    expect(result.forecast).toBe(0);
+    expect(result.expectedAmount).toBe(0);
+  });
+
+  test('returns zero forecast for all-zero data', () => {
+    const result = crostonTSB([0, 0, 0, 0]);
+    expect(result.forecast).toBe(0);
+    expect(result.expectedAmount).toBe(0);
+  });
+
+  test('positive forecast for intermittent data', () => {
+    const result = crostonTSB(intermittentData);
+    expect(result.forecast).toBeGreaterThan(0);
+    expect(result.expectedAmount).toBeGreaterThan(0);
+    // TSB's expectedInterval = 1/prob
+    expect(result.expectedInterval).toBeGreaterThan(1);
+  });
+
+  test('fading demand: consecutive zero periods decay forecast below steady-state', () => {
+    // Same non-zero count but trailing zeros at the end → TSB decays probability
+    const steady = [100, 100, 100, 100];
+    const fading = [100, 100, 100, 0, 0, 0, 0, 0];
+    const steadyResult = crostonTSB(steady);
+    const fadingResult = crostonTSB(fading);
+    expect(fadingResult.forecast).toBeLessThan(steadyResult.forecast);
+  });
+
+  test('growing demand: recent activity increases probability vs trailing zeros', () => {
+    const growing = [0, 0, 0, 0, 0, 100, 100, 100];
+    const fading = [100, 100, 100, 0, 0, 0, 0, 0];
+    const growingResult = crostonTSB(growing);
+    const fadingResult = crostonTSB(fading);
+    expect(growingResult.forecast).toBeGreaterThan(fadingResult.forecast);
+  });
+
+  test('differs from classical Croston when probability decays', () => {
+    // With trailing zeros, TSB should produce a lower forecast than classical Croston
+    // (classical has fixed interval, no decay).
+    const withTrailing = [100, 100, 100, 0, 0, 0, 0, 0];
+    const classical = croston(withTrailing);
+    const tsb = crostonTSB(withTrailing);
+    // TSB decays prob on each zero; classical keeps emaInterval constant
+    expect(tsb.forecast).toBeLessThan(classical.forecast);
+  });
+
+  test('ignores leading zeros correctly (uses first non-zero as starting point)', () => {
+    const result = crostonTSB([0, 0, 50, 50, 50]);
+    // amount should have converged toward 50 with non-trivial probability
+    expect(result.expectedAmount).toBeGreaterThan(40);
+    expect(result.forecast).toBeGreaterThan(0);
+  });
+
+  test('single non-zero event has minimal forecast', () => {
+    const result = crostonTSB([0, 0, 100, 0, 0, 0]);
+    // amount=100, probability started low and kept decaying → forecast much less than 100
+    expect(result.expectedAmount).toBe(100);
+    expect(result.forecast).toBeLessThan(50);
   });
 });
 

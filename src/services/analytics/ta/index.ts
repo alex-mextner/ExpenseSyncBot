@@ -5,6 +5,7 @@ export { dixonTest, grubbsTest, hampelFilter, iqrMethod, modifiedZScore, zScore 
 // Forecasting
 export {
   croston,
+  crostonTSB,
   holt,
   holtWinters,
   knnForecast,

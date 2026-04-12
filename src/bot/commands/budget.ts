@@ -21,6 +21,7 @@ import {
   readMonthBudget,
 } from '../../services/google/sheets';
 import { normalizeCategoryName } from '../../utils/fuzzy-search';
+import { truncateForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import type { GoogleConnectedGroup } from '../guards';
@@ -244,7 +245,9 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
     message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
-  // Add TA forecast insights for budgeted categories
+  // Add TA forecast insights for budgeted categories — cap at 10 lines so the
+  // full budget message stays under Telegram's 4096-char limit. N+2 rule for
+  // the "и ещё N" tail.
   const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
   if (snapshot.technicalAnalysis) {
     const taInsights: string[] = [];
@@ -272,11 +275,17 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
       }
     }
     if (taInsights.length > 0) {
-      message += `\nПрогноз на месяц:\n${taInsights.join('\n')}\n`;
+      const MAX_TA_INSIGHTS = 10;
+      const hidden = taInsights.length - MAX_TA_INSIGHTS;
+      const visibleInsights = hidden >= 3 ? taInsights.slice(0, MAX_TA_INSIGHTS) : taInsights;
+      message += `\nПрогноз на месяц:\n${visibleInsights.join('\n')}\n`;
+      if (hidden >= 3) {
+        message += `… и ещё ${hidden}\n`;
+      }
     }
   }
 
-  return { text: message.trim(), hasBudgets: true };
+  return { text: truncateForTelegram(message.trim()), hasBudgets: true };
 }
 
 async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {

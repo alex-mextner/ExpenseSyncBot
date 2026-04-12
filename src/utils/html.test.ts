@@ -8,6 +8,8 @@ import {
   processThinkTags,
   sanitizeHtmlForTelegram,
   stripAllHtml,
+  TELEGRAM_MAX_MESSAGE_LENGTH,
+  truncateForTelegram,
 } from './html';
 
 // ── closeUnmatchedTags ──────────────────────────────────────────────
@@ -331,5 +333,36 @@ describe('tag balancing stress', () => {
     const result = sanitizeHtmlForTelegram(html);
     // Should be the same (idempotent)
     expect(result).toBe('100 &lt; 200 &amp; 300 &gt; 50');
+  });
+});
+
+// ── truncateForTelegram ─────────────────────────────────────────────
+
+describe('truncateForTelegram', () => {
+  test('returns short text unchanged', () => {
+    expect(truncateForTelegram('hello')).toBe('hello');
+  });
+
+  test('returns text at exactly the limit unchanged', () => {
+    const text = 'a'.repeat(TELEGRAM_MAX_MESSAGE_LENGTH);
+    expect(truncateForTelegram(text)).toBe(text);
+  });
+
+  test('truncates text over the limit and adds ellipsis marker', () => {
+    const text = 'a'.repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 100);
+    const result = truncateForTelegram(text);
+    expect(result.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_LENGTH);
+    expect(result).toContain('…(обрезано)');
+  });
+
+  test('respects custom maxLength', () => {
+    const text = 'abcdefghijklmnopqrstuvwxyz'.repeat(3); // 78 chars
+    const result = truncateForTelegram(text, 50);
+    expect(result.length).toBeLessThanOrEqual(50);
+    expect(result).toContain('…(обрезано)');
+  });
+
+  test('does not touch text shorter than custom maxLength', () => {
+    expect(truncateForTelegram('short', 100)).toBe('short');
   });
 });

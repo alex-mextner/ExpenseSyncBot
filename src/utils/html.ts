@@ -144,6 +144,27 @@ export function sanitizeHtmlForTelegram(text: string): string {
 }
 
 /**
+ * Telegram sendMessage/editMessageText limit — 4096 chars incl. HTML markup.
+ * Anything longer is rejected with `400 MESSAGE_TOO_LONG`.
+ */
+export const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+
+/**
+ * Truncate a message so it fits Telegram's message length limit.
+ * Adds a visible ellipsis marker so users know the tail was cut off.
+ * Does not try to preserve HTML tag structure — callers that need
+ * HTML must re-sanitize the result.
+ */
+export function truncateForTelegram(
+  text: string,
+  maxLength: number = TELEGRAM_MAX_MESSAGE_LENGTH,
+): string {
+  if (text.length <= maxLength) return text;
+  const marker = '\n…(обрезано)';
+  return `${text.slice(0, maxLength - marker.length)}${marker}`;
+}
+
+/**
  * Strip ALL HTML tags and decode entities back to plain text.
  */
 export function stripAllHtml(text: string): string {

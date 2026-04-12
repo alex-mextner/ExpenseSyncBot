@@ -9,6 +9,7 @@ import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
+import { truncateForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { silentSyncBudgets } from '../services/budget-sync';
@@ -204,7 +205,9 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
     }
   }
 
-  // Add trend summary for top spending categories
+  // Add trend summary for top spending categories — cap at 10 entries so the
+  // message still fits Telegram's 4096-char limit alongside budget info. Per
+  // the N+2 rule, only emit "и ещё N..." when N ≥ 3.
   const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
   if (snapshot.technicalAnalysis && snapshot.technicalAnalysis.categories.length > 0) {
     const taLines: string[] = [];
@@ -227,7 +230,13 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
       }
     }
     if (taLines.length > 0) {
-      message += `\n📈 Тренды:\n${taLines.join('\n')}\n`;
+      const MAX_TA_LINES = 10;
+      const hidden = taLines.length - MAX_TA_LINES;
+      const visibleLines = hidden >= 3 ? taLines.slice(0, MAX_TA_LINES) : taLines;
+      message += `\n📈 Тренды:\n${visibleLines.join('\n')}\n`;
+      if (hidden >= 3) {
+        message += `  … и ещё ${hidden}\n`;
+      }
     }
   }
 
@@ -263,7 +272,7 @@ async function addBudgetInfo(
 
   if (budgets.length === 0) {
     // No budgets set - just send base message
-    await sendMessage(baseMessage, keyboard ? { reply_markup: keyboard } : {});
+    await sendMessage(truncateForTelegram(baseMessage), keyboard ? { reply_markup: keyboard } : {});
     return;
   }
 
@@ -309,7 +318,10 @@ async function addBudgetInfo(
     budgetMessage += `\nℹ️ Используй /budget для полного отчета`;
   }
 
-  await sendMessage(baseMessage + budgetMessage, keyboard ? { reply_markup: keyboard } : {});
+  await sendMessage(
+    truncateForTelegram(baseMessage + budgetMessage),
+    keyboard ? { reply_markup: keyboard } : {},
+  );
 }
 
 /**
