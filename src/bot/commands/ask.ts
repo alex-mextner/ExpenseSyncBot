@@ -8,6 +8,7 @@ import { env } from '../../config/env';
 import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
+import { validateAdvice } from '../../services/ai/advice-validator';
 import { ExpenseBotAgent } from '../../services/ai/agent';
 import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
 import type { AgentContext } from '../../services/ai/types';
@@ -297,6 +298,24 @@ async function sendSmartAdvice(
     const cleanAdvice = processThinkTagsForAdvice(stripThinkingTags(rawAdvice));
     const sanitizedAdvice = sanitizeHtmlForTelegram(cleanAdvice);
     if (!sanitizedAdvice || sanitizedAdvice.length < 10) {
+      await writer.close();
+      return;
+    }
+
+    // QA pass: reject hallucinated/generic/contradictory advice before the user sees the final version.
+    // The streamed placeholder is still up — if rejected, we delete it and skip the send.
+    const validation = await validateAdvice({ tier, trigger, advice: cleanAdvice });
+    if (!validation.approved) {
+      logger.warn(
+        {
+          groupId,
+          tier,
+          triggerType: trigger.type,
+          topic: trigger.topic,
+          reason: validation.reason,
+        },
+        '[ADVICE] Validator rejected advice, not sending',
+      );
       await writer.close();
       return;
     }

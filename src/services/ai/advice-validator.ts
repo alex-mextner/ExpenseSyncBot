@@ -1,11 +1,11 @@
 /**
  * Advice-specific validation: checks AI-generated financial advice for errors before sending.
  * Separate from response-validator.ts which handles interactive Q&A validation.
+ * Routes through the shared `aiStreamRound` (fast chain) — no direct SDK access.
  */
-import Anthropic from '@anthropic-ai/sdk';
-import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger.ts';
 import type { AdviceTier, TriggerResult } from '../analytics/types';
+import { aiStreamRound } from './streaming';
 
 const logger = createLogger('advice-validator');
 
@@ -42,38 +42,26 @@ interface AdviceValidationInput {
 
 export type ValidationResult = { approved: true } | { approved: false; reason: string };
 
-export async function validateAdvice(
-  apiKey: string,
-  input: AdviceValidationInput,
-): Promise<ValidationResult> {
+export async function validateAdvice(input: AdviceValidationInput): Promise<ValidationResult> {
   const userContent = `TIER: ${input.tier}
 TRIGGER: ${input.trigger.type} — ${JSON.stringify(input.trigger.data)}
 
 ADVICE TEXT (first 2000 chars):
 ${input.advice.substring(0, 2000)}`;
 
-  const anthropic = new Anthropic({
-    apiKey,
-    baseURL: env.AI_BASE_URL || undefined,
-  });
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), VALIDATION_TIMEOUT_MS);
-
   try {
-    const result = await anthropic.messages.create(
-      {
-        model: env.AI_MODEL,
-        max_tokens: VALIDATION_MAX_TOKENS,
-        system: ADVICE_VALIDATION_PROMPT,
-        messages: [{ role: 'user', content: userContent }],
-      },
-      { signal: controller.signal },
-    );
+    const result = await aiStreamRound({
+      messages: [
+        { role: 'system', content: ADVICE_VALIDATION_PROMPT },
+        { role: 'user', content: userContent },
+      ],
+      maxTokens: VALIDATION_MAX_TOKENS,
+      chain: 'fast',
+      signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
+    });
 
-    const text = result.content[0]?.type === 'text' ? result.content[0].text.trim() : '';
-
-    logger.info(`[ADVICE-VALIDATOR] Result: ${text}`);
+    const text = result.text.trim();
+    logger.info(`[ADVICE-VALIDATOR] Result: ${text} (via ${result.providerUsed})`);
 
     if (text.startsWith('APPROVE')) {
       return { approved: true };
@@ -85,7 +73,5 @@ ${input.advice.substring(0, 2000)}`;
     logger.error({ err: error }, '[ADVICE-VALIDATOR] Validation pass failed');
     // Agent used tools → data is probably real, approve by default on validator failure
     return { approved: true };
-  } finally {
-    clearTimeout(timeout);
   }
 }
