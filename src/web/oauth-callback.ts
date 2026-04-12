@@ -20,6 +20,12 @@ const logger = createLogger('oauth-callback');
 export function startOAuthServer(): void {
   const server = Bun.serve({
     port: env.OAUTH_SERVER_PORT,
+    // Raise idle timeout for /api/receipt/confirm — a 70-item receipt with
+    // batched sheet write typically completes in 1-3s, but with 429 retries
+    // + exponential backoff (up to 32s) it can legitimately take longer.
+    // Bun default is 10s which would kill the connection mid-retry.
+    // Max allowed is 255s. See https://bun.com/docs/api/http
+    idleTimeout: 255,
     async fetch(req) {
       const corsOrigin = env.MINIAPP_URL ?? 'https://expense-sync-bot-app.invntrm.ru';
       const miniAppResponse = await handleMiniAppRequest(req, corsOrigin);

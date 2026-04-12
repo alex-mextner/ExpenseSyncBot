@@ -178,6 +178,90 @@ function colLetter(index: number): string {
  */
 const RATE_COLUMN_HEADER = 'Rate (→EUR)';
 
+/**
+ * Google Sheets API hard limits (write side — this bot's hot path).
+ * Source: https://developers.google.com/workspace/sheets/api/limits
+ *
+ * Per-user and per-project limits are both enforced. We care about the
+ * per-user limit because a single OAuth user writing a 70-item receipt can
+ * exhaust it on its own without touching the project budget.
+ */
+export const GOOGLE_SHEETS_LIMITS = {
+  writeRequestsPerMinutePerUser: 60,
+  writeRequestsPerMinutePerProject: 300,
+  readRequestsPerMinutePerUser: 60,
+  readRequestsPerMinutePerProject: 300,
+  /** Google's own recommended maximum backoff for 429 retries */
+  maxBackoffMs: 32_000,
+  /** Give up after this many attempts (original + retries) */
+  maxAttempts: 6,
+} as const;
+
+/**
+ * Sleep helper — isolated so tests can mock `setTimeout` without touching
+ * the global loop
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if a caught error is a Google API 429 (rate limit exceeded)
+ */
+export function isRateLimitError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+    response?: { status?: unknown; data?: { error?: { status?: unknown } } };
+  };
+  // Top-level code/status (most common path for googleapis SDK)
+  if (e.code === 429 || e.code === '429' || e.status === 429 || e.status === '429') return true;
+  // Nested response.status (GaxiosError wraps the HTTP response)
+  if (e.response?.status === 429 || e.response?.status === '429') return true;
+  // Nested response.data.error.status (Google JSON error body)
+  if (e.response?.data?.error?.status === 'RESOURCE_EXHAUSTED') return true;
+  // Message-based fallback
+  if (typeof e.message === 'string') {
+    return e.message.includes('Quota exceeded') || e.message.includes('rateLimitExceeded');
+  }
+  return false;
+}
+
+/**
+ * Wrap a Google Sheets API call with exponential backoff on 429. Retries
+ * follow Google's recommended formula: `min(2^n * 1000 + jitter, maxBackoffMs)`.
+ * Non-429 errors are rethrown immediately — we don't want to mask auth or
+ * validation failures.
+ *
+ * The random jitter (`randomFn`) is injectable so tests are deterministic.
+ */
+export async function withSheetsRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  opts?: { sleepFn?: (ms: number) => Promise<void>; randomFn?: () => number },
+): Promise<T> {
+  const sleepFn = opts?.sleepFn ?? sleep;
+  const randomFn = opts?.randomFn ?? Math.random;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < GOOGLE_SHEETS_LIMITS.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRateLimitError(err)) throw err;
+      if (attempt === GOOGLE_SHEETS_LIMITS.maxAttempts - 1) break;
+      const base = Math.min(2 ** attempt * 1000, GOOGLE_SHEETS_LIMITS.maxBackoffMs);
+      const jitter = Math.floor(randomFn() * 1000);
+      const waitMs = base + jitter;
+      logger.warn({ label, attempt: attempt + 1, waitMs }, '[SHEETS] 429 rate limit, backing off');
+      await sleepFn(waitMs);
+    }
+  }
+  throw lastErr;
+}
+
 // Per-spreadsheet write queue — serializes appends so EUR formula row references are correct
 const sheetWriteQueues = new Map<string, Promise<void>>();
 
@@ -269,11 +353,16 @@ async function appendExpenseRowsImpl(
 
   // Find column indices
   const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
-  const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
 
-  // Build all rows
-  const rows: (string | number | null)[][] = [];
-  const formulaInfo: Array<{ needsFormula: boolean; amountColIdx: number }> = [];
+  // Build all rows. EUR formulas for non-EUR rows are baked in via
+  // `=INDIRECT("<amountCol>"&ROW())*INDIRECT("<rateCol>"&ROW())` — a
+  // self-positioning formula that doesn't need to know its absolute row
+  // number. This lets us put the formula inside the first append call
+  // instead of doing a second values.batchUpdate, halving write quota usage.
+  //
+  // Trade-off: INDIRECT is volatile — it recalculates on any sheet change.
+  // Immeasurable on the few-thousand rows an expense tracker accumulates.
+  const rows: (string | number | string)[][] = [];
 
   for (const data of dataList) {
     const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
@@ -287,9 +376,11 @@ async function appendExpenseRowsImpl(
 
     const needsFormula =
       expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
-    formulaInfo.push({ needsFormula, amountColIdx });
+    const eurFormula = needsFormula
+      ? `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`
+      : null;
 
-    const row: (string | number | null)[] = [];
+    const row: (string | number)[] = [];
     for (let colIdx = 0; colIdx < headers.length; colIdx++) {
       const header = headers[colIdx];
       if (header === SPREADSHEET_CONFIG.headers[0]) {
@@ -299,7 +390,8 @@ async function appendExpenseRowsImpl(
       } else if (header === SPREADSHEET_CONFIG.headers[2]) {
         row.push(data.comment);
       } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-        row.push(data.eurAmount);
+        // Formula when we can derive EUR from amount*rate, otherwise literal
+        row.push(eurFormula ?? data.eurAmount);
       } else if (header === RATE_COLUMN_HEADER) {
         row.push(data.rate ?? '');
       } else {
@@ -310,14 +402,18 @@ async function appendExpenseRowsImpl(
     rows.push(row);
   }
 
-  // Append all rows in one API call
-  const response = await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: rows },
-  });
+  // Single append call — rows contain their own EUR formulas (no second round-trip)
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: rows },
+      }),
+    'appendExpenseRows.append',
+  );
 
   const updatedRange = response.data.updates?.updatedRange;
   const updatedRows = response.data.updates?.updatedRows;
@@ -325,42 +421,6 @@ async function appendExpenseRowsImpl(
 
   if (!updatedRows || updatedRows === 0) {
     logger.error('[SHEETS-BATCH] No rows appended');
-    return;
-  }
-
-  // Parse start row from response (e.g. "Expenses!A5:G7" → 5)
-  const startRowMatch = updatedRange?.match(/!A(\d+)/);
-  if (!startRowMatch?.[1] || eurColIdx === -1) return;
-
-  const startRow = Number.parseInt(startRowMatch[1], 10);
-
-  // Build EUR formula updates for rows that need them
-  const formulaUpdates: Array<{ range: string; values: string[][] }> = [];
-  for (const [i, info] of formulaInfo.entries()) {
-    if (!info.needsFormula) continue;
-
-    const actualRow = startRow + i;
-    const eurCell = `${colLetter(eurColIdx)}${actualRow}`;
-    const amountCell = `${colLetter(info.amountColIdx)}${actualRow}`;
-    const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
-    const formula = `=${amountCell}*${rateCell}`;
-
-    formulaUpdates.push({
-      range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
-      values: [[formula]],
-    });
-  }
-
-  // Write all EUR formulas in one batchUpdate
-  if (formulaUpdates.length > 0) {
-    await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        valueInputOption: 'USER_ENTERED',
-        data: formulaUpdates,
-      },
-    });
-    logger.info(`[SHEETS-BATCH] Wrote ${formulaUpdates.length} EUR formulas`);
   }
 }
 
@@ -414,8 +474,14 @@ async function appendExpenseRowImpl(
   const needsFormula =
     expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
 
+  // Self-positioning EUR formula — see appendExpenseRowsImpl for rationale.
+  // One append call, no second round-trip to attach the formula afterwards.
+  const eurFormula = needsFormula
+    ? `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`
+    : null;
+
   // Build row values based on header order
-  const row: (string | number | null)[] = [];
+  const row: (string | number)[] = [];
 
   for (let colIdx = 0; colIdx < headers.length; colIdx++) {
     const header = headers[colIdx];
@@ -426,8 +492,7 @@ async function appendExpenseRowImpl(
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      // Write static EUR first; replaced with formula in a second call if needed
-      row.push(data.eurAmount);
+      row.push(eurFormula ?? data.eurAmount);
     } else if (header === RATE_COLUMN_HEADER) {
       row.push(data.rate ?? '');
     } else {
@@ -439,18 +504,21 @@ async function appendExpenseRowImpl(
 
   logger.info({ data: row }, `[SHEETS] Final row`);
 
-  // Append the row — the API finds the next empty row atomically
-  const response = await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: {
-      values: [row],
-    },
-  });
+  // Single append call — row already carries its own EUR formula
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!A:A`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [row],
+        },
+      }),
+    'appendExpenseRow.append',
+  );
 
-  // Log API response for debugging
   const updatedRange = response.data.updates?.updatedRange;
   const updatedRows = response.data.updates?.updatedRows;
   logger.info(
@@ -461,31 +529,6 @@ async function appendExpenseRowImpl(
     logger.error(
       `[SHEETS] No rows were appended! Full response: ${JSON.stringify(response.data, null, 2)}`,
     );
-    return;
-  }
-
-  // Write EUR formula using the ACTUAL row number from the API response
-  if (needsFormula && updatedRange) {
-    const rowMatch = updatedRange.match(/!A(\d+)/);
-    if (rowMatch?.[1]) {
-      const actualRow = Number.parseInt(rowMatch[1], 10);
-      const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
-      if (eurColIdx !== -1) {
-        const eurCell = `${colLetter(eurColIdx)}${actualRow}`;
-        const amountCell = `${colLetter(amountColIdx)}${actualRow}`;
-        const rateCell = `${colLetter(rateColIdx)}${actualRow}`;
-        const formula = `=${amountCell}*${rateCell}`;
-
-        await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${SPREADSHEET_CONFIG.sheetName}!${eurCell}`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [[formula]] },
-        });
-
-        logger.info(`[SHEETS] EUR formula written: ${eurCell} = ${formula}`);
-      }
-    }
   }
 }
 

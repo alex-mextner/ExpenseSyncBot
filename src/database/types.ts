@@ -120,6 +120,7 @@ export interface Expense {
   currency: CurrencyCode;
   eur_amount: number;
   receipt_id: number | null;
+  receipt_file_id: string | null;
   created_at: string;
 }
 
@@ -133,6 +134,7 @@ export interface CreateExpenseData {
   currency: CurrencyCode;
   eur_amount: number;
   receipt_id?: number | null;
+  receipt_file_id?: string | null;
 }
 
 /**
