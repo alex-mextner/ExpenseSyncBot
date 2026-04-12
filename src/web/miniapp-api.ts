@@ -79,7 +79,7 @@ function validateInitData(rawInitData: string): number | null {
  */
 type GroupResolution =
   | { ok: true; internalGroupId: number; internalUserId: number }
-  | { ok: false; code: 'group_missing' };
+  | { ok: false; code: 'group_missing' | 'not_member' };
 
 function resolveGroupAndEnsureUser(
   telegramGroupId: number,
@@ -90,7 +90,25 @@ function resolveGroupAndEnsureUser(
     return { ok: false, code: 'group_missing' };
   }
 
+  // Check that the user has interacted with the bot inside THIS group at
+  // least once (any command, message, or callback creates a group_members
+  // entry via trackMembership / requireGroup guard). Without this check,
+  // anyone with valid Telegram initData could supply an arbitrary groupId
+  // and gain access to someone else's group.
   let user = database.users.findByTelegramId(telegramUserId);
+  const isMember =
+    (user && user.group_id === group.id) ||
+    database.groupMembers.isMember(telegramUserId, group.id);
+
+  if (!isMember) {
+    logger.warn(
+      { telegramUserId, telegramGroupId, internalGroupId: group.id },
+      'Auth rejected: user is not a member of this group',
+    );
+    return { ok: false, code: 'not_member' };
+  }
+
+  // Membership verified — ensure user row exists and is linked to this group
   if (!user) {
     logger.info(
       { telegramUserId, internalGroupId: group.id },
@@ -209,15 +227,14 @@ export async function validateAndResolveContext(
   // auto-create the user row if this is the first time we see them.
   const resolution = resolveGroupAndEnsureUser(telegramGroupId, userId);
   if (!resolution.ok) {
-    logger.warn({ userId, telegramGroupId }, 'Auth rejected: group not found');
+    const message =
+      resolution.code === 'not_member'
+        ? 'Not a member of this group — send a message in the group first'
+        : 'Group not configured — run /connect in the group first';
+    logger.warn({ userId, telegramGroupId, code: resolution.code }, `Auth rejected: ${message}`);
     return {
       ok: false,
-      response: errorResponse(
-        403,
-        'Group not configured — run /connect in the group first',
-        'FORBIDDEN_GROUP',
-        corsHeaders,
-      ),
+      response: errorResponse(403, message, 'FORBIDDEN_GROUP', corsHeaders),
     };
   }
 

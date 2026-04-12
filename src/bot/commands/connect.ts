@@ -1,5 +1,6 @@
 /** /connect command handler — group setup with optional Google Sheets */
 import { InlineKeyboard } from 'gramio';
+import { trackMembership } from '../../bot/handlers/message.handler';
 import {
   buildCurrencyHints,
   type CurrencyCode,
@@ -82,6 +83,8 @@ export async function handleConnectCommand(ctx: Ctx['Command']): Promise<void> {
   } else if (user.group_id !== group.id) {
     database.users.update(telegramId, { group_id: group.id });
   }
+  // Track membership so Mini App auth can verify the user belongs to this group
+  trackMembership(telegramId, group.id);
 
   // If group is already fully configured with Google, don't re-run OAuth
   if (group.google_refresh_token && group.spreadsheet_id) {

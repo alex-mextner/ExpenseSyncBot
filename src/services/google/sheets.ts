@@ -210,8 +210,19 @@ function sleep(ms: number): Promise<void> {
  */
 export function isRateLimitError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
-  const e = err as { code?: unknown; status?: unknown; message?: unknown };
+  const e = err as {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+    response?: { status?: unknown; data?: { error?: { status?: unknown } } };
+  };
+  // Top-level code/status (most common path for googleapis SDK)
   if (e.code === 429 || e.code === '429' || e.status === 429 || e.status === '429') return true;
+  // Nested response.status (GaxiosError wraps the HTTP response)
+  if (e.response?.status === 429 || e.response?.status === '429') return true;
+  // Nested response.data.error.status (Google JSON error body)
+  if (e.response?.data?.error?.status === 'RESOURCE_EXHAUSTED') return true;
+  // Message-based fallback
   if (typeof e.message === 'string') {
     return e.message.includes('Quota exceeded') || e.message.includes('rateLimitExceeded');
   }

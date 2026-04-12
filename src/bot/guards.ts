@@ -45,7 +45,7 @@ export function requireGroup(handler: GroupCommandHandler): (ctx: Ctx['Command']
     // (which normally creates it) because bot/index.ts skips commands.
     const telegramId = ctx.from?.id;
     if (telegramId) {
-      let user = database.users.findByTelegramId(telegramId);
+      const user = database.users.findByTelegramId(telegramId);
       if (!user) {
         database.users.create({ telegram_id: telegramId, group_id: group.id });
       } else if (user.group_id !== group.id) {

@@ -109,6 +109,7 @@ const mockUsersCreate = mock(
 const mockUsersUpdate = mock(
   (_telegramId: number, _data: { group_id?: number }): User | null => null,
 );
+const mockGroupMembersIsMember = mock((_telegramId: number, _groupId: number): boolean => false);
 const mockFetchReceiptData = mock(
   (_qrData: string, _getBrowserFn?: () => Promise<BrowserLike>): Promise<string> =>
     Promise.resolve(''),
@@ -190,6 +191,7 @@ mock.module('sharp', () => ({ default: mockSharp }));
 spyOn(database.users, 'findByTelegramId').mockImplementation(mockFindByTelegramId);
 spyOn(database.users, 'create').mockImplementation(mockUsersCreate);
 spyOn(database.users, 'update').mockImplementation(mockUsersUpdate);
+spyOn(database.groupMembers, 'isMember').mockImplementation(mockGroupMembersIsMember);
 spyOn(database.categories, 'findByGroupId').mockImplementation(mockCategoriesFindByGroupId);
 spyOn(database.groups, 'findById').mockImplementation(mockGroupsFindById);
 spyOn(database.groups, 'findByTelegramGroupId').mockImplementation(mockGroupsFindByTelegramGroupId);
@@ -328,6 +330,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockParseReceipt.mockReset();
@@ -378,6 +381,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
     // group is configured, user row doesn't exist yet.
     mockFindByTelegramId.mockImplementation(() => null);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
 
     const initData = buildInitData(42);
     const req = makeRequest('/api/test', 'GET', initData);
@@ -414,6 +418,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
     const otherGroupUser = { ...MOCK_USER, group_id: 99 };
     mockFindByTelegramId.mockImplementation(() => otherGroupUser);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
 
     const initData = buildInitData(42);
     const req = makeRequest('/api/test', 'GET', initData);
@@ -428,6 +433,7 @@ describe('validateAndResolveContext — HMAC validation', () => {
   test('valid initData + group member → ok with resolved IDs', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     const initData = buildInitData(42);
     const req = makeRequest('/api/test', 'GET', initData);
     const result = await validateAndResolveContext(req, CORS_ORIGIN, -1001234567);
@@ -452,6 +458,7 @@ describe('POST /api/receipt/scan', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockCategoriesFindByGroupId.mockReset();
     mockFetchReceiptData.mockReset();
     mockParseReceipt.mockReset();
@@ -508,6 +515,7 @@ describe('POST /api/receipt/scan', () => {
   test('fetchReceiptData failure → 500 SCAN_FAILED', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.reject(new Error('Network error')));
 
@@ -524,6 +532,7 @@ describe('POST /api/receipt/scan', () => {
   test('extractExpensesFromReceipt failure → 500 SCAN_FAILED', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockParseReceipt.mockImplementation(() => Promise.reject(new Error('AI extraction failed')));
@@ -540,6 +549,7 @@ describe('POST /api/receipt/scan', () => {
   test('successful scan → 200 with mapped items and currency', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => [
       stubCategory('Продукты'),
       stubCategory('Разное'),
@@ -592,6 +602,7 @@ describe('POST /api/receipt/scan', () => {
   test('successful scan without currency → 200 without currency field', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockFetchReceiptData.mockImplementation(() => Promise.resolve('<html>receipt</html>'));
     mockParseReceipt.mockImplementation(() =>
@@ -624,6 +635,7 @@ describe('POST /api/receipt/scan', () => {
   test('categories are loaded from DB and passed to extractor', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => [
       stubCategory('Еда'),
       stubCategory('Транспорт'),
@@ -686,6 +698,7 @@ describe('POST /api/receipt/ocr', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockCategoriesFindByGroupId.mockReset();
     mockParseReceipt.mockReset();
     mockExtractTextFromImageBuffer.mockReset();
@@ -701,7 +714,8 @@ describe('POST /api/receipt/ocr', () => {
 
   test('missing image field → 400 BAD_REQUEST', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 })); // membership check
+    mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true); // membership check
     const initData = buildInitData(42);
     const req = makeOcrRequest(OCR_PATH, false, initData);
     const res = await handleMiniAppRequest(req, CORS_ORIGIN);
@@ -721,7 +735,8 @@ describe('POST /api/receipt/ocr', () => {
 
   test('wrong MIME type → 415 UNSUPPORTED_MEDIA_TYPE', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 })); // membership check
+    mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true); // membership check
     const initData = buildInitData(42);
     const formData = new FormData();
     formData.append(
@@ -743,7 +758,8 @@ describe('POST /api/receipt/ocr', () => {
 
   test('image exceeds 2 MB → 413 PAYLOAD_TOO_LARGE', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
-    mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 })); // membership check
+    mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true); // membership check
     const initData = buildInitData(42);
     const bigBuffer = Buffer.alloc(2 * 1024 * 1024 + 1);
     const formData = new FormData();
@@ -763,6 +779,7 @@ describe('POST /api/receipt/ocr', () => {
   test('OCR failure → 500 OCR_FAILED', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockExtractTextFromImageBuffer.mockImplementation(() =>
       Promise.reject(new Error('Qwen API down')),
@@ -781,6 +798,7 @@ describe('POST /api/receipt/ocr', () => {
   test('success → 200 with items and file_id', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => [stubCategory('Продукты')]);
     mockExtractTextFromImageBuffer.mockImplementation(() =>
       Promise.resolve('Store: TestMart\nMilk 2x85.50'),
@@ -838,6 +856,7 @@ describe('POST /api/receipt/ocr', () => {
   test('success with Telegram upload failure → 200 with file_id: null', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockCategoriesFindByGroupId.mockImplementation(() => []);
     mockExtractTextFromImageBuffer.mockImplementation(() => Promise.resolve('some receipt text'));
     mockParseReceipt.mockImplementation(() =>
@@ -881,6 +900,7 @@ describe('POST /api/receipt/confirm', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockDbExec.mockReset();
     mockGroupsFindById.mockReset();
     mockExpenseRecorderRecord.mockReset();
@@ -925,6 +945,7 @@ describe('POST /api/receipt/confirm', () => {
   test('success → 200 { created: N } with one expense per unique category', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     // Both items are Food → recordReceipt groups them into one category expense
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
@@ -967,6 +988,7 @@ describe('POST /api/receipt/confirm', () => {
     // MOCK_USER.id = 1 (internal), telegram_id = 42
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
         expenses: [{ expense: stubExpense({ id: 88 }), eurAmount: 5 }],
@@ -993,6 +1015,7 @@ describe('POST /api/receipt/confirm', () => {
   test('passes fileId to recordReceipt as receiptFileId', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
         expenses: [{ expense: stubExpense({ id: 77 }), eurAmount: 5 }],
@@ -1023,6 +1046,7 @@ describe('POST /api/receipt/confirm', () => {
   test('70 items in one category → ONE recordReceipt call, ONE created (regression)', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
         expenses: [{ expense: stubExpense({ id: 100 }), eurAmount: 60 }],
@@ -1071,6 +1095,7 @@ describe('GET /api/analytics', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockDbQueryAll.mockReset();
     mockGroupsFindById.mockReset();
   });
@@ -1085,6 +1110,7 @@ describe('GET /api/analytics', () => {
   test('success → 200 with correct shape', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockGroupsFindById.mockImplementation(() => stubGroup({ telegram_group_id: GROUP_ID }));
     mockDbQueryAll.mockImplementation(() => [
       { category: 'Food', total: 100 },
@@ -1126,6 +1152,7 @@ describe('GET /api/dashboard', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
   });
 
   test('auth failure → 401', async () => {
@@ -1138,6 +1165,7 @@ describe('GET /api/dashboard', () => {
   test('no saved config → 200 { widgets: [], updatedAt: null }', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
 
     // dashboard query returns null — no existing row
     mockDbQueryOne.mockImplementation(() => null);
@@ -1155,6 +1183,7 @@ describe('GET /api/dashboard', () => {
   test('existing config → 200 with widgets and updatedAt', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
 
     mockDbQueryOne.mockImplementation(() => ({
       config: '[{"id":"w1"}]',
@@ -1183,6 +1212,7 @@ describe('PUT /api/dashboard', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockDbExec.mockReset();
   });
 
@@ -1200,6 +1230,7 @@ describe('PUT /api/dashboard', () => {
   test('success insert (no existing row) → 200 { ok: true, updatedAt }', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockDbQueryOne.mockImplementation(() => null); // no existing dashboard row
 
     const initData = buildInitData(42);
@@ -1224,6 +1255,7 @@ describe('PUT /api/dashboard', () => {
   test('conflict when updatedAt mismatch → 409 CONFLICT', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
     mockDbQueryOne.mockImplementation(
       () => ({ updated_at: '2025-01-01T00:00:00.000Z' }), // existing row with different timestamp
     );
@@ -1248,6 +1280,7 @@ describe('PUT /api/dashboard', () => {
   test('update success when updatedAt matches → 200', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
 
     const storedUpdatedAt = '2025-01-01T00:00:00.000Z';
     mockDbQueryOne.mockImplementation(() => ({ updated_at: storedUpdatedAt }));
@@ -1280,6 +1313,7 @@ describe('GET /api/dashboard/events', () => {
     mockGroupsFindByTelegramGroupId.mockReset();
     mockUsersCreate.mockClear();
     mockUsersUpdate.mockClear();
+    mockGroupMembersIsMember.mockReset().mockReturnValue(false);
     mockSubscribeGroup.mockReset();
     mockSubscribeGroup.mockImplementation(() => () => {});
   });
@@ -1294,6 +1328,7 @@ describe('GET /api/dashboard/events', () => {
   test('valid auth → 200 with text/event-stream Content-Type', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+    mockGroupMembersIsMember.mockReturnValue(true);
 
     const initData = buildInitData(42);
     const req = makeRequest(
