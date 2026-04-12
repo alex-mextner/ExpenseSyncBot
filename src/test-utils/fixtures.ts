@@ -69,3 +69,45 @@ export function makeExpense(
     ...overrides,
   };
 }
+
+/** Minimal valid FinancialSnapshot with neutral values. Override individual fields as needed. */
+export function buildNeutralSnapshot(
+  overrides: Partial<import('../services/analytics/types').FinancialSnapshot> = {},
+): import('../services/analytics/types').FinancialSnapshot {
+  return {
+    burnRates: [],
+    weekTrend: {
+      period: 'week',
+      current_total: 0,
+      previous_total: 0,
+      change_percent: 0,
+      direction: 'stable',
+      category_changes: [],
+    },
+    monthTrend: {
+      period: 'month',
+      current_total: 0,
+      previous_total: 0,
+      change_percent: 0,
+      direction: 'stable',
+      category_changes: [],
+    },
+    anomalies: [],
+    dayOfWeekPatterns: [],
+    velocity: {
+      period_1_daily_avg: 0,
+      period_2_daily_avg: 0,
+      acceleration: 0,
+      trend: 'stable',
+    },
+    budgetUtilization: null,
+    streak: {
+      current_streak_days: 0,
+      streak_type: 'no_spending',
+      avg_daily_during_streak: 0,
+      overall_daily_average: 0,
+    },
+    projection: null,
+    ...overrides,
+  };
+}
