@@ -9,7 +9,12 @@
 
 import { escapeHtml, sanitizeHtmlForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { deleteMessage, editMessageText, sendMessage } from '../bank/telegram-sender';
+import {
+  deleteMessage,
+  editMessageText,
+  sendChatAction,
+  sendMessage,
+} from '../bank/telegram-sender';
 
 const logger = createLogger('status-writer');
 
@@ -40,6 +45,7 @@ export class StatusWriter {
   private lastErrorTime = 0;
   private flushInProgress = false;
   private closed = false;
+  private typingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(private options: StatusWriterOptions) {
     // Send initial placeholder immediately — editMessageText will update it in-place.
@@ -49,6 +55,18 @@ export class StatusWriter {
         logger.error({ err }, '[STATUS_WRITER] Failed to send placeholder');
         return null;
       });
+
+    // Show "typing" indicator while AI is generating
+    this.typingInterval = setInterval(() => {
+      sendChatAction().catch(() => {});
+    }, 4000);
+  }
+
+  private stopTyping(): void {
+    if (this.typingInterval) {
+      clearInterval(this.typingInterval);
+      this.typingInterval = null;
+    }
   }
 
   /**
@@ -80,6 +98,7 @@ export class StatusWriter {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.stopTyping();
     const messageId = await this.messageIdPromise;
     if (messageId === null) return;
     try {
@@ -101,6 +120,7 @@ export class StatusWriter {
   async finalize(finalText: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.stopTyping();
     const messageId = await this.messageIdPromise;
     if (messageId === null) {
       throw new Error('[STATUS_WRITER] Cannot finalize — placeholder never sent');
@@ -120,6 +140,7 @@ export class StatusWriter {
   async finalizeError(errorSuffix: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.stopTyping();
     const messageId = await this.messageIdPromise;
     if (messageId === null) return;
     const body = this.formatDisplay(this.buffer);
@@ -163,18 +184,20 @@ export class StatusWriter {
     }
 
     const mode = this.options.mode ?? 'code';
+    // Append "..." to indicate the AI is still writing
+    const typingIndicator = this.closed ? '' : '...';
     if (mode === 'code') {
       // Escape all HTML special chars so the streaming output can never produce
       // malformed markup that Telegram rejects. The <code>…</code> wrapper is
       // guaranteed balanced.
-      return `${this.options.header}\n\n<code>${escapeHtml(trimmed)}</code>`;
+      return `${this.options.header}\n\n<code>${escapeHtml(trimmed)}${typingIndicator}</code>`;
     }
 
     // Plain mode — sanitize with the full Telegram sanitizer so whitelisted
     // tags survive and everything else is escaped + unmatched tags are closed.
     // Safe even on partial mid-stream output.
     const safeBody = sanitizeHtmlForTelegram(trimmed);
-    return `${this.options.header}\n\n${safeBody}`;
+    return `${this.options.header}\n\n${safeBody}${typingIndicator}`;
   }
 
   private truncateBuffer(buffer: string): string {

@@ -36,6 +36,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
     fn(),
   editMessageText: mock(() => Promise.resolve()),
   sendDirect: mock(() => Promise.resolve(null)),
+  sendChatAction: mock(() => Promise.resolve()),
 }));
 
 const { handleReconnectCommand } = await import('./reconnect');

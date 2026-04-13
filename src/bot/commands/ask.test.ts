@@ -119,6 +119,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: mockSendMessage,
   editMessageText: mock(async () => undefined),
   deleteMessage: mock(async () => undefined),
+  sendChatAction: mock(async () => undefined),
   withChatContext: async (_chatId: number, _threadId: number | null, fn: () => Promise<unknown>) =>
     fn(),
 }));
@@ -208,24 +209,43 @@ describe('handleAdviceCommand — stream abort safety', () => {
     expect(writerCalls.finalized[0]).toContain('Ситуация нормальная');
   });
 
-  test('preserves partial content via finalizeError when aiStreamRound rejects mid-stream', async () => {
+  test('retries once on failure and succeeds on second attempt', async () => {
+    // First attempt fails
+    mockAiStreamRound.mockImplementationOnce(async () => {
+      throw new Error('provider timeout');
+    });
+    // Second attempt succeeds
+    successfulStream(['Всё хорошо']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+    // First writer was closed (message deleted), second was finalized with the result
+    expect(writerCalls.closed).toBe(1);
+    expect(writerCalls.finalized).toHaveLength(1);
+    expect(writerCalls.finalized[0]).toContain('Всё хорошо');
+    expect(writerCalls.finalizedErrors).toHaveLength(0);
+    expect(logMock.warn).toHaveBeenCalled();
+  });
+
+  test('shows error after both attempts fail', async () => {
+    // Both attempts fail
     mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
-      // Emit a partial delta, then fail — simulates a stream that starts writing
-      // and then dies mid-way (abort, network drop, provider hang timing out).
       callbacks?.onTextDelta?.('Critical situati');
       throw new Error('stream aborted mid-flight');
+    });
+    mockAiStreamRound.mockImplementationOnce(async () => {
+      throw new Error('second attempt also failed');
     });
 
     await handleAdviceCommand(fakeCtx(), fakeGroup());
 
-    expect(writerCalls.appended).toEqual(['Critical situati']);
-    // Do NOT delete the partial message — pin an error indicator on it instead,
-    // so the user sees what was generated so far plus a clear failure marker.
-    expect(writerCalls.closed).toBe(0);
+    expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+    // First writer was closed (deleted), second writer shows error
+    expect(writerCalls.closed).toBe(1);
     expect(writerCalls.finalized).toHaveLength(0);
     expect(writerCalls.finalizedErrors).toHaveLength(1);
     expect(writerCalls.finalizedErrors[0]).toContain('Генерация прервана');
-    // Outer catch in sendSmartAdvice logs the failure but does not throw.
     expect(logMock.error).toHaveBeenCalled();
   });
 });

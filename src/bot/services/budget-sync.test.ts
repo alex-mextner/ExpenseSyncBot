@@ -102,6 +102,7 @@ const mockWithChatContext = mock(
 mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: mockSendMessage,
   withChatContext: mockWithChatContext,
+  sendChatAction: mock(),
 }));
 
 // ── Import after mocks ──
