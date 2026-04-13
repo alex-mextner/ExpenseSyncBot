@@ -1064,24 +1064,24 @@ describe('projectCategory', () => {
 
 describe('burn rate: single large expense early in month', () => {
   test('single large expense does not produce critical status (with or without history)', () => {
-    // Group 10: budget 500 EUR for "Car", single expense of 200 EUR
+    // Group 40: budget 500 EUR for "Car", single expense of 200 EUR
     db.run(
       `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
-      [10, 101010, 'EUR', '["EUR"]'],
+      [40, 404040, 'EUR', '["EUR"]'],
     );
     db.run(
       `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
-      [10, 'Car', currentMonth, 500, 'EUR'],
+      [40, 'Car', currentMonth, 500, 'EUR'],
     );
     // Single expense: 200 EUR → naive projection on day 4 = 200/4*30 = 1500 → critical
     db.run(
       `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [10, USER_ID, today, 'Car', 'repair', 200, 'EUR', 200],
+      [40, USER_ID, today, 'Car', 'repair', 200, 'EUR', 200],
     );
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = analytics.testComputeBurnRates(10, now, currentMonth, monthStart, today);
+    const burnRates = analytics.testComputeBurnRates(40, now, currentMonth, monthStart, today);
 
     expect(burnRates.length).toBe(1);
     const carBurn = burnRates[0];
@@ -1094,14 +1094,14 @@ describe('burn rate: single large expense early in month', () => {
   });
 
   test('category with historical pattern uses EMA for projection', () => {
-    // Group 11: has 3 months of Car history averaging ~100 EUR/month
+    // Group 41: has 3 months of Car history averaging ~100 EUR/month
     db.run(
       `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
-      [11, 111111, 'EUR', '["EUR"]'],
+      [41, 414141, 'EUR', '["EUR"]'],
     );
     db.run(
       `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
-      [11, 'Car', currentMonth, 500, 'EUR'],
+      [41, 'Car', currentMonth, 500, 'EUR'],
     );
 
     // Historical data: 3 months of ~100 EUR
@@ -1121,7 +1121,7 @@ describe('burn rate: single large expense early in month', () => {
       db.run(
         `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [11, USER_ID, d, 'Car', 'fuel', 100, 'EUR', 100],
+        [41, USER_ID, d, 'Car', 'fuel', 100, 'EUR', 100],
       );
     }
 
@@ -1129,11 +1129,11 @@ describe('burn rate: single large expense early in month', () => {
     db.run(
       `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [11, USER_ID, today, 'Car', 'fuel', 80, 'EUR', 80],
+      [41, USER_ID, today, 'Car', 'fuel', 80, 'EUR', 80],
     );
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const burnRates = analytics.testComputeBurnRates(11, now, currentMonth, monthStart, today);
+    const burnRates = analytics.testComputeBurnRates(41, now, currentMonth, monthStart, today);
 
     expect(burnRates.length).toBe(1);
     const carBurn = burnRates[0];

@@ -101,7 +101,13 @@ export class SpendingAnalytics {
         budgets,
         categoryTotals,
       ),
-      technicalAnalysis: this.computeTechnicalAnalysis(groupId, now, currentMonthStart, today),
+      technicalAnalysis: this.computeTechnicalAnalysis(
+        groupId,
+        now,
+        currentMonthStart,
+        today,
+        categoryTotals,
+      ),
     };
   }
 
@@ -826,6 +832,7 @@ export class SpendingAnalytics {
     now: Date,
     currentMonthStart: string,
     today: string,
+    prefetchedCategoryTotals?: CategoryTotal[],
   ): TechnicalAnalysis | null {
     // Use 12 months of history for TA (more than the 6 used for profiles)
     const historyStart = format(subMonths(startOfMonth(now), 12), 'yyyy-MM-dd');
@@ -849,7 +856,9 @@ export class SpendingAnalytics {
     }
 
     // Get current month spending per category for anomaly detection
-    const currentTotals = database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
+    const currentTotals =
+      prefetchedCategoryTotals ??
+      database.expenses.getCategoryTotals(groupId, currentMonthStart, today);
     const currentByCategory = new Map<string, number>();
     for (const row of currentTotals) {
       currentByCategory.set(row.category, row.total);
