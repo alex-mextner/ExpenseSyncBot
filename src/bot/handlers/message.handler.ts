@@ -743,17 +743,10 @@ async function handleBulkCorrectionInput(
  */
 export function buildBudgetAlertStatus(
   spentEur: number,
-  budget: { limit_amount: number; currency: string; category?: string },
+  budget: { category: string; limit_amount: number; currency: string },
 ): { spentInCurrency: number; percentage: number; isExceeded: boolean; isWarning: boolean } {
   const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency as CurrencyCode);
-  const progress = computeBudgetProgress(
-    {
-      category: budget.category ?? '',
-      limit_amount: budget.limit_amount,
-      currency: budget.currency,
-    },
-    spentInCurrency,
-  );
+  const progress = computeBudgetProgress(budget, spentInCurrency);
   return {
     spentInCurrency,
     percentage: progress.percentage,

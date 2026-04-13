@@ -3,7 +3,7 @@
 import type { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
-import { BudgetRepository } from './budget.repository';
+import { BudgetRepository, computeBudgetProgress } from './budget.repository';
 import { GroupRepository } from './group.repository';
 
 let db: Database;
@@ -407,6 +407,18 @@ describe('BudgetRepository', () => {
       expect(progress?.is_warning).toBe(false);
     });
 
+    test('is_warning false when exceeded (not both)', () => {
+      budgetRepo.setBudget({
+        group_id: groupId,
+        category: 'Food',
+        month: '2024-01',
+        limit_amount: 100,
+      });
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 110);
+      expect(progress?.is_exceeded).toBe(true);
+      expect(progress?.is_warning).toBe(false);
+    });
+
     test('returns null when no budget exists', () => {
       expect(budgetRepo.getBudgetProgress(groupId, 'NoCategory', '2024-01', 50)).toBeNull();
     });
@@ -495,5 +507,83 @@ describe('BudgetRepository', () => {
       groupRepo.delete(tgId);
       expect(budgetRepo.findById(budget.id)).toBeNull();
     });
+  });
+});
+
+describe('computeBudgetProgress (pure function)', () => {
+  const budget = { category: 'Food', limit_amount: 500, currency: 'EUR' };
+
+  test('computes correct percentage', () => {
+    const progress = computeBudgetProgress(budget, 250);
+    expect(progress.percentage).toBe(50);
+    expect(progress.is_exceeded).toBe(false);
+    expect(progress.is_warning).toBe(false);
+  });
+
+  test('returns 0% when limit_amount is 0', () => {
+    const zeroBudget = { category: 'Zero', limit_amount: 0, currency: 'EUR' };
+    const progress = computeBudgetProgress(zeroBudget, 100);
+    expect(progress.percentage).toBe(0);
+    expect(progress.is_exceeded).toBe(true);
+  });
+
+  test('returns 0% when spentAmount is 0', () => {
+    const progress = computeBudgetProgress(budget, 0);
+    expect(progress.percentage).toBe(0);
+    expect(progress.is_exceeded).toBe(false);
+    expect(progress.is_warning).toBe(false);
+  });
+
+  test('is_warning at exactly 90%', () => {
+    const progress = computeBudgetProgress(budget, 450);
+    expect(progress.percentage).toBe(90);
+    expect(progress.is_warning).toBe(true);
+    expect(progress.is_exceeded).toBe(false);
+  });
+
+  test('is_warning at exactly 100% (not exceeded — equal)', () => {
+    const progress = computeBudgetProgress(budget, 500);
+    expect(progress.percentage).toBe(100);
+    expect(progress.is_warning).toBe(true);
+    expect(progress.is_exceeded).toBe(false);
+  });
+
+  test('is_exceeded when spending exceeds limit', () => {
+    const progress = computeBudgetProgress(budget, 501);
+    expect(progress.percentage).toBe(100);
+    expect(progress.is_exceeded).toBe(true);
+    expect(progress.is_warning).toBe(false);
+  });
+
+  test('is_warning and is_exceeded are mutually exclusive', () => {
+    // At 95%: warning, not exceeded
+    const w = computeBudgetProgress(budget, 475);
+    expect(w.is_warning).toBe(true);
+    expect(w.is_exceeded).toBe(false);
+
+    // At 120%: exceeded, not warning
+    const e = computeBudgetProgress(budget, 600);
+    expect(e.is_exceeded).toBe(true);
+    expect(e.is_warning).toBe(false);
+  });
+
+  test('returns correct spent_amount and limit_amount passthrough', () => {
+    const progress = computeBudgetProgress(budget, 123.45);
+    expect(progress.spent_amount).toBe(123.45);
+    expect(progress.limit_amount).toBe(500);
+    expect(progress.category).toBe('Food');
+    expect(progress.currency).toBe('EUR');
+  });
+
+  test('handles negative spentAmount gracefully', () => {
+    const progress = computeBudgetProgress(budget, -50);
+    expect(progress.percentage).toBe(-10);
+    expect(progress.is_exceeded).toBe(false);
+    expect(progress.is_warning).toBe(false);
+  });
+
+  test('rounds percentage to nearest integer', () => {
+    const progress = computeBudgetProgress({ ...budget, limit_amount: 300 }, 100);
+    expect(progress.percentage).toBe(33);
   });
 });

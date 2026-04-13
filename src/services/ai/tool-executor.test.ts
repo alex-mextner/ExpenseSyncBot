@@ -215,9 +215,9 @@ mock.module('../../bot/services/budget-sync', () => ({
   silentSyncBudgets: mock(() => Promise.resolve(0)),
 }));
 
-// Mock spending analytics — used by get_technical_analysis tool
+// Mock spending analytics — used by get_technical_analysis and get_budgets tools
 // biome-ignore lint/suspicious/noExplicitAny: test mock returns partial FinancialSnapshot
-const mockGetFinancialSnapshot = mock((): any => ({ technicalAnalysis: null }));
+const mockGetFinancialSnapshot = mock((): any => ({ technicalAnalysis: null, burnRates: [] }));
 mock.module('../analytics/spending-analytics', () => ({
   spendingAnalytics: {
     getFinancialSnapshot: mockGetFinancialSnapshot,
@@ -762,6 +762,149 @@ describe('get_budgets batch', () => {
       ctx,
     );
     expect(result.success).toBe(true);
+  });
+});
+
+describe('get_budgets enriched output', () => {
+  beforeEach(resetAllMocks);
+
+  test('current month shows EMA-based burn rate and projected total from spendingAnalytics', async () => {
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    mockBudgets.getAllBudgetsForMonth.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        category: 'Food',
+        month: currentMonth,
+        limit_amount: 500,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: `${currentMonth}-05`,
+        category: 'Food',
+        comment: '',
+        amount: 200,
+        currency: 'EUR',
+        eur_amount: 200,
+        receipt_id: null,
+        receipt_file_id: null,
+        created_at: '',
+      },
+    ]);
+    // EMA-based burn rate from spendingAnalytics
+    mockGetFinancialSnapshot.mockReturnValue({
+      technicalAnalysis: null,
+      burnRates: [
+        {
+          category: 'Food',
+          budget_limit: 500,
+          spent: 200,
+          currency: 'EUR',
+          days_elapsed: now.getDate(),
+          days_remaining: 30 - now.getDate(),
+          daily_burn_rate: 15.5,
+          projected_total: 465,
+          projected_overshoot: -35,
+          runway_days: 19.4,
+          status: 'warning',
+        },
+      ],
+    });
+
+    const result = await executeTool('get_budgets', { month: currentMonth }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('burn:');
+    expect(result.output).toContain('15.50');
+    expect(result.output).toContain('projected:');
+    expect(result.output).toContain('465.00');
+    expect(result.output).toContain('runway:');
+    expect(result.output).toContain('19d');
+    expect(result.output).toContain('Grand Total:');
+  });
+
+  test('past month does not show burn rate details', async () => {
+    mockBudgets.getAllBudgetsForMonth.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        category: 'Food',
+        month: '2025-01',
+        limit_amount: 500,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    mockExpenses.findByDateRange.mockReturnValue([]);
+
+    const result = await executeTool('get_budgets', { month: '2025-01' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).not.toContain('burn:');
+    expect(result.output).not.toContain('projected:');
+    expect(result.output).not.toContain('runway:');
+  });
+
+  test('grand total shows inline percentage without synthetic budget object', async () => {
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    mockBudgets.getAllBudgetsForMonth.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        category: 'Food',
+        month: currentMonth,
+        limit_amount: 300,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        category: 'Transport',
+        month: currentMonth,
+        limit_amount: 200,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    mockExpenses.findByDateRange.mockReturnValue([
+      {
+        id: 1,
+        group_id: 1,
+        user_id: 123,
+        date: `${currentMonth}-05`,
+        category: 'Food',
+        comment: '',
+        amount: 150,
+        currency: 'EUR',
+        eur_amount: 150,
+        receipt_id: null,
+        receipt_file_id: null,
+        created_at: '',
+      },
+    ]);
+    mockGetFinancialSnapshot.mockReturnValue({
+      technicalAnalysis: null,
+      burnRates: [],
+    });
+
+    const result = await executeTool('get_budgets', { month: currentMonth }, ctx);
+    expect(result.success).toBe(true);
+    // Grand Total: 150 / 500 = 30%
+    expect(result.output).toContain('Grand Total:');
+    expect(result.output).toContain('30%');
   });
 });
 
