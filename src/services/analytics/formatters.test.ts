@@ -1,13 +1,18 @@
 import { describe, expect, mock, test } from 'bun:test';
+import type { BankAccount, BankTransaction } from '../../database/types';
 import { mockDatabase } from '../../test-utils/mocks/database';
-import { computeOverallSeverity, formatSnapshotForPrompt } from './formatters';
+
+const bankAccountsFindByGroupId = mock(() => [] as BankAccount[]);
+const bankTransactionsFindByGroupId = mock(() => [] as BankTransaction[]);
 
 mock.module('../../database', () => ({
   database: mockDatabase({
-    bankAccounts: { findByGroupId: mock(() => []) },
-    bankTransactions: { findByGroupId: mock(() => []) },
+    bankAccounts: { findByGroupId: bankAccountsFindByGroupId },
+    bankTransactions: { findByGroupId: bankTransactionsFindByGroupId },
   }),
 }));
+
+import { computeOverallSeverity, formatSnapshotForPrompt } from './formatters';
 
 import type {
   BudgetBurnRate,
@@ -90,6 +95,51 @@ function makeProjection(overrides: Partial<MonthlyProjection> = {}): MonthlyProj
     projected_vs_last_month: 10,
     confidence: 'medium',
     category_projections: [],
+    ...overrides,
+  };
+}
+
+function makeBankAccount(overrides: Partial<BankAccount> = {}): BankAccount {
+  return {
+    id: 1,
+    connection_id: 1,
+    account_id: 'acc1',
+    title: 'Main Card',
+    balance: 1000,
+    currency: 'EUR',
+    type: 'card',
+    is_excluded: 0,
+    updated_at: '2026-04-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function makeBankTransaction(overrides: Partial<BankTransaction> = {}): BankTransaction {
+  return {
+    id: 1,
+    connection_id: 1,
+    external_id: 'tx1',
+    account_id: 'acc1',
+    date: '2026-04-10',
+    time: '12:00',
+    amount: -50,
+    sign_type: 'debit',
+    currency: 'EUR',
+    merchant: 'Grocery Store',
+    merchant_normalized: null,
+    mcc: 5411,
+    raw_data: '{}',
+    invoice_amount: null,
+    invoice_currency: null,
+    matched_expense_id: null,
+    matched_receipt_id: null,
+    telegram_message_id: null,
+    edit_in_progress: 0,
+    awaiting_comment: 0,
+    prefill_category: null,
+    prefill_comment: null,
+    status: 'confirmed',
+    created_at: '2026-04-10T12:00:00Z',
     ...overrides,
   };
 }
@@ -301,5 +351,93 @@ describe('formatSnapshotForPrompt — full snapshot', () => {
     expect(output).toContain('ПРОГНОЗ');
     expect(output).toContain('СКОРОСТЬ ТРАТ');
     expect(output).toContain('СЕРИЯ ТРАТ');
+  });
+});
+
+describe('formatSnapshotForPrompt — bank sections', () => {
+  test('includes bank balances when accounts exist', () => {
+    bankAccountsFindByGroupId.mockReturnValueOnce([
+      makeBankAccount({ title: 'Mastercard', balance: 1234.56, currency: 'EUR' }),
+      makeBankAccount({ id: 2, title: 'Visa RSD', balance: 55000, currency: 'RSD' }),
+    ]);
+
+    const snapshot = makeSnapshot();
+    const output = formatSnapshotForPrompt(snapshot, 1);
+
+    expect(output).toContain('## Банковские балансы');
+    expect(output).toContain('Mastercard: 1234.56 EUR');
+    expect(output).toContain('Visa RSD: 55000.00 RSD');
+  });
+
+  test('includes confirmed bank transactions with merchant info', () => {
+    bankTransactionsFindByGroupId.mockReturnValueOnce([
+      makeBankTransaction({
+        date: '2026-04-10',
+        amount: -42.5,
+        currency: 'EUR',
+        merchant: 'LIDL STORE 123',
+        merchant_normalized: 'Lidl',
+      }),
+      makeBankTransaction({
+        id: 2,
+        date: '2026-04-09',
+        amount: -15,
+        currency: 'EUR',
+        merchant: 'Unknown Merchant',
+        merchant_normalized: null,
+      }),
+      makeBankTransaction({
+        id: 3,
+        date: '2026-04-08',
+        amount: -100,
+        currency: 'RSD',
+        merchant: null,
+        merchant_normalized: null,
+      }),
+    ]);
+
+    const snapshot = makeSnapshot();
+    const output = formatSnapshotForPrompt(snapshot, 1);
+
+    expect(output).toContain('## Подтверждённые банковские транзакции');
+    // merchant_normalized takes precedence over merchant
+    expect(output).toContain('2026-04-10 -42.5 EUR — Lidl');
+    // falls back to merchant when merchant_normalized is null
+    expect(output).toContain('2026-04-09 -15 EUR — Unknown Merchant');
+    // falls back to dash when both are null
+    expect(output).toContain('2026-04-08 -100 RSD — —');
+  });
+
+  test('only first 20 transactions are included (slice cap)', () => {
+    const transactions = Array.from({ length: 25 }, (_, i) =>
+      makeBankTransaction({
+        id: i + 1,
+        external_id: `tx${i + 1}`,
+        date: '2026-04-10',
+        amount: -(i + 1),
+        currency: 'EUR',
+        merchant: `Store ${i + 1}`,
+      }),
+    );
+    bankTransactionsFindByGroupId.mockReturnValueOnce(transactions);
+
+    const snapshot = makeSnapshot();
+    const output = formatSnapshotForPrompt(snapshot, 1);
+
+    expect(output).toContain('## Подтверждённые банковские транзакции');
+    // First 20 should be present
+    expect(output).toContain('Store 20');
+    // Items 21-25 should be absent
+    expect(output).not.toContain('Store 21');
+    expect(output).not.toContain('Store 25');
+  });
+
+  test('bank sections omitted when no data exists', () => {
+    // Default mocks return empty arrays
+    const snapshot = makeSnapshot();
+    const output = formatSnapshotForPrompt(snapshot, 1);
+
+    expect(output).not.toContain('Банковские балансы');
+    expect(output).not.toContain('Подтверждённые банковские транзакции');
   });
 });

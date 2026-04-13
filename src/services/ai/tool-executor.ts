@@ -7,6 +7,7 @@ import { endOfMonth, format, getDaysInMonth } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
+import { computeBudgetProgress } from '../../database/repositories/budget.repository';
 import type { BankTransaction, BankTransactionFilters, Expense } from '../../database/types';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
@@ -321,7 +322,8 @@ async function executeGetBudgets(
   input: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const months = normalizeArrayParam(input['month'], format(new Date(), 'yyyy-MM'));
+  const now = new Date();
+  const months = normalizeArrayParam(input['month'], format(now, 'yyyy-MM'));
   const categories = normalizeArrayParam(input['category']);
   const isBatch = months.length > 1;
 
@@ -330,6 +332,24 @@ async function executeGetBudgets(
 
   const allLines: string[] = [];
   let grandTotalEur = 0;
+
+  const nowMonth = format(now, 'yyyy-MM');
+
+  // Pre-compute EMA-based burn rates for current month (avoids naive linear projection)
+  const burnRateMap = new Map<
+    string,
+    { projected_total: number; daily_burn_rate: number; runway_days: number }
+  >();
+  if (months.includes(nowMonth)) {
+    const snapshot = spendingAnalytics.getFinancialSnapshot(ctx.groupId);
+    for (const br of snapshot.burnRates) {
+      burnRateMap.set(br.category, {
+        projected_total: br.projected_total,
+        daily_burn_rate: br.daily_burn_rate,
+        runway_days: br.runway_days,
+      });
+    }
+  }
 
   for (const month of months) {
     let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
@@ -346,7 +366,8 @@ async function executeGetBudgets(
     }
 
     const monthStart = `${month}-01`;
-    const monthEnd = format(endOfMonth(new Date(`${month}-01`)), 'yyyy-MM-dd');
+    const monthDate = new Date(`${month}-01`);
+    const monthEnd = format(endOfMonth(monthDate), 'yyyy-MM-dd');
     const expenses = database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
 
     const spendingByCategory: Record<string, number> = {};
@@ -355,25 +376,79 @@ async function executeGetBudgets(
       grandTotalEur += e.eur_amount;
     }
 
+    // Days elapsed for header and grand total
+    const isCurrentMonth = nowMonth === month;
+    const daysInMonth = getDaysInMonth(monthDate);
+    const daysElapsed = isCurrentMonth ? now.getDate() : daysInMonth;
+    const daysRemaining = isCurrentMonth ? daysInMonth - daysElapsed : 0;
+
     if (isBatch) allLines.push(`=== ${month} ===`);
-    else allLines.push(`Budgets for ${month}:`, '');
+    else allLines.push(`Budgets for ${month} (day ${daysElapsed}/${daysInMonth}):`, '');
+
+    // Per-month totals in EUR (for single-month grand total)
+    let monthBudgetSpentEur = 0;
+    let monthBudgetLimitEur = 0;
 
     for (const budget of budgets) {
       const spentEur = spendingByCategory[budget.category] || 0;
       const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
-      const remaining = budget.limit_amount - spentInCurrency;
-      const percent =
-        budget.limit_amount > 0 ? Math.round((spentInCurrency / budget.limit_amount) * 100) : 0;
-      const status = remaining < 0 ? 'EXCEEDED' : percent >= 90 ? 'WARNING' : 'OK';
+      const progress = computeBudgetProgress(budget, spentInCurrency);
+      const status = progress.is_exceeded ? 'EXCEEDED' : progress.is_warning ? 'WARNING' : 'OK';
+
+      // Use EMA-based projections for current month (from spending-analytics)
+      let details = '';
+      if (isCurrentMonth && daysElapsed > 0) {
+        const br = burnRateMap.get(budget.category);
+        if (br) {
+          // EMA-based projection (budget currency, already computed by spending-analytics)
+          const projectedDisplay = formatAmount(br.projected_total, budget.currency, true);
+          const burnDisplay = formatAmount(br.daily_burn_rate, budget.currency, true);
+          const runwayStr = br.runway_days >= 999 ? '∞' : `${Math.round(br.runway_days)}d`;
+          details = ` | burn: ${burnDisplay}/day, projected: ${projectedDisplay}, runway: ${runwayStr}`;
+        } else {
+          // Fallback for categories without burn rate data (e.g. no spending yet)
+          const dailyBurn = spentInCurrency / daysElapsed;
+          const remaining = budget.limit_amount - spentInCurrency;
+          const runwayDays = dailyBurn > 0 ? Math.max(0, remaining / dailyBurn) : 999;
+          details = ` | burn: ${formatAmount(dailyBurn, budget.currency, true)}/day, projected: ${formatAmount(dailyBurn * daysInMonth, budget.currency, true)}, runway: ${runwayDays >= 999 ? '∞' : `${Math.round(runwayDays)}d`}`;
+        }
+      }
 
       allLines.push(
-        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${percent}%) [${status}]`,
+        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${progress.percentage}%) [${status}]${details}`,
       );
+
+      monthBudgetSpentEur += spentEur;
+      monthBudgetLimitEur += convertCurrency(budget.limit_amount, budget.currency, BASE_CURRENCY);
+    }
+
+    // Per-month grand total with burn/projection (single-month view only)
+    if (!isBatch) {
+      const monthSpentDisplay = convertCurrency(
+        monthBudgetSpentEur,
+        BASE_CURRENCY,
+        displayCurrency,
+      );
+      const monthLimitDisplay = convertCurrency(
+        monthBudgetLimitEur,
+        BASE_CURRENCY,
+        displayCurrency,
+      );
+      const grandPercentage =
+        monthLimitDisplay > 0 ? Math.round((monthSpentDisplay / monthLimitDisplay) * 100) : 0;
+      allLines.push('');
+      let grandLine = `Grand Total: ${formatAmount(monthSpentDisplay, displayCurrency, true)}/${formatAmount(monthLimitDisplay, displayCurrency, true)} (${grandPercentage}%)`;
+      if (isCurrentMonth && daysElapsed > 0) {
+        const grandDailyBurn = monthSpentDisplay / daysElapsed;
+        const grandProjected = grandDailyBurn * daysInMonth;
+        grandLine += ` | burn: ${formatAmount(grandDailyBurn, displayCurrency, true)}/day, projected: ${formatAmount(grandProjected, displayCurrency, true)}, ${daysRemaining}d left`;
+      }
+      allLines.push(grandLine);
     }
     allLines.push('');
   }
 
-  // Grand total across all months for batch (uses accumulated EUR total)
+  // Grand total across all months for batch (uses accumulated EUR total from all expenses)
   if (isBatch && grandTotalEur > 0) {
     const totalDisplay = convertCurrency(grandTotalEur, BASE_CURRENCY, displayCurrency);
     allLines.push(`=== Grand Total (${months.length} months) ===`);
