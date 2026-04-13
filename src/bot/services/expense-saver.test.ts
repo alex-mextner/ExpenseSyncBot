@@ -29,6 +29,7 @@ const sendDirect = mock(() => Promise.resolve(null));
 const editMessageText = mock(() => Promise.resolve(undefined));
 const deleteMessage = mock(() => Promise.resolve(undefined));
 const withChatContext = mock((_c: number, _t: number | null, fn: () => unknown) => fn());
+const sendChatAction = mock(() => Promise.resolve(undefined));
 
 // ── Database mocks ───────────────────────────────────────────────────────────
 
@@ -133,6 +134,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   editMessageText,
   deleteMessage,
   withChatContext,
+  sendChatAction,
 }));
 mock.module('../../database', () => ({ database: db }));
 mock.module('./budget-sync', () => ({ silentSyncBudgets: mock(() => Promise.resolve(0)) }));

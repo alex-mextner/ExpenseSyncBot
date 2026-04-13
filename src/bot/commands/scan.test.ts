@@ -13,6 +13,7 @@ mock.module('../../utils/miniapp-url', () => ({
 
 mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: sendMessageMock,
+  sendChatAction: mock(),
 }));
 
 import type { Ctx } from '../types';

@@ -32,9 +32,13 @@ const logger = createLogger('ask');
  * Without this, a provider stream that stalls mid-flight leaves the user
  * staring at a half-written status message forever (no client-side timeout
  * otherwise fires — the OpenAI SDK `timeout` only covers request setup).
- * 60s comfortably covers the deep tier's 3k token budget.
+ * Per-tier: deep (3k tokens) needs more time, especially with thinking models.
  */
-const ADVICE_TIMEOUT_MS = 60_000;
+const ADVICE_TIMEOUT_MS: Record<AdviceTier, number> = {
+  quick: 60_000,
+  alert: 90_000,
+  deep: 120_000,
+};
 
 /**
  * Handle questions to the bot via @botname question
@@ -280,27 +284,35 @@ async function sendSmartAdvice(
     // Live-stream the advice into an editable status message so the user sees
     // the long-form output building up in real time (3k tokens = 15-30s wait).
     const header = `${tierConfig.emoji} ${tierConfig.title}`;
-    const writer = new StatusWriter({ header, mode: 'plain' });
+    let writer = new StatusWriter({ header, mode: 'plain' });
 
-    let rawAdvice: string;
-    try {
-      const result = await aiStreamRound(
-        {
-          messages: [{ role: 'user', content: fullPrompt }],
-          maxTokens: tierConfig.max_tokens,
-          temperature: tierConfig.temperature,
-          chain: 'smart',
-          signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
-        },
-        { onTextDelta: (delta) => writer.append(delta) },
-      );
-      rawAdvice = result.text;
-    } catch (err) {
-      // Preserve whatever was already streamed and pin an error indicator on
-      // the end, so the user doesn't see the message silently vanish after the
-      // stream aborts (timeout, provider error, mid-stream hang).
-      await writer.finalizeError('<i>❌ Генерация прервана, попробуй ещё раз</i>');
-      throw err;
+    let rawAdvice: string | undefined;
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        const result = await aiStreamRound(
+          {
+            messages: [{ role: 'user', content: fullPrompt }],
+            maxTokens: tierConfig.max_tokens,
+            temperature: tierConfig.temperature,
+            chain: 'smart',
+            signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS[tier]),
+          },
+          { onTextDelta: (delta) => writer.append(delta) },
+        );
+        rawAdvice = result.text;
+        break;
+      } catch (err) {
+        if (attempt === 0) {
+          // First attempt failed — silently retry with a fresh message
+          logger.warn({ err }, '[ADVICE] First attempt failed, retrying');
+          await writer.close();
+          writer = new StatusWriter({ header, mode: 'plain' });
+          continue;
+        }
+        // Second attempt also failed — show error to the user
+        await writer.finalizeError('<i>❌ Генерация прервана, попробуй ещё раз</i>');
+        throw err;
+      }
     }
 
     if (!rawAdvice) {
@@ -388,71 +400,101 @@ function buildTieredPrompt(
 ): string {
   const antiRepetition =
     recentTopics.length > 0
-      ? `\nПоследние ${recentTopics.length} советов были на темы: ${JSON.stringify(recentTopics)}\nНЕ повторяй эти темы. Найди новый ракурс.\n`
+      ? `\nRecent ${recentTopics.length} advice topics: ${JSON.stringify(recentTopics)}\nDo NOT repeat these topics. Find a new angle.\n`
       : '';
 
+  const toneOfVoice = `
+TONE OF VOICE:
+Write like a friend who understands finances — simple, human, no bureaucratic or statistical jargon.
+Address the user informally ("ты" in Russian). Never say "пользователь", "наблюдается", "зафиксирован".
+
+BAD examples (❌):
+- "Обнаружен разрыв сильной корреляции r=+0.94"
+- "Зафиксирована аномалия отклонения 2.3σ в категории транспорт"
+- "Наблюдается acceleration spend velocity на 47%"
+- "Budget utilization составляет 89% при burn rate 1.2x"
+- "Медианное значение расходов демонстрирует восходящий тренд"
+
+GOOD examples (✅):
+- "Транспорт и еда раньше росли вместе, а в этом месяце еда улетела отдельно — стоит глянуть почему"
+- "На транспорт потратил в 2.3 раза больше обычного — 15 000 RSD вместо привычных 6 500"
+- "Темп трат ускорился почти вдвое за последнюю неделю"
+- "Бюджет на еду почти исчерпан — потрачено 89% (45 000 из 50 000 RSD)"
+- "Траты на еду понемногу растут каждый месяц"
+
+Rules:
+- Name specific amounts and categories but explain them in plain language
+- "в 2 раза больше обычного" instead of "deviation 2x"
+- "потрачено 80% бюджета" instead of "burn rate 0.8"
+- No correlation coefficients, sigmas, z-scores — translate into understandable words
+- Short sentences. One idea = one sentence`;
+
   const outputRules = `
-ПРАВИЛА ВЫВОДА:
-- Используй ТОЛЬКО HTML теги: <b>, <i>, <code>, <blockquote>. НЕ Markdown (**, *, \`, ##).
-- НЕ выдумывай ссылки! Не используй <a> без реальных URL.
-- Когда упоминаешь аномалию (Nx), ВСЕГДА объясняй простым языком, например: "4.5x — траты в 4.5 раза выше среднего за предыдущие 3 месяца".`;
+OUTPUT RULES:
+- Use ONLY these HTML tags: <b>, <i>, <code>, <blockquote>. NO Markdown (**, *, \`, ##).
+- Do NOT invent links! Do not use <a> without real URLs.
+- When mentioning anomalies (Nx), ALWAYS explain in plain language, e.g. "в 4.5 раза выше обычного за последние 3 месяца".
+- ALWAYS respond in Russian.`;
 
   if (tier === 'quick') {
-    return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
-Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
+    return `You are a financial assistant. You speak simply and to the point.
+Every statement MUST contain a specific number from the data.
+${toneOfVoice}
 
-УРОВЕНЬ СИТУАЦИИ: ${severity}
-${severity === 'good' ? 'Похвали и дай совет по оптимизации.' : 'Начни с самого важного наблюдения.'}
+SITUATION LEVEL: ${severity}
+${severity === 'good' ? 'Praise the user and give optimization advice.' : 'Start with the most important observation.'}
 
-ДАННЫЕ:
+DATA:
 ${snapshotText}
 ${antiRepetition}
 ${outputRules}
 
-Дай ОДИН конкретный финансовый инсайт на основе данных выше.
-Не философствуй. Назови конкретную цифру и конкретное действие.
-Максимум 1-2 предложения.`;
+Give ONE specific financial insight based on the data above.
+No philosophizing. Name a specific number and a specific action.
+Maximum 1-2 sentences.`;
   }
 
   if (tier === 'alert') {
-    return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
-Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
+    return `You are a financial assistant. You speak simply and to the point.
+Every statement MUST contain a specific number from the data.
+${toneOfVoice}
 
-УРОВЕНЬ СИТУАЦИИ: ${severity}
-ТРИГГЕР: ${trigger.type} — ${JSON.stringify(trigger.data)}
+SITUATION LEVEL: ${severity}
+TRIGGER: ${trigger.type} — ${JSON.stringify(trigger.data)}
 
-ДАННЫЕ:
+DATA:
 ${snapshotText}
 ${antiRepetition}
 ${outputRules}
 
-Обнаружена финансовая ситуация, требующая внимания.
-Опиши проблему с конкретными числами. Предложи 1-2 действия.
-3-5 предложений максимум.`;
+A financial situation requiring attention has been detected.
+Describe the problem with specific numbers. Suggest 1-2 actions.
+3-5 sentences maximum.`;
   }
 
   // Tier 3: deep
-  return `Ты — финансовый аналитик. Не философ. Не мотиватор. Аналитик.
-Каждое утверждение ДОЛЖНО содержать конкретную цифру из данных.
+  return `You are a financial assistant. You speak simply and to the point.
+Every statement MUST contain a specific number from the data.
+${toneOfVoice}
 
-УРОВЕНЬ СИТУАЦИИ: ${severity}
+SITUATION LEVEL: ${severity}
 
-ПРАВИЛА АНАЛИЗА:
-- Burn rate > 100% к текущему дню месяца = перерасход
-- Anomaly > 2x среднего = нужен alert
-- Budget utilization > 90% = concern, > 100% = critical
-- Week-over-week рост > 20% = тренд вверх
+ANALYSIS RULES (for your internal use, do NOT use these terms in the response):
+- Spent over 100% of budget by current day of month = overspending
+- Spending over 2x the average = problem
+- Budget used 90%+ = time to slow down, 100%+ = exceeded
+- Week-over-week spending growth 20%+ = rising trend
 
-ДАННЫЕ:
+DATA:
 ${snapshotText}
 ${antiRepetition}
 ${outputRules}
 
-Сделай полный финансовый обзор на основе данных.
-Структура:
-1. Общая картина (total spend vs budget, budget utilization)
-2. Тренды (week/month comparison)
-3. Проблемные категории (anomalies, exceeded budgets)
-4. Прогноз на конец месяца
-5. Рекомендации (max 3, конкретные, с числами)`;
+Create a full financial overview based on the data.
+Structure:
+1. Overall picture (total spent, budget utilization)
+2. Trends (week/month comparison)
+3. Problem categories (where spending is above normal, where budget is exceeded)
+4. End-of-month forecast
+5. Recommendations (max 3, specific, with numbers)`;
 }

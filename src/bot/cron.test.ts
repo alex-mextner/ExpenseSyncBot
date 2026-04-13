@@ -16,6 +16,7 @@ mock.module('../services/currency/converter', () => ({
 
 mock.module('../services/bank/telegram-sender', () => ({
   sendDirect: sendDirectMock,
+  sendChatAction: mock(),
 }));
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
