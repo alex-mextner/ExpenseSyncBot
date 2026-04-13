@@ -223,11 +223,7 @@ describe('computeStreak', () => {
 
     // Only expense 3 days ago, nothing since
     const threeDaysAgo = format(subDays(now, 3), 'yyyy-MM-dd');
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [2, USER_ID, threeDaysAgo, 'Food', 'test', 50, 'EUR', 50],
-    );
+    insertExpenseForGroup(2, threeDaysAgo, 'Food', 50);
 
     const streak = analytics.testComputeStreak(2, today);
 
@@ -490,26 +486,15 @@ describe('computeBurnRates — normExceedsBudget suppresses warning/critical', (
         new Date(subMonths(now, m).getFullYear(), subMonths(now, m).getMonth(), 15),
         'yyyy-MM-dd',
       );
-      db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [GID, USER_ID, monthDate, 'Gym', 'monthly', 500, 'EUR', 500],
-      );
+      insertExpenseForGroup(GID, monthDate, 'Gym', 500, 'monthly');
     }
 
     // Current month: 100 EUR spent (< budget 200), but pace extrapolates higher
     const day3 = format(new Date(now.getFullYear(), now.getMonth(), 3), 'yyyy-MM-dd');
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [GID, USER_ID, day3, 'Gym', 'session', 100, 'EUR', 100],
-    );
+    insertExpenseForGroup(GID, day3, 'Gym', 100, 'session');
 
     // Budget: 200 EUR for Gym (less than historical EMA of ~500)
-    db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-      [GID, 'Gym', currentMonth, 200, 'EUR'],
-    );
+    insertBudget(GID, 'Gym', currentMonth, 200);
 
     // Use day 15 so we have enough data for projection
     const fakeNow = new Date(now.getFullYear(), now.getMonth(), 15);
@@ -547,25 +532,14 @@ describe('computeBurnRates — normExceedsBudget suppresses warning/critical', (
         new Date(subMonths(now, m).getFullYear(), subMonths(now, m).getMonth(), 15),
         'yyyy-MM-dd',
       );
-      db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [GID2, USER_ID, monthDate, 'Gym', 'monthly', 500, 'EUR', 500],
-      );
+      insertExpenseForGroup(GID2, monthDate, 'Gym', 500, 'monthly');
     }
 
     // Current month: 250 EUR spent (> budget 200) — exceeded
     const day5 = format(new Date(now.getFullYear(), now.getMonth(), 5), 'yyyy-MM-dd');
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [GID2, USER_ID, day5, 'Gym', 'session', 250, 'EUR', 250],
-    );
+    insertExpenseForGroup(GID2, day5, 'Gym', 250, 'session');
 
-    db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-      [GID2, 'Gym', currentMonth, 200, 'EUR'],
-    );
+    insertBudget(GID2, 'Gym', currentMonth, 200);
 
     const fakeNow = new Date(now.getFullYear(), now.getMonth(), 15);
     const fakeToday = format(fakeNow, 'yyyy-MM-dd');
@@ -603,29 +577,18 @@ describe('computeBurnRates — stall detection in production path', () => {
           new Date(subMonths(now, m).getFullYear(), subMonths(now, m).getMonth(), 5 + t * 5),
           'yyyy-MM-dd',
         );
-        db.run(
-          `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [GID, USER_ID, txDate, 'Taxi', 'ride', 50, 'EUR', 50],
-        );
+        insertExpenseForGroup(GID, txDate, 'Taxi', 50, 'ride');
       }
     }
 
     // Current month: expenses only on days 1-3, then nothing
     for (let d = 1; d <= 3; d++) {
       const txDate = format(new Date(now.getFullYear(), now.getMonth(), d), 'yyyy-MM-dd');
-      db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [GID, USER_ID, txDate, 'Taxi', 'ride', 30, 'EUR', 30],
-      );
+      insertExpenseForGroup(GID, txDate, 'Taxi', 30, 'ride');
     }
 
     // Budget for the category
-    db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-      [GID, 'Taxi', currentMonth, 500, 'EUR'],
-    );
+    insertBudget(GID, 'Taxi', currentMonth, 500);
 
     // Simulate day 15: daysSinceLastTx = 15 - 3 = 12, monthProgress = 15/30 = 0.5
     const fakeNow = new Date(now.getFullYear(), now.getMonth(), 15);
@@ -656,11 +619,7 @@ describe('computeAnomalies', () => {
       `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
       [3, 33333, 'EUR', '["EUR"]'],
     );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [3, USER_ID, today, 'Food', 'spike', 500, 'EUR', 500],
-    );
+    insertExpenseForGroup(3, today, 'Food', 500, 'spike');
     // History: 3 months of ~100 EUR Food each
     // Spread across different days within each month
     const m1mid = format(
@@ -676,21 +635,9 @@ describe('computeAnomalies', () => {
       'yyyy-MM-dd',
     );
 
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [3, USER_ID, m1mid, 'Food', 'h', 100, 'EUR', 100],
-    );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [3, USER_ID, m2mid, 'Food', 'h', 100, 'EUR', 100],
-    );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [3, USER_ID, m3mid, 'Food', 'h', 100, 'EUR', 100],
-    );
+    insertExpenseForGroup(3, m1mid, 'Food', 100, 'h');
+    insertExpenseForGroup(3, m2mid, 'Food', 100, 'h');
+    insertExpenseForGroup(3, m3mid, 'Food', 100, 'h');
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const anomalies = analytics.testComputeAnomalies(3, now, monthStart, today);
@@ -724,24 +671,12 @@ describe('computeAnomalies', () => {
     );
 
     // History: 100 EUR each month
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [4, USER_ID, m1mid, 'Food', 'h', 100, 'EUR', 100],
-    );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [4, USER_ID, m2mid, 'Food', 'h', 100, 'EUR', 100],
-    );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [4, USER_ID, m3mid, 'Food', 'h', 100, 'EUR', 100],
-    );
+    insertExpenseForGroup(4, m1mid, 'Food', 100, 'h');
+    insertExpenseForGroup(4, m2mid, 'Food', 100, 'h');
+    insertExpenseForGroup(4, m3mid, 'Food', 100, 'h');
 
     // Current month: same as average
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [4, USER_ID, today, 'Food', 'normal', 100, 'EUR', 100],
-    );
+    insertExpenseForGroup(4, today, 'Food', 100, 'normal');
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const anomalies = analytics.testComputeAnomalies(4, now, monthStart, today);
@@ -770,24 +705,12 @@ describe('computeAnomalies', () => {
       'yyyy-MM-dd',
     );
 
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [5, USER_ID, m1mid, 'Food', 'h', 50, 'EUR', 50],
-    );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [5, USER_ID, m2mid, 'Food', 'h', 50, 'EUR', 50],
-    );
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [5, USER_ID, m3mid, 'Food', 'h', 50, 'EUR', 50],
-    );
+    insertExpenseForGroup(5, m1mid, 'Food', 50, 'h');
+    insertExpenseForGroup(5, m2mid, 'Food', 50, 'h');
+    insertExpenseForGroup(5, m3mid, 'Food', 50, 'h');
 
     // Current month: 500 EUR = 10x the average of 50 → extreme
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [5, USER_ID, today, 'Food', 'spike', 500, 'EUR', 500],
-    );
+    insertExpenseForGroup(5, today, 'Food', 500, 'spike');
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const anomalies = analytics.testComputeAnomalies(5, now, monthStart, today);
@@ -913,10 +836,7 @@ describe('getAllBudgetsForMonth with multiple categories', () => {
 
     const categories = ['Entertainment', 'Food', 'Health', 'Shopping', 'Transport'];
     for (const cat of categories) {
-      db.run(
-        `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-        [multiGroupId, cat, currentMonth, 200, 'EUR'],
-      );
+      insertBudget(multiGroupId, cat, currentMonth, 200);
     }
 
     const spy = spyOn(budgetRepo, 'getAllBudgetsForMonth');
@@ -1084,16 +1004,9 @@ describe('burn rate: single large expense early in month', () => {
       `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
       [40, 404040, 'EUR', '["EUR"]'],
     );
-    db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-      [40, 'Car', currentMonth, 500, 'EUR'],
-    );
+    insertBudget(40, 'Car', currentMonth, 500);
     // Single expense: 200 EUR → naive projection on day 4 = 200/4*30 = 1500 → critical
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [40, USER_ID, today, 'Car', 'repair', 200, 'EUR', 200],
-    );
+    insertExpenseForGroup(40, today, 'Car', 200, 'repair');
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const burnRates = analytics.testComputeBurnRates(40, now, currentMonth, monthStart, today);
@@ -1101,10 +1014,11 @@ describe('burn rate: single large expense early in month', () => {
     expect(burnRates.length).toBe(1);
     const carBurn = burnRates[0];
 
-    // Without history: projectCategory returns currentSpent = 200 → on_track
+    // Without history: projectCategory returns currentSpent = 20000 cents → on_track
     // With history: uses EMA baseline → still conservative early in month
+    // 200 EUR = 20000 cents; naive linear projection in cents
     expect(carBurn?.projected_total).toBeLessThanOrEqual(
-      Math.round((200 / now.getDate()) * getDaysInMonth(now) * 100) / 100,
+      Math.round((20000 / now.getDate()) * getDaysInMonth(now)),
     );
   });
 
@@ -1114,10 +1028,7 @@ describe('burn rate: single large expense early in month', () => {
       `INSERT INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (?, ?, ?, ?)`,
       [41, 414141, 'EUR', '["EUR"]'],
     );
-    db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-      [41, 'Car', currentMonth, 500, 'EUR'],
-    );
+    insertBudget(41, 'Car', currentMonth, 500);
 
     // Historical data: 3 months of ~100 EUR
     const m1 = format(
@@ -1133,19 +1044,11 @@ describe('burn rate: single large expense early in month', () => {
       'yyyy-MM-dd',
     );
     for (const d of [m1, m2, m3]) {
-      db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [41, USER_ID, d, 'Car', 'fuel', 100, 'EUR', 100],
-      );
+      insertExpenseForGroup(41, d, 'Car', 100, 'fuel');
     }
 
     // Current month: 80 EUR spent
-    db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [41, USER_ID, today, 'Car', 'fuel', 80, 'EUR', 80],
-    );
+    insertExpenseForGroup(41, today, 'Car', 80, 'fuel');
 
     const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
     const burnRates = analytics.testComputeBurnRates(41, now, currentMonth, monthStart, today);
@@ -1153,9 +1056,9 @@ describe('burn rate: single large expense early in month', () => {
     expect(burnRates.length).toBe(1);
     const carBurn = burnRates[0];
 
-    // With history (EMA ~100), early in month: projection should be close to EMA (100)
-    // not the naive linear extrapolation
-    expect(carBurn?.projected_total).toBeLessThan(500);
+    // With history (EMA ~100 EUR = 10000 cents), early in month: projection should be close to EMA
+    // not the naive linear extrapolation. 500 EUR = 50000 cents
+    expect(carBurn?.projected_total).toBeLessThan(50000);
     expect(carBurn?.status).toBe('on_track');
   });
 });
@@ -1502,11 +1405,7 @@ describe('computeBurnRates — interval profile integration', () => {
       historicalDates.push(format(d, 'yyyy-MM-dd'));
     }
     for (const d of historicalDates) {
-      db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [GID, USER_ID, d, CATEGORY, 'fuel', AMOUNT, 'EUR', AMOUNT],
-      );
+      insertExpenseForGroup(GID, d, CATEGORY, AMOUNT, 'fuel');
     }
 
     // Current month: two same-day transactions on day 5 (total 100 EUR).
@@ -1514,18 +1413,11 @@ describe('computeBurnRates — interval profile integration', () => {
     // but they satisfy the activity gate (needs >=2 tx for sparse categories).
     const day5 = format(new Date(year, month, 5), 'yyyy-MM-dd');
     for (let i = 0; i < 2; i++) {
-      db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [GID, USER_ID, day5, CATEGORY, 'fuel', AMOUNT, 'EUR', AMOUNT],
-      );
+      insertExpenseForGroup(GID, day5, CATEGORY, AMOUNT, 'fuel');
     }
 
     // Generous budget so normExceedsBudget doesn't shortcut status logic.
-    db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
-      [GID, CATEGORY, currentMonth, 1000, 'EUR'],
-    );
+    insertBudget(GID, CATEGORY, currentMonth, 1000);
 
     // Simulate day 9 — before the 0.33 month-progress stall boundary so
     // the stall guard cannot fire.
@@ -1546,31 +1438,32 @@ describe('computeBurnRates — interval profile integration', () => {
     const car = burnRates.find((br) => br.category === CATEGORY);
     if (!car) throw new Error(`${CATEGORY} burn rate missing`);
 
-    // spent = 100 EUR (two same-day 50 EUR tx)
-    expect(car.spent).toBe(100);
+    // spent = 100 EUR = 10000 cents (two same-day 50 EUR tx)
+    expect(car.spent).toBe(10000);
 
-    // Interval-based formula at day 9:
+    // Interval-based formula at day 9 (all values in cents):
     //   daysSinceLastTx = 9 - 5 = 4
     //   timeToNextFill = max(0, 20 - 4) = 16
     //   daysRemaining = daysInMonth - 9
     //   expectedMoreFills = (16 <= daysRemaining)
     //     ? 1 + floor((daysRemaining - 16) / 20) : 0
-    //   projected = 100 + expectedMoreFills * 50
+    //   projected = 10000 + expectedMoreFills * 5000
+    const AMOUNT_CENTS = Math.round(AMOUNT * 100);
     const daysRemaining = daysInMonth - 9;
     const timeToNextFill = Math.max(0, AVG_INTERVAL - 4);
     const expectedMoreFills =
       timeToNextFill <= daysRemaining
         ? 1 + Math.floor((daysRemaining - timeToNextFill) / AVG_INTERVAL)
         : 0;
-    const expectedIntervalProjection = 100 + expectedMoreFills * AMOUNT;
+    const expectedIntervalProjection = 10000 + expectedMoreFills * AMOUNT_CENTS;
 
     expect(car.projected_total).toBe(expectedIntervalProjection);
 
-    // Linear extrapolation would give (100/9)*daysInMonth ≈ 333 for 30-day months
-    // and is always at least 300 — far above the interval-based estimate.
-    const linearProjection = Math.round((100 / 9) * daysInMonth * 100) / 100;
+    // Linear extrapolation would give (10000/9)*daysInMonth ≈ 33333 for 30-day months
+    // and is always at least 30000 — far above the interval-based estimate.
+    const linearProjection = Math.round((10000 / 9) * daysInMonth);
     expect(linearProjection).toBeGreaterThan(car.projected_total);
-    expect(linearProjection - car.projected_total).toBeGreaterThan(50);
+    expect(linearProjection - car.projected_total).toBeGreaterThan(5000);
   });
 });
 
