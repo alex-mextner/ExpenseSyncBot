@@ -119,6 +119,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: mockSendMessage,
   editMessageText: mock(async () => undefined),
   deleteMessage: mock(async () => undefined),
+  sendChatAction: mock(async () => undefined),
   withChatContext: async (_chatId: number, _threadId: number | null, fn: () => Promise<unknown>) =>
     fn(),
 }));

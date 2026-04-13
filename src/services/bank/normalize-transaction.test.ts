@@ -23,6 +23,7 @@ mock.module('./prefill', () => ({ preFillTransaction: async () => ({}) }));
 mock.module('./telegram-sender', () => ({
   sendMessage: async () => null,
   editMessageText: async () => null,
+  sendChatAction: async () => undefined,
 }));
 
 import { normalizePluginsTransaction } from './sync-service';

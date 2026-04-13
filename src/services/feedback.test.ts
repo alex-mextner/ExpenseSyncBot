@@ -11,6 +11,7 @@ const sendDirectMock = mock(
 
 mock.module('./bank/telegram-sender', () => ({
   sendDirect: sendDirectMock,
+  sendChatAction: mock(),
 }));
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
