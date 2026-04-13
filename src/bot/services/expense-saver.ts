@@ -12,6 +12,7 @@ import {
   convertToEUR,
   formatAmount,
   getExchangeRate,
+  toCents,
 } from '../../services/currency/converter';
 import { getExpenseRecorder, type RecordReceiptItem } from '../../services/expense-recorder';
 import { appendExpenseRows, type ExpenseRowData, googleConn } from '../../services/google/sheets';
@@ -29,39 +30,49 @@ interface ExpenseWriteData {
   date: string;
   category: string;
   comment: string;
-  amount: number;
+  amountCents: number;
   currency: CurrencyCode;
-  eurAmount: number;
+  eurAmountCents: number;
 }
 
 // ── Core: prepare row data (no I/O) ─────────────────────────────────────────
 
-/** Build row data and DB write data from a pending expense. Pure computation. */
+/** Build row data and DB write data from a pending expense. Pure computation. All amounts in cents. */
 function prepareExpenseRow(
   group: Group,
   pendingExpense: PendingExpense,
   currentDate: string,
 ): { row: ExpenseRowData; write: ExpenseWriteData } {
-  const eurAmount = convertToEUR(pendingExpense.parsed_amount, pendingExpense.parsed_currency);
+  const eurAmountCents = convertToEUR(
+    pendingExpense.parsed_amount_cents,
+    pendingExpense.parsed_currency,
+  );
   const category = pendingExpense.detected_category || 'Без категории';
   const rate = getExchangeRate(pendingExpense.parsed_currency);
 
   const amounts: Record<string, number | null> = {};
   for (const currency of group.enabled_currencies) {
     amounts[currency] =
-      currency === pendingExpense.parsed_currency ? pendingExpense.parsed_amount : null;
+      currency === pendingExpense.parsed_currency ? pendingExpense.parsed_amount_cents : null;
   }
 
   return {
-    row: { date: currentDate, category, comment: pendingExpense.comment, amounts, eurAmount, rate },
+    row: {
+      date: currentDate,
+      category,
+      comment: pendingExpense.comment,
+      amounts,
+      eurAmountCents,
+      rate,
+    },
     write: {
       pendingExpenseId: pendingExpense.id,
       date: currentDate,
       category,
       comment: pendingExpense.comment,
-      amount: pendingExpense.parsed_amount,
+      amountCents: pendingExpense.parsed_amount_cents,
       currency: pendingExpense.parsed_currency,
-      eurAmount,
+      eurAmountCents,
     },
   };
 }
@@ -78,9 +89,9 @@ function commitExpensesToDb(groupId: number, userId: number, expenses: ExpenseWr
         date: e.date,
         category: e.category,
         comment: e.comment,
-        amount: e.amount,
+        amount_cents: e.amountCents,
         currency: e.currency,
-        eur_amount: e.eurAmount,
+        eur_amount_cents: e.eurAmountCents,
       });
       database.pendingExpenses.delete(e.pendingExpenseId);
     }
@@ -180,16 +191,16 @@ async function checkBudgetLimit(
     return;
   }
 
-  // sumByCategory returns EUR amounts — convert to budget currency for comparison and display
-  const spentEur = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
+  // sumByCategory returns EUR cents — convert to budget currency cents for comparison and display
+  const spentEurCents = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
   const budgetCurrency = budget.currency as CurrencyCode;
-  const spentInCurrency = convertCurrency(spentEur, 'EUR', budgetCurrency);
+  const spentInCurrencyCents = convertCurrency(spentEurCents, 'EUR', budgetCurrency);
 
-  const progress = computeBudgetProgress(budget, spentInCurrency);
+  const progress = computeBudgetProgress(budget, spentInCurrencyCents);
 
   if (progress.is_exceeded || progress.is_warning) {
     const emoji = getCategoryEmoji(category);
-    const progressText = `${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${progress.percentage}%)`;
+    const progressText = `${formatAmount(spentInCurrencyCents, budgetCurrency)} / ${formatAmount(budget.limit_amount_cents, budgetCurrency)} (${progress.percentage}%)`;
     let message = '';
 
     if (progress.is_exceeded) {
@@ -235,13 +246,14 @@ export async function saveReceiptExpenses(
   // Skip items with no confirmed category (defensive — shouldn't happen)
   const itemsWithCategory = confirmedItems.filter((i) => i.confirmed_category);
 
-  // Convert DB rows to the recorder's input shape
+  // Convert DB rows to the recorder's input shape.
+  // receipt_items.price/total are still floats (not migrated) — convert to cents at boundary.
   const recordItems: RecordReceiptItem[] = itemsWithCategory.map((i) => ({
     name: i.name_ru,
     nameOriginal: i.name_original ?? null,
     quantity: i.quantity,
-    price: i.price,
-    total: i.total,
+    price_cents: toCents(i.price),
+    total_cents: toCents(i.total),
     currency: i.currency as CurrencyCode,
     // confirmed_category is guaranteed non-null by the filter above
     category: i.confirmed_category as string,

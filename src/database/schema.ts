@@ -1371,6 +1371,200 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '050_migrate_money_columns_to_integer_cents',
+      up: () => {
+        // ── expenses: amount REAL → amount_cents INTEGER, eur_amount REAL → eur_amount_cents INTEGER ──
+        db.exec(`
+          CREATE TABLE expenses_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            eur_amount_cents INTEGER NOT NULL,
+            receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL,
+            receipt_file_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+
+        db.exec(`
+          INSERT INTO expenses_new (id, group_id, user_id, date, category, comment,
+            amount_cents, currency, eur_amount_cents, receipt_id, receipt_file_id, created_at)
+          SELECT id, group_id, user_id, date, category, comment,
+            CAST(ROUND(amount * 100) AS INTEGER),
+            currency,
+            CAST(ROUND(eur_amount * 100) AS INTEGER),
+            receipt_id, receipt_file_id, created_at
+          FROM expenses;
+        `);
+
+        db.exec('DROP TABLE expenses;');
+        db.exec('ALTER TABLE expenses_new RENAME TO expenses;');
+
+        // Recreate indexes
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_group_id ON expenses(group_id);');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_user_id ON expenses(user_id);');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_group_date ON expenses(group_id, date);');
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_expenses_group_category ON expenses(group_id, category);',
+        );
+        db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_receipt_id ON expenses(receipt_id);');
+
+        // ── budgets: limit_amount REAL → limit_amount_cents INTEGER ──
+        db.exec(`
+          CREATE TABLE budgets_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            month TEXT NOT NULL,
+            limit_amount_cents INTEGER NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'EUR',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            UNIQUE(group_id, category, month)
+          );
+        `);
+
+        db.exec(`
+          INSERT INTO budgets_new (id, group_id, category, month, limit_amount_cents, currency,
+            created_at, updated_at)
+          SELECT id, group_id, category, month,
+            CAST(ROUND(limit_amount * 100) AS INTEGER),
+            currency, created_at, updated_at
+          FROM budgets;
+        `);
+
+        db.exec('DROP TABLE budgets;');
+        db.exec('ALTER TABLE budgets_new RENAME TO budgets;');
+
+        db.exec('CREATE INDEX IF NOT EXISTS idx_budgets_group_id ON budgets(group_id);');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_budgets_month ON budgets(month);');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_budgets_group_month ON budgets(group_id, month);');
+
+        // ── pending_expenses: parsed_amount REAL → parsed_amount_cents INTEGER ──
+        db.exec(`
+          CREATE TABLE pending_expenses_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            parsed_amount_cents INTEGER NOT NULL,
+            parsed_currency TEXT NOT NULL,
+            detected_category TEXT,
+            comment TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending_category', 'confirmed')),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+
+        db.exec(`
+          INSERT INTO pending_expenses_new (id, user_id, message_id, parsed_amount_cents,
+            parsed_currency, detected_category, comment, status, created_at)
+          SELECT id, user_id, message_id,
+            CAST(ROUND(parsed_amount * 100) AS INTEGER),
+            parsed_currency, detected_category, comment, status, created_at
+          FROM pending_expenses;
+        `);
+
+        db.exec('DROP TABLE pending_expenses;');
+        db.exec('ALTER TABLE pending_expenses_new RENAME TO pending_expenses;');
+
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_pending_expenses_user_id ON pending_expenses(user_id);',
+        );
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_pending_expenses_message_id ON pending_expenses(message_id);',
+        );
+
+        // ── expense_snapshots: amount REAL → amount_cents INTEGER, eur_amount → eur_amount_cents ──
+        db.exec(`
+          CREATE TABLE expense_snapshots_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            expense_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            eur_amount_cents INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+
+        db.exec(`
+          INSERT INTO expense_snapshots_new (id, snapshot_id, group_id, expense_id, user_id,
+            date, category, comment, amount_cents, currency, eur_amount_cents, created_at)
+          SELECT id, snapshot_id, group_id, expense_id, user_id,
+            date, category, comment,
+            CAST(ROUND(amount * 100) AS INTEGER),
+            currency,
+            CAST(ROUND(eur_amount * 100) AS INTEGER),
+            created_at
+          FROM expense_snapshots;
+        `);
+
+        db.exec('DROP TABLE expense_snapshots;');
+        db.exec('ALTER TABLE expense_snapshots_new RENAME TO expense_snapshots;');
+
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_expense_snapshots_snapshot ON expense_snapshots(snapshot_id);',
+        );
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_expense_snapshots_group ON expense_snapshots(group_id);',
+        );
+
+        // ── budget_snapshots: limit_amount REAL → limit_amount_cents INTEGER ──
+        db.exec(`
+          CREATE TABLE budget_snapshots_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            budget_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            month TEXT NOT NULL,
+            limit_amount_cents INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `);
+
+        db.exec(`
+          INSERT INTO budget_snapshots_new (id, snapshot_id, group_id, budget_id, category,
+            month, limit_amount_cents, currency, created_at)
+          SELECT id, snapshot_id, group_id, budget_id, category,
+            month,
+            CAST(ROUND(limit_amount * 100) AS INTEGER),
+            currency, created_at
+          FROM budget_snapshots;
+        `);
+
+        db.exec('DROP TABLE budget_snapshots;');
+        db.exec('ALTER TABLE budget_snapshots_new RENAME TO budget_snapshots;');
+
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_budget_snapshots_snapshot ON budget_snapshots(snapshot_id);',
+        );
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_budget_snapshots_group ON budget_snapshots(group_id);',
+        );
+
+        logger.info(
+          '✓ Migrated money columns from REAL to INTEGER cents: expenses, budgets, pending_expenses, expense_snapshots, budget_snapshots',
+        );
+      },
+    },
   ];
 
   // Check and run migrations

@@ -83,7 +83,8 @@ export interface PendingExpense {
   id: number;
   user_id: number;
   message_id: number;
-  parsed_amount: number;
+  /** Amount in minor currency units (cents). 100.50 USD → 10050 */
+  parsed_amount_cents: number;
   parsed_currency: CurrencyCode;
   detected_category: string | null;
   comment: string;
@@ -94,7 +95,8 @@ export interface PendingExpense {
 export interface CreatePendingExpenseData {
   user_id: number;
   message_id: number;
-  parsed_amount: number;
+  /** Amount in minor currency units (cents). 100.50 USD → 10050 */
+  parsed_amount_cents: number;
   parsed_currency: CurrencyCode;
   detected_category: string | null;
   comment: string;
@@ -116,9 +118,11 @@ export interface Expense {
   date: string;
   category: string;
   comment: string;
-  amount: number;
+  /** Amount in minor currency units (cents). 100.50 USD → 10050 */
+  amount_cents: number;
   currency: CurrencyCode;
-  eur_amount: number;
+  /** EUR equivalent in cents */
+  eur_amount_cents: number;
   receipt_id: number | null;
   receipt_file_id: string | null;
   created_at: string;
@@ -130,9 +134,11 @@ export interface CreateExpenseData {
   date: string;
   category: string;
   comment: string;
-  amount: number;
+  /** Amount in minor currency units (cents). 100.50 USD → 10050 */
+  amount_cents: number;
   currency: CurrencyCode;
-  eur_amount: number;
+  /** EUR equivalent in cents */
+  eur_amount_cents: number;
   receipt_id?: number | null;
   receipt_file_id?: string | null;
 }
@@ -145,7 +151,8 @@ export interface Budget {
   group_id: number;
   category: string;
   month: string; // Format: "YYYY-MM"
-  limit_amount: number;
+  /** Budget limit in minor currency units (cents) */
+  limit_amount_cents: number;
   currency: CurrencyCode;
   created_at: string;
   updated_at: string;
@@ -155,7 +162,8 @@ export interface CreateBudgetData {
   group_id: number;
   category: string;
   month: string;
-  limit_amount: number;
+  /** Budget limit in minor currency units (cents) */
+  limit_amount_cents: number;
   currency?: CurrencyCode;
 }
 
@@ -164,8 +172,10 @@ export interface CreateBudgetData {
  */
 export interface BudgetProgress {
   category: string;
-  limit_amount: number;
-  spent_amount: number;
+  /** Budget limit in cents */
+  limit_amount_cents: number;
+  /** Spent amount in cents */
+  spent_amount_cents: number;
   currency: CurrencyCode;
   percentage: number;
   is_exceeded: boolean;
@@ -496,9 +506,11 @@ export interface ExpenseSnapshot {
   date: string;
   category: string;
   comment: string;
-  amount: number;
+  /** Amount in minor currency units (cents) */
+  amount_cents: number;
   currency: CurrencyCode;
-  eur_amount: number;
+  /** EUR equivalent in cents */
+  eur_amount_cents: number;
   created_at: string;
 }
 
@@ -509,7 +521,8 @@ export interface BudgetSnapshot {
   budget_id: number;
   category: string;
   month: string;
-  limit_amount: number;
+  /** Budget limit in cents */
+  limit_amount_cents: number;
   currency: CurrencyCode;
   created_at: string;
 }

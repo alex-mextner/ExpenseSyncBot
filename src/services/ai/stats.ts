@@ -6,7 +6,7 @@ import { convertCurrency, formatAmount } from '../currency/converter';
 
 type ExpenseRecord = Pick<
   Expense,
-  'amount' | 'currency' | 'eur_amount' | 'category' | 'comment' | 'date'
+  'amount_cents' | 'currency' | 'eur_amount_cents' | 'category' | 'comment' | 'date'
 >;
 
 export interface ExpenseStats {
@@ -27,7 +27,7 @@ export function computeExpenseStats(
   }
 
   const converted = expenses.map((e) => ({
-    displayAmount: convertCurrency(e.eur_amount, BASE_CURRENCY, displayCurrency),
+    displayAmount: convertCurrency(e.eur_amount_cents, BASE_CURRENCY, displayCurrency),
     comment: e.comment,
     category: e.category,
     date: e.date,
@@ -135,7 +135,7 @@ function aggregateByCategory(
 ): Record<string, number> {
   const result: Record<string, number> = {};
   for (const e of expenses) {
-    const displayAmount = convertCurrency(e.eur_amount, BASE_CURRENCY, displayCurrency);
+    const displayAmount = convertCurrency(e.eur_amount_cents, BASE_CURRENCY, displayCurrency);
     result[e.category] = (result[e.category] ?? 0) + displayAmount;
   }
   return result;

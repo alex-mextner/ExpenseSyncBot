@@ -13,7 +13,7 @@ import { computeBudgetProgress } from '../../database/repositories/budget.reposi
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
-import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { convertCurrency, formatAmount, toCents } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   createEmptyMonthTab,
@@ -193,7 +193,7 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
   const categorySpending: Record<string, number> = {};
   for (const expense of expenses) {
     categorySpending[expense.category] =
-      (categorySpending[expense.category] || 0) + expense.eur_amount;
+      (categorySpending[expense.category] || 0) + expense.eur_amount_cents;
   }
 
   const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
@@ -212,7 +212,7 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
     }
     const spentEur = categorySpending[budget.category] || 0;
     const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
-    budgetsByCurrency[currency].totalBudget += budget.limit_amount;
+    budgetsByCurrency[currency].totalBudget += budget.limit_amount_cents;
     budgetsByCurrency[currency].totalSpent += spentInCurrency;
   }
 
@@ -236,7 +236,7 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
   for (const { budget, spent, percentage, is_exceeded, is_warning } of budgetProgress) {
     const emoji = getCategoryEmoji(budget.category);
     const status = is_exceeded ? '(!)' : is_warning ? '(~)' : '';
-    message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
+    message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount_cents, budget.currency)} (${percentage}%) ${status}\n`;
   }
 
   // Add TA forecast insights for budgeted categories — cap at 10 lines so the
@@ -255,7 +255,9 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
       const trendLabel =
         cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
       const forecastPct =
-        bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
+        bp.budget.limit_amount_cents > 0
+          ? Math.round((forecast / bp.budget.limit_amount_cents) * 100)
+          : 0;
 
       // Only show insights for categories approaching or exceeding budget
       if (
@@ -338,28 +340,29 @@ async function setBudget(
     return;
   }
 
+  const amountCents = toCents(amount);
   const result = await getBudgetManager().set({
     groupId: group.id,
     category: normalizedCategory,
     month: currentMonth,
-    amount,
+    amountCents,
     currency,
   });
 
   const emoji = getCategoryEmoji(normalizedCategory);
   if (!result.sheetsSynced && group.google_refresh_token) {
     await sendMessage(
-      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
+      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amountCents, currency)}\n\n` +
         'Не удалось записать в Google Sheets. Используй /budget sync позже.',
     );
   } else if (!result.sheetsSynced) {
     await sendMessage(
-      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
+      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amountCents, currency)}\n\n` +
         'Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
     );
   } else {
     await sendMessage(
-      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
+      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amountCents, currency)}`,
     );
   }
 
@@ -407,7 +410,7 @@ async function syncBudgets(ctx: Ctx['Command'], group: GoogleConnectedGroup): Pr
         groupId: group.id,
         category: b.category,
         month: currentMonth,
-        amount: b.limit,
+        amountCents: toCents(b.limit),
         currency: b.currency,
       });
       syncedCount++;

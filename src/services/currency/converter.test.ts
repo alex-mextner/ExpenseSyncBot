@@ -23,23 +23,23 @@ describe('convertToEUR', () => {
   });
 
   it('converts GBP to EUR', () => {
-    // 1 GBP = 1.18 EUR
-    expect(convertToEUR(10, 'GBP')).toBe(11.8);
+    // 1 GBP = 1.18 EUR → 10 GBP (1000 cents) = 11.8 EUR (1180 cents)
+    expect(convertToEUR(1000, 'GBP')).toBe(1180);
   });
 
   it('converts RSD to EUR (small rate)', () => {
-    // 1 RSD = 0.0086 EUR → 1000 RSD = 8.6 EUR
-    expect(convertToEUR(1000, 'RSD')).toBe(8.6);
+    // 1 RSD = 0.0086 EUR → 1000 RSD (100000 cents) = 8.6 EUR (860 cents)
+    expect(convertToEUR(100000, 'RSD')).toBe(860);
   });
 
   it('converts JPY to EUR (very small rate)', () => {
-    // 1 JPY = 0.0062 EUR → 10000 JPY = 62 EUR
-    expect(convertToEUR(10000, 'JPY')).toBe(62);
+    // 1 JPY = 0.0062 EUR → 10000 JPY (1000000 cents) = 62 EUR (6200 cents)
+    expect(convertToEUR(1000000, 'JPY')).toBe(6200);
   });
 
-  it('rounds to 2 decimal places', () => {
-    const result = convertToEUR(7, 'RUB');
-    expect(Number(result.toFixed(2))).toBe(result);
+  it('rounds to integer cents', () => {
+    const result = convertToEUR(700, 'RUB');
+    expect(Number.isInteger(result)).toBe(true);
   });
 
   it('handles zero amount', () => {
@@ -55,41 +55,42 @@ describe('convertToEUR', () => {
   });
 
   it('converts CHF to EUR', () => {
-    // 1 CHF = 1.05 EUR
+    // 1 CHF (100 cents) = 1.05 EUR (105 cents)
     expect(convertToEUR(100, 'CHF')).toBe(105);
   });
 
   it('converts BYN to EUR', () => {
-    // 1 BYN = 0.28 EUR
+    // 1 BYN (100 cents) = 0.28 EUR (28 cents)
     expect(convertToEUR(100, 'BYN')).toBe(28);
   });
 
   it('converts CNY to EUR', () => {
-    // 1 CNY = 0.13 EUR
+    // 1 CNY (100 cents) = 0.13 EUR (13 cents)
     expect(convertToEUR(100, 'CNY')).toBe(13);
   });
 
   it('converts INR to EUR', () => {
-    // 1 INR = 0.011 EUR
-    expect(convertToEUR(100, 'INR')).toBe(1.1);
+    // 1 INR (100 cents) = 0.011 EUR → Math.round(100 * 0.011) = 1 cent
+    expect(convertToEUR(100, 'INR')).toBe(1);
   });
 
   it('converts LKR to EUR', () => {
-    // 1 LKR = 0.0028 EUR
-    expect(convertToEUR(1000, 'LKR')).toBe(2.8);
+    // 10 LKR (1000 cents) = 0.028 EUR → Math.round(1000 * 0.0028) = 3 cents
+    expect(convertToEUR(1000, 'LKR')).toBe(3);
   });
 
   it('converts AED to EUR', () => {
-    // 1 AED = 0.25 EUR
+    // 1 AED (100 cents) = 0.25 EUR (25 cents)
     expect(convertToEUR(100, 'AED')).toBe(25);
   });
 
   it('converts RUB to EUR', () => {
-    // 1 RUB = 0.0093 EUR
-    expect(convertToEUR(1000, 'RUB')).toBe(9.3);
+    // 10 RUB (1000 cents) → Math.round(1000 * 0.0093) = 9 cents
+    expect(convertToEUR(1000, 'RUB')).toBe(9);
   });
 
   // All 11 non-EUR currencies return positive for positive input
+  // Use 10000 cents (= 100 units) to avoid sub-cent rounding to zero for small-rate currencies
   const currencies = [
     'USD',
     'RUB',
@@ -105,7 +106,7 @@ describe('convertToEUR', () => {
   ] as const;
   for (const currency of currencies) {
     it(`converts ${currency} to EUR (result is positive for positive input)`, () => {
-      expect(convertToEUR(100, currency)).toBeGreaterThan(0);
+      expect(convertToEUR(10000, currency)).toBeGreaterThan(0);
     });
   }
 
@@ -117,9 +118,10 @@ describe('convertToEUR', () => {
     expect(convertToEUR(1, 'EUR')).toBe(1);
   });
 
-  it('fractional amounts round correctly', () => {
-    const result = convertToEUR(0.01, 'USD');
-    expect(Number(result.toFixed(2))).toBe(result);
+  it('fractional cents round to integer', () => {
+    // 1 cent USD → Math.round(1 * 0.93) = 1 cent EUR
+    const result = convertToEUR(1, 'USD');
+    expect(Number.isInteger(result)).toBe(true);
   });
 });
 
@@ -133,10 +135,9 @@ describe('convertCurrency', () => {
   });
 
   it('converts USD to GBP via EUR', () => {
-    // USD→EUR: 100 * 0.93 = 93 EUR
-    // EUR→GBP: 93 / 1.18 ≈ 78.81 GBP
+    // 1 USD (100 cents) → EUR: 100 * 0.93 = 93 → GBP: 93 / 1.18 ≈ 78.81 → Math.round = 79 cents
     const result = convertCurrency(100, 'USD', 'GBP');
-    expect(result).toBeCloseTo(78.81, 1);
+    expect(result).toBe(79);
   });
 
   it('converts EUR to USD', () => {
@@ -157,10 +158,12 @@ describe('convertCurrency', () => {
   });
 
   it('is symmetric: A→B then B→A ≈ original', () => {
-    const original = 500;
+    // Use a larger amount so rounding errors are proportionally small
+    const original = 50000;
     const toGBP = convertCurrency(original, 'RSD', 'GBP');
     const back = convertCurrency(toGBP, 'GBP', 'RSD');
-    expect(back).toBeCloseTo(original, -1);
+    // With integer rounding, allow ±1% tolerance
+    expect(back).toBeCloseTo(original, -3);
   });
 
   it('converts RUB to RSD (both small currencies)', () => {
@@ -168,9 +171,9 @@ describe('convertCurrency', () => {
     expect(result).toBeGreaterThan(0);
   });
 
-  it('rounds result to 2 decimal places', () => {
-    const result = convertCurrency(1, 'JPY', 'INR');
-    expect(Number(result.toFixed(2))).toBe(result);
+  it('rounds result to integer cents', () => {
+    const result = convertCurrency(100, 'JPY', 'INR');
+    expect(Number.isInteger(result)).toBe(true);
   });
 
   it('converts GBP to EUR (GBP is stronger)', () => {
@@ -245,25 +248,27 @@ describe('getExchangeRate', () => {
 
 describe('formatAmount', () => {
   it('returns a non-empty string', () => {
-    expect(formatAmount(100, 'USD').length).toBeGreaterThan(0);
+    expect(formatAmount(10000, 'USD').length).toBeGreaterThan(0);
   });
 
   it('uses symbol for USD', () => {
-    expect(formatAmount(100, 'USD')).toContain('$');
-    expect(formatAmount(100, 'USD')).not.toContain('USD');
+    expect(formatAmount(10000, 'USD')).toContain('$');
+    expect(formatAmount(10000, 'USD')).not.toContain('USD');
   });
 
   it('uses symbol for EUR', () => {
-    expect(formatAmount(50, 'EUR')).toContain('€');
-    expect(formatAmount(50, 'EUR')).not.toContain('EUR');
+    expect(formatAmount(5000, 'EUR')).toContain('€');
+    expect(formatAmount(5000, 'EUR')).not.toContain('EUR');
   });
 
   it('includes the numeric value', () => {
-    expect(formatAmount(100, 'USD')).toContain('100');
+    // 10000 cents = 100.00
+    expect(formatAmount(10000, 'USD')).toContain('100');
   });
 
   it('includes fractional value', () => {
-    expect(formatAmount(0.05, 'EUR')).toContain('0.05');
+    // 5 cents = 0.05
+    expect(formatAmount(5, 'EUR')).toContain('0.05');
   });
 
   it('handles zero', () => {
@@ -271,83 +276,94 @@ describe('formatAmount', () => {
   });
 
   it('handles negative amounts', () => {
-    const result = formatAmount(-50.5, 'GBP');
+    // -5050 cents = -50.50
+    const result = formatAmount(-5050, 'GBP');
     expect(result).toContain('50');
     expect(result).toContain('£');
   });
 
   it('formats as "amount.xx symbol"', () => {
-    expect(formatAmount(100, 'USD')).toBe('100.00 $');
+    // 10000 cents = 100.00
+    expect(formatAmount(10000, 'USD')).toBe('100.00 $');
   });
 
   it('formats decimal correctly', () => {
-    expect(formatAmount(50.5, 'EUR')).toBe('50.50 €');
+    // 5050 cents = 50.50
+    expect(formatAmount(5050, 'EUR')).toBe('50.50 €');
   });
 
   it('formats small decimal', () => {
-    expect(formatAmount(0.01, 'RUB')).toBe('0.01 ₽');
+    // 1 cent = 0.01
+    expect(formatAmount(1, 'RUB')).toBe('0.01 ₽');
   });
 
   it('uses code when no distinct symbol exists (RSD)', () => {
-    expect(formatAmount(1_000, 'RSD')).toBe('1000.00 RSD');
+    // 100000 cents = 1000.00
+    expect(formatAmount(100000, 'RSD')).toBe('1000.00 RSD');
   });
 
   it('formats 1M with млн suffix', () => {
-    expect(formatAmount(1_000_000, 'RSD')).toBe('1 млн RSD');
+    // 1M in display = 100_000_000 cents
+    expect(formatAmount(100_000_000, 'RSD')).toBe('1 млн RSD');
   });
 
   it('formats 1.5M with млн suffix', () => {
-    expect(formatAmount(1_500_000, 'RSD')).toBe('1.5 млн RSD');
+    expect(formatAmount(150_000_000, 'RSD')).toBe('1.5 млн RSD');
   });
 
   it('formats 1.23M with млн suffix (2 decimal places)', () => {
-    expect(formatAmount(1_234_567, 'EUR')).toBe('1.23 млн €');
+    // 1_234_567.00 display = 123_456_700 cents
+    expect(formatAmount(123_456_700, 'EUR')).toBe('1.23 млн €');
   });
 
   it('formats 2M exactly as "2 млн" (no trailing zeros)', () => {
-    expect(formatAmount(2_000_000, 'USD')).toBe('2 млн $');
+    expect(formatAmount(200_000_000, 'USD')).toBe('2 млн $');
   });
 
   it('formats 1B with млрд suffix', () => {
-    expect(formatAmount(1_000_000_000, 'RUB')).toBe('1 млрд ₽');
+    expect(formatAmount(100_000_000_000, 'RUB')).toBe('1 млрд ₽');
   });
 
   it('formats 2.5B with млрд suffix', () => {
-    expect(formatAmount(2_500_000_000, 'EUR')).toBe('2.5 млрд €');
+    expect(formatAmount(250_000_000_000, 'EUR')).toBe('2.5 млрд €');
   });
 });
 
 describe('formatAmount (aiContext=true)', () => {
   it('small amount: exact decimal with currency', () => {
-    expect(formatAmount(1234.56, 'RSD', true)).toBe('1234.56 RSD');
+    // 123456 cents = 1234.56
+    expect(formatAmount(123456, 'RSD', true)).toBe('1234.56 RSD');
   });
 
   it('just below 1M: no suffix', () => {
-    expect(formatAmount(999_999.99, 'RSD', true)).toBe('999999.99 RSD');
+    // 99999999 cents = 999999.99
+    expect(formatAmount(99999999, 'RSD', true)).toBe('999999.99 RSD');
   });
 
   it('exactly 1M: adds млн suffix', () => {
-    expect(formatAmount(1_000_000, 'RSD', true)).toBe('1000000.00 (1 млн) RSD');
+    // 100_000_000 cents = 1_000_000.00
+    expect(formatAmount(100_000_000, 'RSD', true)).toBe('1000000.00 (1 млн) RSD');
   });
 
   it('1.5M: exact + suffix', () => {
-    expect(formatAmount(1_500_000, 'RSD', true)).toBe('1500000.00 (1.5 млн) RSD');
+    expect(formatAmount(150_000_000, 'RSD', true)).toBe('1500000.00 (1.5 млн) RSD');
   });
 
   it('1.234M: suffix rounded to 2 decimal places', () => {
-    expect(formatAmount(1_234_567.89, 'EUR', true)).toBe('1234567.89 (1.23 млн) EUR');
+    // 123_456_789 cents = 1_234_567.89
+    expect(formatAmount(123_456_789, 'EUR', true)).toBe('1234567.89 (1.23 млн) EUR');
   });
 
   it('2M: no trailing zeros in suffix', () => {
-    expect(formatAmount(2_000_000, 'USD', true)).toBe('2000000.00 (2 млн) USD');
+    expect(formatAmount(200_000_000, 'USD', true)).toBe('2000000.00 (2 млн) USD');
   });
 
   it('exactly 1B: млрд suffix', () => {
-    expect(formatAmount(1_000_000_000, 'RUB', true)).toBe('1000000000.00 (1 млрд) RUB');
+    expect(formatAmount(100_000_000_000, 'RUB', true)).toBe('1000000000.00 (1 млрд) RUB');
   });
 
   it('2.5B: exact + млрд suffix', () => {
-    expect(formatAmount(2_500_000_000, 'EUR', true)).toBe('2500000000.00 (2.5 млрд) EUR');
+    expect(formatAmount(250_000_000_000, 'EUR', true)).toBe('2500000000.00 (2.5 млрд) EUR');
   });
 });
 

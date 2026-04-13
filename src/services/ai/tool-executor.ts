@@ -17,7 +17,12 @@ import { formatReceiptCommentForTelegram } from '../../utils/receipt-display';
 import { spendingAnalytics } from '../analytics/spending-analytics';
 import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
-import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
+import {
+  convertCurrency,
+  formatAmount,
+  formatExchangeRatesForAI,
+  toCents,
+} from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
 import { executeBatchItems, isBatchInput } from './batch';
@@ -182,8 +187,8 @@ function buildSummaryOutput(
       const cat = existing ?? { count: 0, eur_total: 0, amounts: {} };
       totals[e.category] = cat;
       cat.count++;
-      cat.eur_total += e.eur_amount;
-      cat.amounts[e.currency] = (cat.amounts[e.currency] || 0) + e.amount;
+      cat.eur_total += e.eur_amount_cents;
+      cat.amounts[e.currency] = (cat.amounts[e.currency] || 0) + e.amount_cents;
     }
 
     const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
@@ -212,7 +217,7 @@ function buildSummaryOutput(
   // Overall stats for batch
   if (isBatch && allExpenses.length > 0) {
     const overallStats = computeExpenseStats(allExpenses, displayCurrency);
-    const overallEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
+    const overallEur = allExpenses.reduce((s, e) => s + e.eur_amount_cents, 0);
     const overallDisplay = convertCurrency(overallEur, BASE_CURRENCY, displayCurrency);
     lines.push('=== Overall ===');
     lines.push(`Total: ${formatAmount(overallDisplay, displayCurrency, true)}`);
@@ -274,7 +279,7 @@ function buildDetailOutput(
   const offset = (page - 1) * pageSize;
   const pageItems = allExpenses.slice(offset, offset + pageSize);
 
-  const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
+  const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount_cents, 0);
   const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
 
   const firstPeriod = periodData[0];
@@ -307,7 +312,7 @@ function buildDetailOutput(
   for (const e of pageItems) {
     const displayComment = formatReceiptCommentForTelegram(e.comment).trim() || '(no comment)';
     lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${displayComment}`,
+      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount_cents, e.currency, true)} (EUR ${formatAmount(e.eur_amount_cents, BASE_CURRENCY, true)}) | ${displayComment}`,
     );
   }
 
@@ -372,8 +377,8 @@ async function executeGetBudgets(
 
     const spendingByCategory: Record<string, number> = {};
     for (const e of expenses) {
-      spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
-      grandTotalEur += e.eur_amount;
+      spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount_cents;
+      grandTotalEur += e.eur_amount_cents;
     }
 
     // Days elapsed for header and grand total
@@ -408,18 +413,22 @@ async function executeGetBudgets(
         } else {
           // Fallback for categories without burn rate data (e.g. no spending yet)
           const dailyBurn = spentInCurrency / daysElapsed;
-          const remaining = budget.limit_amount - spentInCurrency;
+          const remaining = budget.limit_amount_cents - spentInCurrency;
           const runwayDays = dailyBurn > 0 ? Math.max(0, remaining / dailyBurn) : 999;
           details = ` | burn: ${formatAmount(dailyBurn, budget.currency, true)}/day, projected: ${formatAmount(dailyBurn * daysInMonth, budget.currency, true)}, runway: ${runwayDays >= 999 ? '∞' : `${Math.round(runwayDays)}d`}`;
         }
       }
 
       allLines.push(
-        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${progress.percentage}%) [${status}]${details}`,
+        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount_cents, budget.currency, true)} (${progress.percentage}%) [${status}]${details}`,
       );
 
       monthBudgetSpentEur += spentEur;
-      monthBudgetLimitEur += convertCurrency(budget.limit_amount, budget.currency, BASE_CURRENCY);
+      monthBudgetLimitEur += convertCurrency(
+        budget.limit_amount_cents,
+        budget.currency,
+        BASE_CURRENCY,
+      );
     }
 
     // Per-month grand total with burn/projection (single-month view only)
@@ -541,11 +550,13 @@ async function executeSetBudgetSingle(
     database.categories.create({ group_id: ctx.groupId, name: category });
   }
 
+  const amountCents = toCents(amount);
+
   const result = await getBudgetManager().set({
     groupId: ctx.groupId,
     category,
     month,
-    amount,
+    amountCents,
     currency,
   });
 
@@ -556,12 +567,12 @@ async function executeSetBudgetSingle(
   const otherBudgets = allBudgets.filter((b) => b.category !== category);
   const othersLine =
     otherBudgets.length > 0
-      ? `\nOther budgets for ${month}: ${otherBudgets.map((b) => `${b.category}=${formatAmount(b.limit_amount, b.currency, true)}`).join(', ')}`
+      ? `\nOther budgets for ${month}: ${otherBudgets.map((b) => `${b.category}=${formatAmount(b.limit_amount_cents, b.currency, true)}`).join(', ')}`
       : '';
 
   return {
     success: true,
-    output: `Budget set: ${category} = ${formatAmount(amount, currency, true)} for ${month}${sheetsNote}${othersLine}`,
+    output: `Budget set: ${category} = ${formatAmount(amountCents, currency, true)} for ${month}${sheetsNote}${othersLine}`,
   };
 }
 
@@ -652,22 +663,24 @@ async function executeAddExpenseSingle(
     database.categories.create({ group_id: ctx.groupId, name: category });
   }
 
+  const amountCents = toCents(amount);
+
   // Record via ExpenseRecorder (handles sheet write, EUR conversion, rate storage, DB insert)
   const { getExpenseRecorder } = await import('../expense-recorder');
   const recorder = getExpenseRecorder();
 
   try {
-    const { expense, eurAmount } = await recorder.record(ctx.groupId, ctx.userId, {
+    const { expense, eurAmountCents } = await recorder.record(ctx.groupId, ctx.userId, {
       date,
       category,
       comment,
-      amount,
+      amount_cents: amountCents,
       currency,
     });
 
     return {
       success: true,
-      output: `Expense added: ${formatAmount(amount, currency, true)} (EUR ${formatAmount(eurAmount, BASE_CURRENCY, true)}) in ${category} on ${date}. ID: ${expense.id}`,
+      output: `Expense added: ${formatAmount(amountCents, currency, true)} (EUR ${formatAmount(eurAmountCents, BASE_CURRENCY, true)}) in ${category} on ${date}. ID: ${expense.id}`,
     };
   } catch (err) {
     logger.error({ err: err }, '[TOOL] Failed to add expense');
@@ -717,7 +730,7 @@ function executeDeleteExpenseSingle(expenseId: number, ctx: AgentContext): ToolR
 
   return {
     success: true,
-    output: `Expense ${expenseId} deleted (${expense.date} | ${expense.category} | ${expense.amount} ${expense.currency}). Note: run /sync to update Google Sheets.`,
+    output: `Expense ${expenseId} deleted (${expense.date} | ${expense.category} | ${formatAmount(expense.amount_cents, expense.currency)} ${expense.currency}). Note: run /sync to update Google Sheets.`,
   };
 }
 
@@ -1029,9 +1042,11 @@ async function executeFindMissingExpenses(
 
     const results = unmatched.map((tx) => {
       // Try exact match: same amount, currency, and within 2 days
+      // tx.amount is float (bank transactions), e.amount_cents is integer cents
+      const txAmountCents = toCents(tx.amount);
       const exactMatch = expenses.find(
         (e) =>
-          Math.abs(e.amount - tx.amount) < 0.01 &&
+          Math.abs(e.amount_cents - txAmountCents) <= 1 &&
           e.currency === tx.currency &&
           Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 2 * 86400 * 1000,
       );
@@ -1041,7 +1056,7 @@ async function executeFindMissingExpenses(
       // Try probable match: same amount, currency, within 5 days
       const probableMatch = expenses.find(
         (e) =>
-          Math.abs(e.amount - tx.amount) < 0.01 &&
+          Math.abs(e.amount_cents - txAmountCents) <= 1 &&
           e.currency === tx.currency &&
           Math.abs(new Date(e.date).getTime() - new Date(tx.date).getTime()) <= 5 * 86400 * 1000,
       );
@@ -1243,7 +1258,7 @@ function executeGetRecurringPatterns(ctx: AgentContext): ToolResult {
   for (const p of patterns) {
     const statusLabel = p.status === 'active' ? '✅' : p.status === 'paused' ? '⏸️' : '❌';
     lines.push(
-      `[id:${p.id}] ${statusLabel} ${p.category} | ${formatAmount(p.expected_amount, p.currency as CurrencyCode)} | day ~${p.expected_day ?? '?'} | next: ${p.next_expected_date ?? 'unknown'} | last: ${p.last_seen_date ?? 'never'} | status: ${p.status}`,
+      `[id:${p.id}] ${statusLabel} ${p.category} | ${formatAmount(toCents(p.expected_amount), p.currency as CurrencyCode)} | day ~${p.expected_day ?? '?'} | next: ${p.next_expected_date ?? 'unknown'} | last: ${p.last_seen_date ?? 'never'} | status: ${p.status}`,
     );
   }
 

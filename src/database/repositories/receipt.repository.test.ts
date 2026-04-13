@@ -221,9 +221,9 @@ describe('ReceiptRepository', () => {
         date: '2024-06-15',
         category: 'Food',
         comment: 'Grocery',
-        amount: 2500,
+        amount_cents: 250000,
         currency: 'RSD',
-        eur_amount: 21.3,
+        eur_amount_cents: 2130,
         receipt_id: receipt.id,
       });
 
@@ -269,9 +269,9 @@ describe('ReceiptRepository', () => {
         date: '2024-06-15',
         category: 'Food',
         comment: 'Grocery',
-        amount: 2500,
+        amount_cents: 250000,
         currency: 'RSD',
-        eur_amount: 21.3,
+        eur_amount_cents: 2130,
         receipt_id: receipt.id,
       });
 
@@ -309,16 +309,16 @@ describe('ReceiptRepository', () => {
         date: '2024-06-15',
         category: 'Food',
         comment: 'Grocery store',
-        amount: 2500,
+        amount_cents: 250000,
         currency: 'RSD',
-        eur_amount: 21.3,
+        eur_amount_cents: 2130,
         receipt_id: receipt.id,
       });
 
       const expenses = receiptRepo.findExpensesByReceiptId(receipt.id);
       expect(expenses).toHaveLength(1);
       expect(expenses[0]?.category).toBe('Food');
-      expect(expenses[0]?.amount).toBe(2500);
+      expect(expenses[0]?.amount_cents).toBe(250000);
     });
 
     test('returns empty array when no expenses linked', () => {
@@ -334,9 +334,9 @@ describe('ReceiptRepository', () => {
         date: '2024-06-15',
         category: 'Food',
         comment: 'Meat',
-        amount: 1500,
+        amount_cents: 150000,
         currency: 'RSD',
-        eur_amount: 12.8,
+        eur_amount_cents: 1280,
         receipt_id: receipt.id,
       });
       expenseRepo.create({
@@ -345,9 +345,9 @@ describe('ReceiptRepository', () => {
         date: '2024-06-15',
         category: 'Household',
         comment: 'Soap',
-        amount: 1000,
+        amount_cents: 100000,
         currency: 'RSD',
-        eur_amount: 8.5,
+        eur_amount_cents: 850,
         receipt_id: receipt.id,
       });
 

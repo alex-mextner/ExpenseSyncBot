@@ -12,7 +12,7 @@ const mockExpenses = {
       _groupId: number,
       _from: string,
       _to: string,
-    ): Array<{ category: string; eur_amount: number }> => [],
+    ): Array<{ category: string; eur_amount_cents: number }> => [],
   ),
 };
 
@@ -23,7 +23,7 @@ const mockBudgets = {
       _month: string,
     ): Array<{
       category: string;
-      limit_amount: number;
+      limit_amount_cents: number;
       currency: CurrencyCode;
     }> => [],
   ),
@@ -82,7 +82,7 @@ describe('formatBudgetProgressText', () => {
 
   it('returns hasBudgets=true when budgets exist', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 500, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 500, currency: 'EUR' as CurrencyCode },
     ]);
 
     const result = formatBudgetProgressText(1);
@@ -94,7 +94,7 @@ describe('formatBudgetProgressText', () => {
 
   it('shows 0% when no expenses match budget category', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 1000, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 1000, currency: 'EUR' as CurrencyCode },
     ]);
 
     const result = formatBudgetProgressText(1);
@@ -104,9 +104,9 @@ describe('formatBudgetProgressText', () => {
 
   it('calculates correct percentage from expenses', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 1000, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 1000, currency: 'EUR' as CurrencyCode },
     ]);
-    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount: 500 }]);
+    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount_cents: 500 }]);
 
     const result = formatBudgetProgressText(1);
 
@@ -115,9 +115,9 @@ describe('formatBudgetProgressText', () => {
 
   it('shows (!) for exceeded budgets', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 100, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 100, currency: 'EUR' as CurrencyCode },
     ]);
-    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount: 150 }]);
+    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount_cents: 150 }]);
 
     const result = formatBudgetProgressText(1);
 
@@ -126,9 +126,9 @@ describe('formatBudgetProgressText', () => {
 
   it('shows (~) for warning budgets (>=90%)', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 100, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 100, currency: 'EUR' as CurrencyCode },
     ]);
-    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount: 95 }]);
+    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount_cents: 95 }]);
 
     const result = formatBudgetProgressText(1);
 
@@ -137,8 +137,8 @@ describe('formatBudgetProgressText', () => {
 
   it('shows total per currency', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 500, currency: 'EUR' as CurrencyCode },
-      { category: 'Transport', limit_amount: 200, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 500, currency: 'EUR' as CurrencyCode },
+      { category: 'Transport', limit_amount_cents: 200, currency: 'EUR' as CurrencyCode },
     ]);
 
     const result = formatBudgetProgressText(1);
@@ -148,12 +148,12 @@ describe('formatBudgetProgressText', () => {
 
   it('sorts budgets by percentage descending', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Low', limit_amount: 1000, currency: 'EUR' as CurrencyCode },
-      { category: 'High', limit_amount: 100, currency: 'EUR' as CurrencyCode },
+      { category: 'Low', limit_amount_cents: 1000, currency: 'EUR' as CurrencyCode },
+      { category: 'High', limit_amount_cents: 100, currency: 'EUR' as CurrencyCode },
     ]);
     mockExpenses.findByDateRange.mockReturnValue([
-      { category: 'Low', eur_amount: 100 },
-      { category: 'High', eur_amount: 90 },
+      { category: 'Low', eur_amount_cents: 100 },
+      { category: 'High', eur_amount_cents: 90 },
     ]);
 
     const result = formatBudgetProgressText(1);
@@ -165,7 +165,7 @@ describe('formatBudgetProgressText', () => {
 
   it('does not log errors on happy path', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { category: 'Food', limit_amount: 500, currency: 'EUR' as CurrencyCode },
+      { category: 'Food', limit_amount_cents: 500, currency: 'EUR' as CurrencyCode },
     ]);
 
     formatBudgetProgressText(1);

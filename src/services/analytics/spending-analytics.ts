@@ -155,12 +155,12 @@ export class SpendingAnalytics {
 
     for (const budget of budgets) {
       // Skip zero-budget categories — no meaningful projection possible
-      if (budget.limit_amount <= 0) continue;
+      if (budget.limit_amount_cents <= 0) continue;
       const currency = budget.currency as CurrencyCode;
-      const spentEur = categorySpentEur[budget.category] || 0;
+      const spentEurCents = categorySpentEur[budget.category] || 0;
       const txCount = categoryTxCount[budget.category] || 0;
       // Convert EUR spent to budget currency for comparison
-      const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
+      const spent = convertCurrency(spentEurCents, BASE_CURRENCY, currency);
 
       const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
 
@@ -189,9 +189,9 @@ export class SpendingAnalytics {
           )
         : spent;
 
-      const projectedOvershoot = projectedTotal - budget.limit_amount;
+      const projectedOvershoot = projectedTotal - budget.limit_amount_cents;
       const runwayDays =
-        dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
+        dailyBurnRate > 0 ? (budget.limit_amount_cents - spent) / dailyBurnRate : Infinity;
 
       // Dynamic warning threshold: volatile categories need higher projection before warning
       // CV=0 → 85%, CV=0.5 → 90%, CV≥1.0 → 95%
@@ -201,15 +201,18 @@ export class SpendingAnalytics {
       // If historical norm (EMA) exceeds budget, projection-based alerts are meaningless —
       // the category chronically overspends, so every projection > budget is expected, not a signal.
       // Only factual exceedance (spent >= budget) should trigger alerts in this case.
-      const normExceedsBudget = profile && profile.ema > budget.limit_amount;
+      const normExceedsBudget = profile && profile.ema > budget.limit_amount_cents;
 
       // Determine status: cascade top-down
       let status: BudgetBurnRate['status'];
-      if (spent >= budget.limit_amount) {
+      if (spent >= budget.limit_amount_cents) {
         status = 'exceeded';
-      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount) {
+      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount_cents) {
         status = 'critical';
-      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount * warningThreshold) {
+      } else if (
+        !normExceedsBudget &&
+        projectedTotal > budget.limit_amount_cents * warningThreshold
+      ) {
         status = 'warning';
       } else {
         status = 'on_track';
@@ -217,7 +220,7 @@ export class SpendingAnalytics {
 
       results.push({
         category: budget.category,
-        budget_limit: budget.limit_amount,
+        budget_limit: budget.limit_amount_cents,
         spent,
         currency,
         days_elapsed: daysElapsed,
@@ -591,7 +594,7 @@ export class SpendingAnalytics {
     let totalBudgetEur = 0;
     for (const budget of budgets) {
       const limitEur = convertCurrency(
-        budget.limit_amount,
+        budget.limit_amount_cents,
         budget.currency as CurrencyCode,
         BASE_CURRENCY,
       );
@@ -768,7 +771,7 @@ export class SpendingAnalytics {
       prefetchedBudgets ?? database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
     const budgetMap: Record<string, { limit: number; currency: string }> = {};
     for (const b of budgets) {
-      budgetMap[b.category] = { limit: b.limit_amount, currency: b.currency };
+      budgetMap[b.category] = { limit: b.limit_amount_cents, currency: b.currency };
     }
 
     const { lastTxByCategory, intervalProfiles } =

@@ -1,6 +1,6 @@
 /** /stats command handler — shows per-currency expense totals and category breakdown */
 import { InlineKeyboard } from 'gramio';
-import { BASE_CURRENCY, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Group } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
@@ -38,8 +38,7 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
 
     message += `\n<b>Последние ${recentExpenses.length} ${pluralize(recentExpenses.length, 'расход', 'расхода', 'расходов')}:</b>\n`;
     for (const expense of recentExpenses) {
-      const symbol = getCurrencySymbol(expense.currency);
-      message += `• ${expense.date}: ${symbol}${expense.amount} - ${expense.category}\n`;
+      message += `• ${expense.date}: ${formatAmount(expense.amount_cents, expense.currency)} - ${expense.category}\n`;
     }
 
     const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);

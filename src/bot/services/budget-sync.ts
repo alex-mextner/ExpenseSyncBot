@@ -4,6 +4,7 @@ import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
+import { toCents } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   type GoogleConn,
@@ -198,13 +199,14 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
       }
 
       const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
+      const limitCents = toCents(b.limit);
 
       if (!existing) {
         const { multiWordWarning } = mgr.importFromSheet({
           groupId,
           category: b.category,
           month: currentMonth,
-          amount: b.limit,
+          amountCents: limitCents,
           currency: b.currency,
         });
         if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
@@ -214,12 +216,12 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
           limit: b.limit,
           currency: b.currency,
         });
-      } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
+      } else if (existing.limit_amount_cents !== limitCents || existing.currency !== b.currency) {
         const { multiWordWarning } = mgr.importFromSheet({
           groupId,
           category: b.category,
           month: currentMonth,
-          amount: b.limit,
+          amountCents: limitCents,
           currency: b.currency,
         });
         if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
@@ -228,7 +230,7 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
           category: b.category,
           limit: b.limit,
           currency: b.currency,
-          oldLimit: existing.limit_amount,
+          oldLimit: existing.limit_amount_cents,
         });
       } else {
         result.unchanged++;
@@ -242,7 +244,7 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
         result.deleted.push({
           month: db.month,
           category: db.category,
-          limit: db.limit_amount,
+          limit: db.limit_amount_cents,
           currency: db.currency,
         });
       }
@@ -324,15 +326,18 @@ export async function silentSyncBudgets(conn: GoogleConn, groupId: number): Prom
           b.category,
           currentMonth,
         );
+        const limitCents = toCents(b.limit);
         const hasChanged =
-          !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
+          !existing ||
+          existing.limit_amount_cents !== limitCents ||
+          existing.currency !== b.currency;
 
         if (hasChanged) {
           mgr.importFromSheet({
             groupId,
             category: b.category,
             month: currentMonth,
-            amount: b.limit,
+            amountCents: limitCents,
             currency: b.currency,
           });
           count++;

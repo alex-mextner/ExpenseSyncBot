@@ -40,9 +40,9 @@ function stubExpense(
     date: '2024-01-15',
     category: 'test',
     comment: '',
-    amount: 10,
+    amount_cents: 1000,
     currency: 'EUR',
-    eur_amount: 10,
+    eur_amount_cents: 1000,
     receipt_id: null,
     receipt_file_id: null,
     created_at: '2024-01-15',
@@ -139,12 +139,12 @@ const mockExtractTextFromImageBuffer = mock(
 );
 const mockExpenseRecorderRecord = mock(
   (_groupId: number, _userId: number, _data: RecordExpenseData): Promise<RecordExpenseResult> =>
-    Promise.resolve({ expense: stubExpense({ id: 99 }), eurAmount: 10 }),
+    Promise.resolve({ expense: stubExpense({ id: 99 }), eurAmountCents: 1000 }),
 );
 const mockExpenseRecorderRecordReceipt = mock(
   (_groupId: number, _userId: number, _data: RecordReceiptData): Promise<RecordReceiptResult> =>
     Promise.resolve({
-      expenses: [{ expense: stubExpense({ id: 99 }), eurAmount: 10 }],
+      expenses: [{ expense: stubExpense({ id: 99 }), eurAmountCents: 1000 }],
       categoriesAffected: [],
     }),
 );
@@ -949,7 +949,7 @@ describe('POST /api/receipt/confirm', () => {
     // Both items are Food → recordReceipt groups them into one category expense
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
-        expenses: [{ expense: stubExpense({ id: 55 }), eurAmount: 8.5 }],
+        expenses: [{ expense: stubExpense({ id: 55 }), eurAmountCents: 850 }],
         categoriesAffected: ['Food'],
       }),
     );
@@ -991,7 +991,7 @@ describe('POST /api/receipt/confirm', () => {
     mockGroupMembersIsMember.mockReturnValue(true);
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
-        expenses: [{ expense: stubExpense({ id: 88 }), eurAmount: 5 }],
+        expenses: [{ expense: stubExpense({ id: 88 }), eurAmountCents: 500 }],
         categoriesAffected: ['Food'],
       }),
     );
@@ -1018,7 +1018,7 @@ describe('POST /api/receipt/confirm', () => {
     mockGroupMembersIsMember.mockReturnValue(true);
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
-        expenses: [{ expense: stubExpense({ id: 77 }), eurAmount: 5 }],
+        expenses: [{ expense: stubExpense({ id: 77 }), eurAmountCents: 500 }],
         categoriesAffected: ['Food'],
       }),
     );
@@ -1049,7 +1049,7 @@ describe('POST /api/receipt/confirm', () => {
     mockGroupMembersIsMember.mockReturnValue(true);
     mockExpenseRecorderRecordReceipt.mockImplementation(() =>
       Promise.resolve({
-        expenses: [{ expense: stubExpense({ id: 100 }), eurAmount: 60 }],
+        expenses: [{ expense: stubExpense({ id: 100 }), eurAmountCents: 6000 }],
         categoriesAffected: ['Продукты'],
       }),
     );

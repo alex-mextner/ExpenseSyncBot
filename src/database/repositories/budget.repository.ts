@@ -6,22 +6,25 @@ import type { Budget, BudgetProgress, CreateBudgetData } from '../types';
 
 /**
  * Pure computation of budget progress from a budget object and spent amount.
+ * All amounts are in minor currency units (cents).
  * No DB queries — safe to call in loops.
  */
 export function computeBudgetProgress(
-  budget: { category: string; limit_amount: number; currency: string },
-  spentAmount: number,
+  budget: { category: string; limit_amount_cents: number; currency: string },
+  spentAmountCents: number,
 ): BudgetProgress {
   const percentage =
-    budget.limit_amount > 0 ? Math.round((spentAmount / budget.limit_amount) * 100) : 0;
+    budget.limit_amount_cents > 0
+      ? Math.round((spentAmountCents / budget.limit_amount_cents) * 100)
+      : 0;
   return {
     category: budget.category,
-    limit_amount: budget.limit_amount,
-    spent_amount: spentAmount,
+    limit_amount_cents: budget.limit_amount_cents,
+    spent_amount_cents: spentAmountCents,
     currency: budget.currency as CurrencyCode,
     percentage,
-    is_exceeded: spentAmount > budget.limit_amount,
-    is_warning: percentage >= 90 && spentAmount <= budget.limit_amount,
+    is_exceeded: spentAmountCents > budget.limit_amount_cents,
+    is_warning: percentage >= 90 && spentAmountCents <= budget.limit_amount_cents,
   };
 }
 
@@ -62,15 +65,15 @@ export class BudgetRepository implements BudgetReadRepository {
     // Atomic UPSERT — no TOCTOU race between check and insert/update
     const result = this.db
       .query<Budget, [number, string, string, number, string]>(
-        `INSERT INTO budgets (group_id, category, month, limit_amount, currency)
+        `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (group_id, category, month) DO UPDATE SET
-           limit_amount = excluded.limit_amount,
+           limit_amount_cents = excluded.limit_amount_cents,
            currency = excluded.currency,
            updated_at = CURRENT_TIMESTAMP
          RETURNING *`,
       )
-      .get(data.group_id, data.category, data.month, data.limit_amount, currency);
+      .get(data.group_id, data.category, data.month, data.limit_amount_cents, currency);
 
     if (!result) {
       throw new Error('Failed to upsert budget');

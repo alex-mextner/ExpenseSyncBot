@@ -51,7 +51,7 @@ export class PendingExpenseRepository {
       INSERT INTO pending_expenses (
         user_id,
         message_id,
-        parsed_amount,
+        parsed_amount_cents,
         parsed_currency,
         detected_category,
         comment,
@@ -64,7 +64,7 @@ export class PendingExpenseRepository {
     const result = query.get(
       data.user_id,
       data.message_id,
-      data.parsed_amount,
+      data.parsed_amount_cents,
       data.parsed_currency,
       data.detected_category,
       data.comment,

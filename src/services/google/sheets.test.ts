@@ -96,24 +96,24 @@ describe('appendExpenseRows', () => {
         date: '2026-04-10',
         category: 'Еда',
         comment: 'обед',
-        amounts: { RSD: 500 },
-        eurAmount: 4.3,
+        amounts: { RSD: 50000 },
+        eurAmountCents: 430,
         rate: 0.0086,
       },
       {
         date: '2026-04-10',
         category: 'Еда',
         comment: 'кофе',
-        amounts: { RSD: 200 },
-        eurAmount: 1.72,
+        amounts: { RSD: 20000 },
+        eurAmountCents: 172,
         rate: 0.0086,
       },
       {
         date: '2026-04-10',
         category: 'Транспорт',
         comment: 'такси',
-        amounts: { RSD: 800 },
-        eurAmount: 6.88,
+        amounts: { RSD: 80000 },
+        eurAmountCents: 688,
         rate: 0.0086,
       },
     ]);
@@ -132,16 +132,16 @@ describe('appendExpenseRows', () => {
         date: '2026-04-10',
         category: 'Еда',
         comment: '',
-        amounts: { RSD: 100 },
-        eurAmount: 0.86,
+        amounts: { RSD: 10000 },
+        eurAmountCents: 86,
         rate: 0.0086,
       },
       {
         date: '2026-04-10',
         category: 'Еда',
         comment: '',
-        amounts: { RSD: 200 },
-        eurAmount: 1.72,
+        amounts: { RSD: 20000 },
+        eurAmountCents: 172,
         rate: 0.0086,
       },
     ]);
@@ -161,24 +161,24 @@ describe('appendExpenseRows', () => {
         date: '2026-04-10',
         category: 'A',
         comment: '',
-        amounts: { RSD: 100 },
-        eurAmount: 0.86,
+        amounts: { RSD: 10000 },
+        eurAmountCents: 86,
         rate: 0.0086,
       },
       {
         date: '2026-04-10',
         category: 'B',
         comment: '',
-        amounts: { RSD: 200 },
-        eurAmount: 1.72,
+        amounts: { RSD: 20000 },
+        eurAmountCents: 172,
         rate: 0.0086,
       },
       {
         date: '2026-04-10',
         category: 'C',
         comment: '',
-        amounts: { RSD: 300 },
-        eurAmount: 2.58,
+        amounts: { RSD: 30000 },
+        eurAmountCents: 258,
         rate: 0.0086,
       },
     ]);
@@ -209,15 +209,27 @@ describe('appendExpenseRows', () => {
     });
 
     await appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
-      { date: '2026-04-10', category: 'A', comment: '', amounts: { EUR: 10 }, eurAmount: 10 },
-      { date: '2026-04-10', category: 'B', comment: '', amounts: { EUR: 20 }, eurAmount: 20 },
+      {
+        date: '2026-04-10',
+        category: 'A',
+        comment: '',
+        amounts: { EUR: 1000 },
+        eurAmountCents: 1000,
+      },
+      {
+        date: '2026-04-10',
+        category: 'B',
+        comment: '',
+        amounts: { EUR: 2000 },
+        eurAmountCents: 2000,
+      },
     ]);
 
     // No formulas needed for EUR-native rows — no second round-trip at all
     expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
     expect(mockValuesUpdate).not.toHaveBeenCalled();
 
-    // EUR column holds the literal amount, not a formula
+    // EUR column holds the literal amount (cents / 100), not a formula
     const callArgs = mockValuesAppend.mock.calls[0]?.[0] as ValuesAppendArgs;
     expect(callArgs.requestBody.values[0]?.[3]).toBe(10);
     expect(callArgs.requestBody.values[1]?.[3]).toBe(20);
@@ -233,17 +245,23 @@ describe('appendExpenseRows', () => {
         date: '2026-04-10',
         category: 'A',
         comment: '',
-        amounts: { RSD: 100 },
-        eurAmount: 0.86,
+        amounts: { RSD: 10000 },
+        eurAmountCents: 86,
         rate: 0.0086,
       },
-      { date: '2026-04-10', category: 'B', comment: '', amounts: { EUR: 5 }, eurAmount: 5 }, // EUR — no formula
+      {
+        date: '2026-04-10',
+        category: 'B',
+        comment: '',
+        amounts: { EUR: 500 },
+        eurAmountCents: 500,
+      }, // EUR — no formula
       {
         date: '2026-04-10',
         category: 'C',
         comment: '',
-        amounts: { RSD: 300 },
-        eurAmount: 2.58,
+        amounts: { RSD: 30000 },
+        eurAmountCents: 258,
         rate: 0.0086,
       },
     ]);
@@ -255,7 +273,7 @@ describe('appendExpenseRows', () => {
     const callArgs = mockValuesAppend.mock.calls[0]?.[0] as ValuesAppendArgs;
     // Row 1 (RSD) — formula
     expect(String(callArgs.requestBody.values[0]?.[3])).toContain('INDIRECT');
-    // Row 2 (EUR) — literal
+    // Row 2 (EUR) — literal (500 cents / 100 = 5)
     expect(callArgs.requestBody.values[1]?.[3]).toBe(5);
     // Row 3 (RSD) — formula
     expect(String(callArgs.requestBody.values[2]?.[3])).toContain('INDIRECT');
@@ -267,8 +285,8 @@ describe('appendExpenseRows', () => {
         date: '2026-04-10',
         category: 'Еда',
         comment: 'lunch',
-        amounts: { RSD: 500 },
-        eurAmount: 4.3,
+        amounts: { RSD: 50000 },
+        eurAmountCents: 430,
         rate: 0.0086,
       },
     ]);
@@ -283,8 +301,8 @@ describe('appendExpenseRows', () => {
         date: '2026-04-10',
         category: 'Еда',
         comment: 'lunch',
-        amounts: { RSD: 500 },
-        eurAmount: 4.3,
+        amounts: { RSD: 50000 },
+        eurAmountCents: 430,
         rate: 0.0086,
       },
     ]);
@@ -298,7 +316,7 @@ describe('appendExpenseRows', () => {
     expect(row?.[2]).toBe('lunch');
     // EUR column holds a self-positioning formula: amount col (E) × rate col (F)
     expect(row?.[3]).toBe('=INDIRECT("E"&ROW())*INDIRECT("F"&ROW())');
-    expect(row?.[4]).toBe(500); // RSD amount
+    expect(row?.[4]).toBe(500); // RSD amount (50000 cents / 100)
     expect(row?.[5]).toBe(0.0086); // rate
   });
 
@@ -314,10 +332,22 @@ describe('appendExpenseRows', () => {
     });
 
     const p1 = appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
-      { date: '2026-04-10', category: 'A', comment: '', amounts: { EUR: 10 }, eurAmount: 10 },
+      {
+        date: '2026-04-10',
+        category: 'A',
+        comment: '',
+        amounts: { EUR: 1000 },
+        eurAmountCents: 1000,
+      },
     ]);
     const p2 = appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
-      { date: '2026-04-10', category: 'B', comment: '', amounts: { EUR: 20 }, eurAmount: 20 },
+      {
+        date: '2026-04-10',
+        category: 'B',
+        comment: '',
+        amounts: { EUR: 2000 },
+        eurAmountCents: 2000,
+      },
     ]);
 
     await Promise.all([p1, p2]);

@@ -10,7 +10,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
   it('converts EUR spending to budget currency before computing percentage', () => {
     const result = buildBudgetAlertStatus(100, {
       category: 'Food',
-      limit_amount: 15_000,
+      limit_amount_cents: 15_000,
       currency: 'RSD',
     });
     // 100 EUR ≈ 11 600 RSD, so percentage should be around 77%, not 0.67%
@@ -22,7 +22,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
     // 100 EUR ≈ 11 600 RSD < 15 000 RSD limit
     const result = buildBudgetAlertStatus(100, {
       category: 'Food',
-      limit_amount: 15_000,
+      limit_amount_cents: 15_000,
       currency: 'RSD',
     });
     expect(result.isExceeded).toBe(false);
@@ -32,7 +32,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
     // 200 EUR ≈ 23 200 RSD > 15 000 RSD limit
     const result = buildBudgetAlertStatus(200, {
       category: 'Food',
-      limit_amount: 15_000,
+      limit_amount_cents: 15_000,
       currency: 'RSD',
     });
     expect(result.isExceeded).toBe(true);
@@ -42,7 +42,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
     // 125 EUR ≈ 14 500 RSD, limit 15 000 RSD → ~97% → warning
     const result = buildBudgetAlertStatus(125, {
       category: 'Food',
-      limit_amount: 15_000,
+      limit_amount_cents: 15_000,
       currency: 'RSD',
     });
     expect(result.isWarning).toBe(true);
@@ -52,7 +52,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
   it('EUR budget: 1:1, no conversion needed', () => {
     const result = buildBudgetAlertStatus(150, {
       category: 'Rent',
-      limit_amount: 200,
+      limit_amount_cents: 200,
       currency: 'EUR',
     });
     expect(result.percentage).toBe(75);
@@ -62,7 +62,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
   it('spentInCurrency is in budget currency, not EUR', () => {
     const result = buildBudgetAlertStatus(100, {
       category: 'Food',
-      limit_amount: 15_000,
+      limit_amount_cents: 15_000,
       currency: 'RSD',
     });
     // spentInCurrency should be ~11 600 RSD, not 100

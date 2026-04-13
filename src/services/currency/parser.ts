@@ -4,7 +4,8 @@ import currency from 'currency.js';
 import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
 
 export interface ParsedExpense {
-  amount: number;
+  /** Amount in minor currency units (cents). 100.50 USD → 10050 */
+  amount_cents: number;
   currency: CurrencyCode;
   category: string | null;
   comment: string;
@@ -182,11 +183,11 @@ export function parseExpenseMessage(
     const normalizedCurrency = normalizeCurrency(currencySymbol);
 
     if (normalizedCurrency) {
-      const amount = parseAmount(amountStr);
-      if (amount !== null) {
+      const amount_cents = parseAmountCents(amountStr);
+      if (amount_cents !== null) {
         const { category, comment } = parseRest(rest || '');
         return {
-          amount,
+          amount_cents,
           currency: normalizedCurrency,
           category,
           comment,
@@ -203,13 +204,13 @@ export function parseExpenseMessage(
   if (match2) {
     const [, amountStr, currencyStr, rest] = match2;
     if (!amountStr || !currencyStr || !rest) return null;
-    const amount = parseAmount(amountStr);
+    const amount_cents = parseAmountCents(amountStr);
     const normalizedCurrency = normalizeCurrency(currencyStr);
 
-    if (amount !== null && normalizedCurrency) {
+    if (amount_cents !== null && normalizedCurrency) {
       const { category, comment } = parseRest(rest);
       return {
-        amount,
+        amount_cents,
         currency: normalizedCurrency,
         category,
         comment,
@@ -225,12 +226,12 @@ export function parseExpenseMessage(
   if (match3) {
     const [, amountStr, rest] = match3;
     if (!amountStr || !rest) return null;
-    const amount = parseAmount(amountStr);
+    const amount_cents = parseAmountCents(amountStr);
 
-    if (amount !== null) {
+    if (amount_cents !== null) {
       const { category, comment } = parseRest(rest);
       return {
-        amount,
+        amount_cents,
         currency: defaultCurrency,
         category,
         comment,
@@ -246,13 +247,13 @@ export function parseExpenseMessage(
   if (match4) {
     const [, amountStr, currencyLetter, rest] = match4;
     if (!amountStr || !currencyLetter || !rest) return null;
-    const amount = parseAmount(amountStr);
+    const amount_cents = parseAmountCents(amountStr);
     const normalizedCurrency = normalizeCurrency(currencyLetter);
 
-    if (amount !== null && normalizedCurrency) {
+    if (amount_cents !== null && normalizedCurrency) {
       const { category, comment } = parseRest(rest);
       return {
-        amount,
+        amount_cents,
         currency: normalizedCurrency,
         category,
         comment,
@@ -265,11 +266,12 @@ export function parseExpenseMessage(
 }
 
 /**
- * Parse amount string to number
+ * Parse amount string to integer cents.
  * Handles: 190, 1900, 1 900, 1,900, 1.900, 1900.50
  * Also handles math expressions: 10*3, 100/4, 10+5, 10*3+5
+ * Returns integer cents: "100.50" → 10050
  */
-function parseAmount(amountStr: string): number | null {
+function parseAmountCents(amountStr: string): number | null {
   try {
     // Remove spaces
     let cleaned = amountStr.replace(/\s+/g, '');
@@ -278,8 +280,7 @@ function parseAmount(amountStr: string): number | null {
     if (/[+\-*×/]/.test(cleaned)) {
       const result = evaluateMathExpression(cleaned);
       if (result === null || result <= 0) return null;
-      // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
-      return Math.round(result * 100) / 100;
+      return Math.round(result * 100);
     }
 
     // Handle European format (1.234,56 -> 1234.56)
@@ -301,7 +302,7 @@ function parseAmount(amountStr: string): number | null {
       return null;
     }
 
-    return parsed.value;
+    return Math.round(parsed.value * 100);
   } catch {
     return null;
   }
@@ -371,7 +372,7 @@ export function validateParsedExpense(parsed: ParsedExpense | null): parsed is P
     return false;
   }
 
-  if (parsed.amount <= 0) {
+  if (parsed.amount_cents <= 0) {
     return false;
   }
 

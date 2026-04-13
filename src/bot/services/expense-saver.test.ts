@@ -40,9 +40,9 @@ const mockExpenseCreate = mock(() => ({
   date: '2024-01-15',
   category: 'Продукты',
   comment: 'test',
-  amount: 200,
+  amount_cents: 20000,
   currency: 'RSD',
-  eur_amount: 1.72,
+  eur_amount_cents: 172,
   created_at: '2024-01-01',
   synced: 0,
 }));
@@ -65,7 +65,7 @@ const mockBudgetsGetForMonth = mock(
   ): {
     id: number;
     category: string;
-    limit_amount: number;
+    limit_amount_cents: number;
     currency: string;
     month: string;
   } | null => null,
@@ -78,7 +78,7 @@ const mockPendingExpenseFindById = mock(
     id: number;
     user_id: number;
     message_id: number;
-    parsed_amount: number;
+    parsed_amount_cents: number;
     parsed_currency: CurrencyCode;
     detected_category: string | null;
     comment: string;
@@ -216,9 +216,9 @@ beforeEach(() => {
     date: '2024-01-15',
     category: 'Продукты',
     comment: 'test',
-    amount: 200,
+    amount_cents: 20000,
     currency: 'RSD',
-    eur_amount: 1.72,
+    eur_amount_cents: 172,
     created_at: '2024-01-01',
     synced: 0,
   });
@@ -278,7 +278,7 @@ describe('saveReceiptExpenses', () => {
         return {
           id: 1,
           category: 'Продукты',
-          limit_amount: 10,
+          limit_amount_cents: 10,
           currency: 'EUR',
           month: '2024-01',
         };
@@ -307,7 +307,7 @@ describe('saveReceiptExpenses', () => {
     mockBudgetsGetForMonth.mockReturnValue({
       id: 1,
       category: 'Продукты',
-      limit_amount: 100,
+      limit_amount_cents: 100,
       currency: 'EUR',
       month: '2024-01',
     });
@@ -328,7 +328,7 @@ describe('saveReceiptExpenses', () => {
     mockBudgetsGetForMonth.mockReturnValue({
       id: 1,
       category: 'Продукты',
-      limit_amount: 100,
+      limit_amount_cents: 100,
       currency: 'EUR',
       month: '2024-01',
     });
@@ -417,7 +417,7 @@ function makePendingExpense(id: number, overrides: Record<string, unknown> = {})
     id,
     user_id: TEST_USER_ID,
     message_id: 100,
-    parsed_amount: 500,
+    parsed_amount_cents: 500,
     parsed_currency: 'RSD' as CurrencyCode,
     detected_category: 'Продукты',
     comment: 'молоко',
@@ -441,8 +441,11 @@ describe('saveExpenseBatch', () => {
   });
 
   it('writes all expenses to sheet then commits to DB atomically', async () => {
-    const pe1 = makePendingExpense(10, { detected_category: 'Продукты', parsed_amount: 500 });
-    const pe2 = makePendingExpense(11, { detected_category: 'Транспорт', parsed_amount: 300 });
+    const pe1 = makePendingExpense(10, { detected_category: 'Продукты', parsed_amount_cents: 500 });
+    const pe2 = makePendingExpense(11, {
+      detected_category: 'Транспорт',
+      parsed_amount_cents: 300,
+    });
 
     mockPendingExpenseFindById.mockImplementation((id: number) => {
       if (id === 10) return pe1;
@@ -520,7 +523,7 @@ describe('saveExpenseBatch', () => {
     mockBudgetsGetForMonth.mockReturnValue({
       id: 1,
       category: 'Продукты',
-      limit_amount: 1000,
+      limit_amount_cents: 1000,
       currency: 'EUR',
       month: '2024-01',
     });

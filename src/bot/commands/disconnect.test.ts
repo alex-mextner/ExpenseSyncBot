@@ -45,10 +45,10 @@ describe('/disconnect — cascading group deletion', () => {
     spreadsheets.setYear(group.id, 2026, 'sheet-abc');
     db.exec(`INSERT INTO categories (name, group_id) VALUES ('Food', ${group.id})`);
     db.exec(
-      `INSERT INTO expenses (group_id, user_id, amount, currency, eur_amount, category, comment, date) VALUES (${group.id}, 1, 100, 'EUR', 100, 'Food', 'test', '2026-03-29')`,
+      `INSERT INTO expenses (group_id, user_id, amount_cents, currency, eur_amount_cents, category, comment, date) VALUES (${group.id}, 1, 10000, 'EUR', 10000, 'Food', 'test', '2026-03-29')`,
     );
     db.exec(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (${group.id}, 'Food', '2026-03', 500, 'EUR')`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (${group.id}, 'Food', '2026-03', 50000, 'EUR')`,
     );
     db.exec(
       `INSERT INTO chat_messages (group_id, user_id, role, content) VALUES (${group.id}, 1, 'user', 'hello')`,

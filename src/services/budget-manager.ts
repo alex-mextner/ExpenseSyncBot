@@ -14,7 +14,8 @@ export interface SetBudgetParams {
   groupId: number;
   category: string;
   month: string; // YYYY-MM
-  amount: number;
+  /** Budget limit in minor currency units (cents) */
+  amountCents: number;
   currency: CurrencyCode;
 }
 
@@ -45,9 +46,9 @@ export interface BudgetDeleteResult extends BudgetWriteResult {
  * Write access via _budgetWriter() from database module (underscore = internal).
  */
 export class BudgetManager {
-  /** Set or update a budget. Writes to DB, then syncs to Sheets. */
+  /** Set or update a budget. Writes to DB, then syncs to Sheets. All amounts in cents. */
   async set(params: SetBudgetParams): Promise<BudgetWriteResult> {
-    const { groupId, month, amount, currency } = params;
+    const { groupId, month, amountCents, currency } = params;
     const category = normalizeCategoryName(params.category);
 
     // 1. Always write to DB first (atomic, never fails silently)
@@ -55,7 +56,7 @@ export class BudgetManager {
       group_id: groupId,
       category,
       month,
-      limit_amount: amount,
+      limit_amount_cents: amountCents,
       currency,
     });
 
@@ -63,7 +64,7 @@ export class BudgetManager {
     const group = database.groups.findById(groupId);
     const sheetsSynced = await this.syncToSheets(group, month, {
       category,
-      limit: amount,
+      limitCents: amountCents,
       currency,
     });
 
@@ -95,7 +96,7 @@ export class BudgetManager {
 
     const sheetsSynced = await this.syncToSheets(group, month, {
       category: existing.category,
-      limit: 0,
+      limitCents: 0,
       currency,
     });
 
@@ -105,16 +106,17 @@ export class BudgetManager {
   /**
    * Import a budget from Google Sheets into DB. No Sheets write-back.
    * Used by budget-sync, reconnect, and rollback operations.
+   * amountCents is in minor currency units (cents).
    */
   importFromSheet(params: SetBudgetParams): { multiWordWarning?: string } {
-    const { groupId, month, amount, currency } = params;
+    const { groupId, month, amountCents, currency } = params;
     const category = normalizeCategoryName(params.category);
 
     _budgetWriter().setBudget({
       group_id: groupId,
       category,
       month,
-      limit_amount: amount,
+      limit_amount_cents: amountCents,
       currency,
     });
 
@@ -138,12 +140,13 @@ export class BudgetManager {
 
   /**
    * Write a budget row to Google Sheets.
+   * limitCents is in minor currency units — converted to decimal for the sheet.
    * Returns true if synced, false if skipped or failed.
    */
   private async syncToSheets(
     group: Group | null,
     month: string,
-    row: { category: string; limit: number; currency: CurrencyCode },
+    row: { category: string; limitCents: number; currency: CurrencyCode },
   ): Promise<boolean> {
     if (!group?.google_refresh_token) return false;
 
@@ -155,7 +158,11 @@ export class BudgetManager {
     try {
       const conn = googleConn(group);
       const monthAbbr = monthAbbrFromYYYYMM(month);
-      await writeMonthBudgetRow(conn, spreadsheetId, monthAbbr, row);
+      await writeMonthBudgetRow(conn, spreadsheetId, monthAbbr, {
+        category: row.category,
+        limit: row.limitCents,
+        currency: row.currency,
+      });
       return true;
     } catch (err) {
       logger.error({ err }, `[BUDGET] Failed to sync to Sheets: ${row.category} for ${month}`);

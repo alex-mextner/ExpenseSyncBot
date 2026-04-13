@@ -84,7 +84,7 @@ function resetAll() {
     group_id: 1,
     category: 'Food',
     month: '2026-04',
-    limit_amount: 500,
+    limit_amount_cents: 50000,
     currency: 'EUR',
     created_at: '',
     updated_at: '',
@@ -124,7 +124,7 @@ describe('BudgetManager.set', () => {
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 700,
+      amountCents: 70000,
       currency: 'EUR',
     });
 
@@ -133,12 +133,12 @@ describe('BudgetManager.set', () => {
       group_id: 1,
       category: 'Food',
       month: '2026-04',
-      limit_amount: 700,
+      limit_amount_cents: 70000,
       currency: 'EUR',
     });
     expect(mockWriteMonthBudgetRow).toHaveBeenCalledWith({ fake: 'conn' }, 'year-sheet-id', 'Apr', {
       category: 'Food',
-      limit: 700,
+      limit: 70000,
       currency: 'EUR',
     });
   });
@@ -151,7 +151,7 @@ describe('BudgetManager.set', () => {
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 500,
+      amountCents: 50000,
       currency: 'EUR',
     });
 
@@ -171,7 +171,7 @@ describe('BudgetManager.set', () => {
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 500,
+      amountCents: 50000,
       currency: 'EUR',
     });
 
@@ -206,7 +206,7 @@ describe('BudgetManager.set', () => {
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 700,
+      amountCents: 70000,
       currency: 'EUR',
     });
 
@@ -223,7 +223,7 @@ describe('BudgetManager.set', () => {
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 700,
+      amountCents: 70000,
       currency: 'EUR',
     });
 
@@ -234,7 +234,13 @@ describe('BudgetManager.set', () => {
   test('resolves correct MonthAbbr from YYYY-MM string', async () => {
     const mgr = new BudgetManager();
 
-    await mgr.set({ groupId: 1, category: 'A', month: '2026-01', amount: 100, currency: 'EUR' });
+    await mgr.set({
+      groupId: 1,
+      category: 'A',
+      month: '2026-01',
+      amountCents: 10000,
+      currency: 'EUR',
+    });
     expect(mockWriteMonthBudgetRow).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -243,7 +249,13 @@ describe('BudgetManager.set', () => {
     );
 
     mockWriteMonthBudgetRow.mockReset();
-    await mgr.set({ groupId: 1, category: 'A', month: '2026-12', amount: 100, currency: 'EUR' });
+    await mgr.set({
+      groupId: 1,
+      category: 'A',
+      month: '2026-12',
+      amountCents: 10000,
+      currency: 'EUR',
+    });
     expect(mockWriteMonthBudgetRow).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -254,7 +266,13 @@ describe('BudgetManager.set', () => {
 
   test('extracts year from month string for spreadsheet lookup', async () => {
     const mgr = new BudgetManager();
-    await mgr.set({ groupId: 1, category: 'A', month: '2027-06', amount: 100, currency: 'EUR' });
+    await mgr.set({
+      groupId: 1,
+      category: 'A',
+      month: '2027-06',
+      amountCents: 10000,
+      currency: 'EUR',
+    });
 
     expect(mockGetByYear).toHaveBeenCalledWith(1, 2027);
   });
@@ -283,7 +301,7 @@ describe('BudgetManager.set', () => {
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 700,
+      amountCents: 70000,
       currency: 'EUR',
     });
 
@@ -401,7 +419,7 @@ describe('BudgetManager.delete', () => {
       group_id: 1,
       category: 'Food',
       month: '2026-04',
-      limit_amount: 500,
+      limit_amount_cents: 50000,
       currency: 'EUR',
       created_at: '',
       updated_at: '',
@@ -426,7 +444,7 @@ describe('BudgetManager.importFromSheet (DB-only, no Sheets write-back)', () => 
       groupId: 1,
       category: 'Food',
       month: '2026-04',
-      amount: 700,
+      amountCents: 70000,
       currency: 'EUR',
     });
 
@@ -434,7 +452,7 @@ describe('BudgetManager.importFromSheet (DB-only, no Sheets write-back)', () => 
       group_id: 1,
       category: 'Food',
       month: '2026-04',
-      limit_amount: 700,
+      limit_amount_cents: 70000,
       currency: 'EUR',
     });
     expect(mockWriteMonthBudgetRow).not.toHaveBeenCalled();

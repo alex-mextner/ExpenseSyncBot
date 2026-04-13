@@ -62,7 +62,7 @@ export class ExpenseRepository {
   findPotentialDuplicates(
     groupId: number,
     date: string,
-    amount: number,
+    amountCents: number,
     currency: string,
   ): { exact: Expense[]; fuzzy: Expense[] } {
     // Exclude expenses already claimed by a bank transaction via either path:
@@ -77,7 +77,7 @@ export class ExpenseRepository {
         WHERE e.receipt_id IS NOT NULL AND bt.matched_receipt_id = e.receipt_id
       )
     `;
-    const amountTolerance = amount * 0.05;
+    const amountTolerance = Math.round(amountCents * 0.05);
 
     const exact = this.db
       .query<Expense, [number, string, string, number, number]>(`
@@ -85,12 +85,12 @@ export class ExpenseRepository {
         WHERE e.group_id = ?
           AND e.date = ?
           AND e.currency = ?
-          AND ABS(e.amount - ?) <= ?
+          AND ABS(e.amount_cents - ?) <= ?
           ${notLinked}
         ORDER BY e.created_at DESC
         LIMIT 5
       `)
-      .all(groupId, date, currency, amount, amountTolerance);
+      .all(groupId, date, currency, amountCents, amountTolerance);
 
     const exactIds = new Set(exact.map((e) => e.id));
 
@@ -102,12 +102,12 @@ export class ExpenseRepository {
           AND e.date <= date(?, '+1 day')
           AND e.date != ?
           AND e.currency = ?
-          AND ABS(e.amount - ?) <= ?
+          AND ABS(e.amount_cents - ?) <= ?
           ${notLinked}
         ORDER BY ABS(julianday(e.date) - julianday(?)) ASC, e.created_at DESC
         LIMIT 5
       `)
-      .all(groupId, date, date, date, currency, amount, amountTolerance, date);
+      .all(groupId, date, date, date, currency, amountCents, amountTolerance, date);
 
     return {
       exact,
@@ -129,9 +129,9 @@ export class ExpenseRepository {
         date,
         category,
         comment,
-        amount,
+        amount_cents,
         currency,
-        eur_amount,
+        eur_amount_cents,
         receipt_id,
         receipt_file_id
       )
@@ -145,9 +145,9 @@ export class ExpenseRepository {
       data.date,
       data.category,
       data.comment,
-      data.amount,
+      data.amount_cents,
       data.currency,
-      data.eur_amount,
+      data.eur_amount_cents,
       data.receipt_id ?? null,
       data.receipt_file_id ?? null,
     );
@@ -182,7 +182,7 @@ export class ExpenseRepository {
    */
   getTotalsByCurrency(groupId: number): Record<string, number> {
     const query = this.db.query<{ currency: string; total: number }, [number]>(`
-      SELECT currency, SUM(amount) as total
+      SELECT currency, SUM(amount_cents) as total
       FROM expenses
       WHERE group_id = ?
       GROUP BY currency
@@ -203,7 +203,7 @@ export class ExpenseRepository {
    */
   getTotalInEUR(groupId: number): number {
     const query = this.db.query<{ total: number }, [number]>(`
-      SELECT SUM(eur_amount) as total
+      SELECT SUM(eur_amount_cents) as total
       FROM expenses
       WHERE group_id = ?
     `);
@@ -253,7 +253,7 @@ export class ExpenseRepository {
    */
   getCategoryTotals(groupId: number, startDate: string, endDate: string): CategoryTotal[] {
     const query = this.db.query<CategoryTotal, [number, string, string]>(`
-      SELECT category, SUM(eur_amount) as total, COUNT(*) as tx_count
+      SELECT category, SUM(eur_amount_cents) as total, COUNT(*) as tx_count
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
       GROUP BY category
@@ -267,7 +267,7 @@ export class ExpenseRepository {
    */
   getDailyTotals(groupId: number, startDate: string, endDate: string): DailyTotal[] {
     const query = this.db.query<DailyTotal, [number, string, string]>(`
-      SELECT date, SUM(eur_amount) as total, COUNT(*) as tx_count
+      SELECT date, SUM(eur_amount_cents) as total, COUNT(*) as tx_count
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
       GROUP BY date
@@ -286,7 +286,7 @@ export class ExpenseRepository {
       SELECT
         CAST(strftime('%w', date) AS INTEGER) as dow,
         COUNT(*) as tx_count,
-        SUM(eur_amount) as total,
+        SUM(eur_amount_cents) as total,
         COUNT(DISTINCT date) as unique_days
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
@@ -309,8 +309,8 @@ export class ExpenseRepository {
         SELECT
           CAST(strftime('%w', date) AS INTEGER) as dow,
           category,
-          SUM(eur_amount) as cat_total,
-          ROW_NUMBER() OVER (PARTITION BY CAST(strftime('%w', date) AS INTEGER) ORDER BY SUM(eur_amount) DESC) as rn
+          SUM(eur_amount_cents) as cat_total,
+          ROW_NUMBER() OVER (PARTITION BY CAST(strftime('%w', date) AS INTEGER) ORDER BY SUM(eur_amount_cents) DESC) as rn
         FROM expenses
         WHERE group_id = ? AND date >= ? AND date <= ?
         GROUP BY dow, category
@@ -332,7 +332,7 @@ export class ExpenseRepository {
           WHEN date >= date(?, '-13 days') AND date < date(?, '-6 days') THEN 'previous_week'
         END as period,
         category,
-        SUM(eur_amount) as total
+        SUM(eur_amount_cents) as total
       FROM expenses
       WHERE group_id = ? AND date >= date(?, '-13 days')
       GROUP BY period, category
@@ -359,8 +359,8 @@ export class ExpenseRepository {
     >(`
       SELECT
         category,
-        SUM(CASE WHEN date >= ? AND date <= ? THEN eur_amount ELSE 0 END) as current_month,
-        SUM(CASE WHEN date >= ? AND date <= ? THEN eur_amount ELSE 0 END) as previous_month
+        SUM(CASE WHEN date >= ? AND date <= ? THEN eur_amount_cents ELSE 0 END) as current_month,
+        SUM(CASE WHEN date >= ? AND date <= ? THEN eur_amount_cents ELSE 0 END) as previous_month
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
       GROUP BY category
@@ -387,7 +387,7 @@ export class ExpenseRepository {
           WHEN date >= date(?, '-6 days') THEN 'recent'
           ELSE 'earlier'
         END as period,
-        SUM(eur_amount) as total,
+        SUM(eur_amount_cents) as total,
         COUNT(*) as tx_count
       FROM expenses
       WHERE group_id = ? AND date >= date(?, '-13 days') AND date <= ?
@@ -410,7 +410,7 @@ export class ExpenseRepository {
       SELECT
         category,
         strftime('%Y-%m', date) as month,
-        SUM(eur_amount) as monthly_total,
+        SUM(eur_amount_cents) as monthly_total,
         COUNT(*) as tx_count
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date < ?
@@ -426,7 +426,7 @@ export class ExpenseRepository {
    */
   getTotalEurForRange(groupId: number, startDate: string, endDate: string): number {
     const query = this.db.query<{ total: number }, [number, string, string]>(`
-      SELECT COALESCE(SUM(eur_amount), 0) as total
+      SELECT COALESCE(SUM(eur_amount_cents), 0) as total
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
     `);
@@ -441,12 +441,12 @@ export class ExpenseRepository {
   getRecentExamplesByCategory(
     groupId: number,
     limit: number = 5,
-  ): Map<string, Array<{ comment: string; amount: number; currency: string }>> {
+  ): Map<string, Array<{ comment: string; amount_cents: number; currency: string }>> {
     const query = this.db.query<
-      { category: string; comment: string; amount: number; currency: string },
+      { category: string; comment: string; amount_cents: number; currency: string },
       [number]
     >(`
-      SELECT category, comment, amount, currency
+      SELECT category, comment, amount_cents, currency
       FROM expenses
       WHERE group_id = ? AND comment != ''
       ORDER BY date DESC, created_at DESC
@@ -454,17 +454,24 @@ export class ExpenseRepository {
     `);
 
     const rows = query.all(groupId);
-    const result = new Map<string, Array<{ comment: string; amount: number; currency: string }>>();
+    const result = new Map<
+      string,
+      Array<{ comment: string; amount_cents: number; currency: string }>
+    >();
 
     for (const row of rows) {
       const existing = result.get(row.category);
       if (existing) {
         if (existing.length < limit) {
-          existing.push({ comment: row.comment, amount: row.amount, currency: row.currency });
+          existing.push({
+            comment: row.comment,
+            amount_cents: row.amount_cents,
+            currency: row.currency,
+          });
         }
       } else {
         result.set(row.category, [
-          { comment: row.comment, amount: row.amount, currency: row.currency },
+          { comment: row.comment, amount_cents: row.amount_cents, currency: row.currency },
         ]);
       }
     }
@@ -518,7 +525,7 @@ export class ExpenseRepository {
       { date: string; category: string; amount: number },
       [number, string, string]
     >(`
-      SELECT date, category, eur_amount as amount
+      SELECT date, category, eur_amount_cents as amount
       FROM expenses
       WHERE group_id = ? AND date >= ? AND date <= ?
       ORDER BY date ASC
@@ -533,7 +540,7 @@ export class ExpenseRepository {
   sumByCategory(groupId: number, category: string, dateFrom: string, dateTo: string): number {
     const result = this.db
       .query<{ total: number }, [number, string, string, string]>(
-        `SELECT COALESCE(SUM(eur_amount), 0) as total
+        `SELECT COALESCE(SUM(eur_amount_cents), 0) as total
          FROM expenses
          WHERE group_id = ? AND category = ? AND date >= ? AND date <= ?`,
       )

@@ -49,7 +49,8 @@ export interface AIExtractionResult {
 /** Category example from expense history, used to improve AI categorization */
 export interface CategoryExample {
   comment: string;
-  amount: number;
+  /** Amount in cents */
+  amount_cents: number;
   currency: string;
 }
 

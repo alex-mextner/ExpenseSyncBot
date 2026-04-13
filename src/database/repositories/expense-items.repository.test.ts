@@ -38,9 +38,9 @@ beforeEach(() => {
     date: '2024-01-15',
     category: 'Groceries',
     comment: 'Supermarket',
-    amount: 50.0,
+    amount_cents: 5000,
     currency: 'EUR',
-    eur_amount: 50.0,
+    eur_amount_cents: 5000,
   });
   expenseId = expense.id;
 });
@@ -135,9 +135,9 @@ describe('ExpenseItemsRepository', () => {
         date: '2024-01-15',
         category: 'Food',
         comment: 'Other',
-        amount: 10,
+        amount_cents: 1000,
         currency: 'EUR',
-        eur_amount: 10,
+        eur_amount_cents: 1000,
       });
 
       itemsRepo.create(makeItem({ expense_id: expense2.id, name_ru: 'Чужой' }));
@@ -223,9 +223,9 @@ describe('ExpenseItemsRepository', () => {
         date: '2024-01-15',
         category: 'Other',
         comment: '',
-        amount: 5,
+        amount_cents: 500,
         currency: 'EUR',
-        eur_amount: 5,
+        eur_amount_cents: 500,
       });
       const item2 = itemsRepo.create(makeItem({ expense_id: expense2.id }));
 

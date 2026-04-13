@@ -206,11 +206,13 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
 }
 
 /**
- * Convert amount to EUR
+ * Convert amount to EUR.
+ * Input and output are in minor currency units (cents).
+ * E.g. convertToEUR(10050, 'USD') returns EUR cents.
  */
-export function convertToEUR(amount: number, fromCurrency: CurrencyCode): number {
+export function convertToEUR(amountCents: number, fromCurrency: CurrencyCode): number {
   if (fromCurrency === BASE_CURRENCY) {
-    return amount;
+    return amountCents;
   }
 
   // Use cached rates if available, otherwise use fallback
@@ -221,20 +223,21 @@ export function convertToEUR(amount: number, fromCurrency: CurrencyCode): number
     throw new Error(`Exchange rate not found for ${fromCurrency}`);
   }
 
-  return Math.round(amount * rate * 100) / 100; // Round to 2 decimal places
+  return Math.round(amountCents * rate);
 }
 
 /**
- * Convert amount between any two currencies
- * Uses EUR as intermediate currency
+ * Convert amount between any two currencies.
+ * Input and output are in minor currency units (cents).
+ * Uses EUR as intermediate currency.
  */
 export function convertCurrency(
-  amount: number,
+  amountCents: number,
   fromCurrency: CurrencyCode,
   toCurrency: CurrencyCode,
 ): number {
   if (fromCurrency === toCurrency) {
-    return amount;
+    return amountCents;
   }
 
   const rates = cachedRates || FALLBACK_RATES;
@@ -247,18 +250,19 @@ export function convertCurrency(
 
   // rates[X] = "1 X = Y EUR"
   // from -> EUR -> to
-  const eurAmount = amount * fromRate;
-  return Math.round((eurAmount / toRate) * 100) / 100;
+  const eurCents = amountCents * fromRate;
+  return Math.round(eurCents / toRate);
 }
 
 /**
  * Convert amount to EUR for any ISO 4217 currency code, including those outside SUPPORTED_CURRENCIES.
+ * Input and output are in minor currency units (cents).
  * Uses live API rates (all currencies), then SUPPORTED_CURRENCIES fallback, then BANK_FALLBACK_RATES.
  * If the currency is completely unknown, logs a warning and returns the amount unchanged.
  * Intended for bank transaction processing where the currency comes from the bank plugin.
  */
-export function convertAnyToEUR(amount: number, currency: string): number {
-  if (currency === 'EUR') return amount;
+export function convertAnyToEUR(amountCents: number, currency: string): number {
+  if (currency === 'EUR') return amountCents;
   // Register so the next scheduled API fetch caches this currency's live rate.
   knownCurrencies.add(currency);
   const rate =
@@ -268,9 +272,9 @@ export function convertAnyToEUR(amount: number, currency: string): number {
     BANK_FALLBACK_RATES[currency];
   if (rate === undefined) {
     logger.warn({ currency }, 'convertAnyToEUR: no rate found, treating as EUR');
-    return Math.round(amount * 100) / 100;
+    return amountCents;
   }
-  return Math.round(amount * rate * 100) / 100;
+  return Math.round(amountCents * rate);
 }
 
 /**
@@ -283,12 +287,14 @@ export function getExchangeRate(currency: CurrencyCode): number {
 
 /**
  * Format amount with currency symbol (falls back to code for unknown currencies).
+ * Input is in minor currency units (cents). 10050 → "100.50 $".
  *
  * User-facing (default): amounts >= 1M shown as "1.5 млн RSD", "1.5 млн $".
  * AI context (aiContext=true): always uses the raw code (not symbol) for unambiguous parsing,
  * e.g. "1500000.00 (1.5 млн) USD".
  */
-export function formatAmount(amount: number, currency: string, aiContext = false): string {
+export function formatAmount(amountCents: number, currency: string, aiContext = false): string {
+  const amount = amountCents / 100;
   const abs = Math.abs(amount);
 
   if (aiContext) {
@@ -312,6 +318,22 @@ export function formatAmount(amount: number, currency: string, aiContext = false
     num = amount.toFixed(2);
   }
   return `${num} ${symbol}`;
+}
+
+/**
+ * Convert a decimal amount (e.g. from user input or external API) to integer cents.
+ * 100.50 → 10050
+ */
+export function toCents(amount: number): number {
+  return Math.round(amount * 100);
+}
+
+/**
+ * Convert integer cents to decimal amount for display or external API.
+ * 10050 → 100.50
+ */
+export function fromCents(cents: number): number {
+  return cents / 100;
 }
 
 /**

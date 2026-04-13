@@ -257,8 +257,8 @@ function makeConfirmExpense(overrides: Partial<Expense> = {}): Expense {
     date: '2026-03-29',
     category: 'Кафе',
     comment: '',
-    amount: 25.5,
-    eur_amount: 25.5,
+    amount_cents: 2550,
+    eur_amount_cents: 2550,
     created_at: '2026-03-29T09:00:00Z',
     ...overrides,
   });

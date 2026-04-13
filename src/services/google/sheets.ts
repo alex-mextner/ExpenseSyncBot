@@ -40,12 +40,12 @@ export function googleConn(group: {
 const logger = createLogger('sheets');
 
 /**
- * Row data from spreadsheet
+ * Row data from spreadsheet. All money values are in minor currency units (cents).
  */
 export interface SheetRow {
   date: string;
-  amounts: Record<string, number>; // currency -> amount
-  eurAmount: number;
+  amounts: Record<string, number>; // currency -> amount in cents
+  eurAmountCents: number;
   rate: number | null; // exchange rate stored at write time (1 CURRENCY = rate EUR)
   category: string;
   comment: string;
@@ -286,8 +286,8 @@ export interface ExpenseRowData {
   date: string;
   category: string;
   comment: string;
-  amounts: Record<string, number | null>; // Currency -> amount
-  eurAmount: number;
+  amounts: Record<string, number | null>; // Currency -> amount in cents
+  eurAmountCents: number;
   rate?: number; // Exchange rate used (1 CURRENCY = rate EUR)
 }
 
@@ -391,12 +391,15 @@ async function appendExpenseRowsImpl(
         row.push(data.comment);
       } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
         // Formula when we can derive EUR from amount*rate, otherwise literal
-        row.push(eurFormula ?? data.eurAmount);
+        // Convert cents to decimal for the sheet
+        row.push(eurFormula ?? data.eurAmountCents / 100);
       } else if (header === RATE_COLUMN_HEADER) {
         row.push(data.rate ?? '');
       } else {
         const currencyCode = header?.split(' ')[0] as CurrencyCode;
-        row.push(data.amounts[currencyCode] ?? '');
+        const cents = data.amounts[currencyCode];
+        // Convert cents to decimal for the sheet
+        row.push(cents != null ? cents / 100 : '');
       }
     }
     rows.push(row);
@@ -492,13 +495,15 @@ async function appendExpenseRowImpl(
     } else if (header === SPREADSHEET_CONFIG.headers[2]) {
       row.push(data.comment);
     } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      row.push(eurFormula ?? data.eurAmount);
+      // Convert cents to decimal for the sheet
+      row.push(eurFormula ?? data.eurAmountCents / 100);
     } else if (header === RATE_COLUMN_HEADER) {
       row.push(data.rate ?? '');
     } else {
       const currencyCode = header?.split(' ')[0] as CurrencyCode;
-      const value = data.amounts[currencyCode] ?? '';
-      row.push(value);
+      const cents = data.amounts[currencyCode];
+      // Convert cents to decimal for the sheet
+      row.push(cents != null ? cents / 100 : '');
     }
   }
 
@@ -731,6 +736,7 @@ export async function verifySpreadsheetAccess(
 
 export interface BudgetRow {
   category: string;
+  /** Budget limit in decimal (for sheet display, not cents) */
   limit: number;
   currency: CurrencyCode;
 }
@@ -1418,7 +1424,8 @@ export async function readExpensesFromSheet(
       if (value && value.trim() !== '') {
         const parsed = parseFloat(value);
         if (!Number.isNaN(parsed) && parsed > 0) {
-          amounts[currency] = parsed;
+          // Convert sheet decimal to cents
+          amounts[currency] = Math.round(parsed * 100);
           foundCurrencies.push(currency);
         }
       }
@@ -1441,7 +1448,8 @@ export async function readExpensesFromSheet(
       const eurCalcVal = eurAmountStr ? parseFloat(eurAmountStr) : 0;
       if (!eurCalcVal || eurCalcVal <= 0) continue; // truly empty row
 
-      amounts['EUR'] = eurCalcVal;
+      // Convert sheet decimal to cents
+      amounts['EUR'] = Math.round(eurCalcVal * 100);
       foundCurrencies.push('EUR');
     }
 
@@ -1457,41 +1465,43 @@ export async function readExpensesFromSheet(
       }
     }
 
-    // EUR amount: prefer recalculated value; fall back to sheet only for EUR expenses
-    const [firstCurr, firstAmt] = Object.entries(amounts)[0] ?? [];
-    let eurAmount: number;
+    // EUR amount in cents: prefer recalculated value; fall back to sheet only for EUR expenses
+    const [firstCurr, firstAmtCents] = Object.entries(amounts)[0] ?? [];
+    let eurAmountCents: number;
 
     if (firstCurr === 'EUR') {
-      // EUR expenses: amount IS eur_amount
-      eurAmount = firstAmt ?? 0;
-    } else if (rate && firstAmt) {
+      // EUR expenses: amount IS eur_amount (already in cents)
+      eurAmountCents = firstAmtCents ?? 0;
+    } else if (rate && firstAmtCents) {
       // Non-EUR with Rate column: recalculate (Rate stores "1 CURRENCY = rate EUR")
-      eurAmount = Math.round(firstAmt * rate * 100) / 100;
-    } else if (firstCurr && firstAmt) {
-      // No Rate column: use runtime converter
-      eurAmount = convertToEUR(firstAmt, firstCurr as CurrencyCode);
+      // firstAmtCents is in cents, rate converts 1 unit → EUR, so result is EUR cents
+      eurAmountCents = Math.round(firstAmtCents * rate);
+    } else if (firstCurr && firstAmtCents) {
+      // No Rate column: use runtime converter (accepts cents, returns cents)
+      eurAmountCents = convertToEUR(firstAmtCents, firstCurr as CurrencyCode);
     } else {
-      eurAmount = 0;
+      eurAmountCents = 0;
     }
 
     // Warn if sheet EUR(calc) diverges significantly from recalculated value
-    if (eurAmountStr && eurAmountStr.trim() !== '' && eurAmount > 0) {
+    if (eurAmountStr && eurAmountStr.trim() !== '' && eurAmountCents > 0) {
       const sheetEur = parseFloat(eurAmountStr);
+      const recalcEur = eurAmountCents / 100;
       if (!Number.isNaN(sheetEur) && sheetEur > 0) {
-        const ratio = sheetEur / eurAmount;
+        const ratio = sheetEur / recalcEur;
         if (ratio < 0.5 || ratio > 2.0) {
           eurMismatchRows.push({
             row: i + 1,
             date,
             category,
             sheetEur,
-            recalcEur: eurAmount,
+            recalcEur,
           });
         }
       }
     }
 
-    expenses.push({ date, amounts, eurAmount, rate, category, comment });
+    expenses.push({ date, amounts, eurAmountCents, rate, category, comment });
   }
 
   if (eurMismatchRows.length > 0) {

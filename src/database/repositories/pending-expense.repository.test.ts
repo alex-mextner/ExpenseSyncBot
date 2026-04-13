@@ -43,7 +43,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 1001,
-        parsed_amount: 50,
+        parsed_amount_cents: 5000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'lunch',
@@ -52,7 +52,7 @@ describe('PendingExpenseRepository', () => {
       expect(pe.id).toBeGreaterThan(0);
       expect(pe.user_id).toBe(userId);
       expect(pe.message_id).toBe(1001);
-      expect(pe.parsed_amount).toBe(50);
+      expect(pe.parsed_amount_cents).toBe(5000);
       expect(pe.parsed_currency).toBe('EUR');
       expect(pe.detected_category).toBeNull();
       expect(pe.comment).toBe('lunch');
@@ -63,7 +63,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 1002,
-        parsed_amount: 100,
+        parsed_amount_cents: 10000,
         parsed_currency: 'USD',
         detected_category: 'Food',
         comment: 'supermarket',
@@ -76,7 +76,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 1003,
-        parsed_amount: 25,
+        parsed_amount_cents: 2500,
         parsed_currency: 'EUR',
         detected_category: 'Transport',
         comment: 'taxi',
@@ -89,7 +89,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 2001,
-        parsed_amount: 10,
+        parsed_amount_cents: 1000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'coffee',
@@ -98,7 +98,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 2002,
-        parsed_amount: 20,
+        parsed_amount_cents: 2000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'tea',
@@ -114,7 +114,7 @@ describe('PendingExpenseRepository', () => {
       const created = repo.create({
         user_id: userId,
         message_id: 3001,
-        parsed_amount: 15,
+        parsed_amount_cents: 1500,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'test',
@@ -136,7 +136,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 4001,
-        parsed_amount: 30,
+        parsed_amount_cents: 3000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'bus',
@@ -158,7 +158,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 5001,
-        parsed_amount: 5,
+        parsed_amount_cents: 500,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'a',
@@ -167,7 +167,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 5002,
-        parsed_amount: 10,
+        parsed_amount_cents: 1000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'b',
@@ -196,7 +196,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 6001,
-        parsed_amount: 40,
+        parsed_amount_cents: 4000,
         parsed_currency: 'EUR',
         detected_category: 'Food',
         comment: 'dinner',
@@ -205,7 +205,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 6002,
-        parsed_amount: 8,
+        parsed_amount_cents: 800,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'snack',
@@ -220,7 +220,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 6003,
-        parsed_amount: 12,
+        parsed_amount_cents: 1200,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'drink',
@@ -236,7 +236,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 7001,
-        parsed_amount: 60,
+        parsed_amount_cents: 6000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'gym',
@@ -251,7 +251,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 7002,
-        parsed_amount: 45,
+        parsed_amount_cents: 4500,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'taxi',
@@ -265,7 +265,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 7003,
-        parsed_amount: 20,
+        parsed_amount_cents: 2000,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'misc',
@@ -287,7 +287,7 @@ describe('PendingExpenseRepository', () => {
       const pe = repo.create({
         user_id: userId,
         message_id: 8001,
-        parsed_amount: 5,
+        parsed_amount_cents: 500,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'del',
@@ -308,7 +308,7 @@ describe('PendingExpenseRepository', () => {
       repo.create({
         user_id: userId,
         message_id: 9001,
-        parsed_amount: 7,
+        parsed_amount_cents: 700,
         parsed_currency: 'EUR',
         detected_category: null,
         comment: 'del-msg',

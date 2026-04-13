@@ -193,7 +193,7 @@ mock.module('../google/sheets', () => ({
 }));
 
 // Mock ExpenseRecorder (used by add_expense tool)
-const mockRecord = mock(() => Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+const mockRecord = mock(() => Promise.resolve({ expense: { id: 42 }, eurAmountCents: 2550 }));
 mock.module('../expense-recorder', () => ({
   getExpenseRecorder: () => ({ record: mockRecord }),
 }));
@@ -269,7 +269,7 @@ function resetAllMocks() {
   );
 
   mockRecord.mockReset();
-  mockRecord.mockReturnValue(Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+  mockRecord.mockReturnValue(Promise.resolve({ expense: { id: 42 }, eurAmountCents: 2550 }));
 
   mockCategories.findByGroupId.mockReset();
   mockCategories.findByGroupId.mockReturnValue([]);
@@ -431,8 +431,8 @@ describe('executeTool routing', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: 'lunch',
-        amount: 15,
-        eur_amount: 15,
+        amount_cents: 1500,
+        eur_amount_cents: 1500,
       }),
     );
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
@@ -451,8 +451,8 @@ describe('executeGetExpenses', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: 'lunch',
-        amount: 15,
-        eur_amount: 15,
+        amount_cents: 1500,
+        eur_amount_cents: 1500,
       }),
       makeExpense({
         id: 2,
@@ -460,8 +460,8 @@ describe('executeGetExpenses', () => {
         date: '2026-03-02',
         category: 'Transport',
         comment: '',
-        amount: 5,
-        eur_amount: 5,
+        amount_cents: 500,
+        eur_amount_cents: 500,
       }),
     ]);
 
@@ -482,8 +482,8 @@ describe('executeGetExpenses', () => {
         date: '2026-03-14',
         category: 'Путешествия',
         comment: '',
-        amount: 1149.47,
-        eur_amount: 1149.47,
+        amount_cents: 114947,
+        eur_amount_cents: 114947,
       }),
     ]);
 
@@ -500,8 +500,8 @@ describe('executeGetExpenses', () => {
         date: '2026-03-14',
         category: 'Лена',
         comment: '   ',
-        amount: 94.37,
-        eur_amount: 94.37,
+        amount_cents: 9437,
+        eur_amount_cents: 9437,
       }),
     ]);
 
@@ -517,8 +517,8 @@ describe('executeGetExpenses', () => {
         date: '2026-03-14',
         category: 'Еда',
         comment: 'обед',
-        amount: 25,
-        eur_amount: 25,
+        amount_cents: 2500,
+        eur_amount_cents: 2500,
       }),
     ]);
 
@@ -534,8 +534,8 @@ describe('executeGetExpenses', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: 'pizza',
-        amount: 10,
-        eur_amount: 10,
+        amount_cents: 1000,
+        eur_amount_cents: 1000,
       }),
       makeExpense({
         id: 2,
@@ -543,8 +543,8 @@ describe('executeGetExpenses', () => {
         date: '2026-03-02',
         category: 'Transport',
         comment: 'taxi',
-        amount: 20,
-        eur_amount: 20,
+        amount_cents: 2000,
+        eur_amount_cents: 2000,
       }),
     ]);
 
@@ -570,8 +570,8 @@ describe('executeGetExpenses', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: `item ${i + 1}`,
-        amount: 10,
-        eur_amount: 10,
+        amount_cents: 1000,
+        eur_amount_cents: 1000,
       }),
     );
     mockExpenses.findByDateRange.mockReturnValue(expenses);
@@ -598,8 +598,8 @@ describe('executeGetExpenses', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: '',
-        amount: 10,
-        eur_amount: 10,
+        amount_cents: 1000,
+        eur_amount_cents: 1000,
       }),
     );
     mockExpenses.findByDateRange.mockReturnValue(expenses);
@@ -622,7 +622,7 @@ describe('executeGetBudgets', () => {
         group_id: 1,
         category: 'Food',
         month: '2026-03',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
         currency: 'EUR',
         created_at: '',
         updated_at: '',
@@ -635,8 +635,8 @@ describe('executeGetBudgets', () => {
         user_id: 123,
         date: '2026-03-05',
         comment: '',
-        amount: 100,
-        eur_amount: 100,
+        amount_cents: 10000,
+        eur_amount_cents: 10000,
       }),
     ]);
 
@@ -665,7 +665,7 @@ describe('get_budgets batch', () => {
         group_id: 1,
         category: 'Еда',
         month,
-        limit_amount: 50000,
+        limit_amount_cents: 5000000,
         currency: 'RSD',
         created_at: '',
         updated_at: '',
@@ -675,7 +675,7 @@ describe('get_budgets batch', () => {
         group_id: 1,
         category: 'Развлечения',
         month,
-        limit_amount: 30000,
+        limit_amount_cents: 3000000,
         currency: 'RSD',
         created_at: '',
         updated_at: '',
@@ -724,7 +724,7 @@ describe('get_budgets enriched output', () => {
         group_id: 1,
         category: 'Food',
         month: currentMonth,
-        limit_amount: 500,
+        limit_amount_cents: 50000,
         currency: 'EUR',
         created_at: '',
         updated_at: '',
@@ -736,8 +736,8 @@ describe('get_budgets enriched output', () => {
         user_id: 123,
         date: `${currentMonth}-05`,
         comment: '',
-        amount: 200,
-        eur_amount: 200,
+        amount_cents: 20000,
+        eur_amount_cents: 20000,
       }),
     ]);
     // EMA-based burn rate from spendingAnalytics
@@ -746,14 +746,14 @@ describe('get_budgets enriched output', () => {
       burnRates: [
         {
           category: 'Food',
-          budget_limit: 500,
-          spent: 200,
+          budget_limit: 50000,
+          spent: 20000,
           currency: 'EUR',
           days_elapsed: now.getDate(),
           days_remaining: 30 - now.getDate(),
-          daily_burn_rate: 15.5,
-          projected_total: 465,
-          projected_overshoot: -35,
+          daily_burn_rate: 1550,
+          projected_total: 46500,
+          projected_overshoot: -3500,
           runway_days: 19.4,
           status: 'warning',
         },
@@ -778,7 +778,7 @@ describe('get_budgets enriched output', () => {
         group_id: 1,
         category: 'Food',
         month: '2025-01',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
         currency: 'EUR',
         created_at: '',
         updated_at: '',
@@ -803,7 +803,7 @@ describe('get_budgets enriched output', () => {
         group_id: 1,
         category: 'Food',
         month: currentMonth,
-        limit_amount: 300,
+        limit_amount_cents: 30000,
         currency: 'EUR',
         created_at: '',
         updated_at: '',
@@ -813,7 +813,7 @@ describe('get_budgets enriched output', () => {
         group_id: 1,
         category: 'Transport',
         month: currentMonth,
-        limit_amount: 200,
+        limit_amount_cents: 20000,
         currency: 'EUR',
         created_at: '',
         updated_at: '',
@@ -825,8 +825,8 @@ describe('get_budgets enriched output', () => {
         user_id: 123,
         date: `${currentMonth}-05`,
         comment: '',
-        amount: 150,
-        eur_amount: 150,
+        amount_cents: 15000,
+        eur_amount_cents: 15000,
       }),
     ]);
     mockGetFinancialSnapshot.mockReturnValue({
@@ -846,7 +846,7 @@ describe('executeAddExpense', () => {
   beforeEach(resetAllMocks);
 
   test('creates expense with correct fields via ExpenseRecorder', async () => {
-    mockRecord.mockResolvedValue({ expense: { id: 42 }, eurAmount: 25.5 });
+    mockRecord.mockResolvedValue({ expense: { id: 42 }, eurAmountCents: 2550 });
 
     const result = await executeTool(
       'add_expense',
@@ -859,13 +859,13 @@ describe('executeAddExpense', () => {
       date: '2026-03-09',
       category: 'Food',
       comment: 'lunch',
-      amount: 25.5,
+      amount_cents: 2550,
       currency: 'EUR',
     });
   });
 
   test('returns confirmation with amount and currency', async () => {
-    mockRecord.mockResolvedValue({ expense: { id: 99 }, eurAmount: 43 });
+    mockRecord.mockResolvedValue({ expense: { id: 99 }, eurAmountCents: 4300 });
 
     const result = await executeTool(
       'add_expense',
@@ -949,10 +949,10 @@ describe('add_expense batch', () => {
     expect(result.output).toContain('1/1 succeeded');
     expect(mockRecord).toHaveBeenCalledTimes(1);
     const calls = mockRecord.mock.calls as unknown as Array<
-      [number, number, { category: string; amount: number }]
+      [number, number, { category: string; amount_cents: number }]
     >;
     expect(calls[0]?.[2].category).toBe('Real');
-    expect(calls[0]?.[2].amount).toBe(42);
+    expect(calls[0]?.[2].amount_cents).toBe(4200);
   });
 
   test('empty items array returns error', async () => {
@@ -972,8 +972,8 @@ describe('executeDeleteExpense', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: 'pizza',
-        amount: 12,
-        eur_amount: 12,
+        amount_cents: 1200,
+        eur_amount_cents: 1200,
       }),
     );
 
@@ -991,8 +991,8 @@ describe('executeDeleteExpense', () => {
         user_id: 456,
         date: '2026-03-01',
         comment: '',
-        amount: 12,
-        eur_amount: 12,
+        amount_cents: 1200,
+        eur_amount_cents: 1200,
       }),
     );
 
@@ -1021,8 +1021,8 @@ describe('delete_expense batch', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: 'test',
-        amount: 10,
-        eur_amount: 10,
+        amount_cents: 1000,
+        eur_amount_cents: 1000,
       })) as unknown as () => Expense | null);
 
     const result = await executeTool('delete_expense', { expense_id: [10, 11, 12] }, ctx);
@@ -1040,8 +1040,8 @@ describe('delete_expense batch', () => {
           user_id: 123,
           date: '2026-03-01',
           comment: '',
-          amount: 10,
-          eur_amount: 10,
+          amount_cents: 1000,
+          eur_amount_cents: 1000,
         }),
       )
       .mockReturnValueOnce(
@@ -1051,8 +1051,8 @@ describe('delete_expense batch', () => {
           user_id: 123,
           date: '2026-03-01',
           comment: '',
-          amount: 10,
-          eur_amount: 10,
+          amount_cents: 1000,
+          eur_amount_cents: 1000,
         }),
       );
 
@@ -1069,8 +1069,8 @@ describe('delete_expense batch', () => {
         user_id: 123,
         date: '2026-03-01',
         comment: 'lunch',
-        amount: 15,
-        eur_amount: 15,
+        amount_cents: 1500,
+        eur_amount_cents: 1500,
       }),
     );
 
@@ -1106,7 +1106,7 @@ describe('executeSetBudget', () => {
         groupId: 1,
         category: 'Food',
         month: '2026-03',
-        amount: 500,
+        amountCents: 50000,
         currency: 'USD',
       }),
     );
@@ -1195,10 +1195,10 @@ describe('set_budget batch', () => {
     expect(result.output).toContain('1/1 succeeded');
     expect(mockBudgetManagerSet).toHaveBeenCalledTimes(1);
     const calls = mockBudgetManagerSet.mock.calls as unknown as Array<
-      [{ category: string; amount: number }]
+      [{ category: string; amountCents: number }]
     >;
     expect(calls[0]?.[0].category).toBe('Real');
-    expect(calls[0]?.[0].amount).toBe(100);
+    expect(calls[0]?.[0].amountCents).toBe(10000);
   });
 
   test('empty items array returns error', async () => {
@@ -1571,8 +1571,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
-        amount: 120,
-        eur_amount: 1.02,
+        amount_cents: 12000,
+        eur_amount_cents: 102,
       }),
       makeExpense({
         id: 2,
@@ -1580,8 +1580,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-10',
         category: 'Еда',
         comment: 'Молоко',
-        amount: 250,
-        eur_amount: 2.13,
+        amount_cents: 25000,
+        eur_amount_cents: 213,
       }),
       makeExpense({
         id: 3,
@@ -1589,8 +1589,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
-        amount: 1500,
-        eur_amount: 12.77,
+        amount_cents: 150000,
+        eur_amount_cents: 1277,
       }),
     ]);
 
@@ -1624,8 +1624,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
-        amount: 120,
-        eur_amount: 1.02,
+        amount_cents: 12000,
+        eur_amount_cents: 102,
       }),
       makeExpense({
         id: 2,
@@ -1633,8 +1633,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-10',
         category: 'Еда',
         comment: 'Молоко',
-        amount: 250,
-        eur_amount: 2.13,
+        amount_cents: 25000,
+        eur_amount_cents: 213,
       }),
       makeExpense({
         id: 3,
@@ -1642,8 +1642,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
-        amount: 1500,
-        eur_amount: 12.77,
+        amount_cents: 150000,
+        eur_amount_cents: 1277,
       }),
     ];
     const februaryExpenses: Expense[] = [
@@ -1653,8 +1653,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-02-03',
         category: 'Еда',
         comment: 'Сыр',
-        amount: 800,
-        eur_amount: 6.88,
+        amount_cents: 80000,
+        eur_amount_cents: 688,
       }),
       makeExpense({
         id: 5,
@@ -1662,8 +1662,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-02-14',
         category: 'Развлечения',
         comment: 'Ресторан',
-        amount: 5000,
-        eur_amount: 42.5,
+        amount_cents: 500000,
+        eur_amount_cents: 4250,
       }),
     ];
 
@@ -1698,8 +1698,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
-        amount: 120,
-        eur_amount: 1.02,
+        amount_cents: 12000,
+        eur_amount_cents: 102,
       }),
       makeExpense({
         id: 2,
@@ -1707,8 +1707,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
-        amount: 1500,
-        eur_amount: 12.77,
+        amount_cents: 150000,
+        eur_amount_cents: 1277,
       }),
       makeExpense({
         id: 3,
@@ -1716,8 +1716,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-20',
         category: 'Транспорт',
         comment: 'Такси',
-        amount: 700,
-        eur_amount: 5.95,
+        amount_cents: 70000,
+        eur_amount_cents: 595,
       }),
     ]);
 
@@ -1740,8 +1740,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
-        amount: 120,
-        eur_amount: 1.02,
+        amount_cents: 12000,
+        eur_amount_cents: 102,
       }),
       makeExpense({
         id: 2,
@@ -1749,8 +1749,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-10',
         category: 'Еда',
         comment: 'Молоко',
-        amount: 250,
-        eur_amount: 2.13,
+        amount_cents: 25000,
+        eur_amount_cents: 213,
       }),
       makeExpense({
         id: 3,
@@ -1758,8 +1758,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
-        amount: 1500,
-        eur_amount: 12.77,
+        amount_cents: 150000,
+        eur_amount_cents: 1277,
       }),
     ]);
 
@@ -1783,8 +1783,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
-        amount: 120,
-        eur_amount: 1.02,
+        amount_cents: 12000,
+        eur_amount_cents: 102,
       }),
     ];
     const febExpenses: Expense[] = [
@@ -1794,8 +1794,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-02-03',
         category: 'Еда',
         comment: 'Сыр',
-        amount: 800,
-        eur_amount: 6.88,
+        amount_cents: 80000,
+        eur_amount_cents: 688,
       }),
     ];
     const marExpenses: Expense[] = [
@@ -1805,8 +1805,8 @@ describe('executeGetExpenses — batch periods and stats', () => {
         date: '2026-03-01',
         category: 'Транспорт',
         comment: 'Такси',
-        amount: 700,
-        eur_amount: 5.95,
+        amount_cents: 70000,
+        eur_amount_cents: 595,
       }),
     ];
 
@@ -1926,7 +1926,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Food',
             monthsOfData: 6,
-            currentMonthSpent: 280,
+            currentMonthSpent: 28000,
             trend: {
               direction: 'rising',
               confidence: 0.8,
@@ -1935,34 +1935,34 @@ describe('get_technical_analysis', () => {
               hurst: { value: 0.65, type: 'trending' },
               changePoints: [],
               pivotPoints: {
-                support1: 200,
-                support2: 150,
-                pivot: 300,
-                resistance1: 400,
-                resistance2: 450,
+                support1: 20000,
+                support2: 15000,
+                pivot: 30000,
+                resistance1: 40000,
+                resistance2: 45000,
               },
             },
             forecasts: {
-              ensemble: 350,
-              holt: { forecast: 340, trend: 10 },
-              theta: { forecast: 360 },
-              quantiles: { p50: 320, p75: 380, p90: 420, p95: 450 },
+              ensemble: 35000,
+              holt: { forecast: 34000, trend: 1000 },
+              theta: { forecast: 36000 },
+              quantiles: { p50: 32000, p75: 38000, p90: 42000, p95: 45000 },
               croston: null,
             },
             volatility: {
               bollingerBands: {
-                upper: 420,
-                middle: 300,
-                lower: 180,
+                upper: 42000,
+                middle: 30000,
+                lower: 18000,
                 bandwidth: 0.8,
                 percentB: 0.7,
               },
-              atr: 45,
+              atr: 4500,
               historicalVol: 0.15,
               donchian: {
-                upper: 450,
-                lower: 180,
-                middle: 315,
+                upper: 45000,
+                lower: 18000,
+                middle: 31500,
                 isBreakoutHigh: false,
                 isBreakoutLow: false,
               },
@@ -1998,7 +1998,7 @@ describe('get_technical_analysis', () => {
           {
             category: 'Food',
             monthsOfData: 6,
-            currentMonthSpent: 180,
+            currentMonthSpent: 18000,
             trend: {
               direction: 'stable',
               confidence: 0.5,
@@ -2007,34 +2007,34 @@ describe('get_technical_analysis', () => {
               hurst: { value: 0.5, type: 'random_walk' },
               changePoints: [],
               pivotPoints: {
-                support1: 100,
-                support2: 80,
-                pivot: 150,
-                resistance1: 200,
-                resistance2: 220,
+                support1: 10000,
+                support2: 8000,
+                pivot: 15000,
+                resistance1: 20000,
+                resistance2: 22000,
               },
             },
             forecasts: {
-              ensemble: 200,
-              holt: { forecast: 200, trend: 0 },
-              theta: { forecast: 200 },
-              quantiles: { p50: 190, p75: 220, p90: 250, p95: 270 },
+              ensemble: 20000,
+              holt: { forecast: 20000, trend: 0 },
+              theta: { forecast: 20000 },
+              quantiles: { p50: 19000, p75: 22000, p90: 25000, p95: 27000 },
               croston: null,
             },
             volatility: {
               bollingerBands: {
-                upper: 250,
-                middle: 200,
-                lower: 150,
+                upper: 25000,
+                middle: 20000,
+                lower: 15000,
                 bandwidth: 0.5,
                 percentB: 0.5,
               },
-              atr: 20,
+              atr: 2000,
               historicalVol: 0.1,
               donchian: {
-                upper: 250,
-                lower: 150,
-                middle: 200,
+                upper: 25000,
+                lower: 15000,
+                middle: 20000,
                 isBreakoutHigh: false,
                 isBreakoutLow: false,
               },
@@ -2048,37 +2048,43 @@ describe('get_technical_analysis', () => {
           {
             category: 'Transport',
             monthsOfData: 4,
-            currentMonthSpent: 50,
+            currentMonthSpent: 5000,
             trend: {
               direction: 'falling',
               confidence: 0.7,
-              macd: { crossover: 'bearish', histogram: -5 },
+              macd: { crossover: 'bearish', histogram: -500 },
               rsi: { value: 30, signal: 'oversold' },
               hurst: { value: 0.4, type: 'mean_reverting' },
               changePoints: [],
               pivotPoints: {
-                support1: 50,
-                support2: 30,
-                pivot: 80,
-                resistance1: 110,
-                resistance2: 130,
+                support1: 5000,
+                support2: 3000,
+                pivot: 8000,
+                resistance1: 11000,
+                resistance2: 13000,
               },
             },
             forecasts: {
-              ensemble: 70,
-              holt: { forecast: 65, trend: -5 },
-              theta: { forecast: 75 },
-              quantiles: { p50: 65, p75: 85, p90: 100, p95: 110 },
+              ensemble: 7000,
+              holt: { forecast: 6500, trend: -500 },
+              theta: { forecast: 7500 },
+              quantiles: { p50: 6500, p75: 8500, p90: 10000, p95: 11000 },
               croston: null,
             },
             volatility: {
-              bollingerBands: { upper: 110, middle: 80, lower: 50, bandwidth: 0.75, percentB: 0.3 },
-              atr: 15,
+              bollingerBands: {
+                upper: 11000,
+                middle: 8000,
+                lower: 5000,
+                bandwidth: 0.75,
+                percentB: 0.3,
+              },
+              atr: 1500,
               historicalVol: 0.2,
               donchian: {
-                upper: 120,
-                lower: 50,
-                middle: 85,
+                upper: 12000,
+                lower: 5000,
+                middle: 8500,
                 isBreakoutHigh: false,
                 isBreakoutLow: false,
               },

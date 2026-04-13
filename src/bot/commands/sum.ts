@@ -57,7 +57,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   logger.info(`[SUM] Current month expenses details:`);
   currentMonthExpenses.forEach((exp) => {
     logger.info(
-      `  - ${exp.date}: ${exp.amount} ${exp.currency} = ${exp.eur_amount} EUR (${exp.category})`,
+      `  - ${exp.date}: ${exp.amount_cents} ${exp.currency} = ${exp.eur_amount_cents} EUR (${exp.category})`,
     );
   });
 
@@ -67,7 +67,10 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
   }
 
   // Calculate current month total in EUR
-  const currentMonthTotal = currentMonthExpenses.reduce((sum, exp) => sum + exp.eur_amount, 0);
+  const currentMonthTotal = currentMonthExpenses.reduce(
+    (sum, exp) => sum + exp.eur_amount_cents,
+    0,
+  );
   logger.info(`[SUM] Current month total: €${currentMonthTotal.toFixed(2)}`);
 
   // Calculate average per month (for all complete months)
@@ -80,7 +83,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
     if (!monthlyAverages[monthKey]) {
       monthlyAverages[monthKey] = 0;
     }
-    monthlyAverages[monthKey] += expense.eur_amount;
+    monthlyAverages[monthKey] += expense.eur_amount_cents;
   }
 
   const monthsCount = Object.keys(monthlyAverages).length;
@@ -109,7 +112,8 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
     if (!categoryTotals[expense.category]) {
       categoryTotals[expense.category] = 0;
     }
-    categoryTotals[expense.category] = (categoryTotals[expense.category] ?? 0) + expense.eur_amount;
+    categoryTotals[expense.category] =
+      (categoryTotals[expense.category] ?? 0) + expense.eur_amount_cents;
   }
 
   // Calculate category averages from previous months
@@ -136,7 +140,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
       categoryAverages[expense.category] = { sum: 0, count: 0 };
     }
     const avgEntry = categoryAverages[expense.category];
-    if (avgEntry) avgEntry.sum += expense.eur_amount;
+    if (avgEntry) avgEntry.sum += expense.eur_amount_cents;
   }
 
   // Calculate category differences
@@ -260,7 +264,7 @@ async function addBudgetInfo(
     spreadsheet_id: string | null;
     default_currency: import('../../config/constants').CurrencyCode;
   },
-  currentMonthExpenses: Array<{ category: string; eur_amount: number }>,
+  currentMonthExpenses: Array<{ category: string; eur_amount_cents: number }>,
 ): Promise<void> {
   const now = new Date();
   const currentMonth = format(now, 'yyyy-MM');
@@ -281,7 +285,7 @@ async function addBudgetInfo(
   const categorySpending: Record<string, number> = {};
   for (const expense of currentMonthExpenses) {
     categorySpending[expense.category] =
-      (categorySpending[expense.category] || 0) + expense.eur_amount;
+      (categorySpending[expense.category] || 0) + expense.eur_amount_cents;
   }
 
   // Calculate budget progress — convert EUR spending to each budget's currency
@@ -327,12 +331,12 @@ async function addBudgetInfo(
 
 /**
  * Compute progress for a single budget entry.
- * spentEur — category spending in EUR; budget — with limit in budget.currency.
+ * spentEur — category spending in EUR cents; budget — with limit in budget.currency cents.
  * Returns spending converted to budget currency with correct percentage.
  */
 export function buildBudgetProgressEntry(
   spentEur: number,
-  budget: { category: string; limit_amount: number; currency: string },
+  budget: { category: string; limit_amount_cents: number; currency: string },
 ): {
   category: string;
   spentInCurrency: number;
@@ -348,7 +352,7 @@ export function buildBudgetProgressEntry(
   return {
     category: budget.category,
     spentInCurrency,
-    limit: budget.limit_amount,
+    limit: budget.limit_amount_cents,
     currency,
     percentage: progress.percentage,
     is_exceeded: progress.is_exceeded,
@@ -362,7 +366,7 @@ export function buildBudgetProgressEntry(
  */
 export function buildBudgetTotals(
   categorySpendingEur: Record<string, number>,
-  budgets: Array<{ category: string; limit_amount: number; currency: string }>,
+  budgets: Array<{ category: string; limit_amount_cents: number; currency: string }>,
   displayCurrency: CurrencyCode,
 ): { totalSpentDisplay: number; totalBudgetDisplay: number; percentage: number } {
   let totalSpentEur = 0;
@@ -370,14 +374,14 @@ export function buildBudgetTotals(
   for (const budget of budgets) {
     totalSpentEur += categorySpendingEur[budget.category] ?? 0;
     totalBudgetEur += convertCurrency(
-      budget.limit_amount,
+      budget.limit_amount_cents,
       budget.currency as CurrencyCode,
       BASE_CURRENCY,
     );
   }
   const totalSpentDisplay = convertCurrency(totalSpentEur, BASE_CURRENCY, displayCurrency);
   const totalBudgetDisplay = convertCurrency(totalBudgetEur, BASE_CURRENCY, displayCurrency);
-  // Guard on display value: if all budgets have limit_amount=0, totalBudgetDisplay is 0 → return 0% not NaN
+  // Guard on display value: if all budgets have limit_amount_cents=0, totalBudgetDisplay is 0 → return 0% not NaN
   const percentage =
     totalBudgetDisplay > 0 ? Math.round((totalSpentDisplay / totalBudgetDisplay) * 100) : 0;
   return { totalSpentDisplay, totalBudgetDisplay, percentage };

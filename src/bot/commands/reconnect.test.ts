@@ -270,9 +270,9 @@ describe('/reconnect expense push detection', () => {
       date: '2026-03-01',
       category: 'Food',
       comment: 'lunch',
-      amount: 100,
+      amount_cents: 10000,
       currency: 'EUR',
-      eur_amount: 100,
+      eur_amount_cents: 10000,
     });
     expenses.create({
       group_id: group.id,
@@ -280,18 +280,18 @@ describe('/reconnect expense push detection', () => {
       date: '2026-03-02',
       category: 'Transport',
       comment: 'taxi',
-      amount: 50,
+      amount_cents: 5000,
       currency: 'EUR',
-      eur_amount: 50,
+      eur_amount_cents: 5000,
     });
 
     const dbExpenses = expenses.findByGroupId(group.id, 100);
     expect(dbExpenses).toHaveLength(2);
 
     // Simulate sheet having only one of them
-    const sheetKeys = new Set(['2026-03-01|Food|100|EUR']);
+    const sheetKeys = new Set(['2026-03-01|Food|10000|EUR']);
     const missing = dbExpenses.filter((e) => {
-      const key = `${e.date}|${e.category}|${e.amount}|${e.currency}`;
+      const key = `${e.date}|${e.category}|${e.amount_cents}|${e.currency}`;
       return !sheetKeys.has(key);
     });
 
@@ -308,21 +308,21 @@ describe('/reconnect budget sync to sheet', () => {
       group_id: group.id,
       category: 'Food',
       month: '2026-01',
-      limit_amount: 500,
+      limit_amount_cents: 50000,
       currency: 'EUR',
     });
     budgets.setBudget({
       group_id: group.id,
       category: 'Transport',
       month: '2026-01',
-      limit_amount: 200,
+      limit_amount_cents: 20000,
       currency: 'EUR',
     });
     budgets.setBudget({
       group_id: group.id,
       category: 'Food',
       month: '2026-03',
-      limit_amount: 600,
+      limit_amount_cents: 60000,
       currency: 'EUR',
     });
 
@@ -350,14 +350,14 @@ describe('/reconnect budget sync to sheet', () => {
       group_id: group.id,
       category: 'Food',
       month: '2025-12',
-      limit_amount: 500,
+      limit_amount_cents: 50000,
       currency: 'EUR',
     });
     budgets.setBudget({
       group_id: group.id,
       category: 'Food',
       month: '2026-01',
-      limit_amount: 600,
+      limit_amount_cents: 60000,
       currency: 'EUR',
     });
 
@@ -387,7 +387,7 @@ describe('/reconnect budget import from sheet', () => {
     const group = groups.create({ telegram_group_id: -1001234 });
 
     // Simulate what importBudgetsFromSheet does: read budget from sheet, create in DB
-    const sheetBudget = { category: 'Food', limit: 500, currency: 'EUR' as CurrencyCode };
+    const sheetBudget = { category: 'Food', limit: 50000, currency: 'EUR' as CurrencyCode };
     const monthStr = '2026-03';
 
     // No existing budget
@@ -404,12 +404,12 @@ describe('/reconnect budget import from sheet', () => {
       group_id: group.id,
       category: sheetBudget.category,
       month: monthStr,
-      limit_amount: sheetBudget.limit,
+      limit_amount_cents: sheetBudget.limit,
       currency: sheetBudget.currency,
     });
 
     const imported = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
-    expect(imported?.limit_amount).toBe(500);
+    expect(imported?.limit_amount_cents).toBe(50000);
     expect(imported?.currency).toBe('EUR');
   });
 
@@ -421,16 +421,16 @@ describe('/reconnect budget import from sheet', () => {
       group_id: group.id,
       category: 'Food',
       month: '2026-03',
-      limit_amount: 300,
+      limit_amount_cents: 30000,
       currency: 'EUR',
     });
 
     // Sheet has updated value
-    const sheetBudget = { category: 'Food', limit: 500, currency: 'USD' as CurrencyCode };
+    const sheetBudget = { category: 'Food', limit: 50000, currency: 'USD' as CurrencyCode };
     const existing = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
     const hasChanged =
       !existing ||
-      existing.limit_amount !== sheetBudget.limit ||
+      existing.limit_amount_cents !== sheetBudget.limit ||
       existing.currency !== sheetBudget.currency;
     expect(hasChanged).toBe(true);
 
@@ -439,12 +439,12 @@ describe('/reconnect budget import from sheet', () => {
       group_id: group.id,
       category: sheetBudget.category,
       month: '2026-03',
-      limit_amount: sheetBudget.limit,
+      limit_amount_cents: sheetBudget.limit,
       currency: sheetBudget.currency,
     });
 
     const updated = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
-    expect(updated?.limit_amount).toBe(500);
+    expect(updated?.limit_amount_cents).toBe(50000);
     expect(updated?.currency).toBe('USD');
   });
 
@@ -455,12 +455,13 @@ describe('/reconnect budget import from sheet', () => {
       group_id: group.id,
       category: 'Food',
       month: '2026-03',
-      limit_amount: 500,
+      limit_amount_cents: 50000,
       currency: 'EUR',
     });
 
     const existing = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
-    const hasChanged = !existing || existing.limit_amount !== 500 || existing.currency !== 'EUR';
+    const hasChanged =
+      !existing || existing.limit_amount_cents !== 50000 || existing.currency !== 'EUR';
     expect(hasChanged).toBe(false);
   });
 });

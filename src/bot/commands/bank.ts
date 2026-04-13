@@ -12,7 +12,7 @@ import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
 import { editMessageText, sendMessage } from '../../services/bank/telegram-sender';
-import { convertAnyToEUR, formatAmount } from '../../services/currency/converter';
+import { convertAnyToEUR, formatAmount, toCents } from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
@@ -412,7 +412,7 @@ export async function handleBankConfirmCallback(
     if (messageId) {
       await editMessageText(
         messageId,
-        `✅ Связано: ${existing.category} (${formatAmount(existing.amount, existing.currency)})`,
+        `✅ Связано: ${existing.category} (${formatAmount(existing.amount_cents, existing.currency)})`,
       );
     }
     return;
@@ -427,7 +427,7 @@ export async function handleBankConfirmCallback(
 
     const replyToMsgId = claimed.telegram_message_id ?? undefined;
     await sendMessage(
-      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nСвязать или создать новый?`,
+      `🔄 Найден похожий расход:\n📅 ${match.date} | ${formatAmount(match.amount_cents, match.currency)} | ${match.category}${commentPart}\n\nСвязать или создать новый?`,
       {
         ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
         reply_markup: {
@@ -558,7 +558,7 @@ export async function handleBankMergeCallback(
   if (messageId) {
     await editMessageText(
       messageId,
-      `✅ Связано: ${expense.category} (${formatAmount(expense.amount, expense.currency)})`,
+      `✅ Связано: ${expense.category} (${formatAmount(expense.amount_cents, expense.currency)})`,
     );
   }
 }
@@ -928,15 +928,16 @@ function saveConfirmedTransaction(
   comment: string,
 ): void {
   const txCurrency = tx.currency as import('../../config/constants').CurrencyCode;
+  const amountCents = toCents(tx.amount);
   const expense = database.expenses.create({
     group_id: groupId,
     user_id: userId,
     date: tx.date,
     category,
     comment,
-    amount: tx.amount,
+    amount_cents: amountCents,
     currency: txCurrency,
-    eur_amount: convertAnyToEUR(tx.amount, tx.currency),
+    eur_amount_cents: convertAnyToEUR(amountCents, tx.currency),
   });
 
   database.bankTransactions.updateStatus(tx.id, groupId, 'confirmed');

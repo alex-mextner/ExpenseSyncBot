@@ -7,6 +7,7 @@ import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
+import { toCents } from '../../services/currency/converter';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
 import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
@@ -272,7 +273,7 @@ async function pushMissingExpensesToSheet(group: Group): Promise<number> {
 
   const missing: Expense[] = [];
   for (const expense of dbExpenses) {
-    const key = `${expense.date}|${expense.category}|${expense.amount}|${expense.currency}`;
+    const key = `${expense.date}|${expense.category}|${expense.amount_cents}|${expense.currency}`;
     if (!sheetKeys.has(key)) {
       missing.push(expense);
     }
@@ -329,15 +330,16 @@ async function importBudgetsFromSheet(group: Group): Promise<number> {
       }
 
       const existing = database.budgets.findByGroupCategoryMonth(group.id, b.category, monthStr);
+      const limitCents = toCents(b.limit);
       const hasChanged =
-        !existing || existing.limit_amount !== b.limit || existing.currency !== b.currency;
+        !existing || existing.limit_amount_cents !== limitCents || existing.currency !== b.currency;
 
       if (hasChanged) {
         getBudgetManager().importFromSheet({
           groupId: group.id,
           category: b.category,
           month: monthStr,
-          amount: b.limit,
+          amountCents: limitCents,
           currency: b.currency,
         });
         imported++;
@@ -400,7 +402,7 @@ async function syncBudgetsToSheet(
       try {
         await writeMonthBudgetRow(conn, spreadsheetId, monthAbbr, {
           category: budget.category,
-          limit: budget.limit_amount,
+          limit: budget.limit_amount_cents,
           currency: budget.currency,
         });
         rowsWritten++;

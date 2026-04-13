@@ -6,6 +6,7 @@ import type { Group, PhotoQueueItem, User } from '../../database/types';
 import { sendOldTransactionCards, skipOldTransactions } from '../../services/bank/sync-service';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
+import { toCents } from '../../services/currency/converter';
 import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
 import { formatReceiptCommentForTelegram } from '../../utils/receipt-display';
@@ -743,7 +744,7 @@ async function handleBudgetAction(
         groupId: group.id,
         category: category ?? '',
         month: currentMonth,
-        amount,
+        amountCents: toCents(amount),
         currency,
       });
 
@@ -784,7 +785,7 @@ async function handleBudgetAction(
         groupId: group.id,
         category: category ?? '',
         month: currentMonth,
-        amount,
+        amountCents: toCents(amount),
         currency,
       });
 

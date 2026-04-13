@@ -77,8 +77,8 @@ describe('ExpenseRecorder', () => {
 
     const testRates: Record<string, number> = { EUR: 1, USD: 0.86, RSD: 0.0085, RUB: 0.01 };
     mockConverter = {
-      convertToEUR: mock((amount: number, _currency: CurrencyCode) => {
-        return Math.round(amount * (testRates[_currency] || 1) * 100) / 100;
+      convertToEUR: mock((amountCents: number, _currency: CurrencyCode) => {
+        return Math.round(amountCents * (testRates[_currency] || 1));
       }),
       getExchangeRate: mock((currency: CurrencyCode) => {
         return testRates[currency] || 1;
@@ -133,13 +133,13 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-24',
         category: 'Еда',
         comment: 'Пицца',
-        amount: 4500,
+        amount_cents: 450000,
         currency: 'RSD',
       });
 
       // EUR conversion called
-      expect(mockConverter.convertToEUR).toHaveBeenCalledWith(4500, 'RSD');
-      expect(result.eurAmount).toBe(38.25); // 4500 * 0.0085
+      expect(mockConverter.convertToEUR).toHaveBeenCalledWith(450000, 'RSD');
+      expect(result.eurAmountCents).toBe(3825); // Math.round(450000 * 0.0085)
 
       // Sheet write called with correct data
       expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(1);
@@ -151,24 +151,24 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-24',
         category: 'Еда',
         comment: 'Пицца',
-        amounts: { USD: null, EUR: null, RSD: 4500 },
-        eurAmount: 38.25,
+        amounts: { USD: null, EUR: null, RSD: 450000 },
+        eurAmountCents: 3825,
         rate: 0.0085,
       });
 
       // DB expense created
       expect(result.expense.group_id).toBe(groupId);
       expect(result.expense.user_id).toBe(userId);
-      expect(result.expense.amount).toBe(4500);
+      expect(result.expense.amount_cents).toBe(450000);
       expect(result.expense.currency).toBe('RSD');
-      expect(result.expense.eur_amount).toBe(38.25);
+      expect(result.expense.eur_amount_cents).toBe(3825);
       expect(result.expense.category).toBe('Еда');
 
       // Verify in DB
       const dbExpense = expenses.findById(result.expense.id);
       expect(dbExpense).toBeTruthy();
       if (!dbExpense) throw new Error('unreachable');
-      expect(dbExpense.eur_amount).toBe(38.25);
+      expect(dbExpense.eur_amount_cents).toBe(3825);
     });
 
     it('handles EUR currency (no conversion needed)', async () => {
@@ -178,12 +178,12 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-24',
         category: 'Квартира',
         comment: '',
-        amount: 700,
+        amount_cents: 70000,
         currency: 'EUR',
       });
 
-      expect(result.eurAmount).toBe(700);
-      expect(result.expense.eur_amount).toBe(700);
+      expect(result.eurAmountCents).toBe(70000);
+      expect(result.expense.eur_amount_cents).toBe(70000);
     });
 
     it('records expense to DB only when no Google connection (refreshToken null)', async () => {
@@ -193,7 +193,7 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-24',
         category: 'Еда',
         comment: 'Пицца',
-        amount: 4500,
+        amount_cents: 450000,
         currency: 'RSD',
       });
 
@@ -203,9 +203,9 @@ describe('ExpenseRecorder', () => {
       // DB expense still created
       expect(result.expense.group_id).toBe(groupId);
       expect(result.expense.user_id).toBe(userId);
-      expect(result.expense.amount).toBe(4500);
+      expect(result.expense.amount_cents).toBe(450000);
       expect(result.expense.currency).toBe('RSD');
-      expect(result.eurAmount).toBe(38.25);
+      expect(result.eurAmountCents).toBe(3825);
 
       // Verify in DB
       const dbExpense = expenses.findById(result.expense.id);
@@ -222,7 +222,7 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-24',
         category: 'Test',
         comment: '',
-        amount: 100,
+        amount_cents: 10000,
         currency: 'EUR',
       });
 
@@ -230,7 +230,7 @@ describe('ExpenseRecorder', () => {
       expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(0);
 
       // DB expense still created
-      expect(result.expense.amount).toBe(100);
+      expect(result.expense.amount_cents).toBe(10000);
     });
 
     it('throws if group not found', async () => {
@@ -239,7 +239,7 @@ describe('ExpenseRecorder', () => {
           date: '2026-03-24',
           category: 'Test',
           comment: '',
-          amount: 100,
+          amount_cents: 10000,
           currency: 'EUR',
         }),
       ).rejects.toThrow('not found');
@@ -256,7 +256,7 @@ describe('ExpenseRecorder', () => {
           date: '2026-03-24',
           category: 'Еда',
           comment: '',
-          amount: 100,
+          amount_cents: 10000,
           currency: 'RSD',
         }),
       ).rejects.toThrow('Google API error');
@@ -275,8 +275,8 @@ describe('ExpenseRecorder', () => {
       const items = Array.from({ length: 70 }, (_, i) => ({
         name: `Item ${i}`,
         quantity: 1,
-        price: 100,
-        total: 100,
+        price_cents: 10000,
+        total_cents: 10000,
         currency: 'RSD' as const,
         category: 'Продукты',
       }));
@@ -296,11 +296,11 @@ describe('ExpenseRecorder', () => {
       const rows = call[2] as unknown[];
       expect(rows).toHaveLength(1);
 
-      // One expense, 70 × 100 = 7000 RSD
+      // One expense, 70 × 10000 = 700000 RSD cents
       expect(result.expenses).toHaveLength(1);
       const first = result.expenses[0];
       if (!first) throw new Error('no result');
-      expect(first.expense.amount).toBe(7000);
+      expect(first.expense.amount_cents).toBe(700000);
       expect(first.expense.category).toBe('Продукты');
       expect(result.categoriesAffected).toEqual(['Продукты']);
 
@@ -315,16 +315,30 @@ describe('ExpenseRecorder', () => {
       const result = await recorder.recordReceipt(groupId, userId, {
         date: '2026-04-11',
         items: [
-          { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
           {
-            name: 'Молоко',
-            quantity: 2,
-            price: 100,
-            total: 200,
+            name: 'Хлеб',
+            quantity: 1,
+            price_cents: 8000,
+            total_cents: 8000,
             currency: 'RSD',
             category: 'Еда',
           },
-          { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
+          {
+            name: 'Молоко',
+            quantity: 2,
+            price_cents: 10000,
+            total_cents: 20000,
+            currency: 'RSD',
+            category: 'Еда',
+          },
+          {
+            name: 'Мыло',
+            quantity: 1,
+            price_cents: 15000,
+            total_cents: 15000,
+            currency: 'RSD',
+            category: 'Дом',
+          },
         ],
       });
 
@@ -345,7 +359,7 @@ describe('ExpenseRecorder', () => {
       // DB: 2 expenses, each with linked items
       const food = result.expenses.find((r) => r.expense.category === 'Еда');
       if (!food) throw new Error('no food');
-      expect(food.expense.amount).toBe(280); // 80 + 200
+      expect(food.expense.amount_cents).toBe(28000); // 8000 + 20000
       const foodItems = expenseItems.findByExpenseId(food.expense.id);
       expect(foodItems).toHaveLength(2);
     });
@@ -356,7 +370,16 @@ describe('ExpenseRecorder', () => {
 
       const result = await recorder.recordReceipt(groupId, userId, {
         date: receiptDate,
-        items: [{ name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' }],
+        items: [
+          {
+            name: 'X',
+            quantity: 1,
+            price_cents: 1000,
+            total_cents: 1000,
+            currency: 'EUR',
+            category: 'A',
+          },
+        ],
       });
 
       // Sheet row uses receipt date
@@ -385,8 +408,22 @@ describe('ExpenseRecorder', () => {
         date: '2026-04-11',
         receiptId,
         items: [
-          { name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' },
-          { name: 'Y', quantity: 1, price: 20, total: 20, currency: 'EUR', category: 'B' },
+          {
+            name: 'X',
+            quantity: 1,
+            price_cents: 1000,
+            total_cents: 1000,
+            currency: 'EUR',
+            category: 'A',
+          },
+          {
+            name: 'Y',
+            quantity: 1,
+            price_cents: 2000,
+            total_cents: 2000,
+            currency: 'EUR',
+            category: 'B',
+          },
         ],
       });
 
@@ -402,7 +439,16 @@ describe('ExpenseRecorder', () => {
       const result = await recorder.recordReceipt(groupId, userId, {
         date: '2026-04-11',
         receiptFileId: 'BAADBAAD_telegram_file_id',
-        items: [{ name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' }],
+        items: [
+          {
+            name: 'X',
+            quantity: 1,
+            price_cents: 1000,
+            total_cents: 1000,
+            currency: 'EUR',
+            category: 'A',
+          },
+        ],
       });
 
       const exp = result.expenses[0]?.expense;
@@ -417,8 +463,22 @@ describe('ExpenseRecorder', () => {
       const result = await recorder.recordReceipt(groupId, userId, {
         date: '2026-04-11',
         items: [
-          { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
-          { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
+          {
+            name: 'Хлеб',
+            quantity: 1,
+            price_cents: 8000,
+            total_cents: 8000,
+            currency: 'RSD',
+            category: 'Еда',
+          },
+          {
+            name: 'Мыло',
+            quantity: 1,
+            price_cents: 15000,
+            total_cents: 15000,
+            currency: 'RSD',
+            category: 'Дом',
+          },
         ],
       });
 
@@ -440,8 +500,22 @@ describe('ExpenseRecorder', () => {
         recorder.recordReceipt(groupId, userId, {
           date: '2026-04-11',
           items: [
-            { name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' },
-            { name: 'Y', quantity: 1, price: 20, total: 20, currency: 'EUR', category: 'B' },
+            {
+              name: 'X',
+              quantity: 1,
+              price_cents: 1000,
+              total_cents: 1000,
+              currency: 'EUR',
+              category: 'A',
+            },
+            {
+              name: 'Y',
+              quantity: 1,
+              price_cents: 2000,
+              total_cents: 2000,
+              currency: 'EUR',
+              category: 'B',
+            },
           ],
         }),
       ).rejects.toThrow('429 quota exceeded');
@@ -461,24 +535,24 @@ describe('ExpenseRecorder', () => {
           {
             name: 'Imported cheese',
             quantity: 1,
-            price: 10,
-            total: 10,
+            price_cents: 1000,
+            total_cents: 1000,
             currency: 'EUR',
             category: 'Продукты',
           },
           {
             name: 'Local bread',
             quantity: 1,
-            price: 100,
-            total: 100,
+            price_cents: 10000,
+            total_cents: 10000,
             currency: 'RSD',
             category: 'Продукты',
           },
           {
             name: 'Milk',
             quantity: 1,
-            price: 200,
-            total: 200,
+            price_cents: 20000,
+            total_cents: 20000,
             currency: 'RSD',
             category: 'Продукты',
           },
@@ -492,9 +566,9 @@ describe('ExpenseRecorder', () => {
       const rsdRow = result.expenses.find((r) => r.expense.currency === 'RSD');
       if (!eurRow || !rsdRow) throw new Error('expected both EUR and RSD rows');
       expect(eurRow.expense.category).toBe('Продукты');
-      expect(eurRow.expense.amount).toBe(10);
+      expect(eurRow.expense.amount_cents).toBe(1000);
       expect(rsdRow.expense.category).toBe('Продукты');
-      expect(rsdRow.expense.amount).toBe(300); // 100 + 200
+      expect(rsdRow.expense.amount_cents).toBe(30000); // 10000 + 20000
 
       // Exactly one batched sheet call with TWO rows
       expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
@@ -516,24 +590,24 @@ describe('ExpenseRecorder', () => {
           {
             name: 'Куриное бедро',
             quantity: 1,
-            price: 279.99,
-            total: 279.99,
+            price_cents: 27999,
+            total_cents: 27999,
             currency: 'RSD',
             category: 'Продукты',
           },
           {
             name: 'Куриное бедро',
             quantity: 1,
-            price: 279.99,
-            total: 279.99,
+            price_cents: 27999,
+            total_cents: 27999,
             currency: 'RSD',
             category: 'Продукты',
           },
           {
             name: 'Куриное бедро',
             quantity: 1,
-            price: 279.99,
-            total: 279.99,
+            price_cents: 27999,
+            total_cents: 27999,
             currency: 'RSD',
             category: 'Продукты',
           },
@@ -543,7 +617,7 @@ describe('ExpenseRecorder', () => {
       expect(result.expenses).toHaveLength(1);
       const exp = result.expenses[0];
       if (!exp) throw new Error('no exp');
-      expect(exp.expense.amount).toBeCloseTo(839.97, 2);
+      expect(exp.expense.amount_cents).toBe(83997); // 27999 * 3
 
       const items = expenseItems.findByExpenseId(exp.expense.id);
       expect(items).toHaveLength(3);
@@ -565,7 +639,14 @@ describe('ExpenseRecorder', () => {
         recorder.recordReceipt(999, 1, {
           date: '2026-04-11',
           items: [
-            { name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'Test' },
+            {
+              name: 'X',
+              quantity: 1,
+              price_cents: 1000,
+              total_cents: 1000,
+              currency: 'EUR',
+              category: 'Test',
+            },
           ],
         }),
       ).rejects.toThrow('not found');
@@ -583,9 +664,9 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-20',
         category: 'Еда',
         comment: 'Pizza',
-        amount: 1000,
+        amount_cents: 100000,
         currency: 'RSD',
-        eur_amount: 8.5,
+        eur_amount_cents: 850,
       });
       const e2 = expenses.create({
         group_id: groupId,
@@ -593,9 +674,9 @@ describe('ExpenseRecorder', () => {
         date: '2026-03-21',
         category: 'Транспорт',
         comment: 'Taxi',
-        amount: 50,
+        amount_cents: 5000,
         currency: 'USD',
-        eur_amount: 43,
+        eur_amount_cents: 4300,
       });
 
       await recorder.pushToSheet(groupId, [e1, e2]);
@@ -603,10 +684,10 @@ describe('ExpenseRecorder', () => {
       // Sheet write called 2 times
       expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(2);
 
-      // Uses eurAmount from expense, NOT recalculated
+      // Uses eurAmountCents from expense, NOT recalculated
       const call1 = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
       if (!call1) throw new Error('Expected sheet write call');
-      expect(call1[2].eurAmount).toBe(8.5); // From DB, not recalculated
+      expect(call1[2].eurAmountCents).toBe(850); // From DB, not recalculated
 
       // DB count unchanged (still 2)
       const all = expenses.findByGroupId(groupId);

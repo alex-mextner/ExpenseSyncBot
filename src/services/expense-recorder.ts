@@ -6,6 +6,7 @@ import type { ExpenseItemsRepository } from '../database/repositories/expense-it
 import type { GroupRepository } from '../database/repositories/group.repository';
 import type { Expense } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
+import { fromCents } from './currency/converter';
 import type { ExpenseRowData, GoogleConn } from './google/sheets';
 
 let _instance: ExpenseRecorder | null = null;
@@ -48,33 +49,35 @@ export interface SheetWriter {
 }
 
 /**
- * Abstraction over EUR conversion — injected for testability
+ * Abstraction over EUR conversion — injected for testability.
+ * All amounts are in cents (integer minor units).
  */
 export interface EurConverter {
-  convertToEUR(amount: number, fromCurrency: CurrencyCode): number;
+  convertToEUR(amountCents: number, fromCurrency: CurrencyCode): number;
   getExchangeRate(currency: CurrencyCode): number;
 }
 
 /**
- * Input for recording a single expense
+ * Input for recording a single expense. Amounts are in cents.
  */
 export interface RecordExpenseData {
   date: string;
   category: string;
   comment: string;
-  amount: number;
+  amount_cents: number;
   currency: CurrencyCode;
 }
 
 /**
- * Input for recording a receipt item (one physical line on the receipt)
+ * Input for recording a receipt item (one physical line on the receipt).
+ * price_cents and total_cents are in minor currency units (cents).
  */
 export interface RecordReceiptItem {
   name: string;
   nameOriginal?: string | null;
   quantity: number;
-  price: number;
-  total: number;
+  price_cents: number;
+  total_cents: number;
   currency: CurrencyCode;
   category: string;
 }
@@ -96,11 +99,11 @@ export interface RecordReceiptData {
 }
 
 /**
- * Result of recording an expense
+ * Result of recording an expense. eurAmountCents is in cents.
  */
 export interface RecordExpenseResult {
   expense: Expense;
-  eurAmount: number;
+  eurAmountCents: number;
 }
 
 /**
@@ -128,16 +131,16 @@ interface ExpenseRecorderDeps {
 }
 
 /**
- * Build amounts record mapping each enabled currency to amount or null
+ * Build amounts record mapping each enabled currency to amount in cents or null
  */
 export function buildAmountsRecord(
-  amount: number,
+  amountCents: number,
   currency: CurrencyCode,
   enabledCurrencies: CurrencyCode[],
 ): Record<string, number | null> {
   const amounts: Record<string, number | null> = {};
   for (const code of enabledCurrencies) {
-    amounts[code] = code === currency ? amount : null;
+    amounts[code] = code === currency ? amountCents : null;
   }
   return amounts;
 }
@@ -148,7 +151,7 @@ export function buildAmountsRecord(
  * callers are responsible for truncating when displaying in Telegram.
  */
 export function buildReceiptComment(items: RecordReceiptItem[]): string {
-  const parts = items.map((i) => `${i.name} (${i.quantity}x${i.price})`);
+  const parts = items.map((i) => `${i.name} (${i.quantity}x${fromCents(i.price_cents)})`);
   return `Чек: ${parts.join(', ')}`;
 }
 
@@ -187,7 +190,8 @@ export class ExpenseRecorder implements RecorderApi {
   }
 
   /**
-   * Record a single expense to Google Sheets + local DB
+   * Record a single expense to Google Sheets + local DB.
+   * All amounts in data are in cents.
    */
   async record(
     groupId: number,
@@ -197,24 +201,24 @@ export class ExpenseRecorder implements RecorderApi {
     const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
     const rate = this.eurConverter.getExchangeRate(data.currency);
-    const eurAmount = this.eurConverter.convertToEUR(data.amount, data.currency);
-    const amounts = buildAmountsRecord(data.amount, data.currency, enabledCurrencies);
+    const eurAmountCents = this.eurConverter.convertToEUR(data.amount_cents, data.currency);
+    const amounts = buildAmountsRecord(data.amount_cents, data.currency, enabledCurrencies);
 
     // Write to Google Sheets if connected
     if (conn && spreadsheetId) {
-      logger.info({ data: { ...data, eurAmount, rate } }, `[RECORD] Writing expense to sheet`);
+      logger.info({ data: { ...data, eurAmountCents, rate } }, `[RECORD] Writing expense to sheet`);
 
       await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
         date: data.date,
         category: data.category,
         comment: data.comment,
         amounts,
-        eurAmount,
+        eurAmountCents: eurAmountCents,
         rate,
       });
     } else {
       logger.info(
-        { data: { ...data, eurAmount, rate } },
+        { data: { ...data, eurAmountCents, rate } },
         `[RECORD] Saving expense locally (no Google Sheets)`,
       );
     }
@@ -225,16 +229,16 @@ export class ExpenseRecorder implements RecorderApi {
       date: data.date,
       category: data.category,
       comment: data.comment,
-      amount: data.amount,
+      amount_cents: data.amount_cents,
       currency: data.currency,
-      eur_amount: eurAmount,
+      eur_amount_cents: eurAmountCents,
     });
 
     logger.info(
-      `[RECORD] Expense ${expense.id} saved (${data.amount} ${data.currency} → ${eurAmount} EUR)`,
+      `[RECORD] Expense ${expense.id} saved (${data.amount_cents}c ${data.currency} → ${eurAmountCents}c EUR)`,
     );
 
-    return { expense, eurAmount };
+    return { expense, eurAmountCents };
   }
 
   /**
@@ -288,36 +292,36 @@ export class ExpenseRecorder implements RecorderApi {
     interface CategoryBatch {
       category: string;
       items: RecordReceiptItem[];
-      totalAmount: number;
+      totalAmountCents: number;
       currency: CurrencyCode;
       comment: string;
-      eurAmount: number;
+      eurAmountCents: number;
       rate: number;
       row: ExpenseRowData;
     }
 
     const batches: CategoryBatch[] = [];
     for (const { category, currency, items } of byKey.values()) {
-      const totalAmount = items.reduce((sum, i) => sum + i.total, 0);
+      const totalAmountCents = items.reduce((sum, i) => sum + i.total_cents, 0);
       const comment = buildReceiptComment(items);
       const rate = this.eurConverter.getExchangeRate(currency);
-      const eurAmount = this.eurConverter.convertToEUR(totalAmount, currency);
-      const amounts = buildAmountsRecord(totalAmount, currency, enabledCurrencies);
+      const eurAmountCents = this.eurConverter.convertToEUR(totalAmountCents, currency);
+      const amounts = buildAmountsRecord(totalAmountCents, currency, enabledCurrencies);
 
       batches.push({
         category,
         items,
-        totalAmount,
+        totalAmountCents,
         currency,
         comment,
-        eurAmount,
+        eurAmountCents,
         rate,
         row: {
           date: data.date,
           category,
           comment,
           amounts,
-          eurAmount,
+          eurAmountCents: eurAmountCents,
           rate,
         },
       });
@@ -355,9 +359,9 @@ export class ExpenseRecorder implements RecorderApi {
           date: data.date,
           category: batch.category,
           comment: batch.comment,
-          amount: batch.totalAmount,
+          amount_cents: batch.totalAmountCents,
           currency: batch.currency,
-          eur_amount: batch.eurAmount,
+          eur_amount_cents: batch.eurAmountCents,
           receipt_id: data.receiptId ?? null,
           receipt_file_id: data.receiptFileId ?? null,
         });
@@ -368,12 +372,12 @@ export class ExpenseRecorder implements RecorderApi {
             name_ru: item.name,
             name_original: item.nameOriginal ?? null,
             quantity: item.quantity,
-            price: item.price,
-            total: item.total,
+            price: fromCents(item.price_cents),
+            total: fromCents(item.total_cents),
           });
         }
 
-        results.push({ expense, eurAmount: batch.eurAmount });
+        results.push({ expense, eurAmountCents: batch.eurAmountCents });
       }
     });
 
@@ -400,7 +404,7 @@ export class ExpenseRecorder implements RecorderApi {
     }
 
     for (const expense of expenseList) {
-      const amounts = buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies);
+      const amounts = buildAmountsRecord(expense.amount_cents, expense.currency, enabledCurrencies);
       const rate = this.eurConverter.getExchangeRate(expense.currency as CurrencyCode);
 
       await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
@@ -408,7 +412,7 @@ export class ExpenseRecorder implements RecorderApi {
         category: expense.category,
         comment: expense.comment,
         amounts,
-        eurAmount: expense.eur_amount,
+        eurAmountCents: expense.eur_amount_cents,
         rate,
       });
     }

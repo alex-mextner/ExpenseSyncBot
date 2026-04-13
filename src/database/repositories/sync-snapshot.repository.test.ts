@@ -43,9 +43,9 @@ function createGroupWithData() {
     date: '2026-03-01',
     category: 'Food',
     comment: 'lunch',
-    amount: 100,
+    amount_cents: 10000,
     currency: 'EUR',
-    eur_amount: 100,
+    eur_amount_cents: 10000,
   });
   const e2 = expenses.create({
     group_id: group.id,
@@ -53,23 +53,23 @@ function createGroupWithData() {
     date: '2026-03-02',
     category: 'Transport',
     comment: 'taxi',
-    amount: 50,
+    amount_cents: 5000,
     currency: 'EUR',
-    eur_amount: 50,
+    eur_amount_cents: 5000,
   });
 
   budgets.setBudget({
     group_id: group.id,
     category: 'Food',
     month: '2026-03',
-    limit_amount: 500,
+    limit_amount_cents: 50000,
     currency: 'EUR',
   });
   budgets.setBudget({
     group_id: group.id,
     category: 'Transport',
     month: '2026-03',
-    limit_amount: 200,
+    limit_amount_cents: 20000,
     currency: 'EUR',
   });
 
@@ -90,15 +90,15 @@ describe('saveSnapshot', () => {
     const savedExpenses = snapshots.getExpenseSnapshots(snapshotId);
     expect(savedExpenses).toHaveLength(2);
     expect(savedExpenses[0]?.category).toBe('Food');
-    expect(savedExpenses[0]?.amount).toBe(100);
+    expect(savedExpenses[0]?.amount_cents).toBe(10000);
     expect(savedExpenses[1]?.category).toBe('Transport');
 
     const savedBudgets = snapshots.getBudgetSnapshots(snapshotId);
     expect(savedBudgets).toHaveLength(2);
     const foodBudget = savedBudgets.find((b) => b.category === 'Food');
     const transportBudget = savedBudgets.find((b) => b.category === 'Transport');
-    expect(foodBudget?.limit_amount).toBe(500);
-    expect(transportBudget?.limit_amount).toBe(200);
+    expect(foodBudget?.limit_amount_cents).toBe(50000);
+    expect(transportBudget?.limit_amount_cents).toBe(20000);
   });
 
   test('returns unique snapshot IDs', () => {
@@ -139,9 +139,9 @@ describe('getExpenseSnapshots', () => {
     expect(first?.group_id).toBe(group.id);
     expect(first?.date).toBe('2026-03-01');
     expect(first?.comment).toBe('lunch');
-    expect(first?.amount).toBe(100);
+    expect(first?.amount_cents).toBe(10000);
     expect(first?.currency).toBe('EUR');
-    expect(first?.eur_amount).toBe(100);
+    expect(first?.eur_amount_cents).toBe(10000);
   });
 });
 

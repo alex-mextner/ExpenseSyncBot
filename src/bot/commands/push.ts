@@ -32,7 +32,7 @@ function makeSheetRowKey(row: SheetRow): string | null {
  * Extract key from DB Expense
  */
 function makeDbExpenseKey(expense: Expense): string {
-  return makeExpenseKey(expense.date, expense.category, expense.amount, expense.currency);
+  return makeExpenseKey(expense.date, expense.category, expense.amount_cents, expense.currency);
 }
 
 /**

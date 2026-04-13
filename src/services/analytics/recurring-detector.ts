@@ -2,6 +2,7 @@
 import { differenceInDays, format, subMonths } from 'date-fns';
 import { database } from '../../database';
 import { createLogger } from '../../utils/logger.ts';
+import { fromCents } from '../currency/converter';
 
 const logger = createLogger('recurring-detector');
 
@@ -56,7 +57,7 @@ export function detectRecurringPatterns(groupId: number): DetectedPattern[] {
     const occurrences = byCategory.get(expense.category) || [];
     occurrences.push({
       date: expense.date,
-      amount: expense.amount,
+      amount: fromCents(expense.amount_cents),
       currency: expense.currency,
     });
     byCategory.set(expense.category, occurrences);

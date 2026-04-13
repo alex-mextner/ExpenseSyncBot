@@ -41,9 +41,9 @@ describe('DatabaseService.transaction', () => {
           date: '2024-01-15',
           category: 'Food',
           comment: 'rollback test',
-          amount: 10,
+          amount_cents: 1000,
           currency: 'EUR',
-          eur_amount: 10,
+          eur_amount_cents: 1000,
         });
         throw new Error('intentional rollback');
       });
@@ -68,9 +68,9 @@ describe('DatabaseService.transaction', () => {
         date: '2024-01-15',
         category: 'Food',
         comment: 'commit test',
-        amount: 20,
+        amount_cents: 2000,
         currency: 'EUR',
-        eur_amount: 20,
+        eur_amount_cents: 2000,
       });
     });
 
@@ -88,9 +88,9 @@ describe('DatabaseService.queryAll', () => {
       date: '2024-01-15',
       category: 'Food',
       comment: 'first',
-      amount: 10,
+      amount_cents: 1000,
       currency: 'EUR',
-      eur_amount: 10,
+      eur_amount_cents: 1000,
     });
     service.expenses.create({
       group_id: groupId,
@@ -98,9 +98,9 @@ describe('DatabaseService.queryAll', () => {
       date: '2024-01-16',
       category: 'Transport',
       comment: 'second',
-      amount: 5,
+      amount_cents: 500,
       currency: 'EUR',
-      eur_amount: 5,
+      eur_amount_cents: 500,
     });
 
     const rows = service.queryAll<{ comment: string }>(
@@ -130,9 +130,9 @@ describe('DatabaseService.queryOne', () => {
       date: '2024-01-15',
       category: 'Food',
       comment: 'only one',
-      amount: 10,
+      amount_cents: 1000,
       currency: 'EUR',
-      eur_amount: 10,
+      eur_amount_cents: 1000,
     });
 
     const row = service.queryOne<{ comment: string }>(

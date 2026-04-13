@@ -194,7 +194,9 @@ ${
 function formatCategoryExamples(categoryExamples: Map<string, CategoryExample[]>): string {
   const lines: string[] = [];
   for (const [category, examples] of categoryExamples) {
-    const formatted = examples.map((e) => `${e.comment} (${e.amount}${e.currency})`).join(', ');
+    const formatted = examples
+      .map((e) => `${e.comment} (${(e.amount_cents / 100).toFixed(2)}${e.currency})`)
+      .join(', ');
     lines.push(`- ${category}: ${formatted}`);
   }
   return lines.join('\n');

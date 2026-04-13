@@ -5,7 +5,7 @@ import { type CurrencyCode, isValidCurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
 import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
-import { convertCurrency } from '../services/currency/converter.ts';
+import { convertCurrency, fromCents, toCents } from '../services/currency/converter.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
 import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
@@ -571,8 +571,10 @@ export async function handleMiniAppRequest(
         items: itemInputs.map((item) => ({
           name: item.name as string,
           quantity: typeof item.qty === 'number' && item.qty > 0 ? item.qty : 1,
-          price: typeof item.price === 'number' ? item.price : (item.total as number),
-          total: item.total as number,
+          price_cents: toCents(
+            typeof item.price === 'number' ? item.price : (item.total as number),
+          ),
+          total_cents: toCents(item.total as number),
           currency: item.currency as CurrencyCode,
           category: item.category as string,
         })),
@@ -638,7 +640,7 @@ export async function handleMiniAppRequest(
     }
 
     const rows = database.queryAll<CategoryRow>(
-      `SELECT category, SUM(eur_amount) as total
+      `SELECT category, SUM(eur_amount_cents) as total
        FROM expenses
        WHERE group_id = ? AND date LIKE ?
        GROUP BY category`,
@@ -648,17 +650,17 @@ export async function handleMiniAppRequest(
 
     const defaultCurrency = group.default_currency as CurrencyCode;
 
-    let totalEur = 0;
+    let totalEurCents = 0;
     const byCategory: Record<string, number> = {};
 
     for (const row of rows) {
-      totalEur += row.total;
-      byCategory[row.category] =
-        Math.round(convertCurrency(row.total, 'EUR', defaultCurrency) * 100) / 100;
+      totalEurCents += row.total;
+      const displayCents = convertCurrency(row.total, 'EUR', defaultCurrency);
+      byCategory[row.category] = Math.round(fromCents(displayCents) * 100) / 100;
     }
 
-    const totalInDefault =
-      Math.round(convertCurrency(totalEur, 'EUR', defaultCurrency) * 100) / 100;
+    const totalDisplayCents = convertCurrency(totalEurCents, 'EUR', defaultCurrency);
+    const totalInDefault = Math.round(fromCents(totalDisplayCents) * 100) / 100;
 
     return new Response(
       JSON.stringify({

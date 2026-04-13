@@ -28,9 +28,9 @@ describe('computeExpenseStats', () => {
   test('computes correct stats for single expense', () => {
     const expenses = [
       {
-        amount: 1000,
+        amount_cents: 100000,
         currency: 'RSD' as const,
-        eur_amount: 8.5,
+        eur_amount_cents: 850,
         category: 'Еда',
         comment: 'Хлеб',
         date: '2026-01-15',
@@ -38,10 +38,10 @@ describe('computeExpenseStats', () => {
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.count).toBe(1);
-    // 8.5 EUR * 100 = 850 RSD (via mock rate)
-    expect(stats.total).toBeCloseTo(850, 0);
-    expect(stats.avg).toBeCloseTo(850, 0);
-    expect(stats.median).toBeCloseTo(850, 0);
+    // 850 EUR-cents * 100 = 85000 RSD-cents (via mock rate)
+    expect(stats.total).toBeCloseTo(85000, 0);
+    expect(stats.avg).toBeCloseTo(85000, 0);
+    expect(stats.median).toBeCloseTo(85000, 0);
     expect(stats.min?.comment).toBe('Хлеб');
     expect(stats.max?.comment).toBe('Хлеб');
   });
@@ -49,33 +49,33 @@ describe('computeExpenseStats', () => {
   test('computes median for even number of items', () => {
     const expenses = [
       {
-        amount: 100,
+        amount_cents: 10000,
         currency: 'RSD' as const,
-        eur_amount: 1,
+        eur_amount_cents: 100,
         category: 'A',
         comment: 'a',
         date: '2026-01-01',
       },
       {
-        amount: 200,
+        amount_cents: 20000,
         currency: 'RSD' as const,
-        eur_amount: 2,
+        eur_amount_cents: 200,
         category: 'B',
         comment: 'b',
         date: '2026-01-02',
       },
       {
-        amount: 300,
+        amount_cents: 30000,
         currency: 'RSD' as const,
-        eur_amount: 3,
+        eur_amount_cents: 300,
         category: 'C',
         comment: 'c',
         date: '2026-01-03',
       },
       {
-        amount: 400,
+        amount_cents: 40000,
         currency: 'RSD' as const,
-        eur_amount: 4,
+        eur_amount_cents: 400,
         category: 'D',
         comment: 'd',
         date: '2026-01-04',
@@ -83,67 +83,67 @@ describe('computeExpenseStats', () => {
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.count).toBe(4);
-    // converted amounts: 100, 200, 300, 400 (EUR * 100)
-    // median of [100, 200, 300, 400] = (200+300)/2 = 250
-    expect(stats.median).toBeCloseTo(250, 0);
-    expect(stats.min?.amount).toBeCloseTo(100, 0);
-    expect(stats.max?.amount).toBeCloseTo(400, 0);
+    // converted amounts: 10000, 20000, 30000, 40000 (EUR-cents * 100)
+    // median of [10000, 20000, 30000, 40000] = (20000+30000)/2 = 25000
+    expect(stats.median).toBeCloseTo(25000, 0);
+    expect(stats.min?.amount).toBeCloseTo(10000, 0);
+    expect(stats.max?.amount).toBeCloseTo(40000, 0);
   });
 
   test('computes median for odd number of items', () => {
     const expenses = [
       {
-        amount: 100,
+        amount_cents: 10000,
         currency: 'RSD' as const,
-        eur_amount: 1,
+        eur_amount_cents: 100,
         category: 'A',
         comment: 'a',
         date: '2026-01-01',
       },
       {
-        amount: 300,
+        amount_cents: 30000,
         currency: 'RSD' as const,
-        eur_amount: 3,
+        eur_amount_cents: 300,
         category: 'B',
         comment: 'b',
         date: '2026-01-02',
       },
       {
-        amount: 500,
+        amount_cents: 50000,
         currency: 'RSD' as const,
-        eur_amount: 5,
+        eur_amount_cents: 500,
         category: 'C',
         comment: 'c',
         date: '2026-01-03',
       },
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
-    // converted: 100, 300, 500 → median = 300
-    expect(stats.median).toBeCloseTo(300, 0);
+    // converted: 10000, 30000, 50000 → median = 30000
+    expect(stats.median).toBeCloseTo(30000, 0);
   });
 
   test('min/max reference correct expense', () => {
     const expenses = [
       {
-        amount: 5000,
+        amount_cents: 500000,
         currency: 'RSD' as const,
-        eur_amount: 42.5,
+        eur_amount_cents: 4250,
         category: 'Развлечения',
         comment: 'Кино',
         date: '2026-01-10',
       },
       {
-        amount: 120,
+        amount_cents: 12000,
         currency: 'RSD' as const,
-        eur_amount: 1.02,
+        eur_amount_cents: 102,
         category: 'Еда',
         comment: 'Хлеб',
         date: '2026-01-05',
       },
       {
-        amount: 45000,
+        amount_cents: 4500000,
         currency: 'RSD' as const,
-        eur_amount: 382.5,
+        eur_amount_cents: 38250,
         category: 'Ресторан',
         comment: 'НГ ужин',
         date: '2025-12-31',
@@ -157,23 +157,23 @@ describe('computeExpenseStats', () => {
     expect(stats.max?.category).toBe('Ресторан');
   });
 
-  test('handles multi-currency by converting via eur_amount', () => {
-    // Mock rate: 1 EUR = 100 RSD
-    // 100 EUR → eur_amount=100 → 100*100 = 10000 RSD
-    // 1000 RSD → eur_amount=8.5 → 8.5*100 = 850 RSD
+  test('handles multi-currency by converting via eur_amount_cents', () => {
+    // Mock rate: 1 EUR = 100 RSD (in cents: 1 EUR-cent → 100 RSD-cents)
+    // 100 EUR → eur_amount_cents=10000 → 10000*100 = 1000000 RSD-cents
+    // 1000 RSD → eur_amount_cents=850 → 850*100 = 85000 RSD-cents
     const expenses = [
       {
-        amount: 100,
+        amount_cents: 10000,
         currency: 'EUR' as const,
-        eur_amount: 100,
+        eur_amount_cents: 10000,
         category: 'A',
         comment: 'euros',
         date: '2026-01-01',
       },
       {
-        amount: 1000,
+        amount_cents: 100000,
         currency: 'RSD' as const,
-        eur_amount: 8.5,
+        eur_amount_cents: 850,
         category: 'B',
         comment: 'dinars',
         date: '2026-01-02',
@@ -181,12 +181,12 @@ describe('computeExpenseStats', () => {
     ];
     const stats = computeExpenseStats(expenses, 'RSD');
     expect(stats.count).toBe(2);
-    // max should be the EUR expense (10000 RSD via mock)
+    // max should be the EUR expense (1000000 RSD-cents via mock)
     expect(stats.max?.comment).toBe('euros');
-    expect(stats.max?.amount).toBeCloseTo(10000, 0);
-    // min should be the RSD expense (850 RSD via mock)
+    expect(stats.max?.amount).toBeCloseTo(1000000, 0);
+    // min should be the RSD expense (85000 RSD-cents via mock)
     expect(stats.min?.comment).toBe('dinars');
-    expect(stats.min?.amount).toBeCloseTo(850, 0);
+    expect(stats.min?.amount).toBeCloseTo(85000, 0);
   });
 });
 
@@ -235,17 +235,17 @@ describe('formatStatsDiff', () => {
     };
     const expA = [
       {
-        amount: 200000,
+        amount_cents: 20000000,
         currency: 'RSD' as const,
-        eur_amount: 2000,
+        eur_amount_cents: 200000,
         category: 'Еда',
         comment: '',
         date: '2026-01-01',
       },
       {
-        amount: 100000,
+        amount_cents: 10000000,
         currency: 'RSD' as const,
-        eur_amount: 1000,
+        eur_amount_cents: 100000,
         category: 'Жилье',
         comment: '',
         date: '2026-01-01',
@@ -253,17 +253,17 @@ describe('formatStatsDiff', () => {
     ];
     const expB = [
       {
-        amount: 245000,
+        amount_cents: 24500000,
         currency: 'RSD' as const,
-        eur_amount: 2450,
+        eur_amount_cents: 245000,
         category: 'Еда',
         comment: '',
         date: '2026-02-01',
       },
       {
-        amount: 18000,
+        amount_cents: 1800000,
         currency: 'RSD' as const,
-        eur_amount: 180,
+        eur_amount_cents: 18000,
         category: 'Жилье',
         comment: '',
         date: '2026-02-01',

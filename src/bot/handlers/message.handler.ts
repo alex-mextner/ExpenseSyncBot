@@ -294,7 +294,7 @@ export async function handleExpenseMessage(
 
   /** Tracks each recognized expense for the numbered summary */
   interface ProcessedExpense {
-    amount: number;
+    amount_cents: number;
     currency: string;
     category: string | null;
     comment: string;
@@ -319,7 +319,7 @@ export async function handleExpenseMessage(
     logger.info(
       {
         data: {
-          amount: parsed.amount,
+          amount_cents: parsed.amount_cents,
           currency: parsed.currency,
           category: parsed.category,
           comment: parsed.comment,
@@ -354,7 +354,7 @@ export async function handleExpenseMessage(
     const pendingExpense = database.pendingExpenses.create({
       user_id: user.id,
       message_id: messageId,
-      parsed_amount: parsed.amount,
+      parsed_amount_cents: parsed.amount_cents,
       parsed_currency: parsed.currency,
       detected_category: parsed.category,
       comment: parsed.comment,
@@ -368,7 +368,7 @@ export async function handleExpenseMessage(
     }
 
     processedExpenses.push({
-      amount: parsed.amount,
+      amount_cents: parsed.amount_cents,
       currency: parsed.currency,
       category: parsed.category,
       comment: parsed.comment,
@@ -443,7 +443,7 @@ export async function handleExpenseMessage(
   if (processedExpenses.length > 1) {
     const summaryLines = processedExpenses.map((exp, i) => {
       const num = digitEmoji(i + 1);
-      const amount = formatAmount(exp.amount, exp.currency);
+      const amount = formatAmount(exp.amount_cents, exp.currency);
       const cat = escapeHtml(exp.category ?? '');
       const comment = exp.comment ? ` — ${escapeHtml(exp.comment)}` : '';
       const status = exp.saved ? '' : ' ❓';
@@ -743,7 +743,7 @@ async function handleBulkCorrectionInput(
  */
 export function buildBudgetAlertStatus(
   spentEur: number,
-  budget: { category: string; limit_amount: number; currency: string },
+  budget: { category: string; limit_amount_cents: number; currency: string },
 ): { spentInCurrency: number; percentage: number; isExceeded: boolean; isWarning: boolean } {
   const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency as CurrencyCode);
   const progress = computeBudgetProgress(budget, spentInCurrency);

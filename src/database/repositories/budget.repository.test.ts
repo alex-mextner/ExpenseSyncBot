@@ -34,12 +34,12 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
       });
       expect(budget.id).toBeGreaterThan(0);
       expect(budget.category).toBe('Food');
       expect(budget.month).toBe('2024-01');
-      expect(budget.limit_amount).toBe(500);
+      expect(budget.limit_amount_cents).toBe(50000);
     });
 
     test('defaults currency to EUR', () => {
@@ -47,7 +47,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Rent',
         month: '2024-01',
-        limit_amount: 1000,
+        limit_amount_cents: 100000,
       });
       expect(budget.currency).toBe('EUR');
     });
@@ -57,7 +57,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Groceries',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
         currency: 'USD',
       });
       expect(budget.currency).toBe('USD');
@@ -68,16 +68,16 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const updated = budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 600,
+        limit_amount_cents: 60000,
       });
       expect(updated.id).toBe(first.id);
-      expect(updated.limit_amount).toBe(600);
+      expect(updated.limit_amount_cents).toBe(60000);
     });
 
     test('updates currency on existing budget', () => {
@@ -85,13 +85,13 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const updated = budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
         currency: 'USD',
       });
       expect(updated.currency).toBe('USD');
@@ -102,13 +102,13 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const b2 = budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-02',
-        limit_amount: 350,
+        limit_amount_cents: 35000,
       });
       expect(b1.id).not.toBe(b2.id);
     });
@@ -118,13 +118,13 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const b2 = budgetRepo.setBudget({
         group_id: groupId,
         category: 'Rent',
         month: '2024-01',
-        limit_amount: 1000,
+        limit_amount_cents: 100000,
       });
       expect(b1.id).not.toBe(b2.id);
     });
@@ -136,7 +136,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const found = budgetRepo.findById(created.id);
       expect(found).not.toBeNull();
@@ -154,7 +154,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const found = budgetRepo.findByGroupCategoryMonth(groupId, 'Food', '2024-01');
       expect(found).not.toBeNull();
@@ -172,7 +172,7 @@ describe('BudgetRepository', () => {
         group_id: group2.id,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.findByGroupCategoryMonth(groupId, 'Food', '2024-01')).toBeNull();
     });
@@ -182,11 +182,11 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Быт',
         month: '2024-01',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
       });
       const found = budgetRepo.findByGroupCategoryMonth(groupId, 'быт', '2024-01');
       expect(found).not.toBeNull();
-      expect(found?.limit_amount).toBe(500);
+      expect(found?.limit_amount_cents).toBe(50000);
     });
 
     test('case-insensitive match for latin categories', () => {
@@ -194,11 +194,11 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const found = budgetRepo.findByGroupCategoryMonth(groupId, 'food', '2024-01');
       expect(found).not.toBeNull();
-      expect(found?.limit_amount).toBe(300);
+      expect(found?.limit_amount_cents).toBe(30000);
     });
   });
 
@@ -208,11 +208,11 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-03',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
       });
       const budget = budgetRepo.getBudgetForMonth(groupId, 'Food', '2024-03');
       expect(budget).not.toBeNull();
-      expect(budget?.limit_amount).toBe(500);
+      expect(budget?.limit_amount_cents).toBe(50000);
     });
 
     test('returns null when no exact match — no fallback', () => {
@@ -220,7 +220,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
       });
       const result = budgetRepo.getBudgetForMonth(groupId, 'Food', '2024-03');
       expect(result).toBeNull();
@@ -233,19 +233,19 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Rent',
         month: '2024-01',
-        limit_amount: 1000,
+        limit_amount_cents: 100000,
       });
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-02',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 250,
+        limit_amount_cents: 25000,
       });
 
       const budgets = budgetRepo.findByGroupId(groupId);
@@ -264,7 +264,7 @@ describe('BudgetRepository', () => {
         group_id: group2.id,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.findByGroupId(groupId)).toEqual([]);
     });
@@ -276,13 +276,13 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
       });
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Transport',
         month: '2024-03',
-        limit_amount: 200,
+        limit_amount_cents: 20000,
       });
 
       const budgets = budgetRepo.getAllBudgetsForMonth(groupId, '2024-03');
@@ -295,7 +295,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 500,
+        limit_amount_cents: 50000,
       });
       expect(budgetRepo.getAllBudgetsForMonth(groupId, '2024-03')).toHaveLength(0);
     });
@@ -307,7 +307,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       budgetRepo.delete(budget.id);
       expect(budgetRepo.findById(budget.id)).toBeNull();
@@ -318,7 +318,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.delete(budget.id)).toBe(true);
     });
@@ -330,7 +330,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       budgetRepo.deleteByGroupCategoryMonth(groupId, 'Food', '2024-01');
       expect(budgetRepo.findByGroupCategoryMonth(groupId, 'Food', '2024-01')).toBeNull();
@@ -345,7 +345,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Быт',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       // Destructive ops must use exact SQL match — case mismatch leaves the row alone.
       // Fuzzy resolution belongs in BudgetManager.delete(), not at the repo layer.
@@ -360,14 +360,14 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 200,
+        limit_amount_cents: 20000,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 100);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 10000);
 
       expect(progress).not.toBeNull();
       expect(progress?.percentage).toBe(50);
-      expect(progress?.spent_amount).toBe(100);
-      expect(progress?.limit_amount).toBe(200);
+      expect(progress?.spent_amount_cents).toBe(10000);
+      expect(progress?.limit_amount_cents).toBe(20000);
       expect(progress?.is_exceeded).toBe(false);
       expect(progress?.is_warning).toBe(false);
     });
@@ -377,9 +377,9 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 100,
+        limit_amount_cents: 10000,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 150);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 15000);
       expect(progress?.is_exceeded).toBe(true);
       expect(progress?.percentage).toBe(150);
     });
@@ -389,9 +389,9 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 100,
+        limit_amount_cents: 10000,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 90);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 9000);
       expect(progress?.is_warning).toBe(true);
       expect(progress?.is_exceeded).toBe(false);
     });
@@ -401,9 +401,9 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 100,
+        limit_amount_cents: 10000,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 89);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 8900);
       expect(progress?.is_warning).toBe(false);
     });
 
@@ -412,25 +412,25 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 100,
+        limit_amount_cents: 10000,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 110);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Food', '2024-01', 11000);
       expect(progress?.is_exceeded).toBe(true);
       expect(progress?.is_warning).toBe(false);
     });
 
     test('returns null when no budget exists', () => {
-      expect(budgetRepo.getBudgetProgress(groupId, 'NoCategory', '2024-01', 50)).toBeNull();
+      expect(budgetRepo.getBudgetProgress(groupId, 'NoCategory', '2024-01', 5000)).toBeNull();
     });
 
-    test('percentage is 0 when limit_amount is 0', () => {
+    test('percentage is 0 when limit_amount_cents is 0', () => {
       budgetRepo.setBudget({
         group_id: groupId,
         category: 'Zero',
         month: '2024-01',
-        limit_amount: 0,
+        limit_amount_cents: 0,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'Zero', '2024-01', 50);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'Zero', '2024-01', 5000);
       expect(progress?.percentage).toBe(0);
     });
 
@@ -439,9 +439,9 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Быт',
         month: '2024-01',
-        limit_amount: 200,
+        limit_amount_cents: 20000,
       });
-      const progress = budgetRepo.getBudgetProgress(groupId, 'быт', '2024-01', 100);
+      const progress = budgetRepo.getBudgetProgress(groupId, 'быт', '2024-01', 10000);
       expect(progress).not.toBeNull();
       expect(progress?.percentage).toBe(50);
     });
@@ -453,7 +453,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.hasBudget(groupId, 'Food')).toBe(true);
     });
@@ -468,7 +468,7 @@ describe('BudgetRepository', () => {
         group_id: group2.id,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.hasBudget(groupId, 'Food')).toBe(false);
     });
@@ -478,7 +478,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2023-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.hasBudget(groupId, 'Food')).toBe(true);
     });
@@ -488,7 +488,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Быт',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       expect(budgetRepo.hasBudget(groupId, 'быт')).toBe(true);
     });
@@ -500,7 +500,7 @@ describe('BudgetRepository', () => {
         group_id: groupId,
         category: 'Food',
         month: '2024-01',
-        limit_amount: 300,
+        limit_amount_cents: 30000,
       });
       const group = groupRepo.findById(groupId);
       const tgId = group?.telegram_group_id ?? 0;
@@ -511,23 +511,23 @@ describe('BudgetRepository', () => {
 });
 
 describe('computeBudgetProgress (pure function)', () => {
-  const budget = { category: 'Food', limit_amount: 500, currency: 'EUR' };
+  const budget = { category: 'Food', limit_amount_cents: 50000, currency: 'EUR' };
 
   test('computes correct percentage', () => {
-    const progress = computeBudgetProgress(budget, 250);
+    const progress = computeBudgetProgress(budget, 25000);
     expect(progress.percentage).toBe(50);
     expect(progress.is_exceeded).toBe(false);
     expect(progress.is_warning).toBe(false);
   });
 
-  test('returns 0% when limit_amount is 0', () => {
-    const zeroBudget = { category: 'Zero', limit_amount: 0, currency: 'EUR' };
-    const progress = computeBudgetProgress(zeroBudget, 100);
+  test('returns 0% when limit_amount_cents is 0', () => {
+    const zeroBudget = { category: 'Zero', limit_amount_cents: 0, currency: 'EUR' };
+    const progress = computeBudgetProgress(zeroBudget, 10000);
     expect(progress.percentage).toBe(0);
     expect(progress.is_exceeded).toBe(true);
   });
 
-  test('returns 0% when spentAmount is 0', () => {
+  test('returns 0% when spentAmountCents is 0', () => {
     const progress = computeBudgetProgress(budget, 0);
     expect(progress.percentage).toBe(0);
     expect(progress.is_exceeded).toBe(false);
@@ -535,21 +535,21 @@ describe('computeBudgetProgress (pure function)', () => {
   });
 
   test('is_warning at exactly 90%', () => {
-    const progress = computeBudgetProgress(budget, 450);
+    const progress = computeBudgetProgress(budget, 45000);
     expect(progress.percentage).toBe(90);
     expect(progress.is_warning).toBe(true);
     expect(progress.is_exceeded).toBe(false);
   });
 
   test('is_warning at exactly 100% (not exceeded — equal)', () => {
-    const progress = computeBudgetProgress(budget, 500);
+    const progress = computeBudgetProgress(budget, 50000);
     expect(progress.percentage).toBe(100);
     expect(progress.is_warning).toBe(true);
     expect(progress.is_exceeded).toBe(false);
   });
 
   test('is_exceeded when spending exceeds limit', () => {
-    const progress = computeBudgetProgress(budget, 501);
+    const progress = computeBudgetProgress(budget, 50100);
     expect(progress.percentage).toBe(100);
     expect(progress.is_exceeded).toBe(true);
     expect(progress.is_warning).toBe(false);
@@ -557,33 +557,33 @@ describe('computeBudgetProgress (pure function)', () => {
 
   test('is_warning and is_exceeded are mutually exclusive', () => {
     // At 95%: warning, not exceeded
-    const w = computeBudgetProgress(budget, 475);
+    const w = computeBudgetProgress(budget, 47500);
     expect(w.is_warning).toBe(true);
     expect(w.is_exceeded).toBe(false);
 
     // At 120%: exceeded, not warning
-    const e = computeBudgetProgress(budget, 600);
+    const e = computeBudgetProgress(budget, 60000);
     expect(e.is_exceeded).toBe(true);
     expect(e.is_warning).toBe(false);
   });
 
-  test('returns correct spent_amount and limit_amount passthrough', () => {
-    const progress = computeBudgetProgress(budget, 123.45);
-    expect(progress.spent_amount).toBe(123.45);
-    expect(progress.limit_amount).toBe(500);
+  test('returns correct spent_amount_cents and limit_amount_cents passthrough', () => {
+    const progress = computeBudgetProgress(budget, 12345);
+    expect(progress.spent_amount_cents).toBe(12345);
+    expect(progress.limit_amount_cents).toBe(50000);
     expect(progress.category).toBe('Food');
     expect(progress.currency).toBe('EUR');
   });
 
-  test('handles negative spentAmount gracefully', () => {
-    const progress = computeBudgetProgress(budget, -50);
+  test('handles negative spentAmountCents gracefully', () => {
+    const progress = computeBudgetProgress(budget, -5000);
     expect(progress.percentage).toBe(-10);
     expect(progress.is_exceeded).toBe(false);
     expect(progress.is_warning).toBe(false);
   });
 
   test('rounds percentage to nearest integer', () => {
-    const progress = computeBudgetProgress({ ...budget, limit_amount: 300 }, 100);
+    const progress = computeBudgetProgress({ ...budget, limit_amount_cents: 30000 }, 10000);
     expect(progress.percentage).toBe(33);
   });
 });

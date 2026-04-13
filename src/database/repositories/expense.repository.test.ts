@@ -41,9 +41,9 @@ function makeExpense(overrides: Partial<CreateExpenseData> = {}): CreateExpenseD
     date: '2024-01-15',
     category: 'Food',
     comment: 'Lunch',
-    amount: 25.0,
+    amount_cents: 2500,
     currency: 'EUR',
-    eur_amount: 25.0,
+    eur_amount_cents: 2500,
     ...overrides,
   };
 }
@@ -60,9 +60,9 @@ describe('ExpenseRepository', () => {
         date: '2024-03-10',
         category: 'Transport',
         comment: 'Bus ticket',
-        amount: 1.5,
+        amount_cents: 150,
         currency: 'USD',
-        eur_amount: 1.39,
+        eur_amount_cents: 139,
       });
       const expense = expenseRepo.create(data);
       expect(expense.group_id).toBe(groupId);
@@ -70,9 +70,9 @@ describe('ExpenseRepository', () => {
       expect(expense.date).toBe('2024-03-10');
       expect(expense.category).toBe('Transport');
       expect(expense.comment).toBe('Bus ticket');
-      expect(expense.amount).toBe(1.5);
+      expect(expense.amount_cents).toBe(150);
       expect(expense.currency).toBe('USD');
-      expect(expense.eur_amount).toBe(1.39);
+      expect(expense.eur_amount_cents).toBe(139);
     });
 
     test('created_at is populated', () => {
@@ -241,13 +241,13 @@ describe('ExpenseRepository', () => {
 
   describe('getTotalsByCurrency', () => {
     test('returns totals per currency', () => {
-      expenseRepo.create(makeExpense({ currency: 'EUR', amount: 10 }));
-      expenseRepo.create(makeExpense({ currency: 'EUR', amount: 20 }));
-      expenseRepo.create(makeExpense({ currency: 'USD', amount: 50 }));
+      expenseRepo.create(makeExpense({ currency: 'EUR', amount_cents: 1000 }));
+      expenseRepo.create(makeExpense({ currency: 'EUR', amount_cents: 2000 }));
+      expenseRepo.create(makeExpense({ currency: 'USD', amount_cents: 5000 }));
 
       const totals = expenseRepo.getTotalsByCurrency(groupId);
-      expect(totals['EUR']).toBe(30);
-      expect(totals['USD']).toBe(50);
+      expect(totals['EUR']).toBe(3000);
+      expect(totals['USD']).toBe(5000);
     });
 
     test('returns empty object for group with no expenses', () => {
@@ -257,12 +257,12 @@ describe('ExpenseRepository', () => {
 
   describe('getTotalInEUR', () => {
     test('returns sum of eur_amount', () => {
-      expenseRepo.create(makeExpense({ eur_amount: 10 }));
-      expenseRepo.create(makeExpense({ eur_amount: 20.5 }));
-      expenseRepo.create(makeExpense({ eur_amount: 5 }));
+      expenseRepo.create(makeExpense({ eur_amount_cents: 1000 }));
+      expenseRepo.create(makeExpense({ eur_amount_cents: 2050 }));
+      expenseRepo.create(makeExpense({ eur_amount_cents: 500 }));
 
       const total = expenseRepo.getTotalInEUR(groupId);
-      expect(total).toBeCloseTo(35.5);
+      expect(total).toBe(3550);
     });
 
     test('returns 0 for group with no expenses', () => {
@@ -272,20 +272,28 @@ describe('ExpenseRepository', () => {
 
   describe('getCategoryTotals', () => {
     test('returns category totals in EUR for date range', () => {
-      expenseRepo.create(makeExpense({ category: 'Food', eur_amount: 30, date: '2024-01-10' }));
-      expenseRepo.create(makeExpense({ category: 'Food', eur_amount: 20, date: '2024-01-15' }));
-      expenseRepo.create(makeExpense({ category: 'Rent', eur_amount: 500, date: '2024-01-01' }));
-      expenseRepo.create(makeExpense({ category: 'Food', eur_amount: 100, date: '2024-02-01' }));
+      expenseRepo.create(
+        makeExpense({ category: 'Food', eur_amount_cents: 3000, date: '2024-01-10' }),
+      );
+      expenseRepo.create(
+        makeExpense({ category: 'Food', eur_amount_cents: 2000, date: '2024-01-15' }),
+      );
+      expenseRepo.create(
+        makeExpense({ category: 'Rent', eur_amount_cents: 50000, date: '2024-01-01' }),
+      );
+      expenseRepo.create(
+        makeExpense({ category: 'Food', eur_amount_cents: 10000, date: '2024-02-01' }),
+      );
 
       const totals = expenseRepo.getCategoryTotals(groupId, '2024-01-01', '2024-01-31');
       const food = totals.find((t) => t.category === 'Food');
       const rent = totals.find((t) => t.category === 'Rent');
 
       expect(food).toBeDefined();
-      expect(food?.total).toBeCloseTo(50);
+      expect(food?.total).toBe(5000);
       expect(food?.tx_count).toBe(2);
       expect(rent).toBeDefined();
-      expect(rent?.total).toBeCloseTo(500);
+      expect(rent?.total).toBe(50000);
     });
 
     test('returns empty array for range with no data', () => {
@@ -295,16 +303,16 @@ describe('ExpenseRepository', () => {
 
   describe('getDailyTotals', () => {
     test('returns daily EUR totals ordered by date', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount: 10 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount: 5 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-03', eur_amount: 20 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount_cents: 1000 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount_cents: 500 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-03', eur_amount_cents: 2000 }));
 
       const daily = expenseRepo.getDailyTotals(groupId, '2024-01-01', '2024-01-03');
       expect(daily).toHaveLength(2);
       expect(daily[0]?.date).toBe('2024-01-01');
-      expect(daily[0]?.total).toBeCloseTo(15);
+      expect(daily[0]?.total).toBe(1500);
       expect(daily[1]?.date).toBe('2024-01-03');
-      expect(daily[1]?.total).toBeCloseTo(20);
+      expect(daily[1]?.total).toBe(2000);
     });
 
     test('returns empty array for range with no expenses', () => {
@@ -314,12 +322,12 @@ describe('ExpenseRepository', () => {
 
   describe('getTotalEurForRange', () => {
     test('returns total EUR for range', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-10', eur_amount: 50 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-20', eur_amount: 30 }));
-      expenseRepo.create(makeExpense({ date: '2024-02-01', eur_amount: 100 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-10', eur_amount_cents: 5000 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-20', eur_amount_cents: 3000 }));
+      expenseRepo.create(makeExpense({ date: '2024-02-01', eur_amount_cents: 10000 }));
 
       const total = expenseRepo.getTotalEurForRange(groupId, '2024-01-01', '2024-01-31');
-      expect(total).toBeCloseTo(80);
+      expect(total).toBe(8000);
     });
 
     test('returns 0 for range with no expenses', () => {
@@ -344,17 +352,17 @@ describe('ExpenseRepository', () => {
   describe('getDayOfWeekStats', () => {
     test('returns day-of-week aggregated stats', () => {
       // 2024-01-01 is Monday (dow=1)
-      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount: 10 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount: 20 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount_cents: 1000 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-01', eur_amount_cents: 2000 }));
       // 2024-01-02 is Tuesday (dow=2)
-      expenseRepo.create(makeExpense({ date: '2024-01-02', eur_amount: 5 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-02', eur_amount_cents: 500 }));
 
       const stats = expenseRepo.getDayOfWeekStats(groupId, '2024-01-01', '2024-01-07');
       expect(stats.length).toBeGreaterThan(0);
 
       const monday = stats.find((s) => s.dow === 1);
       expect(monday).toBeDefined();
-      expect(monday?.total).toBeCloseTo(30);
+      expect(monday?.total).toBe(3000);
       expect(monday?.tx_count).toBe(2);
     });
   });
@@ -362,8 +370,8 @@ describe('ExpenseRepository', () => {
   describe('getWeekOverWeekData', () => {
     test('returns current and previous week periods', () => {
       // Insert some expenses in the past 13 days
-      expenseRepo.create(makeExpense({ date: '2024-01-14', eur_amount: 100 })); // current week
-      expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount: 50 })); // previous week
+      expenseRepo.create(makeExpense({ date: '2024-01-14', eur_amount_cents: 10000 })); // current week
+      expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount_cents: 5000 })); // previous week
 
       const data = expenseRepo.getWeekOverWeekData(groupId, '2024-01-20');
       // At least one period should be present
@@ -376,25 +384,31 @@ describe('ExpenseRepository', () => {
 
   describe('getMonthlyHistoryByCategory', () => {
     test('returns per-category per-month totals', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-10', category: 'Food', eur_amount: 100 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-20', category: 'Food', eur_amount: 50 }));
-      expenseRepo.create(makeExpense({ date: '2024-02-10', category: 'Food', eur_amount: 80 }));
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-10', category: 'Food', eur_amount_cents: 10000 }),
+      );
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-20', category: 'Food', eur_amount_cents: 5000 }),
+      );
+      expenseRepo.create(
+        makeExpense({ date: '2024-02-10', category: 'Food', eur_amount_cents: 8000 }),
+      );
 
       const history = expenseRepo.getMonthlyHistoryByCategory(groupId, '2024-01-01', '2024-03-01');
       const jan = history.find((r) => r.category === 'Food' && r.month === '2024-01');
       const feb = history.find((r) => r.category === 'Food' && r.month === '2024-02');
 
       expect(jan).toBeDefined();
-      expect(jan?.monthly_total).toBeCloseTo(150);
+      expect(jan?.monthly_total).toBe(15000);
       expect(feb).toBeDefined();
-      expect(feb?.monthly_total).toBeCloseTo(80);
+      expect(feb?.monthly_total).toBe(8000);
     });
   });
 
   describe('getVelocityData', () => {
     test('returns recent and earlier periods', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-14', eur_amount: 60 })); // recent
-      expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount: 40 })); // earlier
+      expenseRepo.create(makeExpense({ date: '2024-01-14', eur_amount_cents: 6000 })); // recent
+      expenseRepo.create(makeExpense({ date: '2024-01-07', eur_amount_cents: 4000 })); // earlier
 
       const data = expenseRepo.getVelocityData(groupId, '2024-01-20');
       for (const row of data) {
@@ -496,9 +510,15 @@ describe('ExpenseRepository', () => {
 
   describe('getRecentTransactions', () => {
     test('returns transactions with date, category, amount sorted by date ascending', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-15', category: 'Food', eur_amount: 20 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-05', category: 'Food', eur_amount: 10 }));
-      expenseRepo.create(makeExpense({ date: '2024-01-10', category: 'Transport', eur_amount: 5 }));
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-15', category: 'Food', eur_amount_cents: 2000 }),
+      );
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-05', category: 'Food', eur_amount_cents: 1000 }),
+      );
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-10', category: 'Transport', eur_amount_cents: 500 }),
+      );
 
       const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
 
@@ -513,20 +533,20 @@ describe('ExpenseRepository', () => {
       }
     });
 
-    test('returns eur_amount as amount (not original amount)', () => {
+    test('returns eur_amount_cents as amount (not original amount)', () => {
       expenseRepo.create(
         makeExpense({
           date: '2024-01-10',
           category: 'Food',
-          amount: 100,
+          amount_cents: 10000,
           currency: 'USD',
-          eur_amount: 92.5,
+          eur_amount_cents: 9250,
         }),
       );
 
       const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
       expect(result).toHaveLength(1);
-      expect(result[0]?.amount).toBeCloseTo(92.5);
+      expect(result[0]?.amount).toBe(9250);
     });
 
     test('respects date range bounds (inclusive)', () => {
@@ -562,12 +582,12 @@ describe('ExpenseRepository', () => {
 
   describe('findPotentialDuplicates', () => {
     test('exact match: same date, amount, currency', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount_cents: 10000, currency: 'EUR' }));
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(1);
@@ -575,46 +595,46 @@ describe('ExpenseRepository', () => {
     });
 
     test('exact match: amount within ±5% tolerance', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount_cents: 10000, currency: 'EUR' }));
 
       // Tolerance is computed from the search amount: searchAmount * 0.05
-      // Search 104: tolerance = 5.2, diff = 4 → match
+      // Search 10400: tolerance = 520, diff = 400 → match
       const { exact: match1 } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        104,
+        10400,
         'EUR',
       );
       expect(match1).toHaveLength(1);
 
-      // Search 96: tolerance = 4.8, diff = 4 → match
+      // Search 9600: tolerance = 480, diff = 400 → match
       const { exact: match2 } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        96,
+        9600,
         'EUR',
       );
       expect(match2).toHaveLength(1);
     });
 
     test('no match when amount exceeds 5% tolerance', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount_cents: 10000, currency: 'EUR' }));
 
-      // Search 106: tolerance = 5.3, diff = 6 → no match
+      // Search 10600: tolerance = 530, diff = 600 → no match
       const { exact: e1, fuzzy: f1 } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        106,
+        10600,
         'EUR',
       );
       expect(e1).toHaveLength(0);
       expect(f1).toHaveLength(0);
 
-      // Search 94: tolerance = 4.7, diff = 6 → no match
+      // Search 9400: tolerance = 470, diff = 600 → no match
       const { exact: e2, fuzzy: f2 } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        94,
+        9400,
         'EUR',
       );
       expect(e2).toHaveLength(0);
@@ -622,12 +642,12 @@ describe('ExpenseRepository', () => {
     });
 
     test('no match for different currency', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'USD' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount_cents: 10000, currency: 'USD' }));
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(0);
@@ -635,12 +655,12 @@ describe('ExpenseRepository', () => {
     });
 
     test('fuzzy match: date ±1 day', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-14', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-14', amount_cents: 10000, currency: 'EUR' }));
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(0);
@@ -648,12 +668,12 @@ describe('ExpenseRepository', () => {
     });
 
     test('no fuzzy match for date difference > 1 day', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-12', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-12', amount_cents: 10000, currency: 'EUR' }));
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(0);
@@ -662,7 +682,7 @@ describe('ExpenseRepository', () => {
 
     test('excludes expenses already linked to a bank transaction', () => {
       const expense = expenseRepo.create(
-        makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }),
+        makeExpense({ date: '2024-01-15', amount_cents: 10000, currency: 'EUR' }),
       );
 
       // Create a bank_connection and bank_transaction linking to the expense
@@ -675,13 +695,13 @@ describe('ExpenseRepository', () => {
       const connId = row?.id;
       db.exec(`
         INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, matched_expense_id, status)
-        VALUES (${connId}, 'ext-1', '2024-01-15', 100, 'EUR', '{}', ${expense.id}, 'confirmed')
+        VALUES (${connId}, 'ext-1', '2024-01-15', 10000, 'EUR', '{}', ${expense.id}, 'confirmed')
       `);
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(0);
@@ -693,7 +713,7 @@ describe('ExpenseRepository', () => {
       // The exclusion must follow the receipt FK, not just the direct FK.
       db.exec(`
         INSERT INTO receipts (group_id, image_path, total_amount, currency, date, created_at)
-        VALUES (${groupId}, '/tmp/x.jpg', 100, 'EUR', '2024-01-15', '2024-01-15T00:00:00Z')
+        VALUES (${groupId}, '/tmp/x.jpg', 10000, 'EUR', '2024-01-15', '2024-01-15T00:00:00Z')
       `);
       const receipt = db.query<{ id: number }, []>('SELECT last_insert_rowid() as id').get() as {
         id: number;
@@ -702,7 +722,7 @@ describe('ExpenseRepository', () => {
       expenseRepo.create(
         makeExpense({
           date: '2024-01-15',
-          amount: 100,
+          amount_cents: 10000,
           currency: 'EUR',
           receipt_id: receipt.id,
         }),
@@ -717,13 +737,13 @@ describe('ExpenseRepository', () => {
       };
       db.exec(`
         INSERT INTO bank_transactions (connection_id, external_id, date, amount, currency, raw_data, matched_receipt_id, status)
-        VALUES (${conn.id}, 'ext-r', '2024-01-15', 100, 'EUR', '{}', ${receipt.id}, 'confirmed')
+        VALUES (${conn.id}, 'ext-r', '2024-01-15', 10000, 'EUR', '{}', ${receipt.id}, 'confirmed')
       `);
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(0);
@@ -738,7 +758,7 @@ describe('ExpenseRepository', () => {
           group_id: group2.id,
           user_id: user2.id,
           date: '2024-01-15',
-          amount: 100,
+          amount_cents: 10000,
           currency: 'EUR',
         }),
       );
@@ -746,7 +766,7 @@ describe('ExpenseRepository', () => {
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(0);
@@ -754,13 +774,13 @@ describe('ExpenseRepository', () => {
     });
 
     test('exact matches do not appear in fuzzy results', () => {
-      expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));
-      expenseRepo.create(makeExpense({ date: '2024-01-14', amount: 100, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-15', amount_cents: 10000, currency: 'EUR' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-14', amount_cents: 10000, currency: 'EUR' }));
 
       const { exact, fuzzy } = expenseRepo.findPotentialDuplicates(
         groupId,
         '2024-01-15',
-        100,
+        10000,
         'EUR',
       );
       expect(exact).toHaveLength(1);

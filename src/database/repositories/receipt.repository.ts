@@ -111,14 +111,18 @@ export class ReceiptRepository {
   /**
    * Find all expenses linked to a receipt
    */
-  findExpensesByReceiptId(
-    receiptId: number,
-  ): Array<{ id: number; category: string; amount: number; currency: string; comment: string }> {
+  findExpensesByReceiptId(receiptId: number): Array<{
+    id: number;
+    category: string;
+    amount_cents: number;
+    currency: string;
+    comment: string;
+  }> {
     return this.db
       .query<
-        { id: number; category: string; amount: number; currency: string; comment: string },
+        { id: number; category: string; amount_cents: number; currency: string; comment: string },
         [number]
-      >('SELECT id, category, amount, currency, comment FROM expenses WHERE receipt_id = ?')
+      >('SELECT id, category, amount_cents, currency, comment FROM expenses WHERE receipt_id = ?')
       .all(receiptId);
   }
 

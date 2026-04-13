@@ -27,11 +27,11 @@ function makeKey(date: string, category: string, amount: number, currency: strin
 
 function sheetRowToKey(
   row: SheetRow,
-): { key: string; amount: number; currency: CurrencyCode } | null {
-  for (const [curr, amt] of Object.entries(row.amounts) as [string, number][]) {
+): { key: string; amountCents: number; currency: CurrencyCode } | null {
+  for (const [curr, amountCents] of Object.entries(row.amounts) as [string, number][]) {
     return {
-      key: makeKey(row.date, row.category, amt, curr),
-      amount: amt,
+      key: makeKey(row.date, row.category, amountCents, curr),
+      amountCents,
       currency: curr as CurrencyCode,
     };
   }
@@ -39,7 +39,7 @@ function sheetRowToKey(
 }
 
 function dbExpenseToKey(e: Expense): string {
-  return makeKey(e.date, e.category, e.amount, e.currency);
+  return makeKey(e.date, e.category, e.amount_cents, e.currency);
 }
 
 function fmtExpense(
@@ -172,9 +172,10 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
       continue;
     }
 
-    // Find exact match
+    // Find exact match (compare EUR in cents — sheet values are already in cents)
+    const sheetEurCents = row.eurAmountCents;
     const exactIdx = candidates.findIndex(
-      (e) => e.comment === row.comment && Math.abs(e.eur_amount - row.eurAmount) <= 0.01,
+      (e) => e.comment === row.comment && Math.abs(e.eur_amount_cents - sheetEurCents) <= 1,
     );
 
     if (exactIdx !== -1) {
@@ -189,6 +190,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
   // Pass 2: unmatched sheet rows — try partial match (update) or add
   for (const { row, parsed } of unmatchedSheetRows) {
     const candidates = dbPool.get(parsed.key);
+    const eurAmountCents = row.eurAmountCents;
 
     if (candidates && candidates.length > 0) {
       // Partial match — this is an update
@@ -196,8 +198,8 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
       if (!existing) continue;
 
       const changes: string[] = [];
-      if (Math.abs(existing.eur_amount - row.eurAmount) > 0.01) {
-        changes.push(`EUR: ${existing.eur_amount}→${row.eurAmount}`);
+      if (Math.abs(existing.eur_amount_cents - eurAmountCents) > 1) {
+        changes.push(`EUR: ${existing.eur_amount_cents}→${eurAmountCents}`);
       }
       if (existing.comment !== row.comment) {
         changes.push(`"${existing.comment || ''}"→"${row.comment || ''}"`);
@@ -210,13 +212,13 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
         date: row.date,
         category: row.category,
         comment: row.comment,
-        amount: parsed.amount,
+        amount_cents: parsed.amountCents,
         currency: parsed.currency,
-        eur_amount: row.eurAmount,
+        eur_amount_cents: eurAmountCents,
       });
       result.updated.push({
         date: row.date,
-        amount: parsed.amount,
+        amount: parsed.amountCents,
         currency: parsed.currency,
         category: row.category,
         comment: row.comment,
@@ -230,13 +232,13 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
         date: row.date,
         category: row.category,
         comment: row.comment,
-        amount: parsed.amount,
+        amount_cents: parsed.amountCents,
         currency: parsed.currency,
-        eur_amount: row.eurAmount,
+        eur_amount_cents: eurAmountCents,
       });
       result.added.push({
         date: row.date,
-        amount: parsed.amount,
+        amount: parsed.amountCents,
         currency: parsed.currency,
         category: row.category,
         comment: row.comment,
@@ -251,7 +253,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
       database.expenses.delete(expense.id);
       result.deleted.push({
         date: expense.date,
-        amount: expense.amount,
+        amount: expense.amount_cents,
         currency: expense.currency,
         category: expense.category,
         comment: expense.comment,
@@ -338,9 +340,9 @@ export async function importExpensesFromSheet(
       date: row.date,
       category: row.category,
       comment: row.comment,
-      amount: parsed.amount,
+      amount_cents: parsed.amountCents,
       currency: parsed.currency,
-      eur_amount: row.eurAmount,
+      eur_amount_cents: row.eurAmountCents,
     });
     existingKeys.add(parsed.key); // guard against within-loop duplicates
     inserted++;
@@ -583,9 +585,9 @@ async function handleSyncRollback(groupId: number): Promise<void> {
           date: expense.date,
           category: expense.category,
           comment: expense.comment || '',
-          amount: expense.amount,
+          amount_cents: expense.amount_cents,
           currency: expense.currency,
-          eur_amount: expense.eur_amount,
+          eur_amount_cents: expense.eur_amount_cents,
         });
       }
 
@@ -595,7 +597,7 @@ async function handleSyncRollback(groupId: number): Promise<void> {
           groupId: budget.group_id,
           category: budget.category,
           month: budget.month,
-          amount: budget.limit_amount,
+          amountCents: budget.limit_amount_cents,
           currency: budget.currency as CurrencyCode,
         });
       }

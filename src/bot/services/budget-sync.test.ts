@@ -42,7 +42,7 @@ const mockBudgets = {
       _month: string,
     ): {
       id: number;
-      limit_amount: number;
+      limit_amount_cents: number;
       currency: string;
       category: string;
       month: string;
@@ -56,7 +56,7 @@ const mockBudgets = {
     ): Array<{
       id: number;
       category: string;
-      limit_amount: number;
+      limit_amount_cents: number;
       currency: string;
       month: string;
     }> => [],
@@ -199,7 +199,7 @@ describe('silentSyncBudgets', () => {
     ]);
     mockBudgets.findByGroupCategoryMonth.mockReturnValue({
       id: 1,
-      limit_amount: 500,
+      limit_amount_cents: 50000,
       currency: 'EUR',
       category: 'Еда',
       month: '2026-03',
@@ -216,7 +216,7 @@ describe('silentSyncBudgets', () => {
     ]);
     mockBudgets.findByGroupCategoryMonth.mockReturnValue({
       id: 1,
-      limit_amount: 500,
+      limit_amount_cents: 500,
       currency: 'EUR',
       category: 'Еда',
       month: '2026-03',
@@ -296,7 +296,7 @@ describe('syncBudgetsDiff', () => {
     ]);
     mockBudgets.findByGroupCategoryMonth.mockReturnValue({
       id: 1,
-      limit_amount: 500,
+      limit_amount_cents: 500,
       currency: 'EUR',
       category: 'Еда',
       month: '2026-03',
@@ -312,7 +312,7 @@ describe('syncBudgetsDiff', () => {
   it('detects deleted budgets (in DB but not in sheet)', async () => {
     mockReadMonthBudget.mockResolvedValue([]);
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { id: 5, category: 'Транспорт', limit_amount: 300, currency: 'EUR', month: '2026-03' },
+      { id: 5, category: 'Транспорт', limit_amount_cents: 300, currency: 'EUR', month: '2026-03' },
     ]);
 
     const result = await syncBudgetsDiff(TEST_GROUP_ID);
@@ -328,13 +328,13 @@ describe('syncBudgetsDiff', () => {
     ]);
     mockBudgets.findByGroupCategoryMonth.mockReturnValue({
       id: 1,
-      limit_amount: 500,
+      limit_amount_cents: 50000,
       currency: 'EUR',
       category: 'Еда',
       month: '2026-03',
     });
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
-      { id: 1, category: 'Еда', limit_amount: 500, currency: 'EUR', month: '2026-03' },
+      { id: 1, category: 'Еда', limit_amount_cents: 50000, currency: 'EUR', month: '2026-03' },
     ]);
 
     const result = await syncBudgetsDiff(TEST_GROUP_ID);

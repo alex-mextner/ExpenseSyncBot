@@ -17,12 +17,12 @@ export class SyncSnapshotRepository {
     const snapshotId = crypto.randomUUID();
 
     const insertExpense = this.db.prepare(`
-      INSERT INTO expense_snapshots (snapshot_id, group_id, expense_id, user_id, date, category, comment, amount, currency, eur_amount)
+      INSERT INTO expense_snapshots (snapshot_id, group_id, expense_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertBudget = this.db.prepare(`
-      INSERT INTO budget_snapshots (snapshot_id, group_id, budget_id, category, month, limit_amount, currency)
+      INSERT INTO budget_snapshots (snapshot_id, group_id, budget_id, category, month, limit_amount_cents, currency)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
@@ -36,9 +36,9 @@ export class SyncSnapshotRepository {
           e.date,
           e.category,
           e.comment,
-          e.amount,
+          e.amount_cents,
           e.currency,
-          e.eur_amount,
+          e.eur_amount_cents,
         );
       }
       for (const b of budgets) {
@@ -48,7 +48,7 @@ export class SyncSnapshotRepository {
           b.id,
           b.category,
           b.month,
-          b.limit_amount,
+          b.limit_amount_cents,
           b.currency,
         );
       }
