@@ -794,7 +794,7 @@ describe('handleBankReceiptCallback', () => {
     group_id: 1,
     photo_queue_id: null,
     image_path: 'data/receipts/test.jpg',
-    total_amount: 2500,
+    total_amount: 250000,
     currency: 'RSD',
     date: '2026-03-29',
     created_at: '2026-03-29T10:00:00Z',

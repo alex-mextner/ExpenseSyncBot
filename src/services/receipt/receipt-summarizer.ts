@@ -1,7 +1,7 @@
 /** Receipt summarizer — builds human-readable summaries of receipt items, AI-powered corrections */
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import type { ReceiptItem } from '../../database/types';
-import { formatAmount } from '../../services/currency/converter';
+import { formatAmount, toCents } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
@@ -125,7 +125,7 @@ export function formatSummaryMessage(summary: ReceiptSummary, itemCount: number)
     message += `${emoji} <b>${escapeHtml(category.name)}:</b> ${escapeHtml(itemsText)}\n`;
   }
 
-  message += `\n💰 <b>Итого:</b> ${formatAmount(summary.totalAmount, summary.currency as CurrencyCode)}`;
+  message += `\n💰 <b>Итого:</b> ${formatAmount(toCents(summary.totalAmount), summary.currency as CurrencyCode)}`;
 
   return message;
 }

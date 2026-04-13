@@ -26,8 +26,10 @@ const { detectRecurringPatterns, computeNextExpectedDate } = await import('./rec
 
 const GROUP_ID = 1;
 
-/** Build a fake Expense row with sensible defaults */
-function makeExpense(overrides: Partial<Expense> & { date: string; amount: number }): Expense {
+/** Build a fake Expense row with sensible defaults. `amount` is a float (e.g. 9.99) converted to cents internally. */
+function makeExpense(overrides: { date: string; amount: number } & Partial<Expense>): Expense {
+  const amountCents = Math.round(overrides.amount * 100);
+  const { amount: _amount, ...rest } = overrides;
   return {
     id: 1,
     group_id: GROUP_ID,
@@ -35,9 +37,12 @@ function makeExpense(overrides: Partial<Expense> & { date: string; amount: numbe
     category: 'Подписки',
     comment: 'test',
     currency: 'EUR',
-    eur_amount: overrides.amount,
+    receipt_id: null,
+    receipt_file_id: null,
     created_at: overrides.date,
-    ...overrides,
+    ...rest,
+    amount_cents: amountCents,
+    eur_amount_cents: amountCents,
   } as Expense;
 }
 

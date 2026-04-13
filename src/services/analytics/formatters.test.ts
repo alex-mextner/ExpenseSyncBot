@@ -30,8 +30,8 @@ import type {
 function makeTrend(overrides: Partial<SpendingTrend> = {}): SpendingTrend {
   return {
     period: 'week',
-    current_total: 100,
-    previous_total: 100,
+    current_total: 10000,
+    previous_total: 10000,
     change_percent: 0,
     direction: 'stable',
     category_changes: [],
@@ -41,8 +41,8 @@ function makeTrend(overrides: Partial<SpendingTrend> = {}): SpendingTrend {
 
 function makeVelocity(overrides: Partial<SpendingVelocity> = {}): SpendingVelocity {
   return {
-    period_1_daily_avg: 10,
-    period_2_daily_avg: 10,
+    period_1_daily_avg: 1000,
+    period_2_daily_avg: 1000,
     acceleration: 0,
     trend: 'stable',
     ...overrides,
@@ -53,8 +53,8 @@ function makeStreak(overrides: Partial<SpendingStreak> = {}): SpendingStreak {
   return {
     current_streak_days: 0,
     streak_type: 'below_average',
-    avg_daily_during_streak: 5,
-    overall_daily_average: 10,
+    avg_daily_during_streak: 500,
+    overall_daily_average: 1000,
     ...overrides,
   };
 }
@@ -62,13 +62,13 @@ function makeStreak(overrides: Partial<SpendingStreak> = {}): SpendingStreak {
 function makeBurnRate(overrides: Partial<BudgetBurnRate> = {}): BudgetBurnRate {
   return {
     category: 'food',
-    budget_limit: 500,
-    spent: 250,
+    budget_limit: 50000,
+    spent: 25000,
     currency: 'EUR',
     days_elapsed: 15,
     days_remaining: 15,
-    daily_burn_rate: 16.67,
-    projected_total: 500,
+    daily_burn_rate: 1667,
+    projected_total: 50000,
     projected_overshoot: 0,
     runway_days: 15,
     status: 'on_track',
@@ -79,8 +79,8 @@ function makeBurnRate(overrides: Partial<BudgetBurnRate> = {}): BudgetBurnRate {
 function makeAnomaly(overrides: Partial<CategoryAnomaly> = {}): CategoryAnomaly {
   return {
     category: 'entertainment',
-    current_month_total: 200,
-    avg_3_month: 80,
+    current_month_total: 20000,
+    avg_3_month: 8000,
     deviation_ratio: 2.5,
     severity: 'significant',
     ...overrides,
@@ -91,8 +91,8 @@ function makeProjection(overrides: Partial<MonthlyProjection> = {}): MonthlyProj
   return {
     days_elapsed: 15,
     days_in_month: 30,
-    current_total: 750,
-    projected_total: 1500,
+    current_total: 75000,
+    projected_total: 150000,
     projected_vs_last_month: 10,
     confidence: 'medium',
     category_projections: [],
@@ -181,11 +181,11 @@ describe('formatSnapshotForPrompt — burn rates section', () => {
       burnRates: [
         makeBurnRate({
           category: 'food',
-          spent: 350,
-          budget_limit: 500,
+          spent: 35000,
+          budget_limit: 50000,
           currency: 'EUR',
-          daily_burn_rate: 23.33,
-          projected_total: 700,
+          daily_burn_rate: 2333,
+          projected_total: 70000,
           runway_days: 6,
           status: 'warning',
         }),
@@ -218,8 +218,8 @@ describe('formatSnapshotForPrompt — trends section', () => {
         period: 'week',
         direction: 'up',
         change_percent: 25.3,
-        current_total: 125,
-        previous_total: 100,
+        current_total: 12500,
+        previous_total: 10000,
       }),
     });
     const output = formatSnapshotForPrompt(snapshot, 0);
@@ -233,8 +233,8 @@ describe('formatSnapshotForPrompt — trends section', () => {
         period: 'month',
         direction: 'down',
         change_percent: -15.7,
-        current_total: 84.3,
-        previous_total: 100,
+        current_total: 8430,
+        previous_total: 10000,
       }),
     });
     const output = formatSnapshotForPrompt(snapshot, 0);
@@ -249,8 +249,8 @@ describe('formatSnapshotForPrompt — anomalies section', () => {
       anomalies: [
         makeAnomaly({
           category: 'taxi',
-          current_month_total: 300,
-          avg_3_month: 100,
+          current_month_total: 30000,
+          avg_3_month: 10000,
           deviation_ratio: 3.0,
           severity: 'extreme',
         }),
@@ -277,8 +277,8 @@ describe('formatSnapshotForPrompt — projection section', () => {
   test('contains projected total', () => {
     const snapshot = makeSnapshot({
       projection: makeProjection({
-        projected_total: 1850.5,
-        current_total: 920,
+        projected_total: 185050,
+        current_total: 92000,
         days_elapsed: 15,
         days_in_month: 31,
         confidence: 'high',
@@ -305,9 +305,9 @@ describe('formatSnapshotForPrompt — full snapshot', () => {
       velocity: makeVelocity({ trend: 'accelerating', acceleration: 30 }),
       streak: makeStreak({ current_streak_days: 5, streak_type: 'above_average' }),
       budgetUtilization: {
-        total_budget: 2000,
-        total_spent: 1500,
-        remaining: 500,
+        total_budget: 200000,
+        total_spent: 150000,
+        remaining: 50000,
         utilization_percent: 75,
         remaining_percent: 25,
       },

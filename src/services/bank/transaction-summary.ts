@@ -3,7 +3,7 @@
 import type { BankTransaction } from '../../database/types';
 import { escapeHtml } from '../../utils/html';
 import { pluralize } from '../../utils/pluralize';
-import { formatAmount } from '../currency/converter';
+import { formatAmount, toCents } from '../currency/converter';
 
 const MAX_VISIBLE = 10;
 
@@ -21,7 +21,7 @@ export function buildOldTxSummaryText(
 
   const lines = visible.map(({ tx }) => {
     const merchant = tx.merchant_normalized ?? tx.merchant ?? '—';
-    return `• ${tx.date} — ${formatAmount(tx.amount, tx.currency)} — ${escapeHtml(merchant)}`;
+    return `• ${tx.date} — ${formatAmount(toCents(tx.amount), tx.currency)} — ${escapeHtml(merchant)}`;
   });
 
   if (!showAll) {

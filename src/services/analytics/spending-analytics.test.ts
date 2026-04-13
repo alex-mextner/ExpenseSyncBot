@@ -95,10 +95,31 @@ const threeMonthsAgoDate = format(
 const currentMonth = format(now, 'yyyy-MM');
 
 function insertExpense(date: string, category: string, eurAmount: number) {
+  insertExpenseForGroup(GROUP_ID, date, category, eurAmount);
+}
+
+/** Insert expense with float EUR amount (auto-converted to cents) for any group */
+function insertExpenseForGroup(
+  groupId: number,
+  date: string,
+  category: string,
+  eurAmount: number,
+  comment = 'test',
+) {
+  const cents = Math.round(eurAmount * 100);
   db.run(
-    `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+    `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [GROUP_ID, USER_ID, date, category, 'test', eurAmount, 'EUR', eurAmount],
+    [groupId, USER_ID, date, category, comment, cents, 'EUR', cents],
+  );
+}
+
+/** Insert budget with float EUR limit (auto-converted to cents) */
+function insertBudget(groupId: number, category: string, month: string, limitEur: number) {
+  const cents = Math.round(limitEur * 100);
+  db.run(
+    `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
+    [groupId, category, month, cents, 'EUR'],
   );
 }
 
@@ -138,14 +159,8 @@ beforeAll(() => {
   insertExpense(threeMonthsAgoDate, 'Transport', 70);
 
   // -- Budgets for current month --
-  db.run(
-    `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
-    [GROUP_ID, 'Food', currentMonth, 300, 'EUR'],
-  );
-  db.run(
-    `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
-    [GROUP_ID, 'Transport', currentMonth, 150, 'EUR'],
-  );
+  insertBudget(GROUP_ID, 'Food', currentMonth, 300);
+  insertBudget(GROUP_ID, 'Transport', currentMonth, 150);
 
   analytics = new TestableSpendingAnalytics();
 });
@@ -209,7 +224,7 @@ describe('computeStreak', () => {
     // Only expense 3 days ago, nothing since
     const threeDaysAgo = format(subDays(now, 3), 'yyyy-MM-dd');
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [2, USER_ID, threeDaysAgo, 'Food', 'test', 50, 'EUR', 50],
     );
@@ -476,7 +491,7 @@ describe('computeBurnRates — normExceedsBudget suppresses warning/critical', (
         'yyyy-MM-dd',
       );
       db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [GID, USER_ID, monthDate, 'Gym', 'monthly', 500, 'EUR', 500],
       );
@@ -485,14 +500,14 @@ describe('computeBurnRates — normExceedsBudget suppresses warning/critical', (
     // Current month: 100 EUR spent (< budget 200), but pace extrapolates higher
     const day3 = format(new Date(now.getFullYear(), now.getMonth(), 3), 'yyyy-MM-dd');
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [GID, USER_ID, day3, 'Gym', 'session', 100, 'EUR', 100],
     );
 
     // Budget: 200 EUR for Gym (less than historical EMA of ~500)
     db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
       [GID, 'Gym', currentMonth, 200, 'EUR'],
     );
 
@@ -533,7 +548,7 @@ describe('computeBurnRates — normExceedsBudget suppresses warning/critical', (
         'yyyy-MM-dd',
       );
       db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [GID2, USER_ID, monthDate, 'Gym', 'monthly', 500, 'EUR', 500],
       );
@@ -542,13 +557,13 @@ describe('computeBurnRates — normExceedsBudget suppresses warning/critical', (
     // Current month: 250 EUR spent (> budget 200) — exceeded
     const day5 = format(new Date(now.getFullYear(), now.getMonth(), 5), 'yyyy-MM-dd');
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [GID2, USER_ID, day5, 'Gym', 'session', 250, 'EUR', 250],
     );
 
     db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
       [GID2, 'Gym', currentMonth, 200, 'EUR'],
     );
 
@@ -589,7 +604,7 @@ describe('computeBurnRates — stall detection in production path', () => {
           'yyyy-MM-dd',
         );
         db.run(
-          `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+          `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [GID, USER_ID, txDate, 'Taxi', 'ride', 50, 'EUR', 50],
         );
@@ -600,7 +615,7 @@ describe('computeBurnRates — stall detection in production path', () => {
     for (let d = 1; d <= 3; d++) {
       const txDate = format(new Date(now.getFullYear(), now.getMonth(), d), 'yyyy-MM-dd');
       db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [GID, USER_ID, txDate, 'Taxi', 'ride', 30, 'EUR', 30],
       );
@@ -608,7 +623,7 @@ describe('computeBurnRates — stall detection in production path', () => {
 
     // Budget for the category
     db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
       [GID, 'Taxi', currentMonth, 500, 'EUR'],
     );
 
@@ -642,7 +657,7 @@ describe('computeAnomalies', () => {
       [3, 33333, 'EUR', '["EUR"]'],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [3, USER_ID, today, 'Food', 'spike', 500, 'EUR', 500],
     );
@@ -662,17 +677,17 @@ describe('computeAnomalies', () => {
     );
 
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [3, USER_ID, m1mid, 'Food', 'h', 100, 'EUR', 100],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [3, USER_ID, m2mid, 'Food', 'h', 100, 'EUR', 100],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [3, USER_ID, m3mid, 'Food', 'h', 100, 'EUR', 100],
     );
@@ -710,21 +725,21 @@ describe('computeAnomalies', () => {
 
     // History: 100 EUR each month
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [4, USER_ID, m1mid, 'Food', 'h', 100, 'EUR', 100],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [4, USER_ID, m2mid, 'Food', 'h', 100, 'EUR', 100],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [4, USER_ID, m3mid, 'Food', 'h', 100, 'EUR', 100],
     );
 
     // Current month: same as average
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [4, USER_ID, today, 'Food', 'normal', 100, 'EUR', 100],
     );
 
@@ -756,21 +771,21 @@ describe('computeAnomalies', () => {
     );
 
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [5, USER_ID, m1mid, 'Food', 'h', 50, 'EUR', 50],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [5, USER_ID, m2mid, 'Food', 'h', 50, 'EUR', 50],
     );
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [5, USER_ID, m3mid, 'Food', 'h', 50, 'EUR', 50],
     );
 
     // Current month: 500 EUR = 10x the average of 50 → extreme
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [5, USER_ID, today, 'Food', 'spike', 500, 'EUR', 500],
     );
 
@@ -899,7 +914,7 @@ describe('getAllBudgetsForMonth with multiple categories', () => {
     const categories = ['Entertainment', 'Food', 'Health', 'Shopping', 'Transport'];
     for (const cat of categories) {
       db.run(
-        `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
         [multiGroupId, cat, currentMonth, 200, 'EUR'],
       );
     }
@@ -1070,12 +1085,12 @@ describe('burn rate: single large expense early in month', () => {
       [40, 404040, 'EUR', '["EUR"]'],
     );
     db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
       [40, 'Car', currentMonth, 500, 'EUR'],
     );
     // Single expense: 200 EUR → naive projection on day 4 = 200/4*30 = 1500 → critical
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [40, USER_ID, today, 'Car', 'repair', 200, 'EUR', 200],
     );
@@ -1100,7 +1115,7 @@ describe('burn rate: single large expense early in month', () => {
       [41, 414141, 'EUR', '["EUR"]'],
     );
     db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
       [41, 'Car', currentMonth, 500, 'EUR'],
     );
 
@@ -1119,7 +1134,7 @@ describe('burn rate: single large expense early in month', () => {
     );
     for (const d of [m1, m2, m3]) {
       db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [41, USER_ID, d, 'Car', 'fuel', 100, 'EUR', 100],
       );
@@ -1127,7 +1142,7 @@ describe('burn rate: single large expense early in month', () => {
 
     // Current month: 80 EUR spent
     db.run(
-      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+      `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [41, USER_ID, today, 'Car', 'fuel', 80, 'EUR', 80],
     );
@@ -1488,7 +1503,7 @@ describe('computeBurnRates — interval profile integration', () => {
     }
     for (const d of historicalDates) {
       db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [GID, USER_ID, d, CATEGORY, 'fuel', AMOUNT, 'EUR', AMOUNT],
       );
@@ -1500,7 +1515,7 @@ describe('computeBurnRates — interval profile integration', () => {
     const day5 = format(new Date(year, month, 5), 'yyyy-MM-dd');
     for (let i = 0; i < 2; i++) {
       db.run(
-        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount, currency, eur_amount)
+        `INSERT INTO expenses (group_id, user_id, date, category, comment, amount_cents, currency, eur_amount_cents)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [GID, USER_ID, day5, CATEGORY, 'fuel', AMOUNT, 'EUR', AMOUNT],
       );
@@ -1508,7 +1523,7 @@ describe('computeBurnRates — interval profile integration', () => {
 
     // Generous budget so normExceedsBudget doesn't shortcut status logic.
     db.run(
-      `INSERT INTO budgets (group_id, category, month, limit_amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO budgets (group_id, category, month, limit_amount_cents, currency) VALUES (?, ?, ?, ?, ?)`,
       [GID, CATEGORY, currentMonth, 1000, 'EUR'],
     );
 
