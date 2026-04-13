@@ -108,6 +108,11 @@ mock.module('../../services/receipt/status-writer', () => ({
   StatusWriter: StubStatusWriter,
 }));
 
+// Advice validator — always approve so these tests focus on streaming safety, not validation.
+mock.module('../../services/ai/advice-validator', () => ({
+  validateAdvice: mock(async () => ({ approved: true })),
+}));
+
 // ── telegram-sender (used on finalize-error fallback) ───────────────────
 const mockSendMessage = mock(async () => null);
 mock.module('../../services/bank/telegram-sender', () => ({

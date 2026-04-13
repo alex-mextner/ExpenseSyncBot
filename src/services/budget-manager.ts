@@ -3,6 +3,7 @@
 import type { CurrencyCode } from '../config/constants';
 import { _budgetWriter, database } from '../database';
 import type { Group } from '../database/types';
+import { isMultiWordCategory, normalizeCategoryName } from '../utils/fuzzy-search';
 import { createLogger } from '../utils/logger.ts';
 import { monthAbbrFromYYYYMM } from './google/month-abbr';
 import { googleConn, writeMonthBudgetRow } from './google/sheets';
@@ -27,6 +28,13 @@ export interface BudgetWriteResult {
   sheetsSynced: boolean;
 }
 
+export interface BudgetDeleteResult extends BudgetWriteResult {
+  /** True if a matching budget row was found and deleted. */
+  deleted: boolean;
+  /** The actual category name that was deleted (may differ from input after fuzzy resolve). */
+  resolvedCategory?: string;
+}
+
 /**
  * Single entry point for ALL budget write operations.
  *
@@ -39,7 +47,8 @@ export interface BudgetWriteResult {
 export class BudgetManager {
   /** Set or update a budget. Writes to DB, then syncs to Sheets. */
   async set(params: SetBudgetParams): Promise<BudgetWriteResult> {
-    const { groupId, category, month, amount, currency } = params;
+    const { groupId, month, amount, currency } = params;
+    const category = normalizeCategoryName(params.category);
 
     // 1. Always write to DB first (atomic, never fails silently)
     _budgetWriter().setBudget({
@@ -61,32 +70,46 @@ export class BudgetManager {
     return { sheetsSynced };
   }
 
-  /** Delete a budget. Removes from DB, then zeros out in Sheets. */
-  async delete(params: DeleteBudgetParams): Promise<BudgetWriteResult> {
+  /**
+   * Delete a budget. Removes from DB, then zeros out in Sheets.
+   *
+   * Resolves the actual stored category name via fuzzy read lookup first,
+   * then deletes by exact SQL match on the resolved name. If no matching row
+   * is found, returns `{ deleted: false }` — nothing is written to Sheets.
+   */
+  async delete(params: DeleteBudgetParams): Promise<BudgetDeleteResult> {
     const { groupId, category, month } = params;
 
-    // 1. Delete from DB
-    _budgetWriter().deleteByGroupCategoryMonth(groupId, category, month);
+    // 1. Resolve the actual stored category name (fuzzy read is safe).
+    const existing = database.budgets.findByGroupCategoryMonth(groupId, category, month);
+    if (!existing) {
+      return { deleted: false, sheetsSynced: false };
+    }
 
-    // 2. Zero out in Sheets (row stays with amount=0)
+    // 2. Delete from DB by exact match on the resolved name.
+    _budgetWriter().deleteByGroupCategoryMonth(groupId, existing.category, month);
+
+    // 3. Zero out in Sheets (row stays with amount=0)
     const group = database.groups.findById(groupId);
     const currency = group?.default_currency ?? ('EUR' as CurrencyCode);
 
     const sheetsSynced = await this.syncToSheets(group, month, {
-      category,
+      category: existing.category,
       limit: 0,
       currency,
     });
 
-    return { sheetsSynced };
+    return { deleted: true, sheetsSynced, resolvedCategory: existing.category };
   }
 
   /**
    * Import a budget from Google Sheets into DB. No Sheets write-back.
    * Used by budget-sync, reconnect, and rollback operations.
    */
-  importFromSheet(params: SetBudgetParams): void {
-    const { groupId, category, month, amount, currency } = params;
+  importFromSheet(params: SetBudgetParams): { multiWordWarning?: string } {
+    const { groupId, month, amount, currency } = params;
+    const category = normalizeCategoryName(params.category);
+
     _budgetWriter().setBudget({
       group_id: groupId,
       category,
@@ -94,6 +117,15 @@ export class BudgetManager {
       limit_amount: amount,
       currency,
     });
+
+    if (isMultiWordCategory(category)) {
+      logger.warn({ category, groupId }, 'multi-word category imported from sheet');
+      return {
+        multiWordWarning: `Категория «${category}» содержит пробелы. Бот записывает только первое слово как категорию — остальное уходит в комментарий. Переименуй в таблице на одно слово, или используй /categories чтобы увидеть все категории.`,
+      };
+    }
+
+    return {};
   }
 
   /**

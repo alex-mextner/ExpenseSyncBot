@@ -529,10 +529,10 @@ async function validateAndNormalizeItems(
     }
 
     if (existingCategories.length > 0) {
-      const { findBestCategoryMatch } = await import('../../utils/fuzzy-search');
+      const { findBestCategoryMatchAsync } = await import('../../utils/fuzzy-search');
 
       if (!existingCategories.includes(item.category)) {
-        const closestMatch = findBestCategoryMatch(item.category, existingCategories);
+        const closestMatch = await findBestCategoryMatchAsync(item.category, existingCategories);
         if (closestMatch) {
           item.category = closestMatch;
         } else {

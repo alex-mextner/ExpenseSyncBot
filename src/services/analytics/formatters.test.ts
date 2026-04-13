@@ -105,6 +105,7 @@ function makeSnapshot(overrides: Partial<FinancialSnapshot> = {}): FinancialSnap
     budgetUtilization: null,
     streak: makeStreak(),
     projection: null,
+    technicalAnalysis: null,
     ...overrides,
   };
 }

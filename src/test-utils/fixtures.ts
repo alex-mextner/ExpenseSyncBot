@@ -108,6 +108,7 @@ export function buildNeutralSnapshot(
       overall_daily_average: 0,
     },
     projection: null,
+    technicalAnalysis: null,
     ...overrides,
   };
 }

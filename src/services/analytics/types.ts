@@ -107,6 +107,13 @@ export interface CategoryProjection {
 
 // === Financial Snapshot (aggregate) ===
 
+export interface TechnicalAnalysis {
+  /** Per-category TA analysis with forecasts, volatility, anomaly, trend */
+  categories: import('./ta/analyzer').CategoryTaAnalysis[];
+  /** Cross-category correlations (only significant ones) */
+  correlations: import('./ta/types').CorrelationResult[];
+}
+
 export interface FinancialSnapshot {
   burnRates: BudgetBurnRate[];
   weekTrend: SpendingTrend;
@@ -117,6 +124,8 @@ export interface FinancialSnapshot {
   budgetUtilization: BudgetUtilization | null;
   streak: SpendingStreak;
   projection: MonthlyProjection | null;
+  /** Technical analysis results (47 methods per category) */
+  technicalAnalysis: TechnicalAnalysis | null;
 }
 
 // === SQL result types ===
@@ -168,6 +177,37 @@ export interface MonthlyHistoryRow {
   category: string;
   month: string;
   monthly_total: number;
+  tx_count: number;
+}
+
+// === Category Profile (for smart projections) ===
+
+export interface CategoryProfile {
+  /** Exponential moving average of monthly totals (EUR) */
+  ema: number;
+  /** Coefficient of variation (stddev / mean) — 0 = perfectly stable, >1 = very irregular */
+  cv: number;
+  /** How many months of history we have */
+  monthsOfData: number;
+  /** Average transactions per month (for activity gate) */
+  avgTxPerMonth: number;
+  /** Fraction of months with zero spending (for intermittent detection) */
+  zeroMonthRatio: number;
+  /** Monthly totals in chronological order — used by TSB/Croston for intermittent categories */
+  monthlyTotals?: number[];
+}
+
+// === Interval Profile (for cycle-based categories like refueling, salon, etc.) ===
+
+export interface IntervalProfile {
+  /** Average interval between transactions in days */
+  avgInterval: number;
+  /** CV of intervals (stability measure) */
+  intervalCv: number;
+  /** Average transaction amount */
+  avgAmount: number;
+  /** Whether the cycle is stable enough to use (intervalCv < 0.4) */
+  isStable: boolean;
 }
 
 // === Advice tiers ===
@@ -182,6 +222,8 @@ export type TriggerType =
   | 'first_expense_of_month'
   | 'recurring_missed'
   | 'pending_bank_transactions'
+  | 'ta_trend_change'
+  | 'ta_anomaly'
   | 'manual';
 
 export type OverallSeverity = 'good' | 'watch' | 'concern' | 'critical';

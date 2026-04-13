@@ -1,12 +1,24 @@
-// Fuzzy category matching: phonetic normalization + Levenshtein distance
+/** Fuzzy category matching: phonetic normalization + Levenshtein distance + zero-shot classifier fallback */
+
+import { env } from '../config/env';
+import { createLogger } from './logger';
+
+const logger = createLogger('fuzzy-search');
 
 /**
  * Normalize category name - capitalize first letter
  */
 export function normalizeCategoryName(name: string): string {
-  const trimmed = name.trim();
+  // Trim whitespace + trailing dots/punctuation that cause category duplicates
+  // Lowercase the rest + capitalize first letter for consistent casing across all entry points
+  const trimmed = name.trim().replace(/[.\s]+$/, '');
   if (!trimmed) return trimmed;
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+}
+
+/** Check if a category name looks like it has multiple words (spaces inside) */
+export function isMultiWordCategory(name: string): boolean {
+  return name.trim().includes(' ');
 }
 
 /**
@@ -129,4 +141,102 @@ export function findBestCategoryMatch(input: string, categories: string[]): stri
   }
 
   return bestMatch;
+}
+
+const CLASSIFIER_MODEL = 'joeddav/xlm-roberta-large-xnli';
+const CLASSIFIER_ENDPOINT = `https://api-inference.huggingface.co/models/${CLASSIFIER_MODEL}`;
+const CLASSIFIER_MIN_SCORE = 0.4;
+const CLASSIFIER_TIMEOUT_MS = 10_000;
+const CLASSIFIER_MAX_RETRIES = 2;
+
+interface ZeroShotResponse {
+  sequence: string;
+  labels: string[];
+  scores: number[];
+}
+
+/**
+ * Zero-shot classifier fallback via HF Inference API (direct fetch, no SDK).
+ * Calls XNLI model entailment endpoint; returns the highest-scored label above threshold.
+ * Retries once on 503 "model loading" (common on cold models).
+ *
+ * Used when all string-based methods fail (different wording for same concept).
+ * Example: "Расходы на ремонт квартиры" → matches "Ремонт" semantically.
+ */
+async function classifyCategory(input: string, categories: string[]): Promise<string | null> {
+  if (!env.HF_TOKEN || categories.length === 0) return null;
+
+  const body = JSON.stringify({
+    inputs: input,
+    parameters: { candidate_labels: categories },
+  });
+
+  for (let attempt = 0; attempt <= CLASSIFIER_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CLASSIFIER_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(CLASSIFIER_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.HF_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+        signal: controller.signal,
+      });
+
+      // HF returns 503 "Model is currently loading" on cold start — retry once.
+      if (response.status === 503 && attempt < CLASSIFIER_MAX_RETRIES) {
+        const retryText = await response.text();
+        logger.debug({ attempt, retryText }, 'classifier cold start, retrying');
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.warn(
+          { status: response.status, errorText, input },
+          'zero-shot classifier HTTP error',
+        );
+        return null;
+      }
+
+      const result = (await response.json()) as ZeroShotResponse;
+      const topLabel = result.labels[0];
+      const topScore = result.scores[0];
+
+      if (topLabel && topScore !== undefined && topScore >= CLASSIFIER_MIN_SCORE) {
+        logger.debug({ input, match: topLabel, score: topScore }, 'classifier match');
+        return topLabel;
+      }
+      return null;
+    } catch (err) {
+      logger.warn({ err, input, attempt }, 'zero-shot classifier failed');
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Async version of findBestCategoryMatch with zero-shot classifier fallback.
+ * Pipeline: exact → startsWith → contains → phonetic → Levenshtein → classifier.
+ * Use this in places where async is acceptable (handlers, sync).
+ * Falls back gracefully if HF_TOKEN is not set or classifier fails.
+ */
+export async function findBestCategoryMatchAsync(
+  input: string,
+  categories: string[],
+): Promise<string | null> {
+  // Try all sync methods first
+  const syncResult = findBestCategoryMatch(input, categories);
+  if (syncResult) return syncResult;
+
+  // Last resort: zero-shot classifier (semantic matching)
+  return classifyCategory(input, categories);
 }

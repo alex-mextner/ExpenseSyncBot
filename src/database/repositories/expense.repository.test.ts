@@ -404,6 +404,162 @@ describe('ExpenseRepository', () => {
     });
   });
 
+  describe('getLastTransactionDayByCategory', () => {
+    test('returns max day-of-month per category within range', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-05', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-18', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-10', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-22', category: 'Transport' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-07', category: 'Transport' }));
+
+      const result = expenseRepo.getLastTransactionDayByCategory(
+        groupId,
+        '2024-01-01',
+        '2024-01-31',
+      );
+
+      const food = result.find((r) => r.category === 'Food');
+      const transport = result.find((r) => r.category === 'Transport');
+
+      expect(food).toBeDefined();
+      expect(food?.last_day).toBe(18);
+      expect(transport).toBeDefined();
+      expect(transport?.last_day).toBe(22);
+    });
+
+    test('returns empty array when no expenses', () => {
+      const result = expenseRepo.getLastTransactionDayByCategory(
+        groupId,
+        '2024-01-01',
+        '2024-01-31',
+      );
+      expect(result).toEqual([]);
+    });
+
+    test('last_day is an integer between 1 and 31', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-01', category: 'A' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-31', category: 'B' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-15', category: 'C' }));
+
+      const result = expenseRepo.getLastTransactionDayByCategory(
+        groupId,
+        '2024-01-01',
+        '2024-01-31',
+      );
+
+      expect(result).toHaveLength(3);
+      for (const row of result) {
+        expect(Number.isInteger(row.last_day)).toBe(true);
+        expect(row.last_day).toBeGreaterThanOrEqual(1);
+        expect(row.last_day).toBeLessThanOrEqual(31);
+      }
+      expect(result.find((r) => r.category === 'A')?.last_day).toBe(1);
+      expect(result.find((r) => r.category === 'B')?.last_day).toBe(31);
+      expect(result.find((r) => r.category === 'C')?.last_day).toBe(15);
+    });
+
+    test('excludes expenses outside date range', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-10', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-02-15', category: 'Food' }));
+
+      const result = expenseRepo.getLastTransactionDayByCategory(
+        groupId,
+        '2024-01-01',
+        '2024-01-31',
+      );
+
+      const food = result.find((r) => r.category === 'Food');
+      expect(food?.last_day).toBe(10);
+    });
+
+    test('scoped to group', () => {
+      const group2 = groupRepo.create({ telegram_group_id: Date.now() + 10 });
+      const user2 = userRepo.create({ telegram_id: Date.now() + 10, group_id: group2.id });
+      expenseRepo.create(
+        makeExpense({
+          date: '2024-01-25',
+          category: 'Food',
+          group_id: group2.id,
+          user_id: user2.id,
+        }),
+      );
+      expenseRepo.create(makeExpense({ date: '2024-01-10', category: 'Food' }));
+
+      const result = expenseRepo.getLastTransactionDayByCategory(
+        groupId,
+        '2024-01-01',
+        '2024-01-31',
+      );
+      expect(result.find((r) => r.category === 'Food')?.last_day).toBe(10);
+    });
+  });
+
+  describe('getRecentTransactions', () => {
+    test('returns transactions with date, category, amount sorted by date ascending', () => {
+      expenseRepo.create(makeExpense({ date: '2024-01-15', category: 'Food', eur_amount: 20 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-05', category: 'Food', eur_amount: 10 }));
+      expenseRepo.create(makeExpense({ date: '2024-01-10', category: 'Transport', eur_amount: 5 }));
+
+      const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
+
+      expect(result).toHaveLength(3);
+      expect(result[0]?.date).toBe('2024-01-05');
+      expect(result[1]?.date).toBe('2024-01-10');
+      expect(result[2]?.date).toBe('2024-01-15');
+      for (const row of result) {
+        expect(typeof row.date).toBe('string');
+        expect(typeof row.category).toBe('string');
+        expect(typeof row.amount).toBe('number');
+      }
+    });
+
+    test('returns eur_amount as amount (not original amount)', () => {
+      expenseRepo.create(
+        makeExpense({
+          date: '2024-01-10',
+          category: 'Food',
+          amount: 100,
+          currency: 'USD',
+          eur_amount: 92.5,
+        }),
+      );
+
+      const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
+      expect(result).toHaveLength(1);
+      expect(result[0]?.amount).toBeCloseTo(92.5);
+    });
+
+    test('respects date range bounds (inclusive)', () => {
+      expenseRepo.create(makeExpense({ date: '2023-12-31', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-01', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-01-31', category: 'Food' }));
+      expenseRepo.create(makeExpense({ date: '2024-02-01', category: 'Food' }));
+
+      const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
+      expect(result).toHaveLength(2);
+      expect(result[0]?.date).toBe('2024-01-01');
+      expect(result[1]?.date).toBe('2024-01-31');
+    });
+
+    test('returns empty array when no matches', () => {
+      expenseRepo.create(makeExpense({ date: '2024-06-10' }));
+
+      const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
+      expect(result).toEqual([]);
+    });
+
+    test('scoped to group', () => {
+      const group2 = groupRepo.create({ telegram_group_id: Date.now() + 20 });
+      const user2 = userRepo.create({ telegram_id: Date.now() + 20, group_id: group2.id });
+      expenseRepo.create(
+        makeExpense({ date: '2024-01-15', group_id: group2.id, user_id: user2.id }),
+      );
+
+      const result = expenseRepo.getRecentTransactions(groupId, '2024-01-01', '2024-01-31');
+      expect(result).toEqual([]);
+    });
+  });
+
   describe('findPotentialDuplicates', () => {
     test('exact match: same date, amount, currency', () => {
       expenseRepo.create(makeExpense({ date: '2024-01-15', amount: 100, currency: 'EUR' }));

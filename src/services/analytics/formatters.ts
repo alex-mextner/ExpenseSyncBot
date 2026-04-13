@@ -12,6 +12,7 @@ import type {
   SpendingStreak,
   SpendingTrend,
   SpendingVelocity,
+  TechnicalAnalysis,
 } from './types';
 
 /**
@@ -56,6 +57,11 @@ export function formatSnapshotForPrompt(
   // Section 7: Streak (only if >= 3 days)
   if (snapshot.streak.current_streak_days >= 3) {
     sections.push(formatStreak(snapshot.streak, displayCurrency));
+  }
+
+  // Section 8: Technical Analysis summary
+  if (snapshot.technicalAnalysis) {
+    sections.push(formatTechnicalAnalysis(snapshot.technicalAnalysis));
   }
 
   let result = sections.join('\n\n');
@@ -275,6 +281,92 @@ function formatStreak(streak: SpendingStreak, displayCurrency: CurrencyCode): st
   lines.push(
     `- Среднее в серии: ${formatAmount(cv(streak.avg_daily_during_streak), displayCurrency, true)}/день vs общее среднее ${formatAmount(cv(streak.overall_daily_average), displayCurrency, true)}/день`,
   );
+
+  return lines.join('\n');
+}
+
+/** Format technical analysis results for LLM context */
+function formatTechnicalAnalysis(ta: TechnicalAnalysis): string {
+  const lines = ['=== ТЕХНИЧЕСКИЙ АНАЛИЗ ==='];
+
+  for (const cat of ta.categories) {
+    const parts: string[] = [`<b>${cat.category}</b> (${cat.monthsOfData} мес)`];
+
+    // Current month spending
+    if (cat.currentMonthSpent > 0) {
+      parts.push(`Текущий месяц: ${Math.round(cat.currentMonthSpent)}`);
+    }
+
+    // Trend direction
+    const trendLabel =
+      cat.trend.direction === 'rising'
+        ? 'растёт'
+        : cat.trend.direction === 'falling'
+          ? 'падает'
+          : 'стабильно';
+    parts.push(`Тренд: ${trendLabel} (${Math.round(cat.trend.confidence * 100)}%)`);
+
+    // Ensemble forecast
+    parts.push(`Прогноз: ${Math.round(cat.forecasts.ensemble)}`);
+
+    // Quantile range
+    const q = cat.forecasts.quantiles;
+    parts.push(`P50=${Math.round(q.p50)} P75=${Math.round(q.p75)} P90=${Math.round(q.p90)}`);
+
+    // Bollinger position
+    const bb = cat.volatility.bollingerBands;
+    if (bb.percentB > 0.9) parts.push('выше полосы Боллинджера');
+    else if (bb.percentB < 0.1) parts.push('ниже полосы Боллинджера');
+
+    // Anomaly
+    if (cat.anomaly.isAnomaly) {
+      parts.push(`аномалия (${cat.anomaly.anomalyCount}/3)`);
+    }
+
+    // MACD crossover
+    if (cat.trend.macd.crossover !== 'none') {
+      parts.push(`MACD ${cat.trend.macd.crossover === 'bullish' ? 'рост' : 'снижение'}`);
+    }
+
+    // RSI extreme
+    if (cat.trend.rsi.signal !== 'neutral') {
+      parts.push(`RSI ${Math.round(cat.trend.rsi.value)}`);
+    }
+
+    // Change points
+    if (cat.trend.changePoints.length > 0) {
+      parts.push(`${cat.trend.changePoints.length} смен режима`);
+    }
+
+    // Hurst
+    if (cat.trend.hurst.type !== 'random_walk') {
+      parts.push(
+        `Hurst ${cat.trend.hurst.value.toFixed(2)} ${cat.trend.hurst.type === 'trending' ? 'трендовая' : 'возвратная'}`,
+      );
+    }
+
+    // Croston (intermittent)
+    if (cat.forecasts.croston) {
+      const cr = cat.forecasts.croston;
+      parts.push(
+        `Кростон: ~${Math.round(cr.expectedAmount)} / ${cr.expectedInterval.toFixed(1)} мес`,
+      );
+    }
+
+    lines.push(`- ${parts.join('; ')}`);
+  }
+
+  // Category correlations
+  if (ta.correlations.length > 0) {
+    lines.push('');
+    lines.push('Корреляции:');
+    for (const corr of ta.correlations.slice(0, 5)) {
+      const sign = corr.correlation > 0 ? '+' : '';
+      lines.push(
+        `- ${corr.category1} ↔ ${corr.category2}: r=${sign}${corr.correlation.toFixed(2)}`,
+      );
+    }
+  }
 
   return lines.join('\n');
 }

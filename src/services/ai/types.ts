@@ -24,6 +24,23 @@ export interface ToolCallResult {
   result: ToolResult;
 }
 
+/**
+ * Minimal writer interface used by the agent loop.
+ * TelegramStreamWriter (real-time streaming) and BufferStreamWriter (batch mode) both implement this.
+ */
+export interface AgentStreamWriter {
+  appendText(delta: string): void;
+  setToolLabel(name: string, input?: Record<string, unknown>): void;
+  flush(force?: boolean): Promise<void>;
+  markToolResult(success: boolean): void;
+  commitIntermediate(): void;
+  finalize(): Promise<void>;
+  getText(): string;
+  reset(): void;
+  deleteSentMessage(): Promise<void>;
+  sendRemainingChunks(): Promise<void>;
+}
+
 export interface AgentContext {
   groupId: number;
   userId: number;

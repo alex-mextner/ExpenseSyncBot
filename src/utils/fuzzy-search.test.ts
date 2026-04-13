@@ -1,9 +1,11 @@
 // Tests for category fuzzy matching and normalization
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { env } from '../config/env';
 import {
   calculateSimilarity,
   findBestCategoryMatch,
+  findBestCategoryMatchAsync,
   levenshteinDistance,
   normalizeCategoryName,
   normalizePhonetic,
@@ -17,12 +19,23 @@ describe('normalizeCategoryName', () => {
   it('handles whitespace only', () => expect(normalizeCategoryName('   ')).toBe(''));
   it('handles single character', () => expect(normalizeCategoryName('f')).toBe('F'));
   it('handles unicode first char', () => expect(normalizeCategoryName('еда')).toBe('Еда'));
-  it('does not alter rest of string casing', () =>
-    expect(normalizeCategoryName('fOOD')).toBe('FOOD'));
+  it('lowercases rest after capitalizing first', () =>
+    expect(normalizeCategoryName('fOOD')).toBe('Food'));
   it('handles already trimmed string', () =>
     expect(normalizeCategoryName('Transport')).toBe('Transport'));
   it('handles multi-word input', () =>
     expect(normalizeCategoryName('food and drink')).toBe('Food and drink'));
+  it('lowercases all-caps latin word', () => expect(normalizeCategoryName('BYTES')).toBe('Bytes'));
+  it('lowercases all-caps Cyrillic word', () =>
+    expect(normalizeCategoryName('РАЗВЛЕЧЕНИЯ')).toBe('Развлечения'));
+  it('is idempotent — applying twice yields the same result', () => {
+    const inputs = ['food', 'FOOD', 'fOoD', 'РАЗВЛЕЧЕНИЯ', '  Еда.  ', 'Transport'];
+    for (const input of inputs) {
+      const once = normalizeCategoryName(input);
+      const twice = normalizeCategoryName(once);
+      expect(twice).toBe(once);
+    }
+  });
 });
 
 describe('normalizePhonetic', () => {
@@ -124,4 +137,124 @@ describe('findBestCategoryMatch', () => {
     const c = ['Food', 'Fast Food', 'Seafood'];
     expect(findBestCategoryMatch('food', c)).toBe('Food');
   });
+
+  it('strips trailing dot: Расходыквартиры. matches Расходыквартиры', () => {
+    const c = ['Расходыквартиры', 'Ремонт', 'Дом'];
+    // Trailing dot: Levenshtein distance 1, should match via startsWith or fuzzy
+    expect(findBestCategoryMatch('Расходыквартиры.', c)).toBe('Расходыквартиры');
+  });
+});
+
+describe('findBestCategoryMatchAsync', () => {
+  const originalFetch = global.fetch;
+  const originalToken = env.HF_TOKEN;
+
+  beforeEach(() => {
+    (env as { HF_TOKEN: string }).HF_TOKEN = 'test-token';
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (env as { HF_TOKEN: string }).HF_TOKEN = originalToken;
+  });
+
+  it('returns sync match without calling classifier', async () => {
+    // Sync path short-circuits — fetch must not be called
+    const fetchMock = mock(() => Promise.reject(new Error('should not be called')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const cats = ['Еда', 'Транспорт', 'Развлечения'];
+    expect(await findBestCategoryMatchAsync('еда', cats)).toBe('Еда');
+    expect(await findBestCategoryMatchAsync('транс', cats)).toBe('Транспорт');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to classifier when sync methods fail', async () => {
+    const fetchMock = mock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sequence: 'починка авто',
+            labels: ['Транспорт', 'Еда', 'Развлечения'],
+            scores: [0.87, 0.08, 0.05],
+          }),
+        ),
+      ),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const cats = ['Еда', 'Транспорт', 'Развлечения'];
+    const result = await findBestCategoryMatchAsync('починка авто', cats);
+    expect(result).toBe('Транспорт');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null when classifier top score below threshold (0.4)', async () => {
+    const fetchMock = mock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sequence: 'абракадабра',
+            labels: ['Еда'],
+            scores: [0.2],
+          }),
+        ),
+      ),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+
+  it('returns null when HF_TOKEN is missing', async () => {
+    (env as { HF_TOKEN: string }).HF_TOKEN = '';
+    const fetchMock = mock(() => Promise.reject(new Error('should not be called')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null on HTTP error', async () => {
+    const fetchMock = mock(() => Promise.resolve(new Response('forbidden', { status: 403 })));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+
+  it('retries once on 503 cold start then succeeds', async () => {
+    let calls = 0;
+    const fetchMock = mock(() => {
+      calls++;
+      if (calls === 1) {
+        return Promise.resolve(new Response('Model is currently loading', { status: 503 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sequence: 'починка',
+            labels: ['Ремонт'],
+            scores: [0.92],
+          }),
+        ),
+      );
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('починка', ['Ремонт'])).toBe('Ремонт');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null on fetch abort/network error', async () => {
+    const fetchMock = mock(() => Promise.reject(new TypeError('network error')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+});
+
+describe('normalizeCategoryName edge cases', () => {
+  it('strips trailing dots', () => expect(normalizeCategoryName('Еда.')).toBe('Еда'));
+  it('strips trailing multiple dots', () => expect(normalizeCategoryName('Еда...')).toBe('Еда'));
+  it('strips trailing dot+space', () => expect(normalizeCategoryName('Еда. ')).toBe('Еда'));
 });
