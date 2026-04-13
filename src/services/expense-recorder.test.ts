@@ -72,6 +72,7 @@ describe('ExpenseRecorder', () => {
 
     mockSheetWriter = {
       appendExpenseRow: mock(() => Promise.resolve()),
+      appendExpenseRows: mock(() => Promise.resolve()),
     };
 
     const testRates: Record<string, number> = { EUR: 1, USD: 0.86, RSD: 0.0085, RUB: 0.01 };
@@ -90,6 +91,9 @@ describe('ExpenseRecorder', () => {
       expenseItems,
       sheetWriter: mockSheetWriter,
       eurConverter: mockConverter,
+      // Tests run on a single in-memory DB per file; identity wrapper is fine.
+      // bun:sqlite `db.transaction` would also work but adds noise.
+      runInTransaction: (fn) => fn(),
     });
   });
 
@@ -263,116 +267,307 @@ describe('ExpenseRecorder', () => {
     });
   });
 
-  describe('recordBatch()', () => {
-    it('groups items by category and creates one expense per category with sheet writes', async () => {
+  describe('recordReceipt()', () => {
+    it('writes 70 items in one category with ONE appendExpenseRows call (regression)', async () => {
       const { groupId, userId } = seedGroup();
 
-      const results = await recorder.recordBatch(groupId, userId, [
-        { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
-        { name: 'Молоко', quantity: 2, price: 100, total: 200, currency: 'RSD', category: 'Еда' },
-        { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
-      ]);
+      // Simulate the 2026-04-11 Maxi receipt that caused the 429 incident
+      const items = Array.from({ length: 70 }, (_, i) => ({
+        name: `Item ${i}`,
+        quantity: 1,
+        price: 100,
+        total: 100,
+        currency: 'RSD' as const,
+        category: 'Продукты',
+      }));
 
-      expect(results).toHaveLength(2); // 2 categories: Еда, Дом
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items,
+      });
 
-      // Еда: 80 + 200 = 280 RSD
-      const food = results.find((r) => r.expense.category === 'Еда');
-      if (!food) throw new Error('Expected Еда result');
-      expect(food.expense.amount).toBe(280);
-      expect(food.expense.comment).toContain('Хлеб');
-      expect(food.expense.comment).toContain('Молоко');
+      // Exactly ONE batched sheet call (not 70)
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
+      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
 
-      // Дом: 150 RSD
-      const home = results.find((r) => r.expense.category === 'Дом');
-      if (!home) throw new Error('Expected Дом result');
-      expect(home.expense.amount).toBe(150);
+      // The call receives a single-row payload (one row per category)
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected batch sheet call');
+      const rows = call[2] as unknown[];
+      expect(rows).toHaveLength(1);
 
-      // Sheet writes: 2 calls (one per category)
-      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(2);
+      // One expense, 70 × 100 = 7000 RSD
+      expect(result.expenses).toHaveLength(1);
+      const first = result.expenses[0];
+      if (!first) throw new Error('no result');
+      expect(first.expense.amount).toBe(7000);
+      expect(first.expense.category).toBe('Продукты');
+      expect(result.categoriesAffected).toEqual(['Продукты']);
 
-      // DB: 2 expenses
-      const all = expenses.findByGroupId(groupId);
-      expect(all).toHaveLength(2);
+      // 70 expense items linked to the expense
+      const linkedItems = expenseItems.findByExpenseId(first.expense.id);
+      expect(linkedItems).toHaveLength(70);
     });
 
-    it('records batch to DB only without Google connection', async () => {
+    it('groups items by category: one sheet row per category, one API call', async () => {
+      const { groupId, userId } = seedGroup();
+
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items: [
+          { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
+          {
+            name: 'Молоко',
+            quantity: 2,
+            price: 100,
+            total: 200,
+            currency: 'RSD',
+            category: 'Еда',
+          },
+          { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
+        ],
+      });
+
+      expect(result.expenses).toHaveLength(2);
+      expect(result.categoriesAffected).toEqual(['Еда', 'Дом']);
+
+      // ONE batched call with 2 rows
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('no call');
+      const rows = call[2] as { category: string; comment: string }[];
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.category).toBe('Еда');
+      expect(rows[0]?.comment).toContain('Хлеб');
+      expect(rows[0]?.comment).toContain('Молоко');
+      expect(rows[1]?.category).toBe('Дом');
+
+      // DB: 2 expenses, each with linked items
+      const food = result.expenses.find((r) => r.expense.category === 'Еда');
+      if (!food) throw new Error('no food');
+      expect(food.expense.amount).toBe(280); // 80 + 200
+      const foodItems = expenseItems.findByExpenseId(food.expense.id);
+      expect(foodItems).toHaveLength(2);
+    });
+
+    it('uses the receipt date, not today', async () => {
+      const { groupId, userId } = seedGroup();
+      const receiptDate = '2025-01-15'; // definitely not today
+
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: receiptDate,
+        items: [{ name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' }],
+      });
+
+      // Sheet row uses receipt date
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('no call');
+      const rows = call[2] as { date: string }[];
+      expect(rows[0]?.date).toBe(receiptDate);
+
+      // DB row uses receipt date
+      expect(result.expenses[0]?.expense.date).toBe(receiptDate);
+    });
+
+    it('links expenses to receiptId (bot flow)', async () => {
+      const { groupId, userId } = seedGroup();
+
+      // Seed a receipt row so the FK is satisfied
+      const seeded = db
+        .query<{ id: number }, [number, number, string, string]>(
+          `INSERT INTO receipts (group_id, total_amount, currency, date) VALUES (?, ?, ?, ?) RETURNING id`,
+        )
+        .get(groupId, 30, 'EUR', '2026-04-11');
+      if (!seeded) throw new Error('failed to seed receipt');
+      const receiptId = seeded.id;
+
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        receiptId,
+        items: [
+          { name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' },
+          { name: 'Y', quantity: 1, price: 20, total: 20, currency: 'EUR', category: 'B' },
+        ],
+      });
+
+      for (const r of result.expenses) {
+        expect(r.expense.receipt_id).toBe(receiptId);
+        expect(r.expense.receipt_file_id).toBeNull();
+      }
+    });
+
+    it('links expenses to receiptFileId (Mini App flow)', async () => {
+      const { groupId, userId } = seedGroup();
+
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        receiptFileId: 'BAADBAAD_telegram_file_id',
+        items: [{ name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' }],
+      });
+
+      const exp = result.expenses[0]?.expense;
+      if (!exp) throw new Error('no expense');
+      expect(exp.receipt_file_id).toBe('BAADBAAD_telegram_file_id');
+      expect(exp.receipt_id).toBeNull();
+    });
+
+    it('saves to DB only when Google is not connected', async () => {
       const { groupId, userId } = seedGroupWithoutGoogle();
 
-      const results = await recorder.recordBatch(groupId, userId, [
-        { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
-        { name: 'Молоко', quantity: 2, price: 100, total: 200, currency: 'RSD', category: 'Еда' },
-        { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
-      ]);
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items: [
+          { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
+          { name: 'Мыло', quantity: 1, price: 150, total: 150, currency: 'RSD', category: 'Дом' },
+        ],
+      });
 
-      expect(results).toHaveLength(2);
+      expect(mockSheetWriter.appendExpenseRows).not.toHaveBeenCalled();
+      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
 
-      // Sheet was NOT called
-      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(0);
-
-      // DB: 2 expenses still created
+      expect(result.expenses).toHaveLength(2);
       const all = expenses.findByGroupId(groupId);
       expect(all).toHaveLength(2);
-
-      // Еда: 80 + 200 = 280 RSD
-      const food = results.find((r) => r.expense.category === 'Еда');
-      if (!food) throw new Error('Expected Еда result');
-      expect(food.expense.amount).toBe(280);
     });
 
-    it('groups items by category correctly', async () => {
+    it('does NOT create DB expenses if sheet write fails', async () => {
       const { groupId, userId } = seedGroup();
+      (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mockImplementation(() => {
+        throw new Error('429 quota exceeded');
+      });
 
-      const results = await recorder.recordBatch(groupId, userId, [
-        { name: 'A', quantity: 1, price: 10, total: 10, currency: 'RSD', category: 'Cat1' },
-        { name: 'B', quantity: 1, price: 20, total: 20, currency: 'RSD', category: 'Cat2' },
-        { name: 'C', quantity: 1, price: 30, total: 30, currency: 'RSD', category: 'Cat1' },
-        { name: 'D', quantity: 1, price: 40, total: 40, currency: 'RSD', category: 'Cat3' },
-        { name: 'E', quantity: 1, price: 50, total: 50, currency: 'RSD', category: 'Cat2' },
-      ]);
+      await expect(
+        recorder.recordReceipt(groupId, userId, {
+          date: '2026-04-11',
+          items: [
+            { name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'A' },
+            { name: 'Y', quantity: 1, price: 20, total: 20, currency: 'EUR', category: 'B' },
+          ],
+        }),
+      ).rejects.toThrow('429 quota exceeded');
 
-      expect(results).toHaveLength(3); // 3 distinct categories
-
-      const cat1 = results.find((r) => r.expense.category === 'Cat1');
-      if (!cat1) throw new Error('Expected Cat1');
-      expect(cat1.expense.amount).toBe(40); // 10 + 30
-
-      const cat2 = results.find((r) => r.expense.category === 'Cat2');
-      if (!cat2) throw new Error('Expected Cat2');
-      expect(cat2.expense.amount).toBe(70); // 20 + 50
-
-      const cat3 = results.find((r) => r.expense.category === 'Cat3');
-      if (!cat3) throw new Error('Expected Cat3');
-      expect(cat3.expense.amount).toBe(40);
+      // No partial state in DB
+      const all = expenses.findByGroupId(groupId);
+      expect(all).toHaveLength(0);
     });
 
-    it('creates expense items linked to expenses', async () => {
+    it('splits one category with mixed currencies into separate rows (no silent sum)', async () => {
       const { groupId, userId } = seedGroup();
 
-      const results = await recorder.recordBatch(groupId, userId, [
-        { name: 'Хлеб', quantity: 1, price: 80, total: 80, currency: 'RSD', category: 'Еда' },
-        { name: 'Молоко', quantity: 2, price: 100, total: 200, currency: 'RSD', category: 'Еда' },
-      ]);
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items: [
+          // Same category, two currencies → must not collapse into one row
+          {
+            name: 'Imported cheese',
+            quantity: 1,
+            price: 10,
+            total: 10,
+            currency: 'EUR',
+            category: 'Продукты',
+          },
+          {
+            name: 'Local bread',
+            quantity: 1,
+            price: 100,
+            total: 100,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+          {
+            name: 'Milk',
+            quantity: 1,
+            price: 200,
+            total: 200,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+        ],
+      });
 
-      const firstResult = results[0];
-      if (!firstResult) throw new Error('Expected at least one result');
-      const items = expenseItems.findByExpenseId(firstResult.expense.id);
-      expect(items).toHaveLength(2);
-      expect(items[0]?.name_ru).toBe('Хлеб');
-      expect(items[1]?.name_ru).toBe('Молоко');
+      // Two rows: one EUR, one RSD — both in "Продукты"
+      expect(result.expenses).toHaveLength(2);
+
+      const eurRow = result.expenses.find((r) => r.expense.currency === 'EUR');
+      const rsdRow = result.expenses.find((r) => r.expense.currency === 'RSD');
+      if (!eurRow || !rsdRow) throw new Error('expected both EUR and RSD rows');
+      expect(eurRow.expense.category).toBe('Продукты');
+      expect(eurRow.expense.amount).toBe(10);
+      expect(rsdRow.expense.category).toBe('Продукты');
+      expect(rsdRow.expense.amount).toBe(300); // 100 + 200
+
+      // Exactly one batched sheet call with TWO rows
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('no call');
+      expect((call[2] as unknown[]).length).toBe(2);
+
+      // categoriesAffected is DEDUPED — Продукты appears once even though it
+      // produced two rows (so downstream budget checks don't run twice)
+      expect(result.categoriesAffected).toEqual(['Продукты']);
     });
 
-    it('returns empty array for empty input', async () => {
+    it('preserves duplicate items as separate expense_items', async () => {
       const { groupId, userId } = seedGroup();
-      const results = await recorder.recordBatch(groupId, userId, []);
-      expect(results).toHaveLength(0);
-      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
+
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items: [
+          {
+            name: 'Куриное бедро',
+            quantity: 1,
+            price: 279.99,
+            total: 279.99,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+          {
+            name: 'Куриное бедро',
+            quantity: 1,
+            price: 279.99,
+            total: 279.99,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+          {
+            name: 'Куриное бедро',
+            quantity: 1,
+            price: 279.99,
+            total: 279.99,
+            currency: 'RSD',
+            category: 'Продукты',
+          },
+        ],
+      });
+
+      expect(result.expenses).toHaveLength(1);
+      const exp = result.expenses[0];
+      if (!exp) throw new Error('no exp');
+      expect(exp.expense.amount).toBeCloseTo(839.97, 2);
+
+      const items = expenseItems.findByExpenseId(exp.expense.id);
+      expect(items).toHaveLength(3);
+    });
+
+    it('returns empty result for empty input', async () => {
+      const { groupId, userId } = seedGroup();
+      const result = await recorder.recordReceipt(groupId, userId, {
+        date: '2026-04-11',
+        items: [],
+      });
+      expect(result.expenses).toHaveLength(0);
+      expect(result.categoriesAffected).toEqual([]);
+      expect(mockSheetWriter.appendExpenseRows).not.toHaveBeenCalled();
     });
 
     it('throws if group not found', async () => {
       await expect(
-        recorder.recordBatch(999, 1, [
-          { name: 'X', quantity: 1, price: 10, total: 10, currency: 'RSD', category: 'Test' },
-        ]),
+        recorder.recordReceipt(999, 1, {
+          date: '2026-04-11',
+          items: [
+            { name: 'X', quantity: 1, price: 10, total: 10, currency: 'EUR', category: 'Test' },
+          ],
+        }),
       ).rejects.toThrow('not found');
     });
   });

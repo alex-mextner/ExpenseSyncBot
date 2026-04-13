@@ -1,13 +1,12 @@
 // Single entry point for writing expenses to Google Sheets + local database
 
-import { format } from 'date-fns';
 import type { CurrencyCode } from '../config/constants';
 import type { ExpenseRepository } from '../database/repositories/expense.repository';
 import type { ExpenseItemsRepository } from '../database/repositories/expense-items.repository';
 import type { GroupRepository } from '../database/repositories/group.repository';
 import type { Expense } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
-import type { GoogleConn } from './google/sheets';
+import type { ExpenseRowData, GoogleConn } from './google/sheets';
 
 let _instance: ExpenseRecorder | null = null;
 
@@ -19,15 +18,16 @@ export function getExpenseRecorder(): RecorderApi {
   if (!_instance) {
     // Lazy-import to break circular dependency chains
     const { database } = require('../database');
-    const { appendExpenseRow } = require('./google/sheets');
+    const { appendExpenseRow, appendExpenseRows } = require('./google/sheets');
     const { convertToEUR, getExchangeRate } = require('./currency/converter');
 
     _instance = new ExpenseRecorder({
       groups: database.groups,
       expenses: database.expenses,
       expenseItems: database.expenseItems,
-      sheetWriter: { appendExpenseRow },
+      sheetWriter: { appendExpenseRow, appendExpenseRows },
       eurConverter: { convertToEUR, getExchangeRate },
+      runInTransaction: (fn: () => void) => database.transaction(fn),
     });
   }
   return _instance;
@@ -36,21 +36,15 @@ export function getExpenseRecorder(): RecorderApi {
 const logger = createLogger('expense-recorder');
 
 /**
- * Abstraction over Google Sheets append — injected for testability
+ * Abstraction over Google Sheets append — injected for testability.
+ * `appendExpenseRow` is used for single-row writes (manual expenses).
+ * `appendExpenseRows` is used for multi-row batch writes (receipts) — one API call
+ * regardless of row count, so the Google Sheets 60 writes/min/user quota isn't
+ * exhausted by large receipts.
  */
 export interface SheetWriter {
-  appendExpenseRow(
-    conn: GoogleConn,
-    spreadsheetId: string,
-    data: {
-      date: string;
-      category: string;
-      comment: string;
-      amounts: Record<string, number | null>;
-      eurAmount: number;
-      rate?: number;
-    },
-  ): Promise<void>;
+  appendExpenseRow(conn: GoogleConn, spreadsheetId: string, data: ExpenseRowData): Promise<void>;
+  appendExpenseRows(conn: GoogleConn, spreadsheetId: string, rows: ExpenseRowData[]): Promise<void>;
 }
 
 /**
@@ -73,7 +67,7 @@ export interface RecordExpenseData {
 }
 
 /**
- * Input for recording a receipt item (batch mode)
+ * Input for recording a receipt item (one physical line on the receipt)
  */
 export interface RecordReceiptItem {
   name: string;
@@ -86,11 +80,37 @@ export interface RecordReceiptItem {
 }
 
 /**
+ * Input for recording a full receipt. Receipt items are grouped by category
+ * into one expense per category. The `date` is the receipt date (from the
+ * receipt itself, not today) and applies to every created expense.
+ *
+ * Exactly one of `receiptId` or `receiptFileId` may be passed — they target
+ * different linking strategies (`receipts` table row vs Telegram `file_id`
+ * directly). Both may also be null for anonymous flows.
+ */
+export interface RecordReceiptData {
+  date: string;
+  items: RecordReceiptItem[];
+  receiptId?: number | null;
+  receiptFileId?: string | null;
+}
+
+/**
  * Result of recording an expense
  */
 export interface RecordExpenseResult {
   expense: Expense;
   eurAmount: number;
+}
+
+/**
+ * Result of recording a receipt. `expenses` contains one row per category
+ * that had items (aligned with sheet writes). `categoriesAffected` is a
+ * deduplicated list of categories — convenient for downstream budget checks.
+ */
+export interface RecordReceiptResult {
+  expenses: RecordExpenseResult[];
+  categoriesAffected: string[];
 }
 
 interface ExpenseRecorderDeps {
@@ -99,6 +119,12 @@ interface ExpenseRecorderDeps {
   expenseItems: ExpenseItemsRepository;
   sheetWriter: SheetWriter;
   eurConverter: EurConverter;
+  /**
+   * Synchronous transaction wrapper. Production passes `database.transaction`;
+   * tests pass a no-op that just invokes the callback (bun:sqlite in-memory
+   * DBs support transactions but tests already create isolated DBs per file).
+   */
+  runInTransaction: (fn: () => void) => void;
 }
 
 /**
@@ -117,15 +143,25 @@ export function buildAmountsRecord(
 }
 
 /**
+ * Build the full comment string for a receipt-derived expense. All items
+ * for the category are listed with quantity and price. No truncation —
+ * callers are responsible for truncating when displaying in Telegram.
+ */
+export function buildReceiptComment(items: RecordReceiptItem[]): string {
+  const parts = items.map((i) => `${i.name} (${i.quantity}x${i.price})`);
+  return `Чек: ${parts.join(', ')}`;
+}
+
+/**
  * Public API surface of ExpenseRecorder — use this interface for DI and testing
  */
 export interface RecorderApi {
   record(groupId: number, userId: number, data: RecordExpenseData): Promise<RecordExpenseResult>;
-  recordBatch(
+  recordReceipt(
     groupId: number,
     userId: number,
-    items: RecordReceiptItem[],
-  ): Promise<RecordExpenseResult[]>;
+    data: RecordReceiptData,
+  ): Promise<RecordReceiptResult>;
   pushToSheet(groupId: number, expenseList: Expense[]): Promise<void>;
 }
 
@@ -139,6 +175,7 @@ export class ExpenseRecorder implements RecorderApi {
   private expenseItems: ExpenseItemsRepository;
   private sheetWriter: SheetWriter;
   private eurConverter: EurConverter;
+  private runInTransaction: (fn: () => void) => void;
 
   constructor(deps: ExpenseRecorderDeps) {
     this.groups = deps.groups;
@@ -146,6 +183,7 @@ export class ExpenseRecorder implements RecorderApi {
     this.expenseItems = deps.expenseItems;
     this.sheetWriter = deps.sheetWriter;
     this.eurConverter = deps.eurConverter;
+    this.runInTransaction = deps.runInTransaction;
   }
 
   /**
@@ -200,86 +238,155 @@ export class ExpenseRecorder implements RecorderApi {
   }
 
   /**
-   * Record a batch of receipt items — groups by category, one expense per category
+   * Record a receipt: groups items by category, one expense per category,
+   * one batched sheet write for all categories, one DB transaction.
+   *
+   * This is the sole entry point for receipt writes — both the bot's
+   * `saveReceiptExpenses` and the Mini App's `/api/receipt/confirm` endpoint
+   * route through it so both paths write to the sheet identically.
+   *
+   * Atomicity: the sheet write is issued first. If it throws (429, network,
+   * auth), the DB transaction never runs — no partial state. If the sheet
+   * write succeeds and the DB insert then fails, we have orphan sheet rows,
+   * but that's the same behaviour as `record()` today (DB insert is extremely
+   * unlikely to fail for valid inputs, and atomicity is a best-effort guarantee
+   * at this layer).
    */
-  async recordBatch(
+  async recordReceipt(
     groupId: number,
     userId: number,
-    items: RecordReceiptItem[],
-  ): Promise<RecordExpenseResult[]> {
-    if (items.length === 0) return [];
+    data: RecordReceiptData,
+  ): Promise<RecordReceiptResult> {
+    if (data.items.length === 0) {
+      return { expenses: [], categoriesAffected: [] };
+    }
 
     const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
 
-    // Group items by category
-    const byCategory = new Map<string, RecordReceiptItem[]>();
-    for (const item of items) {
-      const existing = byCategory.get(item.category);
+    // Group items by (category, currency). We group by both — not category
+    // alone — because a receipt may legitimately contain items in different
+    // currencies under the same category (e.g. duty-free purchases with
+    // mixed EUR/USD prices). Grouping only by category and then picking the
+    // first item's currency would silently sum "10 EUR + 100 RSD" as
+    // "110 EUR" — a real corruption bug. Splitting by currency creates one
+    // sheet row per (category, currency) pair, which is the correct shape.
+    const byKey = new Map<
+      string,
+      { category: string; currency: CurrencyCode; items: RecordReceiptItem[] }
+    >();
+    for (const item of data.items) {
+      const key = `${item.category}\u0000${item.currency}`;
+      const existing = byKey.get(key);
       if (existing) {
-        existing.push(item);
+        existing.items.push(item);
       } else {
-        byCategory.set(item.category, [item]);
+        byKey.set(key, { category: item.category, currency: item.currency, items: [item] });
       }
     }
 
-    const currentDate = format(new Date(), 'yyyy-MM-dd');
-    const results: RecordExpenseResult[] = [];
+    // Build per-(category, currency) batches (pure computation, no I/O)
+    interface CategoryBatch {
+      category: string;
+      items: RecordReceiptItem[];
+      totalAmount: number;
+      currency: CurrencyCode;
+      comment: string;
+      eurAmount: number;
+      rate: number;
+      row: ExpenseRowData;
+    }
 
-    for (const [category, categoryItems] of byCategory.entries()) {
-      if (categoryItems.length === 0) continue;
-
-      const totalAmount = categoryItems.reduce((sum, item) => sum + item.total, 0);
-      const firstItem = categoryItems[0];
-      if (!firstItem) continue;
-      const currency = firstItem.currency;
+    const batches: CategoryBatch[] = [];
+    for (const { category, currency, items } of byKey.values()) {
+      const totalAmount = items.reduce((sum, i) => sum + i.total, 0);
+      const comment = buildReceiptComment(items);
       const rate = this.eurConverter.getExchangeRate(currency);
       const eurAmount = this.eurConverter.convertToEUR(totalAmount, currency);
-
-      const comment = `Чек: ${categoryItems.map((i) => `${i.name} (${i.quantity}x${i.price})`).join(', ')}`;
       const amounts = buildAmountsRecord(totalAmount, currency, enabledCurrencies);
 
-      // Write to sheet if connected
-      if (conn && spreadsheetId) {
-        await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
-          date: currentDate,
+      batches.push({
+        category,
+        items,
+        totalAmount,
+        currency,
+        comment,
+        eurAmount,
+        rate,
+        row: {
+          date: data.date,
           category,
           comment,
           amounts,
           eurAmount,
           rate,
-        });
-      }
-
-      const expense = this.expenses.create({
-        group_id: groupId,
-        user_id: userId,
-        date: currentDate,
-        category,
-        comment,
-        amount: totalAmount,
-        currency,
-        eur_amount: eurAmount,
+        },
       });
-
-      // Create expense items
-      for (const item of categoryItems) {
-        this.expenseItems.create({
-          expense_id: expense.id,
-          name_ru: item.name,
-          name_original: item.nameOriginal || null,
-          quantity: item.quantity,
-          price: item.price,
-          total: item.total,
-        });
-      }
-
-      results.push({ expense, eurAmount });
     }
 
+    if (batches.length === 0) {
+      return { expenses: [], categoriesAffected: [] };
+    }
+
+    // One batched sheet write for all category rows
+    if (conn && spreadsheetId) {
+      logger.info(
+        { rowCount: batches.length, itemCount: data.items.length, date: data.date },
+        '[RECORD_RECEIPT] Writing receipt to sheet',
+      );
+      await this.sheetWriter.appendExpenseRows(
+        conn,
+        spreadsheetId,
+        batches.map((b) => b.row),
+      );
+    } else {
+      logger.info(
+        { rowCount: batches.length, itemCount: data.items.length },
+        '[RECORD_RECEIPT] Saving receipt locally (no Google Sheets)',
+      );
+    }
+
+    // Single DB transaction: one expense per category + all expense items
+    const results: RecordExpenseResult[] = [];
+    this.runInTransaction(() => {
+      for (const batch of batches) {
+        const expense = this.expenses.create({
+          group_id: groupId,
+          user_id: userId,
+          date: data.date,
+          category: batch.category,
+          comment: batch.comment,
+          amount: batch.totalAmount,
+          currency: batch.currency,
+          eur_amount: batch.eurAmount,
+          receipt_id: data.receiptId ?? null,
+          receipt_file_id: data.receiptFileId ?? null,
+        });
+
+        for (const item of batch.items) {
+          this.expenseItems.create({
+            expense_id: expense.id,
+            name_ru: item.name,
+            name_original: item.nameOriginal ?? null,
+            quantity: item.quantity,
+            price: item.price,
+            total: item.total,
+          });
+        }
+
+        results.push({ expense, eurAmount: batch.eurAmount });
+      }
+    });
+
+    // Dedupe categories — multiple batches can share one category when a
+    // receipt has mixed currencies in the same category, but budget checks
+    // downstream need the distinct category list.
+    const categoriesAffected = Array.from(new Set(batches.map((b) => b.category)));
+
     logger.info(
-      `[RECORD_BATCH] Recorded ${results.length} category expenses from ${items.length} items`,
+      `[RECORD_RECEIPT] Recorded ${results.length} expense rows from ${data.items.length} items`,
     );
-    return results;
+
+    return { expenses: results, categoriesAffected };
   }
 
   /**

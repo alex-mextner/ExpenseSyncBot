@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
 import type { BankConnection, BankTransaction } from '../../database/types';
+import { buildNeutralSnapshot } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 import type { CategoryTaAnalysis } from './ta/analyzer';
 import type {
@@ -57,7 +58,7 @@ const { SpendingAnalytics } = await import('./spending-analytics');
 mock.module('./spending-analytics', () => ({
   SpendingAnalytics,
   spendingAnalytics: {
-    getFinancialSnapshot: mock(() => buildNeutralSnapshot()),
+    getFinancialSnapshot: mock(() => buildTriggerSnapshot()),
   },
 }));
 
@@ -66,44 +67,21 @@ const { checkSmartTriggers, recordAdviceSent } = await import('./advice-triggers
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function buildNeutralSnapshot(overrides: Partial<FinancialSnapshot> = {}): FinancialSnapshot {
-  return {
-    burnRates: [],
-    weekTrend: {
-      period: 'week',
-      current_total: 100,
-      previous_total: 100,
-      change_percent: 0,
-      direction: 'stable',
-      category_changes: [],
-    },
-    monthTrend: {
-      period: 'month',
-      current_total: 500,
-      previous_total: 500,
-      change_percent: 0,
-      direction: 'stable',
-      category_changes: [],
-    },
-    anomalies: [],
-    dayOfWeekPatterns: [],
-    velocity: {
-      period_1_daily_avg: 50,
-      period_2_daily_avg: 50,
-      acceleration: 0,
-      trend: 'stable',
-    },
-    budgetUtilization: null,
-    streak: {
-      current_streak_days: 0,
-      streak_type: 'no_spending',
-      avg_daily_during_streak: 0,
-      overall_daily_average: 50,
-    },
-    projection: null,
-    technicalAnalysis: null,
-    ...overrides,
-  };
+// Default to a non-low-confidence projection so warning/critical burn-rate
+// tests (which exist independent of the confidence gate) are not suppressed
+// by it. Tests that specifically exercise the gate override this explicitly.
+const DEFAULT_PROJECTION: FinancialSnapshot['projection'] = {
+  days_elapsed: 15,
+  days_in_month: 30,
+  current_total: 500,
+  projected_total: 1000,
+  projected_vs_last_month: 100,
+  confidence: 'medium',
+  category_projections: [],
+};
+
+function buildTriggerSnapshot(overrides: Partial<FinancialSnapshot> = {}): FinancialSnapshot {
+  return buildNeutralSnapshot({ projection: DEFAULT_PROJECTION, ...overrides });
 }
 
 function buildBurnRate(overrides: Partial<BudgetBurnRate> = {}): BudgetBurnRate {
@@ -165,7 +143,7 @@ afterEach(() => {
 describe('checkSmartTriggers', () => {
   test('neutral snapshot with no anomalies or budget issues returns weekly_check on Monday', () => {
     // System time is set to Monday 2026-03-23 in beforeEach
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(9999, snapshot);
     // On a Monday with neutral snapshot, weekly_check fires
     expect(result).not.toBeNull();
@@ -176,7 +154,7 @@ describe('checkSmartTriggers', () => {
   test('returns null when daily advice limit is reached', () => {
     mockAdviceLogs.countToday.mockImplementation(() => 3);
 
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'exceeded', spent: 600 })],
     });
 
@@ -185,7 +163,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('budget exceeded triggers alert', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'exceeded',
@@ -209,7 +187,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('budget warning triggers alert with projected data', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'warning',
@@ -230,7 +208,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('budget critical triggers alert', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'critical',
@@ -250,8 +228,165 @@ describe('checkSmartTriggers', () => {
     expect(result?.topic).toContain('100');
   });
 
+  // ── Projection confidence gate ──────────────────────────────────────
+  // Reproduces the false-alert bug: a lumpy one-off expense early in the
+  // month (e.g. a car repair on day 2) produces a huge linear projection
+  // and used to fire a `critical` budget-threshold alert. The spec says
+  // projection-based triggers must be suppressed at low confidence.
+
+  test('low-confidence projection suppresses critical burn-rate alert (lumpy car expense, day 2)', () => {
+    // Tuesday — no weekly_check noise, so null means "all triggers suppressed"
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+
+    const snapshot = buildTriggerSnapshot({
+      // One car expense of 300 on day 2 of a 30-day month → linear extrapolation
+      // projects 4500 for the month on a 500 budget. `computeBurnRates` marks
+      // this `critical`, but projection.confidence is `low` (days_elapsed < 7)
+      // so the alert must NOT fire.
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Автомобиль',
+          spent: 300,
+          projected_total: 4500,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 2,
+          days_remaining: 28,
+        }),
+      ],
+      projection: {
+        days_elapsed: 2,
+        days_in_month: 30,
+        current_total: 300,
+        projected_total: 4500,
+        projected_vs_last_month: 900,
+        confidence: 'low',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8001, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('low-confidence projection suppresses warning burn-rate alert', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Продукты',
+          projected_total: 450,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 3,
+        }),
+      ],
+      projection: {
+        days_elapsed: 3,
+        days_in_month: 30,
+        current_total: 150,
+        projected_total: 1500,
+        projected_vs_last_month: 300,
+        confidence: 'low',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8002, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('low-confidence projection still fires EXCEEDED alert (fact, not projection)', () => {
+    // `exceeded` means spent >= limit — that is a hard fact, no extrapolation
+    // involved. It must still fire even when the month is young, because the
+    // user has already blown past the budget regardless of projection math.
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Developer',
+          spent: 600,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 2,
+        }),
+      ],
+      projection: {
+        days_elapsed: 2,
+        days_in_month: 30,
+        current_total: 600,
+        projected_total: 9000,
+        projected_vs_last_month: 1500,
+        confidence: 'low',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8003, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.topic).toContain('exceeded');
+    expect(result?.data['spent']).toBe(600);
+  });
+
+  test('null projection (too early in month) suppresses warning/critical alerts', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Транспорт',
+          projected_total: 3000,
+          budget_limit: 500,
+          currency: 'EUR',
+          days_elapsed: 1,
+        }),
+      ],
+      projection: null,
+    });
+
+    const result = checkSmartTriggers(8004, snapshot);
+    expect(result).toBeNull();
+  });
+
+  test('medium-confidence projection allows critical alert to fire', () => {
+    // Past the first week: projection confidence is medium/high, the linear
+    // extrapolation is trustworthy, and the alert should fire normally.
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'critical',
+          category: 'Rent',
+          projected_total: 1200,
+          budget_limit: 1000,
+          currency: 'USD',
+          days_elapsed: 15,
+        }),
+      ],
+      projection: {
+        days_elapsed: 15,
+        days_in_month: 30,
+        current_total: 600,
+        projected_total: 1200,
+        projected_vs_last_month: 120,
+        confidence: 'medium',
+        category_projections: [],
+      },
+    });
+
+    const result = checkSmartTriggers(8005, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('budget_threshold');
+    expect(result?.topic).toContain('Rent');
+    expect(result?.topic).toContain('100');
+  });
+
   test('significant category anomaly triggers alert', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       anomalies: [
         buildAnomaly({
           category: 'Entertainment',
@@ -275,7 +410,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('extreme anomaly triggers alert', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       anomalies: [buildAnomaly({ severity: 'extreme', deviation_ratio: 5.0 })],
     });
 
@@ -286,7 +421,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('mild anomaly does NOT trigger', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       anomalies: [buildAnomaly({ severity: 'mild', deviation_ratio: 1.2 })],
     });
 
@@ -299,7 +434,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('velocity spike (accelerating > 50%) triggers quick advice', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 30,
         period_2_daily_avg: 60,
@@ -316,7 +451,7 @@ describe('checkSmartTriggers', () => {
   });
 
   test('budget exceeded takes priority over anomaly (priority order)', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'exceeded', category: 'Food', spent: 600 })],
       anomalies: [buildAnomaly({ severity: 'extreme' })],
     });
@@ -330,7 +465,7 @@ describe('checkSmartTriggers', () => {
   test('already-sent topic this month is skipped', () => {
     mockAdviceLogs.hasTopicThisMonth.mockImplementation(() => true);
 
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'exceeded', category: 'Food', spent: 600 })],
       anomalies: [buildAnomaly({ severity: 'extreme' })],
       velocity: {
@@ -365,7 +500,7 @@ describe('recordAdviceSent + cooldown', () => {
     const groupId = 7001;
 
     // First call: budget exceeded should fire
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'exceeded', category: 'A', spent: 600 })],
     });
 
@@ -378,7 +513,7 @@ describe('recordAdviceSent + cooldown', () => {
     recordAdviceSent(groupId, 'quick');
 
     // Second call with a different exceeded budget — should be blocked by cooldown
-    const snapshot2 = buildNeutralSnapshot({
+    const snapshot2 = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'exceeded', category: 'B', spent: 700 })],
     });
 
@@ -390,7 +525,7 @@ describe('recordAdviceSent + cooldown', () => {
   test('quick cooldown (4h): blocks velocity spike after recording', () => {
     const groupId = 7002;
 
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 30,
         period_2_daily_avg: 60,
@@ -419,7 +554,7 @@ describe('recordAdviceSent + cooldown', () => {
     recordAdviceSent(groupId, 'alert');
 
     // Velocity spike is 'quick' tier — should still fire
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 30,
         period_2_daily_avg: 60,
@@ -441,7 +576,7 @@ describe('recordAdviceSent + cooldown', () => {
 describe('edge cases', () => {
   test('weekly_check returns correct topic format with week number', () => {
     // Monday 2026-03-23 set in beforeEach
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8001, snapshot);
     expect(result).not.toBeNull();
     expect(result?.type).toBe('weekly_check');
@@ -452,7 +587,7 @@ describe('edge cases', () => {
   test('weekly_check does NOT fire on a non-Monday (Tuesday)', () => {
     // Override to Tuesday
     setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8002, snapshot);
     // No budget/anomaly/velocity — should return null on non-Monday
     expect(result).toBeNull();
@@ -460,13 +595,13 @@ describe('edge cases', () => {
 
   test('weekly_check does NOT fire on Sunday', () => {
     setSystemTime(new Date('2026-03-22T10:00:00Z')); // Sunday
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8003, snapshot);
     expect(result).toBeNull();
   });
 
   test('multiple budgets: only the first exceeded one fires', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({ status: 'on_track', category: 'Food', spent: 100 }),
         buildBurnRate({ status: 'exceeded', category: 'Transport', spent: 600 }),
@@ -481,7 +616,7 @@ describe('edge cases', () => {
   });
 
   test('budget warning topic includes "80" threshold', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'warning', category: 'Gym' })],
     });
     const result = checkSmartTriggers(8005, snapshot);
@@ -490,7 +625,7 @@ describe('edge cases', () => {
   });
 
   test('budget critical topic includes "100" threshold', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'critical', category: 'Rent' })],
     });
     const result = checkSmartTriggers(8006, snapshot);
@@ -499,7 +634,7 @@ describe('edge cases', () => {
   });
 
   test('velocity spike at exactly 50% acceleration does NOT trigger (boundary: > 50 required)', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 50,
         period_2_daily_avg: 75,
@@ -514,7 +649,7 @@ describe('edge cases', () => {
   });
 
   test('velocity spike at 51% acceleration DOES trigger', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 50,
         period_2_daily_avg: 75.5,
@@ -529,7 +664,7 @@ describe('edge cases', () => {
   });
 
   test('velocity trend stable does NOT trigger velocity_spike even with high acceleration number', () => {
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 50,
         period_2_daily_avg: 100,
@@ -547,7 +682,7 @@ describe('edge cases', () => {
     // Use March 1 (day 1 of month, also not Monday to isolate)
     setSystemTime(new Date('2026-03-01T10:00:00Z')); // Sunday
     mockExpenses.getCountForRange.mockImplementation(() => 1);
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8010, snapshot);
     expect(result).not.toBeNull();
     expect(result?.type).toBe('first_expense_of_month');
@@ -558,7 +693,7 @@ describe('edge cases', () => {
   test('first_expense_of_month does NOT fire when count > 1', () => {
     setSystemTime(new Date('2026-03-01T10:00:00Z'));
     mockExpenses.getCountForRange.mockImplementation(() => 5);
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8011, snapshot);
     expect(result).toBeNull();
   });
@@ -566,7 +701,7 @@ describe('edge cases', () => {
   test('first_expense_of_month does NOT fire after day 3', () => {
     setSystemTime(new Date('2026-03-05T10:00:00Z')); // day 5
     mockExpenses.getCountForRange.mockImplementation(() => 1);
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8012, snapshot);
     expect(result).toBeNull();
   });
@@ -583,7 +718,7 @@ describe('edge cases', () => {
 
     // Use Tuesday to avoid weekly_check interference
     setSystemTime(new Date('2026-03-24T10:00:00Z'));
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 30,
         period_2_daily_avg: 80,
@@ -606,7 +741,7 @@ describe('edge cases', () => {
       } as AdviceLog,
     ]);
 
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 30,
         period_2_daily_avg: 80,
@@ -679,7 +814,7 @@ describe('edge cases', () => {
 
   test('critical alert fires after day 5', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z'));
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'critical',
@@ -698,7 +833,7 @@ describe('edge cases', () => {
 
   test('budget_limit=0 with status exceeded does NOT trigger (disabled category)', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({ status: 'exceeded', category: 'Путешествия', budget_limit: 0, spent: 0 }),
       ],
@@ -709,7 +844,7 @@ describe('edge cases', () => {
 
   test('budget_limit=0 with status warning does NOT trigger (disabled category)', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z'));
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'warning',
@@ -725,7 +860,7 @@ describe('edge cases', () => {
 
   test('budget_limit=0 with status critical does NOT trigger (disabled category)', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z'));
-    const snapshot = buildNeutralSnapshot({
+    const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'critical',
@@ -741,7 +876,7 @@ describe('edge cases', () => {
 
   test('all trigger types return correct tier', () => {
     // alert tier
-    const alertSnap = buildNeutralSnapshot({
+    const alertSnap = buildTriggerSnapshot({
       burnRates: [buildBurnRate({ status: 'exceeded' })],
     });
     const alertResult = checkSmartTriggers(8015, alertSnap);
@@ -749,7 +884,7 @@ describe('edge cases', () => {
 
     // quick tier — velocity (use unique groupId, Tuesday to avoid weekly check overlap)
     setSystemTime(new Date('2026-03-24T10:00:00Z'));
-    const quickSnap = buildNeutralSnapshot({
+    const quickSnap = buildTriggerSnapshot({
       velocity: {
         period_1_daily_avg: 30,
         period_2_daily_avg: 80,
@@ -773,7 +908,7 @@ describe('edge cases', () => {
       () => [{ id: 1 }, { id: 2 }, { id: 3 }] as BankTransaction[],
     );
 
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8017, snapshot);
 
     expect(result).not.toBeNull();
@@ -788,7 +923,7 @@ describe('edge cases', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z'));
 
     // mockBankConnections returns [] by default (reset in beforeEach)
-    const snapshot = buildNeutralSnapshot();
+    const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8018, snapshot);
 
     expect(result).toBeNull();

@@ -121,7 +121,7 @@ export class ExpenseRepository {
   create(data: CreateExpenseData): Expense {
     const query = this.db.query<
       { id: number },
-      [number, number, string, string, string, number, string, number, number | null]
+      [number, number, string, string, string, number, string, number, number | null, string | null]
     >(`
       INSERT INTO expenses (
         group_id,
@@ -132,9 +132,10 @@ export class ExpenseRepository {
         amount,
         currency,
         eur_amount,
-        receipt_id
+        receipt_id,
+        receipt_file_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
 
@@ -148,6 +149,7 @@ export class ExpenseRepository {
       data.currency,
       data.eur_amount,
       data.receipt_id ?? null,
+      data.receipt_file_id ?? null,
     );
 
     if (!result) {

@@ -270,6 +270,7 @@ function makeExpense(overrides: Partial<Expense> = {}): Expense {
     currency: 'EUR',
     eur_amount: 25.5,
     receipt_id: null,
+    receipt_file_id: null,
     created_at: '2026-03-29T09:00:00Z',
     ...overrides,
   };

@@ -45,17 +45,27 @@ export interface ConfirmExpense {
   total: number;
   category: string;
   currency: string;
-  date?: string;
 }
 
+/**
+ * Confirm a parsed receipt. `date` is the date printed on the receipt (one
+ * value for the whole receipt, not per item) — the server uses this to
+ * timestamp every created expense. Optional: falls back to today on the
+ * server.
+ */
 export async function confirmExpenses(
   groupId: number,
   expenses: ConfirmExpense[],
-  fileId?: string | null,
+  opts?: { fileId?: string | null; date?: string | null },
 ): Promise<{ created: number }> {
   return apiRequest<{ created: number }>(`/api/receipt/confirm?groupId=${groupId}`, {
     method: 'POST',
-    body: JSON.stringify({ groupId, fileId: fileId ?? null, expenses }),
+    body: JSON.stringify({
+      groupId,
+      fileId: opts?.fileId ?? null,
+      date: opts?.date ?? null,
+      expenses,
+    }),
   });
 }
 

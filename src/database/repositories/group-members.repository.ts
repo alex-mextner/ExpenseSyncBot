@@ -37,6 +37,16 @@ export class GroupMembersRepository {
       .all(telegramId);
   }
 
+  /** Check if a user is a member of a specific group */
+  isMember(telegramId: number, groupId: number): boolean {
+    const row = this.db
+      .query<{ c: number }, [number, number]>(
+        `SELECT 1 AS c FROM group_members WHERE telegram_id = ? AND group_id = ? LIMIT 1`,
+      )
+      .get(telegramId, groupId);
+    return row !== null;
+  }
+
   /** Remove a user from a group */
   remove(telegramId: number, groupId: number): void {
     this.db

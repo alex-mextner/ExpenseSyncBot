@@ -67,19 +67,25 @@ jobs:
             BRANCH="${{ github.head_ref }}"
             MAIN_DIR="/var/www/ExpenseSyncBot"
             WORKTREE="$MAIN_DIR/.claude/worktrees/$BRANCH"
-            ENV_FILE="$MAIN_DIR/.env.stage"
+            STAGE_CWD="/var/www/ExpenseSyncBot-stage"
+            STAGE_ENV="$MAIN_DIR/.env.stage"
             PM2="/var/www/.bun/bin/pm2"
             BUN="/var/www/.bun/bin/bun"
 
-            # Start stage bot. Uses `bun --env-file` with an absolute path so
-            # the process doesn't depend on a `.env` file being present in
-            # the cwd — works identically for worktree and main checkouts.
+            # Merge prod .env + stage overrides into STAGE_CWD/.env, then
+            # start bun with --no-env-file --env-file pointing at the merged
+            # result. This avoids bun's auto-load from package.json directory.
             start_stage_bot() {
-              local cwd="$1"
+              local code_dir="$1"
+              mkdir -p "$STAGE_CWD/data"
+              cat "$MAIN_DIR/.env" "$STAGE_ENV" | grep -v "^#" | grep -v "^$" | \
+                awk -F= '{keys[$1]=$0} END {for(k in keys) print keys[k]}' > "$STAGE_CWD/.env"
+              echo "Merged env → $STAGE_CWD/.env ($(wc -l < "$STAGE_CWD/.env") vars)"
+
               $PM2 delete expensesyncbot-stage 2>/dev/null || true
-              $PM2 start "$BUN --env-file=$ENV_FILE index.ts" \
+              $PM2 start "$BUN --no-env-file --env-file=$STAGE_CWD/.env $code_dir/index.ts" \
                    --name expensesyncbot-stage \
-                   --cwd "$cwd"
+                   --cwd "$STAGE_CWD"
 
               sleep 3
               STATUS=$($PM2 jlist | $BUN -e "
@@ -120,9 +126,9 @@ jobs:
               local short_sha="${commit_sha:0:7}"
 
               local stage_bot_token
-              stage_bot_token=$(grep "^BOT_TOKEN=" "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+              stage_bot_token=$(grep "^BOT_TOKEN=" "$STAGE_ENV" | cut -d= -f2- | tr -d '"' | tr -d "'")
               if [ -z "$stage_bot_token" ]; then
-                echo "⚠️  BOT_TOKEN not found in $ENV_FILE — skipping announcement"
+                echo "⚠️  BOT_TOKEN not found in $STAGE_ENV — skipping announcement"
                 return 0
               fi
               if [ -z "${ADMIN_CHAT_ID:-}" ]; then

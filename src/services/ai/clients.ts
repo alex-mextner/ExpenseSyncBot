@@ -8,6 +8,12 @@ import OpenAI from 'openai';
 import { env } from '../../config/env';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+// Gemini 2.5 Pro has always-on "thinking" that adds significant latency.
+// 60s is too tight for large receipts (70 items: 27s measured, but network
+// jitter + thinking can push past 60s). 120s matches PARSE_TIMEOUT_MS in
+// receipt-parser.ts so the client doesn't kill the request before the
+// application-level timeout fires.
+const GEMINI_TIMEOUT_MS = 120_000;
 
 function makeFetchDelegate(): (
   url: string | URL | Request,
@@ -51,7 +57,7 @@ export function geminiClient(): OpenAI {
     _gemini = new OpenAI({
       apiKey: env.GEMINI_API_KEY,
       baseURL: env.GEMINI_BASE_URL,
-      timeout: DEFAULT_TIMEOUT_MS,
+      timeout: GEMINI_TIMEOUT_MS,
       maxRetries: 0,
       fetch: makeFetchDelegate(),
     });

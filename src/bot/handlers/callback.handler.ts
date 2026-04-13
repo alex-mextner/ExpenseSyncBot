@@ -8,6 +8,7 @@ import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
+import { formatReceiptCommentForTelegram } from '../../utils/receipt-display';
 import {
   handleBankAccountsCallback,
   handleBankAccountToggleCallback,
@@ -1586,9 +1587,8 @@ async function handleSyncMoreCallback(ctx: Ctx['CallbackQuery'], params: string[
   const lines = [`📋 ${label} (ещё ${items.length}):`];
   for (const e of items) {
     const field = e.field ? ` (${e.field})` : '';
-    lines.push(
-      `  ${e.date} ${e.amount} ${e.currency} ${e.category}${e.comment ? ` ${e.comment}` : ''}${field}`,
-    );
+    const displayComment = e.comment ? ` ${formatReceiptCommentForTelegram(e.comment)}` : '';
+    lines.push(`  ${e.date} ${e.amount} ${e.currency} ${e.category}${displayComment}${field}`);
   }
 
   let text = lines.join('\n');

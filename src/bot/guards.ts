@@ -41,9 +41,16 @@ export function requireGroup(handler: GroupCommandHandler): (ctx: Ctx['Command']
       return;
     }
 
-    // Track membership for private chat redirect buttons
+    // Ensure user row exists — command handlers bypass message.handler
+    // (which normally creates it) because bot/index.ts skips commands.
     const telegramId = ctx.from?.id;
     if (telegramId) {
+      const user = database.users.findByTelegramId(telegramId);
+      if (!user) {
+        database.users.create({ telegram_id: telegramId, group_id: group.id });
+      } else if (user.group_id !== group.id) {
+        database.users.update(telegramId, { group_id: group.id });
+      }
       trackMembership(telegramId, group.id);
     }
 

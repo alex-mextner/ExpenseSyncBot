@@ -62,24 +62,73 @@ function validateInitData(rawInitData: string): number | null {
   }
 }
 
-/** Row shape returned by the membership query */
-interface MembershipRow {
-  id: number;
-}
+/**
+ * Resolve a (telegramGroupId, telegramUserId) pair to internal DB ids.
+ *
+ * Steps:
+ * 1. Find the group by `telegram_group_id`. If missing, return `{ ok: false,
+ *    code: 'group_missing' }` — the group was never `/connect`-ed.
+ * 2. Find the user by `telegram_id`. If missing, **create** it linked to the
+ *    group — this covers the first-open-Mini-App flow where the user has a
+ *    valid Telegram identity (HMAC-signed initData) but has never sent a
+ *    message to the bot (so `message.handler` never ran). Creating the user
+ *    here is safe: the Telegram signature guarantees the identity.
+ * 3. If the user exists but belongs to a different group, update its
+ *    `group_id` to the current one — matches the behaviour of
+ *    `message.handler` and `callback.handler::ensureUserInGroup`.
+ */
+type GroupResolution =
+  | { ok: true; internalGroupId: number; internalUserId: number }
+  | { ok: false; code: 'group_missing' | 'not_member' };
 
-/** Check that userId is a member of the group identified by telegram_group_id */
-function resolveGroupMembership(telegramGroupId: number, userId: number): number | null {
-  const row = database.queryOne<MembershipRow>(
-    `SELECT g.id FROM groups g
-     WHERE g.telegram_group_id = ? AND EXISTS (
-       SELECT 1 FROM users u
-       WHERE u.telegram_id = ? AND u.group_id = g.id
-     )`,
-    telegramGroupId,
-    userId,
-  );
+function resolveGroupAndEnsureUser(
+  telegramGroupId: number,
+  telegramUserId: number,
+): GroupResolution {
+  const group = database.groups.findByTelegramGroupId(telegramGroupId);
+  if (!group) {
+    return { ok: false, code: 'group_missing' };
+  }
 
-  return row ? row.id : null;
+  // Check that the user has interacted with the bot inside THIS group at
+  // least once (any command, message, or callback creates a group_members
+  // entry via trackMembership / requireGroup guard). Without this check,
+  // anyone with valid Telegram initData could supply an arbitrary groupId
+  // and gain access to someone else's group.
+  let user = database.users.findByTelegramId(telegramUserId);
+  const isMember =
+    (user && user.group_id === group.id) ||
+    database.groupMembers.isMember(telegramUserId, group.id);
+
+  if (!isMember) {
+    logger.warn(
+      { telegramUserId, telegramGroupId, internalGroupId: group.id },
+      'Auth rejected: user is not a member of this group',
+    );
+    return { ok: false, code: 'not_member' };
+  }
+
+  // Membership verified — ensure user row exists and is linked to this group
+  if (!user) {
+    logger.info(
+      { telegramUserId, internalGroupId: group.id },
+      'Auto-creating user on Mini App first open',
+    );
+    user = database.users.create({
+      telegram_id: telegramUserId,
+      group_id: group.id,
+    });
+  } else if (user.group_id !== group.id) {
+    logger.info(
+      { telegramUserId, from: user.group_id, to: group.id },
+      'Updating user group_id from Mini App auth',
+    );
+    database.users.update(telegramUserId, { group_id: group.id });
+    const refreshed = database.users.findByTelegramId(telegramUserId);
+    if (refreshed) user = refreshed;
+  }
+
+  return { ok: true, internalGroupId: group.id, internalUserId: user.id };
 }
 
 /** Build CORS headers for a given allowed origin */
@@ -174,30 +223,27 @@ export async function validateAndResolveContext(
     };
   }
 
-  const user = database.users.findByTelegramId(userId);
-  if (!user) {
-    logger.warn({ userId, telegramGroupId }, 'Auth rejected: user not found in DB');
+  // HMAC verified → Telegram identity is trusted. Resolve the group and
+  // auto-create the user row if this is the first time we see them.
+  const resolution = resolveGroupAndEnsureUser(telegramGroupId, userId);
+  if (!resolution.ok) {
+    const message =
+      resolution.code === 'not_member'
+        ? 'Not a member of this group — send a message in the group first'
+        : 'Group not configured — run /connect in the group first';
+    logger.warn({ userId, telegramGroupId, code: resolution.code }, `Auth rejected: ${message}`);
     return {
       ok: false,
-      response: errorResponse(401, 'User not found', 'INVALID_INIT_DATA', corsHeaders),
-    };
-  }
-
-  const internalGroupId = resolveGroupMembership(telegramGroupId, userId);
-  if (internalGroupId === null) {
-    logger.warn({ userId, telegramGroupId }, 'Auth rejected: user not a member of group');
-    return {
-      ok: false,
-      response: errorResponse(403, 'Forbidden', 'FORBIDDEN_GROUP', corsHeaders),
+      response: errorResponse(403, message, 'FORBIDDEN_GROUP', corsHeaders),
     };
   }
 
   return {
     ok: true,
     userId,
-    internalUserId: user.id,
+    internalUserId: resolution.internalUserId,
     groupId: telegramGroupId,
-    internalGroupId,
+    internalGroupId: resolution.internalGroupId,
     corsHeaders,
   };
 }
@@ -445,6 +491,7 @@ export async function handleMiniAppRequest(
     let body: {
       groupId?: unknown;
       fileId?: unknown;
+      date?: unknown;
       expenses?: unknown;
     };
     try {
@@ -463,19 +510,18 @@ export async function handleMiniAppRequest(
       return errorResponse(400, 'Missing or empty expenses array', 'BAD_REQUEST', corsHeaders);
     }
 
-    /** Expected shape of each expense item from client */
-    interface ConfirmExpenseInput {
+    /** Expected shape of each receipt item from the Mini App client */
+    interface ConfirmItemInput {
       name?: unknown;
       total?: unknown;
       category?: unknown;
       currency?: unknown;
-      date?: unknown;
       qty?: unknown;
       price?: unknown;
     }
 
-    const expenseInputs = body.expenses as ConfirmExpenseInput[];
-    for (const item of expenseInputs) {
+    const itemInputs = body.expenses as ConfirmItemInput[];
+    for (const item of itemInputs) {
       if (
         typeof item.name !== 'string' ||
         typeof item.total !== 'number' ||
@@ -487,7 +533,7 @@ export async function handleMiniAppRequest(
       ) {
         return errorResponse(
           400,
-          'Each expense must have name (string), total (positive finite number), category (string), currency (valid ISO code)',
+          'Each item must have name (string), total (positive finite number), category (string), currency (valid ISO code)',
           'BAD_REQUEST',
           corsHeaders,
         );
@@ -499,40 +545,38 @@ export async function handleMiniAppRequest(
 
     const fileId = typeof body.fileId === 'string' ? body.fileId : null;
 
+    // Receipt date (one for the whole receipt, not per item). Fall back to today.
+    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const date =
+      typeof body.date === 'string' && ISO_DATE_RE.test(body.date)
+        ? body.date
+        : new Date().toISOString().slice(0, 10);
+
     logger.info(
-      { userId: ctx.userId, groupId: telegramGroupId, expenseCount: expenseInputs.length },
+      {
+        userId: ctx.userId,
+        groupId: telegramGroupId,
+        itemCount: itemInputs.length,
+        date,
+        hasFileId: fileId !== null,
+      },
       'Receipt confirm started',
     );
 
     try {
       const recorder = getExpenseRecorder();
-      let created = 0;
-
-      for (const item of expenseInputs) {
-        const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-        const date =
-          typeof item.date === 'string' && ISO_DATE_RE.test(item.date)
-            ? item.date
-            : new Date().toISOString().slice(0, 10);
-
-        const result = await recorder.record(ctx.internalGroupId, ctx.internalUserId, {
-          date,
-          category: item.category as string,
-          comment: item.name as string,
-          amount: item.total as number,
+      const result = await recorder.recordReceipt(ctx.internalGroupId, ctx.internalUserId, {
+        date,
+        receiptFileId: fileId,
+        items: itemInputs.map((item) => ({
+          name: item.name as string,
+          quantity: typeof item.qty === 'number' && item.qty > 0 ? item.qty : 1,
+          price: typeof item.price === 'number' ? item.price : (item.total as number),
+          total: item.total as number,
           currency: item.currency as CurrencyCode,
-        });
-
-        if (fileId) {
-          database.exec(
-            'UPDATE expenses SET receipt_file_id = ? WHERE id = ?',
-            fileId,
-            result.expense.id,
-          );
-        }
-
-        created++;
-      }
+          category: item.category as string,
+        })),
+      });
 
       try {
         emitForGroup(ctx.internalGroupId, 'expense_added');
@@ -540,9 +584,16 @@ export async function handleMiniAppRequest(
         logger.warn({ err: emitError }, 'SSE emit failed, continuing');
       }
 
-      logger.info({ userId: ctx.userId, created }, 'Receipt confirm completed');
+      logger.info(
+        {
+          userId: ctx.userId,
+          created: result.expenses.length,
+          categories: result.categoriesAffected.length,
+        },
+        'Receipt confirm completed',
+      );
 
-      return new Response(JSON.stringify({ created }), {
+      return new Response(JSON.stringify({ created: result.expenses.length }), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...ctx.corsHeaders },
       });

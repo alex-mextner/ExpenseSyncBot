@@ -13,4 +13,4 @@ cat "$REPO/.env" "$REPO/.env.stage" | grep -v "^#" | grep -v "^$" | awk -F= "{ke
 
 echo "Merged env → $STAGE_CWD/.env ($(wc -l < "$STAGE_CWD/.env") vars)"
 
-exec /var/www/.bun/bin/bun "$REPO/index.ts"
+exec /var/www/.bun/bin/bun --no-env-file --env-file="$STAGE_CWD/.env" "$REPO/index.ts"

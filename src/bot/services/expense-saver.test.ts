@@ -8,8 +8,8 @@ import { mockDatabase } from '../../test-utils/mocks/database';
 
 // ── Mock functions ───────────────────────────────────────────────────────────
 
-const appendExpenseRow = mock(() => Promise.resolve(undefined));
-const appendExpenseRows = mock(() => Promise.resolve(undefined));
+const appendExpenseRow = mock((..._args: unknown[]) => Promise.resolve(undefined));
+const appendExpenseRows = mock((..._args: unknown[]) => Promise.resolve(undefined));
 const googleConn = mock(() => ({}));
 
 const convertToEUR = mock(() => 1.72);
@@ -370,12 +370,41 @@ describe('saveReceiptExpenses', () => {
     expect(appendExpenseRows).toHaveBeenCalledTimes(1);
     // No DB writes — atomic rollback
     expect(mockExpenseCreate).not.toHaveBeenCalled();
-    expect(mockTransaction).not.toHaveBeenCalled();
     // Receipt items NOT deleted — user can retry after /reconnect
     expect(mockReceiptItemsDelete).not.toHaveBeenCalled();
     // Error message sent to user
     const errorMsg = sentMessages.find((m) => m.text.includes('Не удалось'));
     expect(errorMsg).toBeDefined();
+  });
+
+  it('writes 70 items in one category with ONE appendExpenseRows call (regression)', async () => {
+    // Simulates the 2026-04-11 incident: 70-item Maxi receipt from Mini App.
+    // Bot flow must share the same batched path as the Mini App after refactor.
+    const items = Array.from({ length: 70 }, (_, i) =>
+      makeReceiptItem({
+        id: i + 1,
+        confirmed_category: 'Продукты',
+        name_ru: `Item ${i}`,
+        total: 100,
+      }),
+    );
+    mockReceiptItemsFind.mockReturnValue(items);
+
+    await saveReceiptExpenses(TEST_PHOTO_QUEUE_ID, TEST_GROUP_ID, TEST_USER_ID);
+
+    // Exactly ONE batched sheet call for all 70 items (was 70× before fix)
+    expect(appendExpenseRows).toHaveBeenCalledTimes(1);
+    expect(appendExpenseRow).not.toHaveBeenCalled();
+
+    // The batched call receives a single-row payload — one row per category
+    const call = appendExpenseRows.mock.calls[0];
+    if (!call) throw new Error('appendExpenseRows not called');
+    const rows = call[2] as unknown[];
+    expect(rows).toHaveLength(1);
+
+    // Exactly one expense created (one category) and 70 linked expense items
+    expect(mockExpenseCreate).toHaveBeenCalledTimes(1);
+    expect(mockExpenseItemsCreate).toHaveBeenCalledTimes(70);
   });
 });
 
