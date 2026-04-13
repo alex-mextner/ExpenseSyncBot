@@ -1,6 +1,6 @@
 // Tests for StatusWriter — typing indicator, "..." suffix, close/finalize/finalizeError lifecycle.
 
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 // ── Logger ──────────────────────────────────────────────────────────────
@@ -35,8 +35,23 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Extract the typing interval callback registered by StatusWriter.
+ * StatusWriter is the only caller of setInterval in these tests, so the
+ * first captured call belongs to it.
+ */
+function getTypingCallback(
+  spy: ReturnType<typeof spyOn<typeof globalThis, 'setInterval'>>,
+): () => void {
+  const call = spy.mock.calls[0] as unknown as [() => void, number];
+  return call[0];
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 describe('StatusWriter', () => {
+  let setIntervalSpy: ReturnType<typeof spyOn<typeof globalThis, 'setInterval'>>;
+  let clearIntervalSpy: ReturnType<typeof spyOn<typeof globalThis, 'clearInterval'>>;
+
   beforeEach(() => {
     mockSendMessage.mockClear();
     mockEditMessageText.mockClear();
@@ -44,6 +59,13 @@ describe('StatusWriter', () => {
     mockSendChatAction.mockClear();
     logMock.error.mockClear();
     logMock.warn.mockClear();
+    setIntervalSpy = spyOn(globalThis, 'setInterval');
+    clearIntervalSpy = spyOn(globalThis, 'clearInterval');
+  });
+
+  afterEach(() => {
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 
   describe('constructor', () => {
@@ -58,16 +80,18 @@ describe('StatusWriter', () => {
       await writer.close();
     });
 
-    test('starts typing interval that sends chat actions', async () => {
+    test('starts typing interval every 4s that calls sendChatAction', async () => {
       const writer = new StatusWriter({ header: '🤖 Test' });
       await tick();
 
-      // Typing interval fires every 4s — use fake timer to verify
-      expect(mockSendChatAction).not.toHaveBeenCalled();
+      // setInterval was called with 4000ms
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 4000);
 
-      // Wait for the interval to fire (slightly over 4s)
-      await new Promise((resolve) => setTimeout(resolve, 4100));
-      expect(mockSendChatAction.mock.calls.length).toBeGreaterThanOrEqual(1);
+      // Manually fire the callback — verify it calls sendChatAction
+      const callback = getTypingCallback(setIntervalSpy);
+      callback();
+      await tick();
+      expect(mockSendChatAction).toHaveBeenCalledTimes(1);
 
       await writer.close();
     });
@@ -136,11 +160,8 @@ describe('StatusWriter', () => {
       await tick();
 
       await writer.close();
-      mockSendChatAction.mockClear();
 
-      // Wait past the typing interval — no more calls should happen
-      await new Promise((resolve) => setTimeout(resolve, 4200));
-      expect(mockSendChatAction).not.toHaveBeenCalled();
+      expect(clearIntervalSpy).toHaveBeenCalled();
     });
 
     test('is idempotent — second call is a no-op', async () => {
@@ -174,17 +195,7 @@ describe('StatusWriter', () => {
       expect(mockEditMessageText).toHaveBeenCalledWith(42, 'Final result', {
         throwOnError: true,
       });
-    });
-
-    test('stops typing interval on finalize', async () => {
-      const writer = new StatusWriter({ header: 'H' });
-      await tick();
-
-      await writer.finalize('Done');
-      mockSendChatAction.mockClear();
-
-      await new Promise((resolve) => setTimeout(resolve, 4200));
-      expect(mockSendChatAction).not.toHaveBeenCalled();
+      expect(clearIntervalSpy).toHaveBeenCalled();
     });
 
     test('throws when placeholder was never sent', async () => {
@@ -231,10 +242,8 @@ describe('StatusWriter', () => {
       await tick();
 
       await writer.finalizeError('err');
-      mockSendChatAction.mockClear();
 
-      await new Promise((resolve) => setTimeout(resolve, 4200));
-      expect(mockSendChatAction).not.toHaveBeenCalled();
+      expect(clearIntervalSpy).toHaveBeenCalled();
     });
 
     test('is a no-op if already closed', async () => {
