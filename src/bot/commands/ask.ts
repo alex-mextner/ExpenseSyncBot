@@ -284,27 +284,35 @@ async function sendSmartAdvice(
     // Live-stream the advice into an editable status message so the user sees
     // the long-form output building up in real time (3k tokens = 15-30s wait).
     const header = `${tierConfig.emoji} ${tierConfig.title}`;
-    const writer = new StatusWriter({ header, mode: 'plain' });
+    let writer = new StatusWriter({ header, mode: 'plain' });
 
-    let rawAdvice: string;
-    try {
-      const result = await aiStreamRound(
-        {
-          messages: [{ role: 'user', content: fullPrompt }],
-          maxTokens: tierConfig.max_tokens,
-          temperature: tierConfig.temperature,
-          chain: 'smart',
-          signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS[tier]),
-        },
-        { onTextDelta: (delta) => writer.append(delta) },
-      );
-      rawAdvice = result.text;
-    } catch (err) {
-      // Preserve whatever was already streamed and pin an error indicator on
-      // the end, so the user doesn't see the message silently vanish after the
-      // stream aborts (timeout, provider error, mid-stream hang).
-      await writer.finalizeError('<i>❌ Генерация прервана, попробуй ещё раз</i>');
-      throw err;
+    let rawAdvice: string | undefined;
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        const result = await aiStreamRound(
+          {
+            messages: [{ role: 'user', content: fullPrompt }],
+            maxTokens: tierConfig.max_tokens,
+            temperature: tierConfig.temperature,
+            chain: 'smart',
+            signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS[tier]),
+          },
+          { onTextDelta: (delta) => writer.append(delta) },
+        );
+        rawAdvice = result.text;
+        break;
+      } catch (err) {
+        if (attempt === 0) {
+          // First attempt failed — silently retry with a fresh message
+          logger.warn({ err }, '[ADVICE] First attempt failed, retrying');
+          await writer.close();
+          writer = new StatusWriter({ header, mode: 'plain' });
+          continue;
+        }
+        // Second attempt also failed — show error to the user
+        await writer.finalizeError('<i>❌ Генерация прервана, попробуй ещё раз</i>');
+        throw err;
+      }
     }
 
     if (!rawAdvice) {
