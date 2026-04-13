@@ -201,8 +201,9 @@ export class TelegramStreamWriter {
     try {
       // Build display: current streamed text + typing indicator + live tool indicator suffix
       let display = this.truncateForTelegram(processThinkTags(this.fullText)) || '⏳';
-      // Append "..." to indicate the AI is still writing (only for non-empty text, not placeholder)
-      if (this.fullText && !display.endsWith('...')) {
+      // Append "..." to indicate the AI is still writing.
+      // Skip if truncateForTelegram already added "..." (truncation) or if text is empty (placeholder).
+      if (this.fullText && !/\.{3}(<\/[a-z]+>)*$/i.test(display)) {
         display += '...';
       }
       if (this.toolLabel) {

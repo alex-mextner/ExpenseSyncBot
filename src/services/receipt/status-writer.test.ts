@@ -1,6 +1,6 @@
 // Tests for StatusWriter — typing indicator, "..." suffix, close/finalize/finalizeError lifecycle.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 // ── Logger ──────────────────────────────────────────────────────────────
@@ -44,11 +44,6 @@ describe('StatusWriter', () => {
     mockSendChatAction.mockClear();
     logMock.error.mockClear();
     logMock.warn.mockClear();
-  });
-
-  afterEach(() => {
-    // Clear any lingering intervals from unclosed writers
-    // (each test should close its writer, but just in case)
   });
 
   describe('constructor', () => {
