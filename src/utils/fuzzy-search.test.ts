@@ -9,6 +9,7 @@ import {
   levenshteinDistance,
   normalizeCategoryName,
   normalizePhonetic,
+  resetClassifierCircuit,
 } from './fuzzy-search';
 
 describe('normalizeCategoryName', () => {
@@ -151,11 +152,13 @@ describe('findBestCategoryMatchAsync', () => {
 
   beforeEach(() => {
     (env as { HF_TOKEN: string }).HF_TOKEN = 'test-token';
+    resetClassifierCircuit();
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
     (env as { HF_TOKEN: string }).HF_TOKEN = originalToken;
+    resetClassifierCircuit();
   });
 
   it('returns sync match without calling classifier', async () => {
@@ -250,6 +253,50 @@ describe('findBestCategoryMatchAsync', () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     expect(await findBestCategoryMatchAsync('абракадабра', ['Еда'])).toBeNull();
+  });
+
+  it('circuit breaker opens after 3 consecutive failures and skips fetch', async () => {
+    const fetchMock = mock(() => Promise.resolve(new Response('server error', { status: 500 })));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    // 3 consecutive failures → circuit opens
+    for (let i = 0; i < 3; i++) {
+      await findBestCategoryMatchAsync(`miss${i}`, ['Еда']);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    // 4th call should skip fetch entirely (circuit open)
+    fetchMock.mockClear();
+    await findBestCategoryMatchAsync('miss3', ['Еда']);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('circuit breaker resets on success', async () => {
+    let callCount = 0;
+    const fetchMock = mock(() => {
+      callCount++;
+      // First 2 calls fail, 3rd succeeds, 4th should still work
+      if (callCount <= 2) {
+        return Promise.resolve(new Response('error', { status: 500 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ sequence: 'x', labels: ['Еда'], scores: [0.9] })),
+      );
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    // 2 failures (circuit stays closed, threshold is 3)
+    await findBestCategoryMatchAsync('miss1', ['Еда']);
+    await findBestCategoryMatchAsync('miss2', ['Еда']);
+
+    // 3rd call succeeds → resets counter
+    const result = await findBestCategoryMatchAsync('miss3', ['Еда']);
+    expect(result).toBe('Еда');
+
+    // 4th call still works (circuit was reset by success)
+    const result2 = await findBestCategoryMatchAsync('miss4', ['Еда']);
+    expect(result2).toBe('Еда');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });
 

@@ -151,9 +151,8 @@ export const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
 /**
  * Truncate a message so it fits Telegram's message length limit.
- * Adds a visible ellipsis marker so users know the tail was cut off.
- * Does not try to preserve HTML tag structure — callers that need
- * HTML must re-sanitize the result.
+ * Closes any HTML tags broken by the cut (via closeUnmatchedTags),
+ * then appends a visible ellipsis marker.
  */
 export function truncateForTelegram(
   text: string,
@@ -161,7 +160,8 @@ export function truncateForTelegram(
 ): string {
   if (text.length <= maxLength) return text;
   const marker = '\n…(обрезано)';
-  return `${text.slice(0, maxLength - marker.length)}${marker}`;
+  const sliced = text.slice(0, maxLength - marker.length);
+  return `${closeUnmatchedTags(sliced)}${marker}`;
 }
 
 /**

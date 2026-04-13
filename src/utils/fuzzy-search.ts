@@ -149,6 +149,20 @@ const CLASSIFIER_MIN_SCORE = 0.4;
 const CLASSIFIER_TIMEOUT_MS = 10_000;
 const CLASSIFIER_MAX_RETRIES = 2;
 
+/** Circuit breaker: after N consecutive failures, disable for COOLDOWN_MS to avoid
+ *  adding 2-10s latency to every unmatched expense while HF is down. */
+const CIRCUIT_BREAKER_THRESHOLD = 3;
+const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+let circuitFailures = 0;
+let circuitOpenUntil = 0;
+
+/** Reset the circuit breaker (for tests). */
+export function resetClassifierCircuit(): void {
+  circuitFailures = 0;
+  circuitOpenUntil = 0;
+}
+
 interface ZeroShotResponse {
   sequence: string;
   labels: string[];
@@ -160,11 +174,20 @@ interface ZeroShotResponse {
  * Calls XNLI model entailment endpoint; returns the highest-scored label above threshold.
  * Retries once on 503 "model loading" (common on cold models).
  *
+ * Circuit breaker: after 3 consecutive failures, disables itself for 5 minutes
+ * so that a downed HF endpoint doesn't add seconds of latency to every expense.
+ *
  * Used when all string-based methods fail (different wording for same concept).
  * Example: "Расходы на ремонт квартиры" → matches "Ремонт" semantically.
  */
 async function classifyCategory(input: string, categories: string[]): Promise<string | null> {
   if (!env.HF_TOKEN || categories.length === 0) return null;
+
+  // Circuit breaker: skip entirely while open
+  if (circuitOpenUntil > Date.now()) {
+    logger.debug('classifier circuit breaker open, skipping');
+    return null;
+  }
 
   const body = JSON.stringify({
     inputs: input,
@@ -200,8 +223,19 @@ async function classifyCategory(input: string, categories: string[]): Promise<st
           { status: response.status, errorText, input },
           'zero-shot classifier HTTP error',
         );
+        circuitFailures++;
+        if (circuitFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+          logger.warn(
+            { failures: circuitFailures },
+            `classifier circuit breaker opened for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`,
+          );
+        }
         return null;
       }
+
+      // Success — reset circuit breaker
+      circuitFailures = 0;
 
       const result = (await response.json()) as ZeroShotResponse;
       const topLabel = result.labels[0];
@@ -214,6 +248,14 @@ async function classifyCategory(input: string, categories: string[]): Promise<st
       return null;
     } catch (err) {
       logger.warn({ err, input, attempt }, 'zero-shot classifier failed');
+      circuitFailures++;
+      if (circuitFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+        circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+        logger.warn(
+          { failures: circuitFailures },
+          `classifier circuit breaker opened for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`,
+        );
+      }
       return null;
     } finally {
       clearTimeout(timeout);
