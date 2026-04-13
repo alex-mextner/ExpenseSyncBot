@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { format } from 'date-fns';
 import type { BankAccount, BankConnection, BankTransaction, Group } from '../../database/types';
+import { makeBankTransaction } from '../../test-utils/fixtures';
 
 // ── Mock repositories (defined before mock.module so spyOn can target them) ──
 const mockBankConnections = { findById: () => null as BankConnection | null };
@@ -67,33 +68,19 @@ const GROUP: Group = {
 };
 
 function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
-  return {
-    id: 1,
+  return makeBankTransaction({
     connection_id: 10,
     external_id: 'ext-1',
     account_id: null,
     date: '2026-03-28',
     time: null,
     amount: 500,
-    sign_type: 'debit',
     currency: 'RSD',
     merchant: 'METRO',
-    merchant_normalized: null,
-    mcc: null,
-    raw_data: '{}',
-    matched_expense_id: null,
-    matched_receipt_id: null,
-    telegram_message_id: null,
-    edit_in_progress: 0,
-    awaiting_comment: 0,
     prefill_category: 'food',
-    prefill_comment: null,
-    invoice_amount: null,
-    invoice_currency: null,
-    status: 'pending',
     created_at: '2026-03-28T10:00:00Z',
     ...overrides,
-  };
+  });
 }
 
 let findConnectionByIdSpy: ReturnType<typeof mock>;

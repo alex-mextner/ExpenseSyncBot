@@ -1,6 +1,7 @@
 // Shared test fixture factories
 
 import type { Database } from 'bun:sqlite';
+import type { BankTransaction, Expense } from '../database/types';
 
 let nextId = 100_000;
 
@@ -40,32 +41,52 @@ export function seedGroupAndUser(
   return { groupId: group.id, userId: user.id };
 }
 
-/** Standard expense fields with sensible defaults */
-export interface ExpenseFixture {
-  group_id: number;
-  user_id: number;
-  date: string;
-  category: string;
-  comment: string;
-  amount: number;
-  currency: string;
-  eur_amount: number;
-}
-
-export function makeExpense(
-  groupId: number,
-  userId: number,
-  overrides: Partial<ExpenseFixture> = {},
-): ExpenseFixture {
+/** Build a full Expense object with sensible defaults. Override only what each test cares about. */
+export function makeExpense(overrides: Partial<Expense> = {}): Expense {
   return {
-    group_id: groupId,
-    user_id: userId,
+    id: 1,
+    group_id: 1,
+    user_id: 1,
     date: '2024-01-15',
     category: 'Food',
     comment: 'Lunch',
     amount: 25.0,
     currency: 'EUR',
     eur_amount: 25.0,
+    receipt_id: null,
+    receipt_file_id: null,
+    created_at: '',
+    ...overrides,
+  };
+}
+
+/** Build a full BankTransaction object with sensible defaults. */
+export function makeBankTransaction(overrides: Partial<BankTransaction> = {}): BankTransaction {
+  return {
+    id: 1,
+    connection_id: 1,
+    external_id: 'tx1',
+    account_id: 'acc1',
+    date: '2024-01-15',
+    time: '12:00',
+    amount: -50,
+    sign_type: 'debit',
+    currency: 'EUR',
+    merchant: 'Store',
+    merchant_normalized: null,
+    mcc: null,
+    raw_data: '{}',
+    invoice_amount: null,
+    invoice_currency: null,
+    matched_expense_id: null,
+    matched_receipt_id: null,
+    telegram_message_id: null,
+    edit_in_progress: 0,
+    awaiting_comment: 0,
+    prefill_category: null,
+    prefill_comment: null,
+    status: 'pending',
+    created_at: '',
     ...overrides,
   };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import type { BankAccount, BankTransaction } from '../../database/types';
+import { makeBankTransaction } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 
 const bankAccountsFindByGroupId = mock(() => [] as BankAccount[]);
@@ -110,36 +111,6 @@ function makeBankAccount(overrides: Partial<BankAccount> = {}): BankAccount {
     type: 'card',
     is_excluded: 0,
     updated_at: '2026-04-01T00:00:00Z',
-    ...overrides,
-  };
-}
-
-function makeBankTransaction(overrides: Partial<BankTransaction> = {}): BankTransaction {
-  return {
-    id: 1,
-    connection_id: 1,
-    external_id: 'tx1',
-    account_id: 'acc1',
-    date: '2026-04-10',
-    time: '12:00',
-    amount: -50,
-    sign_type: 'debit',
-    currency: 'EUR',
-    merchant: 'Grocery Store',
-    merchant_normalized: null,
-    mcc: 5411,
-    raw_data: '{}',
-    invoice_amount: null,
-    invoice_currency: null,
-    matched_expense_id: null,
-    matched_receipt_id: null,
-    telegram_message_id: null,
-    edit_in_progress: 0,
-    awaiting_comment: 0,
-    prefill_category: null,
-    prefill_comment: null,
-    status: 'confirmed',
-    created_at: '2026-04-10T12:00:00Z',
     ...overrides,
   };
 }
