@@ -2,36 +2,19 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { BankTransaction } from '../../database/types';
+import { makeBankTransaction } from '../../test-utils/fixtures';
 import { buildOldTxSummaryText } from './transaction-summary';
 
 function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
-  return {
-    id: 1,
-    connection_id: 1,
-    external_id: 'ext-1',
-    account_id: null,
+  return makeBankTransaction({
     date: '2026-03-28',
     time: null,
     amount: 100,
-    sign_type: 'debit',
     currency: 'RSD',
     merchant: 'METRO',
-    merchant_normalized: null,
-    mcc: null,
-    raw_data: '{}',
-    matched_expense_id: null,
-    matched_receipt_id: null,
-    telegram_message_id: null,
-    edit_in_progress: 0,
-    awaiting_comment: 0,
-    prefill_category: null,
-    prefill_comment: null,
-    invoice_amount: null,
-    invoice_currency: null,
-    status: 'pending',
     created_at: '2026-03-28T10:00:00Z',
     ...overrides,
-  };
+  });
 }
 
 function makeTxList(count: number): { tx: BankTransaction; category: string }[] {

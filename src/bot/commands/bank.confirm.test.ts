@@ -15,6 +15,7 @@ import {
 import type { TelegramMessage } from '@gramio/types';
 import type { BankTransaction, Expense, Group, User } from '../../database/types';
 import * as senderModule from '../../services/bank/telegram-sender';
+import { makeBankTransaction, makeExpense } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 
 // ─── Mutable mock state ───────────────────────────────────────────────────────
@@ -211,8 +212,9 @@ const user: User = {
   updated_at: '2026-01-01T00:00:00Z',
 };
 
+/** Local shortcut wrapping the shared factory with domain-specific defaults */
 function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
-  return {
+  return makeBankTransaction({
     id: 7,
     connection_id: 3,
     external_id: 'ext-1',
@@ -220,25 +222,15 @@ function makeTx(overrides: Partial<BankTransaction> = {}): BankTransaction {
     date: '2026-03-29',
     time: '14:35',
     amount: 25.5,
-    sign_type: 'debit',
     currency: 'GEL',
     merchant: 'Starbucks',
     merchant_normalized: 'Starbucks Coffee',
     mcc: 5812,
-    raw_data: '{}',
-    matched_expense_id: null,
-    matched_receipt_id: null,
     telegram_message_id: 555,
-    edit_in_progress: 0,
-    awaiting_comment: 0,
     prefill_category: 'Кафе',
-    prefill_comment: null,
-    invoice_amount: null,
-    invoice_currency: null,
-    status: 'pending',
     created_at: '2026-03-29T10:00:00Z',
     ...overrides,
-  };
+  });
 }
 
 function makeCallbackCtx(overrides: Record<string, unknown> = {}) {
@@ -258,22 +250,18 @@ function makeMsgCtx(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeExpense(overrides: Partial<Expense> = {}): Expense {
-  return {
+/** Local shortcut wrapping the shared factory with domain-specific defaults */
+function makeConfirmExpense(overrides: Partial<Expense> = {}): Expense {
+  return makeExpense({
     id: 50,
-    group_id: 1,
-    user_id: 1,
     date: '2026-03-29',
     category: 'Кафе',
     comment: '',
     amount: 25.5,
-    currency: 'EUR',
     eur_amount: 25.5,
-    receipt_id: null,
-    receipt_file_id: null,
     created_at: '2026-03-29T09:00:00Z',
     ...overrides,
-  };
+  });
 }
 
 // ─── Tests: handleBankConfirmCallback ─────────────────────────────────────────
@@ -379,7 +367,7 @@ describe('handleBankConfirmCallback', () => {
 
   test('auto-merges when exact duplicate found', async () => {
     const tx = makeTx();
-    const existing = makeExpense();
+    const existing = makeConfirmExpense();
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findPotentialDuplicates.mockImplementation(() => ({
       exact: [existing],
@@ -404,7 +392,7 @@ describe('handleBankConfirmCallback', () => {
 
   test('shows merge prompt when fuzzy duplicate found', async () => {
     const tx = makeTx();
-    const nearby = makeExpense({ date: '2026-03-28', id: 51 });
+    const nearby = makeConfirmExpense({ date: '2026-03-28', id: 51 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findPotentialDuplicates.mockImplementation(() => ({
       exact: [],
@@ -443,7 +431,7 @@ describe('handleBankMergeCallback', () => {
 
   test('links transaction to existing expense', async () => {
     const tx = makeTx({ edit_in_progress: 1 });
-    const expense = makeExpense({ id: 50 });
+    const expense = makeConfirmExpense({ id: 50 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findById.mockImplementation(() => expense);
 
@@ -466,7 +454,7 @@ describe('handleBankMergeCallback', () => {
 
   test('rejects when expense belongs to different group', async () => {
     const tx = makeTx();
-    const expense = makeExpense({ group_id: 999 });
+    const expense = makeConfirmExpense({ group_id: 999 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findById.mockImplementation(() => expense);
 
@@ -482,7 +470,7 @@ describe('handleBankMergeCallback', () => {
 
   test('rejects already-processed transaction', async () => {
     const tx = makeTx({ status: 'confirmed' });
-    const expense = makeExpense();
+    const expense = makeConfirmExpense();
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findById.mockImplementation(() => expense);
 
@@ -498,7 +486,7 @@ describe('handleBankMergeCallback', () => {
 
   test('rejects when expense is already linked to another transaction (race condition)', async () => {
     const tx = makeTx({ edit_in_progress: 1 });
-    const expense = makeExpense({ id: 50 });
+    const expense = makeConfirmExpense({ id: 50 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findById.mockImplementation(() => expense);
     mockQueryOne.mockImplementation(() => ({ n: 1 }));
@@ -518,7 +506,7 @@ describe('handleBankMergeCallback', () => {
     // matched_receipt_id must be treated as "taken" — even though no bank_tx
     // points at this expense directly via matched_expense_id.
     const tx = makeTx({ edit_in_progress: 1 });
-    const expense = makeExpense({ id: 50, receipt_id: 42 });
+    const expense = makeConfirmExpense({ id: 50, receipt_id: 42 });
     mockBankTransactions.findById.mockImplementation(() => tx);
     mockExpenses.findById.mockImplementation(() => expense);
 

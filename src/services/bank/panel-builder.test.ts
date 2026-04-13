@@ -2,6 +2,7 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import type { BankAccount, BankTransaction } from '../../database/types';
+import { makeBankTransaction } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 
 // Mutable mock state — individual tests can override these to inject fixture data.
@@ -112,32 +113,13 @@ describe('buildBankStatusText', () => {
 
   test('includes pending transactions section when pending txs exist', () => {
     mockTxs.findPendingByConnectionId = () => [
-      {
-        id: 1,
-        connection_id: 1,
-        external_id: 'e1',
-        account_id: null,
+      makeBankTransaction({
         date: '2026-03-27',
-        time: null,
         amount: 50,
-        sign_type: 'debit',
         currency: 'GEL',
         merchant: 'Cafe',
         merchant_normalized: 'Cafe',
-        mcc: null,
-        raw_data: '{}',
-        status: 'pending',
-        matched_expense_id: null,
-        matched_receipt_id: null,
-        telegram_message_id: null,
-        prefill_category: null,
-        prefill_comment: null,
-        invoice_amount: null,
-        invoice_currency: null,
-        edit_in_progress: 0,
-        awaiting_comment: 0,
-        created_at: '',
-      },
+      }),
     ];
 
     try {

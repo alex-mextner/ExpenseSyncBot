@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Budget, Category, Expense, Group } from '../../database/types';
+import { makeExpense } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 import type { AgentContext } from './types';
 
@@ -424,20 +425,16 @@ describe('executeTool routing', () => {
   });
 
   test('routes delete_expense to correct handler', async () => {
-    mockExpenses.findById.mockReturnValue({
-      id: 10,
-      group_id: 1,
-      user_id: 123,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: 'lunch',
-      amount: 15,
-      currency: 'EUR',
-      eur_amount: 15,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    });
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({
+        id: 10,
+        user_id: 123,
+        date: '2026-03-01',
+        comment: 'lunch',
+        amount: 15,
+        eur_amount: 15,
+      }),
+    );
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
     expect(result.success).toBe(true);
     expect(mockExpenses.delete).toHaveBeenCalledWith(10);
@@ -449,34 +446,23 @@ describe('executeGetExpenses', () => {
 
   test('returns formatted expense list', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-01',
-        category: 'Food',
         comment: 'lunch',
         amount: 15,
-        currency: 'EUR',
         eur_amount: 15,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-02',
         category: 'Transport',
         comment: '',
         amount: 5,
-        currency: 'EUR',
         eur_amount: 5,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool('get_expenses', {}, ctx);
@@ -490,20 +476,15 @@ describe('executeGetExpenses', () => {
 
   test('expense with no comment shows (no comment) in output', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-14',
         category: 'Путешествия',
         comment: '',
         amount: 1149.47,
-        currency: 'EUR',
         eur_amount: 1149.47,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool('get_expenses', {}, ctx);
@@ -513,20 +494,15 @@ describe('executeGetExpenses', () => {
 
   test('expense with whitespace-only comment shows (no comment) in output', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-14',
         category: 'Лена',
         comment: '   ',
         amount: 94.37,
-        currency: 'EUR',
         eur_amount: 94.37,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool('get_expenses', {}, ctx);
@@ -535,20 +511,15 @@ describe('executeGetExpenses', () => {
 
   test('expense with real comment shows the comment', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 3,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-14',
         category: 'Еда',
         comment: 'обед',
         amount: 25,
-        currency: 'EUR',
         eur_amount: 25,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool('get_expenses', {}, ctx);
@@ -558,34 +529,23 @@ describe('executeGetExpenses', () => {
 
   test('respects category filter (case-insensitive)', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-01',
-        category: 'Food',
         comment: 'pizza',
         amount: 10,
-        currency: 'EUR',
         eur_amount: 10,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-02',
         category: 'Transport',
         comment: 'taxi',
         amount: 20,
-        currency: 'EUR',
         eur_amount: 20,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool('get_expenses', { category: 'food' }, ctx);
@@ -604,20 +564,16 @@ describe('executeGetExpenses', () => {
   });
 
   test('paginates results with page and page_size', async () => {
-    const expenses = Array.from({ length: 150 }, (_, i) => ({
-      id: i + 1,
-      group_id: 1,
-      user_id: 123,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: `item ${i + 1}`,
-      amount: 10,
-      currency: 'EUR' as const,
-      eur_amount: 10,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    }));
+    const expenses = Array.from({ length: 150 }, (_, i) =>
+      makeExpense({
+        id: i + 1,
+        user_id: 123,
+        date: '2026-03-01',
+        comment: `item ${i + 1}`,
+        amount: 10,
+        eur_amount: 10,
+      }),
+    );
     mockExpenses.findByDateRange.mockReturnValue(expenses);
 
     const page1 = await executeTool('get_expenses', { page: 1 }, ctx);
@@ -636,20 +592,16 @@ describe('executeGetExpenses', () => {
   });
 
   test('custom page_size works', async () => {
-    const expenses = Array.from({ length: 30 }, (_, i) => ({
-      id: i + 1,
-      group_id: 1,
-      user_id: 123,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: '',
-      amount: 10,
-      currency: 'EUR' as const,
-      eur_amount: 10,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    }));
+    const expenses = Array.from({ length: 30 }, (_, i) =>
+      makeExpense({
+        id: i + 1,
+        user_id: 123,
+        date: '2026-03-01',
+        comment: '',
+        amount: 10,
+        eur_amount: 10,
+      }),
+    );
     mockExpenses.findByDateRange.mockReturnValue(expenses);
 
     const result = await executeTool('get_expenses', { page: 1, page_size: 10 }, ctx);
@@ -678,20 +630,14 @@ describe('executeGetBudgets', () => {
     ]);
     // Expenses for spending calculation
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-05',
-        category: 'Food',
         comment: '',
         amount: 100,
-        currency: 'EUR',
         eur_amount: 100,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool('get_budgets', {}, ctx);
@@ -785,20 +731,14 @@ describe('get_budgets enriched output', () => {
       },
     ]);
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: `${currentMonth}-05`,
-        category: 'Food',
         comment: '',
         amount: 200,
-        currency: 'EUR',
         eur_amount: 200,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
     // EMA-based burn rate from spendingAnalytics
     mockGetFinancialSnapshot.mockReturnValue({
@@ -880,20 +820,14 @@ describe('get_budgets enriched output', () => {
       },
     ]);
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: `${currentMonth}-05`,
-        category: 'Food',
         comment: '',
         amount: 150,
-        currency: 'EUR',
         eur_amount: 150,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
     mockGetFinancialSnapshot.mockReturnValue({
       technicalAnalysis: null,
@@ -1032,20 +966,16 @@ describe('executeDeleteExpense', () => {
   beforeEach(resetAllMocks);
 
   test('deletes expense belonging to this group', async () => {
-    mockExpenses.findById.mockReturnValue({
-      id: 10,
-      group_id: 1,
-      user_id: 123,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: 'pizza',
-      amount: 12,
-      currency: 'EUR',
-      eur_amount: 12,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    });
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({
+        id: 10,
+        user_id: 123,
+        date: '2026-03-01',
+        comment: 'pizza',
+        amount: 12,
+        eur_amount: 12,
+      }),
+    );
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
     expect(result.success).toBe(true);
@@ -1054,20 +984,17 @@ describe('executeDeleteExpense', () => {
   });
 
   test('rejects deletion of expense from different group', async () => {
-    mockExpenses.findById.mockReturnValue({
-      id: 10,
-      group_id: 999,
-      user_id: 456,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: '',
-      amount: 12,
-      currency: 'EUR',
-      eur_amount: 12,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    });
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({
+        id: 10,
+        group_id: 999,
+        user_id: 456,
+        date: '2026-03-01',
+        comment: '',
+        amount: 12,
+        eur_amount: 12,
+      }),
+    );
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
     expect(result.success).toBe(false);
@@ -1088,20 +1015,15 @@ describe('delete_expense batch', () => {
   beforeEach(resetAllMocks);
 
   test('batch delete with expense_id array', async () => {
-    mockExpenses.findById.mockImplementation(((id: number) => ({
-      id,
-      group_id: 1,
-      user_id: 123,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: 'test',
-      amount: 10,
-      currency: 'EUR' as const,
-      eur_amount: 10,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    })) as unknown as () => Expense | null);
+    mockExpenses.findById.mockImplementation(((id: number) =>
+      makeExpense({
+        id,
+        user_id: 123,
+        date: '2026-03-01',
+        comment: 'test',
+        amount: 10,
+        eur_amount: 10,
+      })) as unknown as () => Expense | null);
 
     const result = await executeTool('delete_expense', { expense_id: [10, 11, 12] }, ctx);
 
@@ -1112,34 +1034,27 @@ describe('delete_expense batch', () => {
 
   test('batch delete rejects expense from another group', async () => {
     mockExpenses.findById
-      .mockReturnValueOnce({
-        id: 10,
-        group_id: 1,
-        user_id: 123,
-        date: '2026-03-01',
-        category: 'Food',
-        comment: '',
-        amount: 10,
-        currency: 'EUR',
-        eur_amount: 10,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      })
-      .mockReturnValueOnce({
-        id: 11,
-        group_id: 999,
-        user_id: 123,
-        date: '2026-03-01',
-        category: 'Food',
-        comment: '',
-        amount: 10,
-        currency: 'EUR',
-        eur_amount: 10,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      });
+      .mockReturnValueOnce(
+        makeExpense({
+          id: 10,
+          user_id: 123,
+          date: '2026-03-01',
+          comment: '',
+          amount: 10,
+          eur_amount: 10,
+        }),
+      )
+      .mockReturnValueOnce(
+        makeExpense({
+          id: 11,
+          group_id: 999,
+          user_id: 123,
+          date: '2026-03-01',
+          comment: '',
+          amount: 10,
+          eur_amount: 10,
+        }),
+      );
 
     const result = await executeTool('delete_expense', { expense_id: [10, 11] }, ctx);
 
@@ -1148,20 +1063,16 @@ describe('delete_expense batch', () => {
   });
 
   test('single delete still works', async () => {
-    mockExpenses.findById.mockReturnValue({
-      id: 10,
-      group_id: 1,
-      user_id: 123,
-      date: '2026-03-01',
-      category: 'Food',
-      comment: 'lunch',
-      amount: 15,
-      currency: 'EUR',
-      eur_amount: 15,
-      receipt_id: null,
-      receipt_file_id: null,
-      created_at: '',
-    });
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({
+        id: 10,
+        user_id: 123,
+        date: '2026-03-01',
+        comment: 'lunch',
+        amount: 15,
+        eur_amount: 15,
+      }),
+    );
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
     expect(result.success).toBe(true);
@@ -1654,48 +1565,33 @@ describe('executeGetExpenses — batch periods and stats', () => {
 
   test('summary_only includes stats block', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
         amount: 120,
-        currency: 'EUR',
         eur_amount: 1.02,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-10',
         category: 'Еда',
         comment: 'Молоко',
         amount: 250,
-        currency: 'EUR',
         eur_amount: 2.13,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 3,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
         amount: 1500,
-        currency: 'EUR',
         eur_amount: 12.77,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool(
@@ -1722,78 +1618,53 @@ describe('executeGetExpenses — batch periods and stats', () => {
 
   test('batch periods returns per-period stats and diff', async () => {
     const januaryExpenses: Expense[] = [
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
         amount: 120,
-        currency: 'EUR',
         eur_amount: 1.02,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-10',
         category: 'Еда',
         comment: 'Молоко',
         amount: 250,
-        currency: 'EUR',
         eur_amount: 2.13,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 3,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
         amount: 1500,
-        currency: 'EUR',
         eur_amount: 12.77,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ];
     const februaryExpenses: Expense[] = [
-      {
+      makeExpense({
         id: 4,
-        group_id: 1,
         user_id: 123,
         date: '2026-02-03',
         category: 'Еда',
         comment: 'Сыр',
         amount: 800,
-        currency: 'EUR',
         eur_amount: 6.88,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 5,
-        group_id: 1,
         user_id: 123,
         date: '2026-02-14',
         category: 'Развлечения',
         comment: 'Ресторан',
         amount: 5000,
-        currency: 'EUR',
         eur_amount: 42.5,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ];
 
     let callCount = 0;
@@ -1821,48 +1692,33 @@ describe('executeGetExpenses — batch periods and stats', () => {
 
   test('category array filters multiple categories', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
         amount: 120,
-        currency: 'EUR',
         eur_amount: 1.02,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
         amount: 1500,
-        currency: 'EUR',
         eur_amount: 12.77,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 3,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-20',
         category: 'Транспорт',
         comment: 'Такси',
         amount: 700,
-        currency: 'EUR',
         eur_amount: 5.95,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool(
@@ -1878,48 +1734,33 @@ describe('executeGetExpenses — batch periods and stats', () => {
 
   test('detail output includes stats for all expenses', async () => {
     mockExpenses.findByDateRange.mockReturnValue([
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
         amount: 120,
-        currency: 'EUR',
         eur_amount: 1.02,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-10',
         category: 'Еда',
         comment: 'Молоко',
         amount: 250,
-        currency: 'EUR',
         eur_amount: 2.13,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
-      {
+      }),
+      makeExpense({
         id: 3,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-15',
         category: 'Развлечения',
         comment: 'Кино',
         amount: 1500,
-        currency: 'EUR',
         eur_amount: 12.77,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ]);
 
     const result = await executeTool(
@@ -1936,52 +1777,37 @@ describe('executeGetExpenses — batch periods and stats', () => {
 
   test('3+ periods returns trend instead of diff', async () => {
     const janExpenses: Expense[] = [
-      {
+      makeExpense({
         id: 1,
-        group_id: 1,
         user_id: 123,
         date: '2026-01-05',
         category: 'Еда',
         comment: 'Хлеб',
         amount: 120,
-        currency: 'EUR',
         eur_amount: 1.02,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ];
     const febExpenses: Expense[] = [
-      {
+      makeExpense({
         id: 2,
-        group_id: 1,
         user_id: 123,
         date: '2026-02-03',
         category: 'Еда',
         comment: 'Сыр',
         amount: 800,
-        currency: 'EUR',
         eur_amount: 6.88,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ];
     const marExpenses: Expense[] = [
-      {
+      makeExpense({
         id: 3,
-        group_id: 1,
         user_id: 123,
         date: '2026-03-01',
         category: 'Транспорт',
         comment: 'Такси',
         amount: 700,
-        currency: 'EUR',
         eur_amount: 5.95,
-        receipt_id: null,
-        receipt_file_id: null,
-        created_at: '',
-      },
+      }),
     ];
 
     let trendCallCount = 0;
