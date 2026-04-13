@@ -113,6 +113,16 @@ export async function sendDirect(
   return withChatContext(chatId, null, () => sendMessage(text, options));
 }
 
+/** Send a "typing" chat action to the current chat. Best-effort, errors are silently ignored. */
+export async function sendChatAction(): Promise<void> {
+  try {
+    const { chatId } = getContext();
+    await getBot().api.sendChatAction({ chat_id: chatId, action: 'typing' });
+  } catch {
+    // Best-effort — typing indicators are non-critical
+  }
+}
+
 /** Create a non-primary invite link for a group chat.
  * Uses createChatInviteLink (not exportChatInviteLink) to avoid revoking existing invite links. */
 export async function createInviteLink(chatId: number): Promise<string | null> {
