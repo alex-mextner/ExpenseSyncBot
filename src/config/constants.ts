@@ -571,12 +571,14 @@ export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
 export const BASE_CURRENCY = 'EUR' as const satisfies CurrencyCode;
 
 /**
- * Google API Scopes
+ * Google API Scopes.
+ *
+ * `drive.file` is a non-sensitive scope that grants access only to files the
+ * app itself creates. Because the bot creates every spreadsheet it touches,
+ * this single scope covers both Sheets read/write and Drive operations
+ * (copy/list/update) — the broader `spreadsheets` scope is not needed.
  */
-export const GOOGLE_SCOPES = [
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/drive.file',
-];
+export const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
 /**
  * Default spreadsheet configuration
