@@ -698,7 +698,10 @@ async function executeDeleteExpense(
   return executeDeleteExpenseSingle(rawId as number, ctx);
 }
 
-function executeDeleteExpenseSingle(expenseId: number, ctx: AgentContext): ToolResult {
+async function executeDeleteExpenseSingle(
+  expenseId: number,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   if (!expenseId) {
     return { success: false, error: 'expense_id is required' };
   }
@@ -713,11 +716,27 @@ function executeDeleteExpenseSingle(expenseId: number, ctx: AgentContext): ToolR
     return { success: false, error: 'Access denied: expense belongs to a different group' };
   }
 
+  // Remove the matching row from Google Sheets BEFORE deleting from DB.
+  // If we deleted from DB first and the next /sync ran (auto-sync runs before
+  // get_expenses), the expense would be re-imported from the sheet — that's
+  // exactly the bug this fix addresses.
+  const { getExpenseRecorder } = await import('../expense-recorder');
+  let sheetSuffix = '';
+  try {
+    const sheetResult = await getExpenseRecorder().deleteFromSheet(ctx.groupId, expense);
+    if (sheetResult.deletedRowIndex === null) {
+      sheetSuffix = ' (not found in sheet — already removed manually?)';
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'unknown';
+    sheetSuffix = ` ⚠️ sheet delete failed: ${msg}. Run /repair to recreate the sheet if access is lost.`;
+  }
+
   database.expenses.delete(expenseId);
 
   return {
     success: true,
-    output: `Expense ${expenseId} deleted (${expense.date} | ${expense.category} | ${expense.amount} ${expense.currency}). Note: run /sync to update Google Sheets.`,
+    output: `Expense ${expenseId} deleted (${expense.date} | ${expense.category} | ${expense.amount} ${expense.currency}).${sheetSuffix}`,
   };
 }
 

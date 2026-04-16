@@ -18,14 +18,18 @@ export function getExpenseRecorder(): RecorderApi {
   if (!_instance) {
     // Lazy-import to break circular dependency chains
     const { database } = require('../database');
-    const { appendExpenseRow, appendExpenseRows } = require('./google/sheets');
+    const {
+      appendExpenseRow,
+      appendExpenseRows,
+      findAndDeleteExpenseRow,
+    } = require('./google/sheets');
     const { convertToEUR, getExchangeRate } = require('./currency/converter');
 
     _instance = new ExpenseRecorder({
       groups: database.groups,
       expenses: database.expenses,
       expenseItems: database.expenseItems,
-      sheetWriter: { appendExpenseRow, appendExpenseRows },
+      sheetWriter: { appendExpenseRow, appendExpenseRows, findAndDeleteExpenseRow },
       eurConverter: { convertToEUR, getExchangeRate },
       runInTransaction: (fn: () => void) => database.transaction(fn),
     });
@@ -36,15 +40,39 @@ export function getExpenseRecorder(): RecorderApi {
 const logger = createLogger('expense-recorder');
 
 /**
- * Abstraction over Google Sheets append — injected for testability.
+ * Identifying fields used to locate a sheet row when deleting an expense.
+ * EUR amount is intentionally excluded — sheet stores it as a formula, so the
+ * recomputed value can drift from the DB-stored eur_amount across exchange-rate
+ * changes. The four-tuple (date, category, amount, currency) plus comment is
+ * unique enough in practice; if multiple rows match, the first one wins.
+ */
+export interface DeleteRowCriteria {
+  date: string;
+  category: string;
+  comment: string;
+  amount: number;
+  currency: CurrencyCode;
+}
+
+/**
+ * Abstraction over Google Sheets writes — injected for testability.
  * `appendExpenseRow` is used for single-row writes (manual expenses).
  * `appendExpenseRows` is used for multi-row batch writes (receipts) — one API call
  * regardless of row count, so the Google Sheets 60 writes/min/user quota isn't
  * exhausted by large receipts.
+ * `findAndDeleteExpenseRow` removes a single matching row from the sheet —
+ * symmetric counterpart to append, used by AI delete_expense and any future
+ * delete UX. Returns the 1-based row index that was deleted, or null if no
+ * matching row was found.
  */
 export interface SheetWriter {
   appendExpenseRow(conn: GoogleConn, spreadsheetId: string, data: ExpenseRowData): Promise<void>;
   appendExpenseRows(conn: GoogleConn, spreadsheetId: string, rows: ExpenseRowData[]): Promise<void>;
+  findAndDeleteExpenseRow(
+    conn: GoogleConn,
+    spreadsheetId: string,
+    criteria: DeleteRowCriteria,
+  ): Promise<{ deletedRowIndex: number | null }>;
 }
 
 /**
@@ -163,6 +191,7 @@ export interface RecorderApi {
     data: RecordReceiptData,
   ): Promise<RecordReceiptResult>;
   pushToSheet(groupId: number, expenseList: Expense[]): Promise<void>;
+  deleteFromSheet(groupId: number, expense: Expense): Promise<{ deletedRowIndex: number | null }>;
 }
 
 /**
@@ -387,6 +416,40 @@ export class ExpenseRecorder implements RecorderApi {
     );
 
     return { expenses: results, categoriesAffected };
+  }
+
+  /**
+   * Remove a single matching row from Google Sheets — symmetric counterpart
+   * to `record()`. Used by AI delete_expense and any future delete UX.
+   *
+   * No-op (returns deletedRowIndex=null) when the group has no Google connection.
+   * Errors from the sheet layer (404, auth, network) propagate so the caller
+   * can decide whether to still proceed with DB deletion.
+   */
+  async deleteFromSheet(
+    groupId: number,
+    expense: Expense,
+  ): Promise<{ deletedRowIndex: number | null }> {
+    const { conn, spreadsheetId } = this.getGroupConfig(groupId);
+
+    if (!conn || !spreadsheetId) {
+      return { deletedRowIndex: null };
+    }
+
+    const result = await this.sheetWriter.findAndDeleteExpenseRow(conn, spreadsheetId, {
+      date: expense.date,
+      category: expense.category,
+      comment: expense.comment,
+      amount: expense.amount,
+      currency: expense.currency as CurrencyCode,
+    });
+
+    logger.info(
+      { expenseId: expense.id, deletedRowIndex: result.deletedRowIndex },
+      `[DELETE] Sheet row delete attempt`,
+    );
+
+    return result;
   }
 
   /**

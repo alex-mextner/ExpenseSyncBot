@@ -5,7 +5,7 @@ import type { GoogleConn } from './sheets';
 // ── Mock googleapis sheets client ─────────────────────────────────────────────
 
 interface ValuesGetResponse {
-  data: { values: string[][] };
+  data: { values: unknown[][] };
 }
 interface ValuesAppendResponse {
   data: { updates: { updatedRange: string; updatedRows: number } };
@@ -61,7 +61,12 @@ mock.module('./oauth', () => ({
   isTokenExpiredError: () => false,
 }));
 
-import { appendExpenseRows, isRateLimitError, withSheetsRetry } from './sheets';
+import {
+  appendExpenseRows,
+  findAndDeleteExpenseRow,
+  isRateLimitError,
+  withSheetsRetry,
+} from './sheets';
 
 const TEST_CONN: GoogleConn = { refreshToken: 'token', oauthClient: 'legacy' };
 const TEST_SPREADSHEET = 'sheet-123';
@@ -322,6 +327,142 @@ describe('appendExpenseRows', () => {
 
     await Promise.all([p1, p2]);
     expect(mockValuesAppend).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── findAndDeleteExpenseRow ────────────────────────────────────────────────
+
+describe('findAndDeleteExpenseRow', () => {
+  beforeEach(() => {
+    mockSpreadsheetsBatchUpdate.mockReset().mockResolvedValue({ data: {} });
+  });
+
+  test('finds matching row and deletes via batchUpdate; returns 1-based row index', async () => {
+    // Headers row + 3 data rows. The match is on row 3 (1-based: header=1, data start=2).
+    // Headers: Дата | Категория | Комментарий | EUR (calc) | RSD (дин.) | Rate (→EUR)
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)'],
+          ['2026-04-15', 'Алекс', 'Кофе', '4.3', 500, 0.0086], // row 2
+          ['2026-04-15', 'Алекс', 'Ноут для умного дома', '348.5', 41000, 0.0085], // row 3 — match
+          ['2026-04-15', 'Еда', 'Пицца', '8.5', 1000, 0.0085], // row 4
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Ноут для умного дома',
+      amount: 41000,
+      currency: 'RSD',
+    });
+
+    expect(result.deletedRowIndex).toBe(3);
+    expect(mockSpreadsheetsBatchUpdate).toHaveBeenCalledTimes(1);
+    const call = mockSpreadsheetsBatchUpdate.mock.calls[0]?.[0] as {
+      requestBody: {
+        requests: Array<{
+          deleteDimension: { range: { dimension: string; startIndex: number; endIndex: number } };
+        }>;
+      };
+    };
+    const req = call.requestBody.requests[0];
+    expect(req?.deleteDimension.range.dimension).toBe('ROWS');
+    expect(req?.deleteDimension.range.startIndex).toBe(2); // 0-based: row 3 -> startIndex 2
+    expect(req?.deleteDimension.range.endIndex).toBe(3);
+  });
+
+  test('returns deletedRowIndex=null when no row matches', async () => {
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)'],
+          ['2026-04-15', 'Еда', 'Пицца', '8.5', 1000, 0.0085],
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Ноут для умного дома',
+      amount: 41000,
+      currency: 'RSD',
+    });
+
+    expect(result.deletedRowIndex).toBeNull();
+    expect(mockSpreadsheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  test('matches first row when multiple identical rows exist (delete-one-per-call semantics)', async () => {
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)'],
+          ['2026-04-15', 'Алекс', 'Ноут', '348.5', 41000, 0.0085], // row 2 — first match
+          ['2026-04-15', 'Алекс', 'Ноут', '348.5', 41000, 0.0085], // row 3 — also matches
+          ['2026-04-15', 'Алекс', 'Ноут', '348.5', 41000, 0.0085], // row 4 — also matches
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Ноут',
+      amount: 41000,
+      currency: 'RSD',
+    });
+
+    // First match (row 2) is deleted — repeated calls handle dups
+    expect(result.deletedRowIndex).toBe(2);
+    expect(mockSpreadsheetsBatchUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not match if comment differs (avoids deleting unrelated expense)', async () => {
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)'],
+          ['2026-04-15', 'Алекс', 'Совершенно другой расход', '348.5', 41000, 0.0085],
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Ноут',
+      amount: 41000,
+      currency: 'RSD',
+    });
+
+    expect(result.deletedRowIndex).toBeNull();
+    expect(mockSpreadsheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  test('handles date stored as Sheets serial number (UNFORMATTED_VALUE)', async () => {
+    // 2026-04-15 = serial 46127 (days since 1899-12-30)
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)'],
+          [46127, 'Алекс', 'Ноут', '348.5', 41000, 0.0085],
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Ноут',
+      amount: 41000,
+      currency: 'RSD',
+    });
+
+    expect(result.deletedRowIndex).toBe(2);
   });
 });
 

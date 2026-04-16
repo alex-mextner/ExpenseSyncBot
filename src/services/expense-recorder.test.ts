@@ -73,6 +73,7 @@ describe('ExpenseRecorder', () => {
     mockSheetWriter = {
       appendExpenseRow: mock(() => Promise.resolve()),
       appendExpenseRows: mock(() => Promise.resolve()),
+      findAndDeleteExpenseRow: mock(() => Promise.resolve({ deletedRowIndex: 7 as number | null })),
     };
 
     const testRates: Record<string, number> = { EUR: 1, USD: 0.86, RSD: 0.0085, RUB: 0.01 };
@@ -632,6 +633,104 @@ describe('ExpenseRecorder', () => {
 
     it('throws if group not found', async () => {
       await expect(recorder.pushToSheet(999, [])).rejects.toThrow('not found');
+    });
+  });
+
+  describe('deleteFromSheet()', () => {
+    it('finds and deletes the matching sheet row by expense match criteria', async () => {
+      const { groupId, userId } = seedGroup();
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'Алекс',
+        comment: 'Ноут для умного дома',
+        amount: 41000,
+        currency: 'RSD',
+        eur_amount: 348.5,
+      });
+
+      const result = await recorder.deleteFromSheet(groupId, expense);
+
+      expect(result.deletedRowIndex).toBe(7);
+      expect(mockSheetWriter.findAndDeleteExpenseRow).toHaveBeenCalledTimes(1);
+      const call = (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mock
+        .calls[0];
+      if (!call) throw new Error('Expected sheet delete call');
+      expect(call[0]).toEqual({ refreshToken: 'token-abc', oauthClient: 'legacy' });
+      expect(call[1]).toBe('sheet-123');
+      expect(call[2]).toEqual({
+        date: '2026-04-15',
+        category: 'Алекс',
+        comment: 'Ноут для умного дома',
+        amount: 41000,
+        currency: 'RSD',
+      });
+    });
+
+    it('returns deletedRowIndex=null when sheet has no matching row', async () => {
+      const { groupId, userId } = seedGroup();
+      (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mockReturnValueOnce(
+        Promise.resolve({ deletedRowIndex: null }),
+      );
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'Алекс',
+        comment: 'Ноут для умного дома',
+        amount: 41000,
+        currency: 'RSD',
+        eur_amount: 348.5,
+      });
+
+      const result = await recorder.deleteFromSheet(groupId, expense);
+
+      expect(result.deletedRowIndex).toBeNull();
+    });
+
+    it('skips sheet operation entirely when group has no Google connection', async () => {
+      const { groupId, userId } = seedGroupWithoutGoogle();
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'X',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+      });
+
+      const result = await recorder.deleteFromSheet(groupId, expense);
+
+      expect(mockSheetWriter.findAndDeleteExpenseRow).not.toHaveBeenCalled();
+      expect(result.deletedRowIndex).toBeNull();
+    });
+
+    it('propagates sheet errors so the caller can surface them', async () => {
+      const { groupId, userId } = seedGroup();
+      (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mockImplementation(
+        () => {
+          throw new Error('Sheets API 404');
+        },
+      );
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'X',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+      });
+
+      await expect(recorder.deleteFromSheet(groupId, expense)).rejects.toThrow('Sheets API 404');
     });
   });
 });

@@ -153,6 +153,7 @@ const mockGetExpenseRecorder = mock(
     record: mockExpenseRecorderRecord,
     recordReceipt: mockExpenseRecorderRecordReceipt,
     pushToSheet: () => Promise.resolve(),
+    deleteFromSheet: () => Promise.resolve({ deletedRowIndex: null }),
   }),
 );
 const mockEmitForGroup = mock((_groupId: number, _eventType: SseEventType): void => {});
