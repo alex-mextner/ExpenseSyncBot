@@ -6,6 +6,7 @@ import type { CurrencyCode } from '../config/constants';
 import { ExpenseRepository } from '../database/repositories/expense.repository';
 import { ExpenseItemsRepository } from '../database/repositories/expense-items.repository';
 import { GroupRepository } from '../database/repositories/group.repository';
+import { GroupSpreadsheetRepository } from '../database/repositories/group-spreadsheet.repository';
 import { UserRepository } from '../database/repositories/user.repository';
 import { clearTestDb, createTestDb } from '../test-utils/db';
 import {
@@ -59,6 +60,7 @@ describe('ExpenseRecorder', () => {
   let users: UserRepository;
   let expenses: ExpenseRepository;
   let expenseItems: ExpenseItemsRepository;
+  let groupSpreadsheets: GroupSpreadsheetRepository;
   let mockSheetWriter: SheetWriter;
   let mockConverter: EurConverter;
   let recorder: ExpenseRecorder;
@@ -69,6 +71,7 @@ describe('ExpenseRecorder', () => {
     users = new UserRepository(db);
     expenses = new ExpenseRepository(db);
     expenseItems = new ExpenseItemsRepository(db);
+    groupSpreadsheets = new GroupSpreadsheetRepository(db);
 
     mockSheetWriter = {
       appendExpenseRow: mock(() => Promise.resolve()),
@@ -90,6 +93,7 @@ describe('ExpenseRecorder', () => {
       groups,
       expenses,
       expenseItems,
+      groupSpreadsheets,
       sheetWriter: mockSheetWriter,
       eurConverter: mockConverter,
       // Tests run on a single in-memory DB per file; identity wrapper is fine.
@@ -709,6 +713,34 @@ describe('ExpenseRecorder', () => {
 
       expect(mockSheetWriter.findAndDeleteExpenseRow).not.toHaveBeenCalled();
       expect(result.deletedRowIndex).toBeNull();
+    });
+
+    it('uses the spreadsheet for the expense YEAR, not the group current-year sheet (regression)', async () => {
+      // Sheet registered for current year (via seedGroup default). Also register an
+      // older year with a DIFFERENT spreadsheet ID — that's the one delete must target.
+      const { groupId, userId } = seedGroup();
+      const group = groups.findById(groupId);
+      if (!group) throw new Error('seed failed');
+      groupSpreadsheets.setYear(groupId, 2024, 'old-year-sheet-id');
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-07-04', // past year — NOT current
+        category: 'Алекс',
+        comment: 'Old trip',
+        amount: 500,
+        currency: 'EUR',
+        eur_amount: 500,
+      });
+
+      await recorder.deleteFromSheet(groupId, expense);
+
+      const call = (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mock
+        .calls[0];
+      if (!call) throw new Error('Expected sheet delete call');
+      // Must target the 2024 sheet, NOT the default sheet-123 (current year).
+      expect(call[1]).toBe('old-year-sheet-id');
     });
 
     it('propagates sheet errors so the caller can surface them', async () => {

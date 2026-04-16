@@ -717,9 +717,10 @@ async function executeDeleteExpenseSingle(
   }
 
   // Remove the matching row from Google Sheets BEFORE deleting from DB.
-  // If we deleted from DB first and the next /sync ran (auto-sync runs before
-  // get_expenses), the expense would be re-imported from the sheet — that's
-  // exactly the bug this fix addresses.
+  // The DB delete is the LAST step: if sheet delete fails, we must NOT touch
+  // the DB — the next /sync (auto-sync fires before get_expenses) would
+  // re-import the still-present sheet row, silently resurrecting the expense.
+  // That's the exact bug this whole fix addresses.
   const { getExpenseRecorder } = await import('../expense-recorder');
   let sheetSuffix = '';
   try {
@@ -729,7 +730,10 @@ async function executeDeleteExpenseSingle(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
-    sheetSuffix = ` ⚠️ sheet delete failed: ${msg}. Run /repair to recreate the sheet if access is lost.`;
+    return {
+      success: false,
+      error: `Could not delete expense ${expenseId} from the sheet: ${msg}. DB row preserved to avoid silent resurrection on next sync. Run /repair if the sheet is inaccessible.`,
+    };
   }
 
   database.expenses.delete(expenseId);

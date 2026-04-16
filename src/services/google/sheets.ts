@@ -1348,7 +1348,12 @@ export async function findAndDeleteExpenseRow(
   const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? '');
   const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? '');
   const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? '');
-  const currencyCol = headers.findIndex((h) => h.startsWith(`${criteria.currency} `));
+  // `startsWith("EUR ")` alone would also match "EUR (calc)" — the computed
+  // EUR column, not the EUR currency column. Exclude it explicitly so the
+  // match is column-order-independent.
+  const currencyCol = headers.findIndex(
+    (h) => h.startsWith(`${criteria.currency} `) && h !== SPREADSHEET_CONFIG.eurColumnHeader,
+  );
 
   if (dateCol === -1 || categoryCol === -1 || commentCol === -1 || currencyCol === -1) {
     logger.warn(

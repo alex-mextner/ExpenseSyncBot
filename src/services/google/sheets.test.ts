@@ -443,6 +443,34 @@ describe('findAndDeleteExpenseRow', () => {
     expect(mockSpreadsheetsBatchUpdate).not.toHaveBeenCalled();
   });
 
+  test('does NOT match "EUR (calc)" column when looking up EUR currency (regression)', async () => {
+    // Layout where EUR (calc) comes BEFORE the EUR currency column —
+    // defensive against future column reorders.
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'EUR (€)', 'Rate (→EUR)'],
+          // EUR (calc) column holds the computed value 100.  EUR currency column holds 100 too.
+          // Without the fix, findIndex would match "EUR (calc)" first (index 3)
+          // and read the computed EUR from the wrong column.
+          ['2026-04-15', 'Алекс', 'Coffee', 100, 100, 1.0],
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Coffee',
+      amount: 100,
+      currency: 'EUR',
+    });
+
+    // Even with both columns present in the wrong order, the correct row is found.
+    expect(result.deletedRowIndex).toBe(2);
+    expect(mockSpreadsheetsBatchUpdate).toHaveBeenCalledTimes(1);
+  });
+
   test('handles date stored as Sheets serial number (UNFORMATTED_VALUE)', async () => {
     // 2026-04-15 = serial 46127 (days since 1899-12-30)
     mockValuesGet.mockResolvedValueOnce({

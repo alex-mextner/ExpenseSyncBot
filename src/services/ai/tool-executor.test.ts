@@ -1010,17 +1010,22 @@ describe('executeDeleteExpense', () => {
     expect(result.output).toContain('not found in sheet');
   });
 
-  test('still deletes from DB if sheet operation fails (and warns)', async () => {
+  test('preserves DB row when sheet delete fails — no silent resurrection via /sync', async () => {
+    // If we deleted the DB row while sheet delete failed, the sheet still holds
+    // the row, and the next /sync (or auto-sync) would re-import it. So we leave
+    // DB untouched and surface a clear error that points at /repair.
     mockExpenses.findById.mockReturnValue(
       makeExpense({ id: 10, user_id: 123, date: '2026-03-01', comment: 'pizza', amount: 12 }),
     );
     mockDeleteFromSheet.mockReturnValueOnce(Promise.reject(new Error('Sheet API 404 — file gone')));
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
-    expect(result.success).toBe(true);
-    expect(mockExpenses.delete).toHaveBeenCalledWith(10);
-    expect(result.output).toContain('sheet');
-    expect((result.output ?? '').toLowerCase()).toMatch(/error|failed|404|gone/);
+
+    expect(result.success).toBe(false);
+    expect(mockExpenses.delete).not.toHaveBeenCalled();
+    expect(result.error).toContain('sheet');
+    expect((result.error ?? '').toLowerCase()).toMatch(/404|gone|failed|error/);
+    expect(result.error).toContain('/repair');
   });
 
   test('rejects deletion of expense from different group', async () => {

@@ -4,6 +4,7 @@ import type { CurrencyCode } from '../config/constants';
 import type { ExpenseRepository } from '../database/repositories/expense.repository';
 import type { ExpenseItemsRepository } from '../database/repositories/expense-items.repository';
 import type { GroupRepository } from '../database/repositories/group.repository';
+import type { GroupSpreadsheetRepository } from '../database/repositories/group-spreadsheet.repository';
 import type { Expense } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
 import type { ExpenseRowData, GoogleConn } from './google/sheets';
@@ -29,6 +30,7 @@ export function getExpenseRecorder(): RecorderApi {
       groups: database.groups,
       expenses: database.expenses,
       expenseItems: database.expenseItems,
+      groupSpreadsheets: database.groupSpreadsheets,
       sheetWriter: { appendExpenseRow, appendExpenseRows, findAndDeleteExpenseRow },
       eurConverter: { convertToEUR, getExchangeRate },
       runInTransaction: (fn: () => void) => database.transaction(fn),
@@ -145,6 +147,11 @@ interface ExpenseRecorderDeps {
   groups: GroupRepository;
   expenses: ExpenseRepository;
   expenseItems: ExpenseItemsRepository;
+  /**
+   * Needed so delete (and future per-year writes) can target the correct
+   * spreadsheet by the expense's year — not the group's current-year sheet.
+   */
+  groupSpreadsheets: GroupSpreadsheetRepository;
   sheetWriter: SheetWriter;
   eurConverter: EurConverter;
   /**
@@ -202,6 +209,7 @@ export class ExpenseRecorder implements RecorderApi {
   private groups: GroupRepository;
   private expenses: ExpenseRepository;
   private expenseItems: ExpenseItemsRepository;
+  private groupSpreadsheets: GroupSpreadsheetRepository;
   private sheetWriter: SheetWriter;
   private eurConverter: EurConverter;
   private runInTransaction: (fn: () => void) => void;
@@ -210,6 +218,7 @@ export class ExpenseRecorder implements RecorderApi {
     this.groups = deps.groups;
     this.expenses = deps.expenses;
     this.expenseItems = deps.expenseItems;
+    this.groupSpreadsheets = deps.groupSpreadsheets;
     this.sheetWriter = deps.sheetWriter;
     this.eurConverter = deps.eurConverter;
     this.runInTransaction = deps.runInTransaction;
@@ -430,9 +439,26 @@ export class ExpenseRecorder implements RecorderApi {
     groupId: number,
     expense: Expense,
   ): Promise<{ deletedRowIndex: number | null }> {
-    const { conn, spreadsheetId } = this.getGroupConfig(groupId);
+    const { conn } = this.getGroupConfig(groupId);
+    if (!conn) {
+      return { deletedRowIndex: null };
+    }
 
-    if (!conn || !spreadsheetId) {
+    // CRITICAL: resolve the spreadsheet by the expense's YEAR, not the group's
+    // current spreadsheet_id. A user can delete a 2024 expense in 2026 — that
+    // row lives in the 2024 sheet. Using the current-year sheet here would
+    // silently miss, mark the row "not found", delete the DB row, and then
+    // /sync would resurrect it from the 2024 sheet.
+    const year = Number.parseInt(expense.date.slice(0, 4), 10);
+    const spreadsheetId = Number.isFinite(year)
+      ? this.groupSpreadsheets.getByYear(groupId, year)
+      : null;
+
+    if (!spreadsheetId) {
+      logger.warn(
+        { expenseId: expense.id, groupId, year, date: expense.date },
+        '[DELETE] No spreadsheet registered for expense year — skipping sheet delete',
+      );
       return { deletedRowIndex: null };
     }
 
@@ -445,7 +471,7 @@ export class ExpenseRecorder implements RecorderApi {
     });
 
     logger.info(
-      { expenseId: expense.id, deletedRowIndex: result.deletedRowIndex },
+      { expenseId: expense.id, year, spreadsheetId, deletedRowIndex: result.deletedRowIndex },
       `[DELETE] Sheet row delete attempt`,
     );
 

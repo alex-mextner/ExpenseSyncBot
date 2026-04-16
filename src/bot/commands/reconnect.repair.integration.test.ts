@@ -71,11 +71,6 @@ mock.module('googleapis', () => ({
 
 // ── Mock outbound side effects we don't care about ───────────────────────────
 
-mock.module('./oauth', () => ({
-  getAuthenticatedClient: () => ({}),
-  isTokenExpiredError: () => false,
-}));
-
 mock.module('../../services/google/oauth', () => ({
   generateAuthUrl: () => 'https://oauth-fake-url',
   getAuthenticatedClient: () => ({}),
@@ -419,8 +414,8 @@ describe('auditAndRepairSpreadsheets — integration', () => {
       if (createCount === 1) {
         return {
           data: {
-            spreadsheetId: 'NEW-2025-ok',
-            spreadsheetUrl: 'https://docs.google.com/d/NEW-2025-ok',
+            spreadsheetId: 'NEW-recreated',
+            spreadsheetUrl: 'https://docs.google.com/d/NEW-recreated',
           },
         };
       }
@@ -430,16 +425,11 @@ describe('auditAndRepairSpreadsheets — integration', () => {
 
     await expect(auditAndRepairSpreadsheets(group)).rejects.toThrow('Drive API quota exceeded');
 
-    // First (2025) succeeded — DB pointer updated
-    // Note: audits are sorted year DESC by listAll, so 2026 is processed first
-    // and 2025 second. But the deterministic detail is: when one succeeds and
-    // one fails, only the successful one updates the DB.
-    const updated2025 = groupSpreadsheets.getByYear(group.id, 2025);
-    const updated2026 = groupSpreadsheets.getByYear(group.id, 2026);
-    // Exactly one of them should still be 'LOST-...' — the one that failed
-    const lostCount = [updated2025, updated2026].filter((id) => id?.startsWith('LOST-')).length;
-    const newCount = [updated2025, updated2026].filter((id) => id === 'NEW-2025-ok').length;
-    expect(lostCount).toBe(1);
-    expect(newCount).toBe(1);
+    // listAll returns ORDER BY year DESC → [2026, 2025]. Audit preserves order,
+    // recreateLostSpreadsheets iterates in the same order. So:
+    //   - 2026 is processed first → createCount=1 → gets 'NEW-recreated'
+    //   - 2025 is processed second → createCount=2 → throws, LOST-2025 stays
+    expect(groupSpreadsheets.getByYear(group.id, 2026)).toBe('NEW-recreated');
+    expect(groupSpreadsheets.getByYear(group.id, 2025)).toBe('LOST-2025');
   });
 });
