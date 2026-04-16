@@ -38,16 +38,14 @@
 
       <h2>2. How We Use Your Data</h2>
       <ul>
-        <li><strong>Creating and updating Google Sheets</strong> — we use Google Sheets API (<code>spreadsheets</code> scope) to create a spreadsheet and write your expenses into it.</li>
-        <li><strong>Creating spreadsheet files</strong> — we use Google Drive API (<code>drive.file</code> scope) solely to create new spreadsheet files. We do not access any other files on your Google Drive.</li>
+        <li><strong>Creating and updating Google Sheets</strong> — we use Google Drive API (<code>drive.file</code> scope) to create a spreadsheet for you and to read and write your expenses into it. This scope is limited to files created by the Bot and does not grant access to any other files on your Google Drive.</li>
         <li><strong>Expense tracking</strong> — we store expenses locally to provide statistics, budgets, and AI-powered analysis.</li>
       </ul>
 
       <h2>3. Google API Scopes</h2>
-      <p>The Bot requests the following Google API scopes:</p>
+      <p>The Bot requests the following Google API scope:</p>
       <ul>
-        <li><code>https://www.googleapis.com/auth/spreadsheets</code> — to read and write expense data in your Google Sheets spreadsheet.</li>
-        <li><code>https://www.googleapis.com/auth/drive.file</code> — to create new spreadsheet files. This scope is limited to files created by the Bot and does not grant access to any other files on your Drive.</li>
+        <li><code>https://www.googleapis.com/auth/drive.file</code> — to create spreadsheet files and to read and write expense data in spreadsheets created by the Bot. This scope is limited to files created by the Bot and does not grant access to any other files on your Drive.</li>
       </ul>
 
       <h2>4. Data Sharing</h2>
