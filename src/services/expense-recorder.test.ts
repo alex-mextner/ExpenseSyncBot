@@ -250,6 +250,43 @@ describe('ExpenseRecorder', () => {
       ).rejects.toThrow('not found');
     });
 
+    it('writes backdated expense into the spreadsheet for THAT year, not current (regression)', async () => {
+      const { groupId, userId } = seedGroup();
+      // Register a separate 2024 spreadsheet on top of the current-year default
+      groupSpreadsheets.setYear(groupId, 2024, 'sheet-2024');
+
+      await recorder.record(groupId, userId, {
+        date: '2024-07-04',
+        category: 'Trip',
+        comment: 'Paris',
+        amount: 250,
+        currency: 'EUR',
+      });
+
+      const call = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected sheet write call');
+      // Must write into the 2024 sheet, NOT the default current-year sheet-123
+      expect(call[1]).toBe('sheet-2024');
+    });
+
+    it('falls back to current-year spreadsheet when expense year has no registration', async () => {
+      const { groupId, userId } = seedGroup();
+      // Note: no setYear for 2024 — only the default current-year sheet exists
+
+      await recorder.record(groupId, userId, {
+        date: '2024-07-04',
+        category: 'Trip',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+      });
+
+      const call = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected sheet write call');
+      // No 2024 sheet registered → fallback to current year sheet-123
+      expect(call[1]).toBe('sheet-123');
+    });
+
     it('does NOT create DB expense if sheet write fails', async () => {
       const { groupId, userId } = seedGroup();
       (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mockImplementation(() => {
@@ -627,6 +664,72 @@ describe('ExpenseRecorder', () => {
       await recorder.pushToSheet(groupId, []);
       expect(mockSheetWriter.appendExpenseRows).not.toHaveBeenCalled();
       expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
+    });
+
+    it('splits multi-year expense list into per-year batches, each to the matching sheet', async () => {
+      const { groupId, userId } = seedGroup();
+      groupSpreadsheets.setYear(groupId, 2024, 'sheet-2024');
+      groupSpreadsheets.setYear(groupId, 2025, 'sheet-2025');
+      // 2026 uses the default sheet-123 registered by seedGroup's current-year setYear.
+
+      const e2024 = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-06-10',
+        category: 'A',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+      });
+      const e2025 = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2025-03-15',
+        category: 'B',
+        comment: '',
+        amount: 200,
+        currency: 'EUR',
+        eur_amount: 200,
+      });
+      const e2026a = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-01-05',
+        category: 'C',
+        comment: '',
+        amount: 300,
+        currency: 'EUR',
+        eur_amount: 300,
+      });
+      const e2026b = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'D',
+        comment: '',
+        amount: 400,
+        currency: 'EUR',
+        eur_amount: 400,
+      });
+
+      await recorder.pushToSheet(groupId, [e2024, e2025, e2026a, e2026b]);
+
+      // Three batched calls, one per year
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(3);
+
+      const calls = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls;
+      // Collect (spreadsheetId, row count) per call — order depends on Map iteration
+      // but groupings must be exact.
+      const summary = calls
+        .map((c) => ({ sheet: c[1] as string, count: (c[2] as unknown[]).length }))
+        .sort((a, b) => a.sheet.localeCompare(b.sheet));
+
+      expect(summary).toEqual([
+        { sheet: 'sheet-123', count: 2 }, // 2026: two expenses
+        { sheet: 'sheet-2024', count: 1 },
+        { sheet: 'sheet-2025', count: 1 },
+      ]);
     });
 
     it('throws when no Google connection (refreshToken null)', async () => {

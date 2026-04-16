@@ -60,7 +60,11 @@ export function getSheetErrorMessage(error: unknown): string {
     case 'auth':
       return '❌ Не удалось записать в Google таблицу — авторизация устарела. Выполни /reconnect и повтори попытку.';
     case 'not_found':
-      return '❌ Не удалось записать в Google таблицу — таблица недоступна или удалена. Проверь её и выполни /reconnect.';
+      return (
+        '❌ Не удалось записать в Google таблицу — таблица недоступна или удалена.\n' +
+        'Попробуй /repair — бот проверит все таблицы и пересоздаст недоступные. ' +
+        'Если не помогло — /reconnect.'
+      );
     case 'rate_limit':
       return '⚠️ Google Sheets временно ограничил запросы. Подожди минуту и повтори попытку.';
     case 'network':

@@ -242,7 +242,10 @@ export class ExpenseRecorder implements RecorderApi {
     userId: number,
     data: RecordExpenseData,
   ): Promise<RecordExpenseResult> {
-    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.resolveWriteConfigForDate(
+      groupId,
+      data.date,
+    );
 
     const rate = this.eurConverter.getExchangeRate(data.currency);
     const eurAmount = this.eurConverter.convertToEUR(data.amount, data.currency);
@@ -309,7 +312,10 @@ export class ExpenseRecorder implements RecorderApi {
       return { expenses: [], categoriesAffected: [] };
     }
 
-    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.resolveWriteConfigForDate(
+      groupId,
+      data.date,
+    );
 
     // Group items by (category, currency). We group by both — not category
     // alone — because a receipt may legitimately contain items in different
@@ -492,29 +498,50 @@ export class ExpenseRecorder implements RecorderApi {
    * Push existing DB expenses to sheet (no new DB entries)
    */
   async pushToSheet(groupId: number, expenseList: Expense[]): Promise<void> {
-    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
-
-    if (!conn || !spreadsheetId) {
+    const base = this.getGroupConfig(groupId);
+    if (!base.conn || !base.spreadsheetId) {
       throw new Error(`Group ${groupId} not connected to Google Sheets`);
     }
 
     if (expenseList.length === 0) return;
 
-    // Single batched append — one API call regardless of row count, so
-    // pushing 500+ expenses (e.g. after /reconnect) doesn't exhaust the
-    // Sheets 60-writes/min/user quota the way a per-row loop would.
-    const rows = expenseList.map((expense) => ({
-      date: expense.date,
-      category: expense.category,
-      comment: expense.comment,
-      amounts: buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies),
-      eurAmount: expense.eur_amount,
-      rate: this.eurConverter.getExchangeRate(expense.currency as CurrencyCode),
-    }));
+    const { conn, enabledCurrencies } = base;
 
-    await this.sheetWriter.appendExpenseRows(conn, spreadsheetId, rows);
+    // Split expenses by their YEAR so each year's rows go to the correct
+    // spreadsheet. Expense list may span multiple years (e.g. /reconnect
+    // after long inactivity, or /push with a custom range).
+    const byYear = new Map<string, Expense[]>();
+    for (const expense of expenseList) {
+      const year = expense.date.slice(0, 4);
+      const arr = byYear.get(year);
+      if (arr) {
+        arr.push(expense);
+      } else {
+        byYear.set(year, [expense]);
+      }
+    }
 
-    logger.info(`[PUSH] Pushed ${expenseList.length} expenses to sheet (1 batched call)`);
+    for (const [year, expenses] of byYear) {
+      const { spreadsheetId: targetSheet } = this.resolveWriteConfigForDate(
+        groupId,
+        `${year}-01-01`,
+      );
+      if (!targetSheet) continue;
+
+      const rows = expenses.map((expense) => ({
+        date: expense.date,
+        category: expense.category,
+        comment: expense.comment,
+        amounts: buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies),
+        eurAmount: expense.eur_amount,
+        rate: this.eurConverter.getExchangeRate(expense.currency as CurrencyCode),
+      }));
+
+      await this.sheetWriter.appendExpenseRows(conn, targetSheet, rows);
+      logger.info(
+        `[PUSH] Pushed ${rows.length} expenses for ${year} to sheet ${targetSheet} (1 batched call)`,
+      );
+    }
   }
 
   private getGroupConfig(groupId: number): {
@@ -536,5 +563,42 @@ export class ExpenseRecorder implements RecorderApi {
       spreadsheetId: group.spreadsheet_id,
       enabledCurrencies: group.enabled_currencies,
     };
+  }
+
+  /**
+   * Resolve sheet config for a WRITE that has a specific date (record,
+   * recordReceipt, pushToSheet). Backdated expenses must land in the
+   * spreadsheet for THEIR year, not the group's current-year sheet —
+   * otherwise a 2024 expense added in 2026 would end up in the 2026 sheet.
+   *
+   * Fallback: if the expense's year has no registered spreadsheet (e.g.
+   * user only started with the bot this year), fall back to the current
+   * spreadsheet so the row isn't silently lost.
+   */
+  private resolveWriteConfigForDate(
+    groupId: number,
+    dateString: string,
+  ): {
+    conn: GoogleConn | null;
+    spreadsheetId: string | null;
+    enabledCurrencies: CurrencyCode[];
+  } {
+    const base = this.getGroupConfig(groupId);
+    const year = Number.parseInt(dateString.slice(0, 4), 10);
+    if (!Number.isFinite(year)) return base;
+
+    const yearSpreadsheetId = this.groupSpreadsheets.getByYear(groupId, year);
+    if (yearSpreadsheetId) {
+      return { ...base, spreadsheetId: yearSpreadsheetId };
+    }
+
+    // No year-specific sheet — fall back to current-year sheet with a warning
+    if (base.spreadsheetId && base.spreadsheetId !== null) {
+      logger.warn(
+        { groupId, date: dateString, year, fallbackSpreadsheetId: base.spreadsheetId },
+        '[RESOLVE] No spreadsheet registered for expense year — writing to current-year sheet',
+      );
+    }
+    return base;
   }
 }

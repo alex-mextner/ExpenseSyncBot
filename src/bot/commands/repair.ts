@@ -10,10 +10,37 @@ import { auditAndRepairSpreadsheets } from './reconnect';
 
 const logger = createLogger('repair');
 
+/**
+ * /repair creates new spreadsheets on Drive — a non-trivial side effect.
+ * Limit to once per 5 minutes per group to stop accidental floods
+ * (double-tap, bugged client) from filling the user's Drive with empty sheets.
+ * In-memory is fine: a restart drops the cooldown, which is the correct
+ * behavior (operator intervention = operator trusted).
+ */
+const REPAIR_COOLDOWN_MS = 5 * 60 * 1000;
+const lastRepairByGroup = new Map<number, number>();
+
+/** Test-only: wipe the cooldown map so tests start from a clean state. */
+export function _resetRepairCooldownForTests(): void {
+  lastRepairByGroup.clear();
+}
+
 export async function handleRepairCommand(
   _ctx: Ctx['Command'],
   group: GoogleConnectedGroup,
 ): Promise<void> {
+  const now = Date.now();
+  const last = lastRepairByGroup.get(group.id);
+  if (last !== undefined && now - last < REPAIR_COOLDOWN_MS) {
+    const remainingMs = REPAIR_COOLDOWN_MS - (now - last);
+    const remainingMin = Math.ceil(remainingMs / 60_000);
+    await sendMessage(
+      `⏳ /repair можно запускать не чаще раза в 5 минут. Подожди ~${remainingMin} ${pluralize(remainingMin, 'минуту', 'минуты', 'минут')} и попробуй снова.`,
+    );
+    return;
+  }
+  lastRepairByGroup.set(group.id, now);
+
   await sendMessage('🔍 Проверяю доступ к Google таблицам по всем годам...');
 
   try {
