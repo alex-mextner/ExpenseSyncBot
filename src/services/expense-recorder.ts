@@ -42,11 +42,21 @@ export function getExpenseRecorder(): RecorderApi {
 const logger = createLogger('expense-recorder');
 
 /**
- * Identifying fields used to locate a sheet row when deleting an expense.
- * EUR amount is intentionally excluded — sheet stores it as a formula, so the
- * recomputed value can drift from the DB-stored eur_amount across exchange-rate
- * changes. The four-tuple (date, category, amount, currency) plus comment is
- * unique enough in practice; if multiple rows match, the first one wins.
+ * Identifying fields used to locate a sheet row when DELETING an expense.
+ *
+ * Notes on fields:
+ * - EUR amount is intentionally excluded — sheet stores it as an INDIRECT
+ *   formula, so the recomputed value can drift from DB-stored eur_amount
+ *   across exchange-rate changes.
+ * - Comment IS included (unlike the dedup key used in sync's
+ *   pushMissingExpensesToSheet, which uses only (date, category, amount,
+ *   currency)). The reason for asymmetry: push-dedup should be fuzzy —
+ *   "don't duplicate-push an expense that's already in the sheet even with
+ *   a different comment". Delete, in contrast, should be precise — "remove
+ *   THIS particular row, not an unrelated expense that happens to share
+ *   date+category+amount".
+ * - If multiple rows match, the first (topmost) one wins. Repeated delete
+ *   calls handle duplicate scenarios naturally.
  */
 export interface DeleteRowCriteria {
   date: string;
@@ -488,21 +498,23 @@ export class ExpenseRecorder implements RecorderApi {
       throw new Error(`Group ${groupId} not connected to Google Sheets`);
     }
 
-    for (const expense of expenseList) {
-      const amounts = buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies);
-      const rate = this.eurConverter.getExchangeRate(expense.currency as CurrencyCode);
+    if (expenseList.length === 0) return;
 
-      await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
-        date: expense.date,
-        category: expense.category,
-        comment: expense.comment,
-        amounts,
-        eurAmount: expense.eur_amount,
-        rate,
-      });
-    }
+    // Single batched append — one API call regardless of row count, so
+    // pushing 500+ expenses (e.g. after /reconnect) doesn't exhaust the
+    // Sheets 60-writes/min/user quota the way a per-row loop would.
+    const rows = expenseList.map((expense) => ({
+      date: expense.date,
+      category: expense.category,
+      comment: expense.comment,
+      amounts: buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies),
+      eurAmount: expense.eur_amount,
+      rate: this.eurConverter.getExchangeRate(expense.currency as CurrencyCode),
+    }));
 
-    logger.info(`[PUSH] Pushed ${expenseList.length} expenses to sheet`);
+    await this.sheetWriter.appendExpenseRows(conn, spreadsheetId, rows);
+
+    logger.info(`[PUSH] Pushed ${expenseList.length} expenses to sheet (1 batched call)`);
   }
 
   private getGroupConfig(groupId: number): {

@@ -209,9 +209,16 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
       return;
     }
 
-    // Step -1: Snapshot DB state BEFORE any spreadsheet changes — recovery point
-    // if a recreate corrupts data.
-    const snapshotExpenses = database.expenses.findByGroupId(freshGroup.id, 100000);
+    // Step -1: Snapshot DB state BEFORE any spreadsheet changes. This is NOT
+    // auto-rollback — we never restore automatically because we can't
+    // distinguish "bad sync corrupted DB" from "user added expenses between
+    // snapshot and failure". Instead the snapshot is a manual recovery point:
+    // if the user sees data loss after /reconnect, they run `/sync rollback`
+    // (handled in sync.ts) to restore from the latest snapshot.
+    //
+    // Limit bump: findByGroupId caps the result. 1M is effectively unbounded
+    // for realistic group sizes while still defending against runaway queries.
+    const snapshotExpenses = database.expenses.findByGroupId(freshGroup.id, 1_000_000);
     const snapshotBudgets = database.budgets.findByGroupId(freshGroup.id);
     report.snapshotId = database.syncSnapshots.saveSnapshot(
       freshGroup.id,
@@ -280,7 +287,8 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
     logger.error({ err }, '[RECONNECT] Full sync failed');
     await sendMessage(
       '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' +
-        'Попробуй /repair (проверка таблиц) или /sync позже.',
+        'Попробуй /repair (проверка таблиц) или /sync позже.\n' +
+        'Если заметишь потерю данных — /sync rollback откатит последний снэпшот.',
     );
   }
 }

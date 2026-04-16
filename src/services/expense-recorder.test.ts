@@ -605,17 +605,28 @@ describe('ExpenseRecorder', () => {
 
       await recorder.pushToSheet(groupId, [e1, e2]);
 
-      // Sheet write called 2 times
-      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(2);
+      // One batched call — not two per-row calls (quota protection)
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
+      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
 
       // Uses eurAmount from expense, NOT recalculated
-      const call1 = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
-      if (!call1) throw new Error('Expected sheet write call');
-      expect(call1[2].eurAmount).toBe(8.5); // From DB, not recalculated
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected batched sheet write call');
+      const rows = call[2] as Array<{ eurAmount: number }>;
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.eurAmount).toBe(8.5); // From DB, not recalculated
+      expect(rows[1]?.eurAmount).toBe(43);
 
       // DB count unchanged (still 2)
       const all = expenses.findByGroupId(groupId);
       expect(all).toHaveLength(2);
+    });
+
+    it('is a no-op (no API call) for empty array', async () => {
+      const { groupId } = seedGroup();
+      await recorder.pushToSheet(groupId, []);
+      expect(mockSheetWriter.appendExpenseRows).not.toHaveBeenCalled();
+      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
     });
 
     it('throws when no Google connection (refreshToken null)', async () => {

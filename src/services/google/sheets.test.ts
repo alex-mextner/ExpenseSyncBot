@@ -443,6 +443,53 @@ describe('findAndDeleteExpenseRow', () => {
     expect(mockSpreadsheetsBatchUpdate).not.toHaveBeenCalled();
   });
 
+  test('tolerates float round-trip error for fractional amounts (regression)', async () => {
+    // Sheets round-trip often drifts fractional floats by ~1e-14.
+    // Strict === would miss the row and silently leave it in the sheet.
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'USD ($)', 'Rate (→EUR)'],
+          // criteria.amount = 12.34; sheet returns what Sheets actually stores
+          ['2026-04-15', 'Coffee', 'latte', 10.61, 12.339999999999996, 0.86],
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Coffee',
+      comment: 'latte',
+      amount: 12.34,
+      currency: 'USD',
+    });
+
+    expect(result.deletedRowIndex).toBe(2);
+    expect(mockSpreadsheetsBatchUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  test('still rejects amounts that differ by more than half a cent', async () => {
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'USD ($)', 'Rate (→EUR)'],
+          ['2026-04-15', 'Coffee', 'latte', 10.61, 12.35, 0.86],
+        ],
+      },
+    });
+
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-04-15',
+      category: 'Coffee',
+      comment: 'latte',
+      amount: 12.34, // sheet has 12.35 — a real different amount
+      currency: 'USD',
+    });
+
+    expect(result.deletedRowIndex).toBeNull();
+    expect(mockSpreadsheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
   test('does NOT match "EUR (calc)" column when looking up EUR currency (regression)', async () => {
     // Layout where EUR (calc) comes BEFORE the EUR currency column —
     // defensive against future column reorders.

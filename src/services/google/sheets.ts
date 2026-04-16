@@ -1381,7 +1381,13 @@ export async function findAndDeleteExpenseRow(
     const cellAmount = row[currencyCol];
     const numAmount =
       typeof cellAmount === 'number' ? cellAmount : Number.parseFloat(String(cellAmount ?? ''));
-    if (!Number.isFinite(numAmount) || numAmount !== criteria.amount) continue;
+    // Epsilon 0.005 = half of the smallest unit for 2-decimal currencies
+    // (cents/копейки). Float round-trip through Sheets can drift by ~1e-14
+    // for fractional values like $12.34; strict equality here would miss
+    // those rows and leave them in the sheet, re-importable via /sync.
+    // The gap between any two realistic neighboring sums (12.34 vs 12.35)
+    // is 0.01 > 0.005, so false positives are impossible.
+    if (!Number.isFinite(numAmount) || Math.abs(numAmount - criteria.amount) > 0.005) continue;
 
     // Match — delete this row (1-based for the public interface).
     const oneBasedRowIndex = i + 1;
