@@ -285,11 +285,12 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 - `/start` - Welcome & setup status
 - `/connect` - OAuth & initial setup
 - `/disconnect` - Disconnect from Google Sheets
-- `/reconnect` - Refresh OAuth
+- `/reconnect` - Refresh OAuth (also audits + auto-recreates any spreadsheets the bot has lost access to, e.g. after a scope downgrade or if the sheet was trashed)
+- `/repair` - Audit every year spreadsheet and recreate any that are 404/403. Manual entry point for users who didn't trigger /reconnect (e.g. deleted sheet by hand). No OAuth flow.
 - `/spreadsheet` - View spreadsheet URL
 - `/stats` - Expense statistics
 - `/sum` (alias: `/total`) - Sum expenses by filters
-- `/sync` - Manual sync to sheets
+- `/sync` - Manual sync to sheets (subcommand: `/sync rollback` restores the latest snapshot if recent sync lost data)
 - `/budget` - Manage budgets
 - `/categories` - List categories
 - `/settings` - View settings
