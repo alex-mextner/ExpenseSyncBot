@@ -18,6 +18,7 @@ export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'settings', description: 'Настройки группы' },
   { command: 'feedback', description: 'Отправить отзыв или баг-репорт' },
   { command: 'reconnect', description: 'Переподключить Google аккаунт' },
+  { command: 'repair', description: 'Проверить и пересоздать недоступные Google-таблицы' },
   { command: 'advice', description: 'AI-анализ расходов с советами' },
   { command: 'prompt', description: 'Настроить AI-промпт группы' },
   { command: 'topic', description: 'Привязать бота к топику форума' },
