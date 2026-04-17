@@ -282,6 +282,61 @@ describe('recreateSpreadsheet', () => {
     expect(rows[0]?.amounts['EUR']).toBeNull();
   });
 
+  test('passes ensureTab:true for first budget per month, ensureTab:false for the rest', async () => {
+    // Regression: without ensureTab=false for repeated rows, writeMonthBudgetRow
+    // fires one spreadsheets.get per budget row just to probe tab existence.
+    // On a 20-row month that's 20 extra reads — burns the 60/min quota fast.
+    const budgets: Budget[] = [
+      {
+        id: 1,
+        group_id: 1,
+        category: 'Алекс',
+        month: '2026-04',
+        limit_amount: 700,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 2,
+        group_id: 1,
+        category: 'Еда',
+        month: '2026-04',
+        limit_amount: 500,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 3,
+        group_id: 1,
+        category: 'Транспорт',
+        month: '2026-05',
+        limit_amount: 100,
+        currency: 'EUR',
+        created_at: '',
+        updated_at: '',
+      },
+    ];
+    const deps = buildDeps({ loadBudgetsForYear: mock(() => budgets) });
+
+    await recreateSpreadsheet(deps, conn, group, {
+      year: 2026,
+      spreadsheetId: 'OLD-2026',
+      status: 'not_found',
+    });
+
+    const calls = (deps.writeMonthBudgetRow as ReturnType<typeof mock>).mock.calls;
+    expect(calls).toHaveLength(3);
+    // Apr budget #1 (first for Apr) → ensureTab: true
+    expect(calls[0]?.[3]).toEqual({ category: 'Алекс', limit: 700, currency: 'EUR' });
+    expect(calls[0]?.[4]).toEqual({ ensureTab: true });
+    // Apr budget #2 (same month) → ensureTab: false
+    expect(calls[1]?.[4]).toEqual({ ensureTab: false });
+    // May budget (first for May) → ensureTab: true
+    expect(calls[2]?.[4]).toEqual({ ensureTab: true });
+  });
+
   test('copies budgets for the lost year, one writeMonthBudgetRow per budget', async () => {
     const budgets: Budget[] = [
       {

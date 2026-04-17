@@ -9,7 +9,11 @@ import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { getExchangeRate } from '../../services/currency/converter';
 import { getExpenseRecorder } from '../../services/expense-recorder';
-import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
+import {
+  type MonthAbbr,
+  monthAbbrFromDate,
+  monthIndexFromAbbr,
+} from '../../services/google/month-abbr';
 import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
 import {
   appendExpenseRows,
@@ -17,7 +21,7 @@ import {
   createExpenseSpreadsheet,
   type GoogleConn,
   googleConn,
-  monthTabExists,
+  listMonthTabs,
   readExpensesFromSheet,
   readMonthBudget,
   type SheetRow,
@@ -306,7 +310,14 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
 
 const BACKUP_NAME_PREFIX = 'Expenses Tracker — backup';
 
-/** Copy the Google spreadsheet via Drive API. Deletes previous backups first (recoverable from trash). */
+/**
+ * Copy the Google spreadsheet via Drive API. Deletes previous backups first
+ * (recoverable from trash).
+ *
+ * Drive API shares the same per-user quota as Sheets in our usage patterns,
+ * so each sub-call is wrapped in withSheetsRetry — 429s are transient and
+ * auto-recoverable.
+ */
 async function backupSpreadsheet(conn: GoogleConn, spreadsheetId: string): Promise<string | null> {
   try {
     const auth = getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
@@ -316,10 +327,14 @@ async function backupSpreadsheet(conn: GoogleConn, spreadsheetId: string): Promi
     await deletePreviousBackups(drive);
 
     const timestamp = format(new Date(), 'yyyy-MM-dd HH:mm');
-    const copy = await drive.files.copy({
-      fileId: spreadsheetId,
-      requestBody: { name: `${BACKUP_NAME_PREFIX} ${timestamp}` },
-    });
+    const copy = await withSheetsRetry(
+      () =>
+        drive.files.copy({
+          fileId: spreadsheetId,
+          requestBody: { name: `${BACKUP_NAME_PREFIX} ${timestamp}` },
+        }),
+      'backupSpreadsheet.copy',
+    );
     const backupId = copy.data.id;
     if (!backupId) {
       logger.error('[RECONNECT] Drive backup returned no file ID');
@@ -337,15 +352,26 @@ async function backupSpreadsheet(conn: GoogleConn, spreadsheetId: string): Promi
 /** Find and trash previous backup spreadsheets by name prefix. */
 async function deletePreviousBackups(drive: ReturnType<typeof google.drive>): Promise<void> {
   try {
-    const res = await drive.files.list({
-      q: `name contains '${BACKUP_NAME_PREFIX}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
-      fields: 'files(id, name)',
-      pageSize: 50,
-    });
+    const res = await withSheetsRetry(
+      () =>
+        drive.files.list({
+          q: `name contains '${BACKUP_NAME_PREFIX}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
+          fields: 'files(id, name)',
+          pageSize: 50,
+        }),
+      'deletePreviousBackups.list',
+    );
     const files = res.data.files ?? [];
     for (const file of files) {
       if (file.id) {
-        await drive.files.update({ fileId: file.id, requestBody: { trashed: true } });
+        await withSheetsRetry(
+          () =>
+            drive.files.update({
+              fileId: file.id as string,
+              requestBody: { trashed: true },
+            }),
+          `deletePreviousBackups.trash ${file.id}`,
+        );
         logger.info(`[RECONNECT] Trashed old backup: ${file.name} (${file.id})`);
       }
     }
@@ -459,16 +485,17 @@ async function importBudgetsFromSheet(group: Group): Promise<number> {
   const spreadsheetId =
     database.groupSpreadsheets.getByYear(group.id, currentYear) ?? group.spreadsheet_id;
 
+  // One round trip to list existing month tabs instead of 12 monthTabExists
+  // calls. A January-only sheet used to cost 12 reads; now it costs 1 — the
+  // main reason /reconnect burned through the 60/min read quota.
+  const existingTabs = await listMonthTabs(conn, spreadsheetId);
   let imported = 0;
 
-  for (const monthAbbr of MONTH_ABBREVS) {
-    const exists = await monthTabExists(conn, spreadsheetId, monthAbbr);
-    if (!exists) continue;
-
+  for (const monthAbbr of existingTabs) {
     const budgetsFromSheet = await readMonthBudget(conn, spreadsheetId, monthAbbr);
     if (budgetsFromSheet.length === 0) continue;
 
-    const monthIndex = MONTH_ABBREVS.indexOf(monthAbbr) + 1;
+    const monthIndex = monthIndexFromAbbr(monthAbbr);
     const monthStr = `${currentYear}-${String(monthIndex).padStart(2, '0')}`;
 
     for (const b of budgetsFromSheet) {
@@ -534,23 +561,35 @@ async function syncBudgetsToSheet(
   const tabsCreated: string[] = [];
   let rowsWritten = 0;
 
+  // One list call up front instead of N monthTabExists probes (one per budget
+  // month). We mutate this set on creation so subsequent iterations see the
+  // just-created tab without another round trip.
+  const existingTabs = new Set(await listMonthTabs(conn, spreadsheetId));
+
   for (const [monthAbbr, budgets] of budgetsByMonth) {
-    // Create tab if missing
-    const exists = await monthTabExists(conn, spreadsheetId, monthAbbr);
-    if (!exists) {
+    if (!existingTabs.has(monthAbbr)) {
       await createEmptyMonthTab(conn, spreadsheetId, monthAbbr);
+      existingTabs.add(monthAbbr);
       tabsCreated.push(monthAbbr);
       logger.info(`[RECONNECT] Created budget tab ${monthAbbr} for group ${group.id}`);
     }
 
-    // Write each budget row (upserts by category)
+    // Write each budget row (upserts by category). ensureTab: false — the tab
+    // is guaranteed by the listMonthTabs/createEmptyMonthTab guard above, so
+    // skip the redundant per-row monthTabExists read.
     for (const budget of budgets) {
       try {
-        await writeMonthBudgetRow(conn, spreadsheetId, monthAbbr, {
-          category: budget.category,
-          limit: budget.limit_amount,
-          currency: budget.currency,
-        });
+        await writeMonthBudgetRow(
+          conn,
+          spreadsheetId,
+          monthAbbr,
+          {
+            category: budget.category,
+            limit: budget.limit_amount,
+            currency: budget.currency,
+          },
+          { ensureTab: false },
+        );
         rowsWritten++;
       } catch (err) {
         logger.error({ err }, `[RECONNECT] Failed to write budget ${budget.category}/${monthAbbr}`);

@@ -42,6 +42,11 @@ export function monthAbbrFromYYYYMM(yyyyMM: string): MonthAbbr {
   return abbr;
 }
 
+/** 1-based month number (Jan → 1, Dec → 12). */
+export function monthIndexFromAbbr(month: MonthAbbr): number {
+  return MONTH_ABBREVS.indexOf(month) + 1;
+}
+
 export function prevMonthAbbr(year: number, month: MonthAbbr): { year: number; month: MonthAbbr } {
   const idx = MONTH_ABBREVS.indexOf(month);
   if (idx === 0) return { year: year - 1, month: 'Dec' };

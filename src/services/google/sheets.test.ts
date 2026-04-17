@@ -65,7 +65,9 @@ import {
   appendExpenseRows,
   findAndDeleteExpenseRow,
   isRateLimitError,
+  listMonthTabs,
   withSheetsRetry,
+  writeMonthBudgetRow,
 } from './sheets';
 
 const TEST_CONN: GoogleConn = { refreshToken: 'token', oauthClient: 'legacy' };
@@ -581,6 +583,90 @@ describe('findAndDeleteExpenseRow', () => {
     });
 
     expect(result.deletedRowIndex).toBe(2);
+  });
+});
+
+describe('writeMonthBudgetRow ensureTab option', () => {
+  const mockSpreadsheetsGet = mockSheets.spreadsheets.get as ReturnType<typeof mock>;
+
+  beforeEach(() => {
+    mockSpreadsheetsGet.mockReset().mockResolvedValue({
+      data: { sheets: [{ properties: { sheetId: 1, title: 'Apr' } }] },
+    });
+    mockValuesGet.mockReset().mockResolvedValue({ data: { values: [] } });
+    mockValuesAppend.mockReset().mockResolvedValue({
+      data: { updates: { updatedRange: 'Apr!A2:C2', updatedRows: 1 } },
+    });
+    mockValuesUpdate.mockReset().mockResolvedValue({ data: {} });
+  });
+
+  test('defaults to ensureTab:true — probes tab existence via spreadsheets.get', async () => {
+    await writeMonthBudgetRow(TEST_CONN, TEST_SPREADSHEET, 'Apr', {
+      category: 'Food',
+      limit: 500,
+      currency: 'EUR',
+    });
+    expect(mockSpreadsheetsGet).toHaveBeenCalledTimes(1);
+    expect(mockValuesAppend).toHaveBeenCalledTimes(1);
+  });
+
+  test('ensureTab:false skips the spreadsheets.get probe — saves one read per call', async () => {
+    await writeMonthBudgetRow(
+      TEST_CONN,
+      TEST_SPREADSHEET,
+      'Apr',
+      { category: 'Food', limit: 500, currency: 'EUR' },
+      { ensureTab: false },
+    );
+    expect(mockSpreadsheetsGet).not.toHaveBeenCalled();
+    expect(mockValuesAppend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('listMonthTabs', () => {
+  const mockSpreadsheetsGet = mockSheets.spreadsheets.get as ReturnType<typeof mock>;
+
+  beforeEach(() => {
+    mockSpreadsheetsGet.mockReset();
+  });
+
+  test('returns only month-abbreviation tabs, filters Expenses and custom sheets', async () => {
+    mockSpreadsheetsGet.mockResolvedValue({
+      data: {
+        sheets: [
+          { properties: { sheetId: 0, title: 'Expenses' } },
+          { properties: { sheetId: 1, title: 'Jan' } },
+          { properties: { sheetId: 2, title: 'Feb' } },
+          { properties: { sheetId: 3, title: 'MySheet' } },
+          { properties: { sheetId: 4, title: 'Apr' } },
+        ],
+      },
+    });
+
+    const tabs = await listMonthTabs(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(tabs).toEqual(['Jan', 'Feb', 'Apr']);
+    expect(mockSpreadsheetsGet).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns empty array when no month tabs exist', async () => {
+    mockSpreadsheetsGet.mockResolvedValue({
+      data: { sheets: [{ properties: { sheetId: 0, title: 'Expenses' } }] },
+    });
+
+    const tabs = await listMonthTabs(TEST_CONN, TEST_SPREADSHEET);
+    expect(tabs).toEqual([]);
+  });
+
+  test('returns empty array and does not throw when API returns malformed data', async () => {
+    mockSpreadsheetsGet.mockResolvedValue({ data: {} });
+    const tabs = await listMonthTabs(TEST_CONN, TEST_SPREADSHEET);
+    expect(tabs).toEqual([]);
+  });
+
+  test('rethrows underlying error so caller can classify it (rate-limit, etc.)', async () => {
+    mockSpreadsheetsGet.mockRejectedValue({ code: 403, message: 'permissionDenied' });
+    await expect(listMonthTabs(TEST_CONN, TEST_SPREADSHEET)).rejects.toMatchObject({ code: 403 });
   });
 });
 

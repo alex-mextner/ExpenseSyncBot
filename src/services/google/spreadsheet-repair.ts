@@ -148,6 +148,7 @@ export interface RecreateDeps {
     spreadsheetId: string,
     month: MonthAbbr,
     row: { category: string; limit: number; currency: CurrencyCode },
+    options?: { ensureTab?: boolean },
   ): Promise<void>;
   loadExpensesForYear(groupId: number, year: number): Expense[];
   loadBudgetsForYear(groupId: number, year: number): Budget[];
@@ -201,15 +202,25 @@ export async function recreateSpreadsheet(
   const seenTabs = new Set<MonthAbbr>();
   for (const b of budgets) {
     const month = monthAbbrFromYYYYMM(b.month);
-    if (!seenTabs.has(month)) {
+    const firstBudgetForMonth = !seenTabs.has(month);
+    if (firstBudgetForMonth) {
       seenTabs.add(month);
       budgetTabsCreated.push(month);
     }
-    await deps.writeMonthBudgetRow(conn, newId, month, {
-      category: b.category,
-      limit: b.limit_amount,
-      currency: b.currency as CurrencyCode,
-    });
+    // First budget per month: allow writeMonthBudgetRow to create the tab.
+    // Subsequent budgets in the same month: tab is guaranteed, skip the
+    // redundant monthTabExists read that otherwise costs one per-row quota hit.
+    await deps.writeMonthBudgetRow(
+      conn,
+      newId,
+      month,
+      {
+        category: b.category,
+        limit: b.limit_amount,
+        currency: b.currency as CurrencyCode,
+      },
+      { ensureTab: firstBudgetForMonth },
+    );
   }
 
   // Persist the new pointer LAST — only if the data made it across.

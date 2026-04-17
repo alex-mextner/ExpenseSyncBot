@@ -6,8 +6,7 @@ import type { OAuthClientType } from '../../database/types';
 import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { convertToEUR } from '../currency/converter';
-import type { MonthAbbr } from './month-abbr';
-import { monthAbbrFromDate } from './month-abbr';
+import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from './month-abbr';
 import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
 
 /**
@@ -779,6 +778,30 @@ export async function monthTabExists(
 }
 
 /**
+ * Fetch all month-abbreviation tabs (e.g. "Jan", "Feb", …) present in the
+ * spreadsheet with a single `spreadsheets.get` call. Used to avoid the N× per-
+ * month `monthTabExists` probe that hits Sheets quota in bulk-sync loops.
+ *
+ * Rethrows underlying errors (including 429/403) so the caller can classify
+ * or retry at a higher level — this is deliberate, unlike the defensive
+ * catch in `monthTabExists`.
+ */
+export async function listMonthTabs(conn: GoogleConn, spreadsheetId: string): Promise<MonthAbbr[]> {
+  const auth = authClient(conn);
+  const sheets = google.sheets({ version: 'v4', auth });
+  const spreadsheet = await withSheetsRetry(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    'listMonthTabs',
+  );
+  const titles = new Set(
+    spreadsheet.data.sheets
+      ?.map((s) => s.properties?.title)
+      .filter((t): t is string => typeof t === 'string') ?? [],
+  );
+  return MONTH_ABBREVS.filter((abbr) => titles.has(abbr));
+}
+
+/**
  * Create an empty monthly budget tab with header row (Category | Limit | Currency)
  */
 export async function createEmptyMonthTab(
@@ -789,21 +812,25 @@ export async function createEmptyMonthTab(
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const addResponse = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          addSheet: {
-            properties: {
-              title: month,
-              gridProperties: { frozenRowCount: 1 },
+  const addResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: month,
+                  gridProperties: { frozenRowCount: 1 },
+                },
+              },
             },
-          },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    `createEmptyMonthTab.addSheet ${month}`,
+  );
 
   const sheetId = addResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
   if (sheetId === undefined || sheetId === null) {
@@ -812,40 +839,44 @@ export async function createEmptyMonthTab(
     );
   }
 
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          updateCells: {
-            rows: [
-              {
-                values: MONTH_TAB_HEADERS.map((header) => ({
-                  userEnteredValue: { stringValue: header },
-                  userEnteredFormat: {
-                    textFormat: { bold: true },
-                    backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateCells: {
+                rows: [
+                  {
+                    values: MONTH_TAB_HEADERS.map((header) => ({
+                      userEnteredValue: { stringValue: header },
+                      userEnteredFormat: {
+                        textFormat: { bold: true },
+                        backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                      },
+                    })),
                   },
-                })),
+                ],
+                fields: 'userEnteredValue,userEnteredFormat',
+                start: { sheetId, rowIndex: 0, columnIndex: 0 },
               },
-            ],
-            fields: 'userEnteredValue,userEnteredFormat',
-            start: { sheetId, rowIndex: 0, columnIndex: 0 },
-          },
-        },
-        {
-          autoResizeDimensions: {
-            dimensions: {
-              sheetId,
-              dimension: 'COLUMNS',
-              startIndex: 0,
-              endIndex: 3,
             },
-          },
+            {
+              autoResizeDimensions: {
+                dimensions: {
+                  sheetId,
+                  dimension: 'COLUMNS',
+                  startIndex: 0,
+                  endIndex: 3,
+                },
+              },
+            },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    `createEmptyMonthTab.format ${month}`,
+  );
 
   logger.info(`[SHEETS] Created empty month tab: ${month}`);
 }
@@ -888,18 +919,27 @@ export async function readMonthBudget(
 
 /**
  * Write or update a single budget row in a monthly tab (upsert by category).
- * Defensively ensures the month tab exists before writing.
+ *
+ * By default, defensively ensures the month tab exists before writing —
+ * costs one extra `spreadsheets.get`. Callers that already guaranteed the
+ * tab (e.g. via a single upfront `listMonthTabs` + selective
+ * `createEmptyMonthTab`) should pass `{ ensureTab: false }` to skip the
+ * redundant probe; this is what keeps the 60/min read quota from being
+ * burned during bulk budget sync.
  */
 export async function writeMonthBudgetRow(
   conn: GoogleConn,
   spreadsheetId: string,
   month: MonthAbbr,
   row: BudgetRow,
+  options?: { ensureTab?: boolean },
 ): Promise<void> {
-  // Ensure the month tab exists before writing
-  const tabExists = await monthTabExists(conn, spreadsheetId, month);
-  if (!tabExists) {
-    await createEmptyMonthTab(conn, spreadsheetId, month);
+  const ensureTab = options?.ensureTab ?? true;
+  if (ensureTab) {
+    const tabExists = await monthTabExists(conn, spreadsheetId, month);
+    if (!tabExists) {
+      await createEmptyMonthTab(conn, spreadsheetId, month);
+    }
   }
 
   const auth = authClient(conn);
@@ -1521,10 +1561,14 @@ export async function readExpensesFromSheet(
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!A:Z`,
-  });
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!A:Z`,
+      }),
+    'readExpensesFromSheet',
+  );
 
   const rows = response.data.values || [];
 
