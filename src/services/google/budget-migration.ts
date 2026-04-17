@@ -17,6 +17,7 @@ import {
   readExpenseRowsRaw,
   repairEurFormulas,
   sortExpensesTab,
+  withSheetsRetry,
   writeMonthBudgetRow,
 } from './sheets';
 
@@ -152,10 +153,14 @@ export async function runYearSplitMigration(
 
   // 1. Backup old spreadsheet before any modifications
   const drive = google.drive({ version: 'v3', auth });
-  const copy = await drive.files.copy({
-    fileId: oldSpreadsheetId,
-    requestBody: { name: `Expenses Tracker — backup ${format(new Date(), 'yyyy-MM-dd')}` },
-  });
+  const copy = await withSheetsRetry(
+    () =>
+      drive.files.copy({
+        fileId: oldSpreadsheetId,
+        requestBody: { name: `Expenses Tracker — backup ${format(new Date(), 'yyyy-MM-dd')}` },
+      }),
+    'budget-migration.backup',
+  );
   const backupId = copy.data.id;
   if (!backupId) throw new Error('[MIGRATION] Drive backup failed: no file ID returned');
   const backupUrl = `https://docs.google.com/spreadsheets/d/${backupId}`;

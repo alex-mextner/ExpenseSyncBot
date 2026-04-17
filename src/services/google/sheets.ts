@@ -82,40 +82,44 @@ export async function createExpenseSpreadsheet(
   ];
 
   // Create spreadsheet
-  const response = await sheets.spreadsheets.create({
-    requestBody: {
-      properties: {
-        title: `Expenses Tracker ${new Date().getFullYear()}`,
-      },
-      sheets: [
-        {
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.create({
+        requestBody: {
           properties: {
-            title: SPREADSHEET_CONFIG.sheetName,
-            gridProperties: {
-              frozenRowCount: 1, // Freeze header row
-            },
+            title: `Expenses Tracker ${new Date().getFullYear()}`,
           },
-          data: [
+          sheets: [
             {
-              startRow: 0,
-              startColumn: 0,
-              rowData: [
+              properties: {
+                title: SPREADSHEET_CONFIG.sheetName,
+                gridProperties: {
+                  frozenRowCount: 1, // Freeze header row
+                },
+              },
+              data: [
                 {
-                  values: headers.map((header) => ({
-                    userEnteredValue: { stringValue: header },
-                    userEnteredFormat: {
-                      textFormat: { bold: true },
-                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                  startRow: 0,
+                  startColumn: 0,
+                  rowData: [
+                    {
+                      values: headers.map((header) => ({
+                        userEnteredValue: { stringValue: header },
+                        userEnteredFormat: {
+                          textFormat: { bold: true },
+                          backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                        },
+                      })),
                     },
-                  })),
+                  ],
                 },
               ],
             },
           ],
         },
-      ],
-    },
-  });
+      }),
+    'createExpenseSpreadsheet.create',
+  );
 
   const spreadsheetId = response.data.spreadsheetId;
   if (!spreadsheetId) throw new Error('Spreadsheet creation did not return an ID');
@@ -126,23 +130,27 @@ export async function createExpenseSpreadsheet(
 
   if (sheetId !== undefined) {
     // Auto-resize columns
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            autoResizeDimensions: {
-              dimensions: {
-                sheetId: sheetId,
-                dimension: 'COLUMNS',
-                startIndex: 0,
-                endIndex: headers.length,
+    await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: [
+              {
+                autoResizeDimensions: {
+                  dimensions: {
+                    sheetId: sheetId,
+                    dimension: 'COLUMNS',
+                    startIndex: 0,
+                    endIndex: headers.length,
+                  },
+                },
               },
-            },
+            ],
           },
-        ],
-      },
-    });
+        }),
+      'createExpenseSpreadsheet.autoResize',
+    );
   }
 
   // Create current month's budget tab alongside the expenses tab
@@ -341,10 +349,14 @@ async function appendExpenseRowsImpl(
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Get headers once
-  const headersResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
-  });
+  const headersResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+      }),
+    'appendExpenseRows.readHeaders',
+  );
 
   let headers: string[] = headersResponse.data.values?.[0] || [];
   logger.info({ data: headers }, '[SHEETS-BATCH] Headers from spreadsheet');
@@ -451,10 +463,14 @@ async function appendExpenseRowImpl(
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Get headers to determine column order
-  const headersResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
-  });
+  const headersResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+      }),
+    'appendExpenseRow.readHeaders',
+  );
 
   let headers: string[] = headersResponse.data.values?.[0] || [];
   logger.info({ data: headers }, `[SHEETS] Headers from spreadsheet`);
@@ -568,7 +584,10 @@ async function insertCurrencyColumn(
   const insertIdx = eurCalcIdx !== -1 ? eurCalcIdx : currentHeaders.length;
 
   // Get sheet ID
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const spreadsheet = await withSheetsRetry(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    'insertCurrencyColumn.getSheetId',
+  );
   const sheet = spreadsheet.data.sheets?.find(
     (s) => s.properties?.title === SPREADSHEET_CONFIG.sheetName,
   );
@@ -580,42 +599,46 @@ async function insertCurrencyColumn(
   }
 
   // Insert column at position
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          insertDimension: {
-            range: {
-              sheetId,
-              dimension: 'COLUMNS',
-              startIndex: insertIdx,
-              endIndex: insertIdx + 1,
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              insertDimension: {
+                range: {
+                  sheetId,
+                  dimension: 'COLUMNS',
+                  startIndex: insertIdx,
+                  endIndex: insertIdx + 1,
+                },
+              },
             },
-          },
-        },
-        {
-          updateCells: {
-            rows: [
-              {
-                values: [
+            {
+              updateCells: {
+                rows: [
                   {
-                    userEnteredValue: { stringValue: newHeader },
-                    userEnteredFormat: {
-                      textFormat: { bold: true },
-                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
-                    },
+                    values: [
+                      {
+                        userEnteredValue: { stringValue: newHeader },
+                        userEnteredFormat: {
+                          textFormat: { bold: true },
+                          backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                        },
+                      },
+                    ],
                   },
                 ],
+                fields: 'userEnteredValue,userEnteredFormat',
+                start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
               },
-            ],
-            fields: 'userEnteredValue,userEnteredFormat',
-            start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
-          },
+            },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    `insertCurrencyColumn.write ${currency}`,
+  );
 
   logger.info(`[SHEETS] Inserted currency column "${newHeader}" at index ${insertIdx}`);
 
@@ -637,7 +660,10 @@ async function ensureRateColumn(
   // Append at end
   const insertIdx = currentHeaders.length;
 
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const spreadsheet = await withSheetsRetry(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    'ensureRateColumn.getSheetId',
+  );
   const sheet = spreadsheet.data.sheets?.find(
     (s) => s.properties?.title === SPREADSHEET_CONFIG.sheetName,
   );
@@ -648,32 +674,36 @@ async function ensureRateColumn(
     return currentHeaders;
   }
 
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          updateCells: {
-            rows: [
-              {
-                values: [
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateCells: {
+                rows: [
                   {
-                    userEnteredValue: { stringValue: RATE_COLUMN_HEADER },
-                    userEnteredFormat: {
-                      textFormat: { bold: true },
-                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
-                    },
+                    values: [
+                      {
+                        userEnteredValue: { stringValue: RATE_COLUMN_HEADER },
+                        userEnteredFormat: {
+                          textFormat: { bold: true },
+                          backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                        },
+                      },
+                    ],
                   },
                 ],
+                fields: 'userEnteredValue,userEnteredFormat',
+                start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
               },
-            ],
-            fields: 'userEnteredValue,userEnteredFormat',
-            start: { sheetId, rowIndex: 0, columnIndex: insertIdx },
-          },
+            },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    'ensureRateColumn.write',
+  );
 
   logger.info(`[SHEETS] Added Rate column at index ${insertIdx}`);
   return [...currentHeaders, RATE_COLUMN_HEADER];
@@ -691,10 +721,14 @@ export async function ensureSheetColumns(
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const headersResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
-  });
+  const headersResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+      }),
+    'ensureSheetColumns.readHeaders',
+  );
 
   let headers: string[] = headersResponse.data.values?.[0] || [];
 
@@ -730,7 +764,10 @@ export async function verifySpreadsheetAccess(
     const auth = authClient(conn);
     const sheets = google.sheets({ version: 'v4', auth });
 
-    await sheets.spreadsheets.get({ spreadsheetId });
+    await withSheetsRetry(
+      () => sheets.spreadsheets.get({ spreadsheetId }),
+      'verifySpreadsheetAccess',
+    );
     return true;
   } catch (err) {
     if (isTokenExpiredError(err)) {
@@ -1007,7 +1044,10 @@ export async function cloneMonthTab(
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Find source sheet ID
-  const sourceSpreadsheet = await sheets.spreadsheets.get({ spreadsheetId: sourceSpreadsheetId });
+  const sourceSpreadsheet = await withSheetsRetry(
+    () => sheets.spreadsheets.get({ spreadsheetId: sourceSpreadsheetId }),
+    `cloneMonthTab.getSource ${sourceMonth}`,
+  );
   const sourceSheet = sourceSpreadsheet.data.sheets?.find(
     (s) => s.properties?.title === sourceMonth,
   );
@@ -1017,11 +1057,15 @@ export async function cloneMonthTab(
   }
 
   // Copy sheet to target spreadsheet
-  const copyResponse = await sheets.spreadsheets.sheets.copyTo({
-    spreadsheetId: sourceSpreadsheetId,
-    sheetId: sourceSheetId,
-    requestBody: { destinationSpreadsheetId: targetSpreadsheetId },
-  });
+  const copyResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.sheets.copyTo({
+        spreadsheetId: sourceSpreadsheetId,
+        sheetId: sourceSheetId,
+        requestBody: { destinationSpreadsheetId: targetSpreadsheetId },
+      }),
+    `cloneMonthTab.copyTo ${sourceMonth}`,
+  );
 
   const newSheetId = copyResponse.data.sheetId;
   if (newSheetId === undefined || newSheetId === null) {
@@ -1029,19 +1073,23 @@ export async function cloneMonthTab(
   }
 
   // Rename the copied sheet to targetMonth
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: targetSpreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          updateSheetProperties: {
-            properties: { sheetId: newSheetId, title: targetMonth },
-            fields: 'title',
-          },
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId: targetSpreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateSheetProperties: {
+                properties: { sheetId: newSheetId, title: targetMonth },
+                fields: 'title',
+              },
+            },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    `cloneMonthTab.rename ${targetMonth}`,
+  );
 
   logger.info(`[SHEETS] Cloned ${sourceMonth} → ${targetMonth}`);
 }
@@ -1062,11 +1110,15 @@ export async function readExpenseRowsRaw(
 ): Promise<string[][]> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!A2:Z`,
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  });
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!A2:Z`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      }),
+    'readExpenseRowsRaw',
+  );
   return (response.data.values ?? []).map((row) =>
     row.map((cell, colIdx) => {
       const str = String(cell ?? '');
@@ -1096,28 +1148,35 @@ export async function sortExpensesTab(conn: GoogleConn, spreadsheetId: string): 
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const spreadsheet = await withSheetsRetry(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    'sortExpensesTab.getSheetId',
+  );
   const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
   const sheetId = expensesSheet?.properties?.sheetId;
   if (sheetId === undefined) return;
 
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          sortRange: {
-            range: {
-              sheetId,
-              startRowIndex: 1, // skip header
-              startColumnIndex: 0,
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              sortRange: {
+                range: {
+                  sheetId,
+                  startRowIndex: 1, // skip header
+                  startColumnIndex: 0,
+                },
+                sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }],
+              },
             },
-            sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }],
-          },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    'sortExpensesTab.sort',
+  );
 }
 
 /** Rename a spreadsheet's title. */
@@ -1128,19 +1187,23 @@ export async function renameSpreadsheet(
 ): Promise<void> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          updateSpreadsheetProperties: {
-            properties: { title },
-            fields: 'title',
-          },
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateSpreadsheetProperties: {
+                properties: { title },
+                fields: 'title',
+              },
+            },
+          ],
         },
-      ],
-    },
-  });
+      }),
+    'renameSpreadsheet',
+  );
 }
 
 /**
@@ -1151,11 +1214,15 @@ export async function repairDateSerials(conn: GoogleConn, spreadsheetId: string)
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!A2:A`,
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  });
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!A2:A`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      }),
+    'repairDateSerials.read',
+  );
 
   const rows = response.data.values ?? [];
   const updates: { row: number; isoDate: string }[] = [];
@@ -1174,16 +1241,20 @@ export async function repairDateSerials(conn: GoogleConn, spreadsheetId: string)
 
   if (updates.length === 0) return 0;
 
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: updates.map(({ row, isoDate }) => ({
-        range: `${EXPENSES_TAB}!A${row}`,
-        values: [[isoDate]],
-      })),
-    },
-  });
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: updates.map(({ row, isoDate }) => ({
+            range: `${EXPENSES_TAB}!A${row}`,
+            values: [[isoDate]],
+          })),
+        },
+      }),
+    'repairDateSerials.write',
+  );
 
   return updates.length;
 }
@@ -1197,11 +1268,15 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const headerResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!1:1`,
-    valueRenderOption: 'FORMATTED_VALUE',
-  });
+  const headerResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!1:1`,
+        valueRenderOption: 'FORMATTED_VALUE',
+      }),
+    'repairEurFormulas.readHeaders',
+  );
   const headers = (headerResponse.data.values?.[0] ?? []) as string[];
 
   const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
@@ -1220,11 +1295,15 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
 
   const lastCol = colLetter(headers.length - 1);
   // FORMULA render option: formulas come back as "=C5*G5", static values as the number
-  const dataResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!A2:${lastCol}`,
-    valueRenderOption: 'FORMULA',
-  });
+  const dataResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!A2:${lastCol}`,
+        valueRenderOption: 'FORMULA',
+      }),
+    'repairEurFormulas.readData',
+  );
   const rows = dataResponse.data.values ?? [];
 
   const eurFormulaUpdates: { row: number; formula: string }[] = [];
@@ -1288,13 +1367,17 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
   ];
 
   if (batchData.length > 0) {
-    await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        valueInputOption: 'USER_ENTERED',
-        data: batchData,
-      },
-    });
+    await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            valueInputOption: 'USER_ENTERED',
+            data: batchData,
+          },
+        }),
+      'repairEurFormulas.write',
+    );
   }
 
   logger.info(
@@ -1313,10 +1396,14 @@ export async function readExpenseHeaders(
 ): Promise<string[]> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!1:1`,
-  });
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!1:1`,
+      }),
+    'readExpenseHeaders',
+  );
   return (response.data.values?.[0] ?? []) as string[];
 }
 
@@ -1357,15 +1444,19 @@ export async function appendExpenseRowsRaw(
 
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!A2`,
-    // USER_ENTERED so numeric strings are parsed as numbers (not stored as text).
-    // Formulas are not preserved (see readExpenseRowsRaw doc for rationale).
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: outputRows },
-  });
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!A2`,
+        // USER_ENTERED so numeric strings are parsed as numbers (not stored as text).
+        // Formulas are not preserved (see readExpenseRowsRaw doc for rationale).
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: outputRows },
+      }),
+    'appendExpenseRowsRaw',
+  );
 }
 
 /**
@@ -1436,11 +1527,15 @@ async function findAndDeleteExpenseRowImpl(
 
   // UNFORMATTED_VALUE so amounts come as numbers (not locale-formatted strings)
   // and dates as serial numbers (which we normalize back to ISO).
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPENSES_TAB}!A:Z`,
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  });
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${EXPENSES_TAB}!A:Z`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      }),
+    'findAndDeleteExpenseRow.read',
+  );
 
   const rows = response.data.values ?? [];
   if (rows.length < 2) return { deletedRowIndex: null };
@@ -1512,7 +1607,10 @@ export async function deleteExpenseRowsByIndex(
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const spreadsheet = await withSheetsRetry(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    'deleteExpenseRowsByIndex.getSheetId',
+  );
   const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
   const sheetId = expensesSheet?.properties?.sheetId;
   if (sheetId === undefined) throw new Error(`"${EXPENSES_TAB}" tab not found in ${spreadsheetId}`);
@@ -1531,10 +1629,14 @@ export async function deleteExpenseRowsByIndex(
     },
   }));
 
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests },
-  });
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests },
+      }),
+    'deleteExpenseRowsByIndex.delete',
+  );
 }
 
 export interface EurMismatchWarning {
