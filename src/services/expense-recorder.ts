@@ -455,26 +455,14 @@ export class ExpenseRecorder implements RecorderApi {
     groupId: number,
     expense: Expense,
   ): Promise<{ deletedRowIndex: number | null }> {
-    const { conn } = this.getGroupConfig(groupId);
-    if (!conn) {
-      return { deletedRowIndex: null };
-    }
-
-    // CRITICAL: resolve the spreadsheet by the expense's YEAR, not the group's
-    // current spreadsheet_id. A user can delete a 2024 expense in 2026 — that
-    // row lives in the 2024 sheet. Using the current-year sheet here would
-    // silently miss, mark the row "not found", delete the DB row, and then
-    // /sync would resurrect it from the 2024 sheet.
-    const year = Number.parseInt(expense.date.slice(0, 4), 10);
-    const spreadsheetId = Number.isFinite(year)
-      ? this.groupSpreadsheets.getByYear(groupId, year)
-      : null;
-
-    if (!spreadsheetId) {
-      logger.warn(
-        { expenseId: expense.id, groupId, year, date: expense.date },
-        '[DELETE] No spreadsheet registered for expense year — skipping sheet delete',
-      );
+    // Resolve the target sheet symmetrically with writes: year-specific if
+    // registered, otherwise fall back to the current-year sheet. Without the
+    // fallback, a 2024 expense written into the current sheet (because there
+    // was no 2024 registration at write time) would be marked "not found in
+    // sheet" on delete, the DB row would be removed, and /sync would then
+    // resurrect it from the still-present row in the current sheet.
+    const { conn, spreadsheetId } = this.resolveWriteConfigForDate(groupId, expense.date);
+    if (!conn || !spreadsheetId) {
       return { deletedRowIndex: null };
     }
 
@@ -487,7 +475,11 @@ export class ExpenseRecorder implements RecorderApi {
     });
 
     logger.info(
-      { expenseId: expense.id, year, spreadsheetId, deletedRowIndex: result.deletedRowIndex },
+      {
+        expenseId: expense.id,
+        spreadsheetId,
+        deletedRowIndex: result.deletedRowIndex,
+      },
       `[DELETE] Sheet row delete attempt`,
     );
 

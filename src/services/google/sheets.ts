@@ -1330,6 +1330,29 @@ export async function findAndDeleteExpenseRow(
     currency: string;
   },
 ): Promise<{ deletedRowIndex: number | null }> {
+  // Serialize with other operations on this spreadsheet. Without this, two
+  // concurrent deletes can both read the same pre-delete row indices; the
+  // first deleteDimension shifts row numbers, and the second batchUpdate
+  // ends up targeting a stale index — removing the wrong row. Appends use
+  // the same queue for the same reason (row-relative EUR formulas).
+  let capturedResult: { deletedRowIndex: number | null } = { deletedRowIndex: null };
+  await enqueueSheetWrite(spreadsheetId, async () => {
+    capturedResult = await findAndDeleteExpenseRowImpl(conn, spreadsheetId, criteria);
+  });
+  return capturedResult;
+}
+
+async function findAndDeleteExpenseRowImpl(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  criteria: {
+    date: string;
+    category: string;
+    comment: string;
+    amount: number;
+    currency: string;
+  },
+): Promise<{ deletedRowIndex: number | null }> {
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 

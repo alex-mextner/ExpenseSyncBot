@@ -518,6 +518,49 @@ describe('findAndDeleteExpenseRow', () => {
     expect(mockSpreadsheetsBatchUpdate).toHaveBeenCalledTimes(1);
   });
 
+  test('serializes concurrent deletes through the per-spreadsheet queue (regression)', async () => {
+    // Two concurrent deletes must not run read-then-delete in parallel —
+    // otherwise both can read the pre-delete row numbers and the second
+    // deleteDimension shifts a stale index, removing the wrong row.
+    // The queue guarantees strict sequencing: second values.get runs only
+    // after the first batchUpdate has resolved.
+    const callOrder: string[] = [];
+
+    mockValuesGet.mockImplementation(async () => {
+      callOrder.push('read');
+      // Small delay lets a racy implementation interleave reads
+      await Bun.sleep(5);
+      return {
+        data: {
+          values: [
+            ['Дата', 'Категория', 'Комментарий', 'EUR (calc)', 'RSD (дин.)', 'Rate (→EUR)'],
+            ['2026-04-15', 'Алекс', 'Coffee', 4.3, 500, 0.0086],
+          ],
+        },
+      };
+    });
+
+    mockSpreadsheetsBatchUpdate.mockImplementation(async () => {
+      callOrder.push('delete');
+      return { data: {} };
+    });
+
+    const criteria = {
+      date: '2026-04-15',
+      category: 'Алекс',
+      comment: 'Coffee',
+      amount: 500,
+      currency: 'RSD',
+    };
+
+    const p1 = findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, criteria);
+    const p2 = findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, criteria);
+    await Promise.all([p1, p2]);
+
+    // Expected strict interleaving: read → delete → read → delete
+    expect(callOrder).toEqual(['read', 'delete', 'read', 'delete']);
+  });
+
   test('handles date stored as Sheets serial number (UNFORMATTED_VALUE)', async () => {
     // 2026-04-15 = serial 46127 (days since 1899-12-30)
     mockValuesGet.mockResolvedValueOnce({

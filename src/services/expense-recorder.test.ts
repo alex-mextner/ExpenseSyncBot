@@ -829,6 +829,33 @@ describe('ExpenseRecorder', () => {
       expect(result.deletedRowIndex).toBeNull();
     });
 
+    it('falls back to current-year sheet for delete when expense year has no registration (symmetric with record)', async () => {
+      // Symmetry with record() fallback: if record() wrote a 2024 expense to
+      // the current-year sheet (because no 2024 registration existed), delete
+      // must look there too — otherwise we'd mark the row "not found", delete
+      // the DB row, and /sync would resurrect it from the still-present row.
+      const { groupId, userId } = seedGroup();
+      // NO setYear(groupId, 2024, ...) — expense's year has no registration
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-07-04',
+        category: 'Trip',
+        comment: 'Paris',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 250,
+      });
+
+      await recorder.deleteFromSheet(groupId, expense);
+
+      const call = (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mock
+        .calls[0];
+      if (!call) throw new Error('Expected sheet delete call — fallback to current sheet missing');
+      expect(call[1]).toBe('sheet-123'); // current-year fallback
+    });
+
     it('uses the spreadsheet for the expense YEAR, not the group current-year sheet (regression)', async () => {
       // Sheet registered for current year (via seedGroup default). Also register an
       // older year with a DIFFERENT spreadsheet ID — that's the one delete must target.

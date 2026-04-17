@@ -373,13 +373,29 @@ async function ensureCurrentYearSpreadsheet(group: Group): Promise<number | null
 }
 
 /**
- * Push DB expenses missing from the current spreadsheet.
+ * Push DB expenses missing from the current-year spreadsheet.
+ *
+ * Scoped deliberately to the CURRENT year:
+ * - We compare DB expenses only against the current-year sheet (that's what
+ *   `group.spreadsheet_id` resolves to via the LEFT JOIN).
+ * - Since `pushToSheet` now routes each expense to its own year sheet, we
+ *   MUST restrict the input to current-year expenses. Without that, a 2024
+ *   DB expense would be flagged "missing from current sheet" (which is
+ *   trivially true — current sheet is 2026) and then get appended to the
+ *   2024 sheet, where it already exists — a duplicate.
+ * - Prior-year sheets are handled by the recreate flow (which repopulates
+ *   them from DB wholesale) or by running /push manually per year.
+ *
  * Returns count of pushed expenses.
  */
 async function pushMissingExpensesToSheet(group: Group): Promise<number> {
   if (!group.google_refresh_token || !group.spreadsheet_id) return 0;
 
-  const dbExpenses = database.expenses.findByGroupId(group.id, 100000);
+  const currentYear = new Date().getFullYear();
+  const currentYearPrefix = `${currentYear}-`;
+
+  const allDbExpenses = database.expenses.findByGroupId(group.id, 100000);
+  const dbExpenses = allDbExpenses.filter((e) => e.date.startsWith(currentYearPrefix));
   if (dbExpenses.length === 0) return 0;
 
   const { expenses: sheetExpenses } = await readExpensesFromSheet(
@@ -403,7 +419,7 @@ async function pushMissingExpensesToSheet(group: Group): Promise<number> {
 
   if (missing.length === 0) return 0;
 
-  logger.info(`[RECONNECT] Pushing ${missing.length} missing expenses to sheet`);
+  logger.info(`[RECONNECT] Pushing ${missing.length} missing current-year expenses to sheet`);
   const recorder = getExpenseRecorder();
   try {
     await recorder.pushToSheet(group.id, missing);
