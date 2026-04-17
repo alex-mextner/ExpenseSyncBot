@@ -186,6 +186,44 @@ function makeNotFoundError(id: string) {
   };
 }
 
+function makeRateLimitError() {
+  return {
+    code: 429,
+    status: 429,
+    message: "Quota exceeded for quota metric 'Read requests'",
+    response: {
+      data: {
+        error: {
+          code: 429,
+          status: 'RESOURCE_EXHAUSTED',
+          message: 'Quota exceeded',
+          errors: [{ reason: 'rateLimitExceeded', message: 'Quota exceeded' }],
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Replace `setTimeout` with an instant-resolving stub. The production retry
+ * loop uses `setTimeout` inside its private `sleep()`, so the integration
+ * test cannot mock the sleep directly — stubbing the global timer is the
+ * only way to skip real-time backoff waits (up to ~62s cumulative). The
+ * stub invokes the callback immediately and returns a fake handle.
+ */
+function stubInstantTimers(): () => void {
+  const original = globalThis.setTimeout;
+  (globalThis as { setTimeout: typeof setTimeout }).setTimeout = ((
+    fn: (...args: unknown[]) => void,
+  ) => {
+    fn();
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  return () => {
+    globalThis.setTimeout = original;
+  };
+}
+
 describe('auditAndRepairSpreadsheets — integration', () => {
   test('returns empty audit when group has no registered spreadsheets', async () => {
     const group = groups.create({ telegram_group_id: -100100 });
@@ -391,6 +429,67 @@ describe('auditAndRepairSpreadsheets — integration', () => {
     );
 
     expect(mockSpreadsheetsCreate).toHaveBeenCalledTimes(2);
+  });
+
+  test('transient 429 on probe is retried — audit eventually reports ok, no recreate', async () => {
+    const restore = stubInstantTimers();
+    try {
+      const { group } = seedGroupWithSpreadsheets({
+        telegramId: -100700,
+        spreadsheets: [{ year: 2026, id: 'FLAKY-2026' }],
+      });
+      if (!group) throw new Error('group seed failed');
+
+      // Probe returns 429 twice, then 200 on the third call — withSheetsRetry
+      // should walk through the backoff (instant here) and report `ok`.
+      let probeCalls = 0;
+      mockSpreadsheetsGet.mockImplementation(async () => {
+        probeCalls++;
+        if (probeCalls <= 2) throw makeRateLimitError();
+        return { data: { sheets: [{ properties: { title: 'Expenses', sheetId: 0 } }] } };
+      });
+
+      const result = await auditAndRepairSpreadsheets(group);
+
+      expect(probeCalls).toBeGreaterThanOrEqual(3);
+      expect(result.audit).toHaveLength(1);
+      expect(result.audit[0]?.status).toBe('ok');
+      expect(result.recreated).toHaveLength(0);
+      expect(mockSpreadsheetsCreate).not.toHaveBeenCalled();
+      // DB pointer stays on the original — no accidental "recovery"
+      expect(groupSpreadsheets.getByYear(group.id, 2026)).toBe('FLAKY-2026');
+    } finally {
+      restore();
+    }
+  });
+
+  test('persistent 429 — classifies as rate_limited and does NOT recreate', async () => {
+    const restore = stubInstantTimers();
+    try {
+      const { group } = seedGroupWithSpreadsheets({
+        telegramId: -100800,
+        spreadsheets: [{ year: 2026, id: 'THROTTLED-2026' }],
+      });
+      if (!group) throw new Error('group seed failed');
+
+      // Every probe call returns 429. After maxAttempts the retry gives up
+      // and the surrounding audit classifies it.
+      mockSpreadsheetsGet.mockImplementation(async () => {
+        throw makeRateLimitError();
+      });
+
+      const result = await auditAndRepairSpreadsheets(group);
+
+      expect(result.audit).toHaveLength(1);
+      expect(result.audit[0]?.status).toBe('rate_limited');
+      // Critical: do not recreate a sheet just because probe got throttled —
+      // would duplicate a perfectly valid spreadsheet in the user's Drive.
+      expect(result.recreated).toHaveLength(0);
+      expect(mockSpreadsheetsCreate).not.toHaveBeenCalled();
+      expect(groupSpreadsheets.getByYear(group.id, 2026)).toBe('THROTTLED-2026');
+    } finally {
+      restore();
+    }
   });
 
   test('partial failure — first year recreated, second fails, DB reflects committed work only', async () => {

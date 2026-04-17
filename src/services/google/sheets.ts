@@ -214,7 +214,15 @@ export function isRateLimitError(err: unknown): boolean {
     code?: unknown;
     status?: unknown;
     message?: unknown;
-    response?: { status?: unknown; data?: { error?: { status?: unknown } } };
+    response?: {
+      status?: unknown;
+      data?: {
+        error?: {
+          status?: unknown;
+          errors?: Array<{ reason?: unknown }>;
+        };
+      };
+    };
   };
   // Top-level code/status (most common path for googleapis SDK)
   if (e.code === 429 || e.code === '429' || e.status === 429 || e.status === '429') return true;
@@ -222,6 +230,17 @@ export function isRateLimitError(err: unknown): boolean {
   if (e.response?.status === 429 || e.response?.status === '429') return true;
   // Nested response.data.error.status (Google JSON error body)
   if (e.response?.data?.error?.status === 'RESOURCE_EXHAUSTED') return true;
+  // Google returns quota exhaustion as 403 with a rate-limit reason code —
+  // not just 429. Must detect this shape so callers don't misclassify a
+  // throttled request as a real permission-denied error.
+  const reasons = e.response?.data?.error?.errors;
+  if (Array.isArray(reasons)) {
+    for (const entry of reasons) {
+      if (entry?.reason === 'rateLimitExceeded' || entry?.reason === 'userRateLimitExceeded') {
+        return true;
+      }
+    }
+  }
   // Message-based fallback
   if (typeof e.message === 'string') {
     return e.message.includes('Quota exceeded') || e.message.includes('rateLimitExceeded');
@@ -748,7 +767,10 @@ export async function monthTabExists(
   try {
     const auth = authClient(conn);
     const sheets = google.sheets({ version: 'v4', auth });
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const spreadsheet = await withSheetsRetry(
+      () => sheets.spreadsheets.get({ spreadsheetId }),
+      `monthTabExists ${month}`,
+    );
     return !!spreadsheet.data.sheets?.find((s) => s.properties?.title === month);
   } catch (err) {
     logger.error({ err }, `[SHEETS] monthTabExists failed for ${month}`);
@@ -840,10 +862,14 @@ export async function readMonthBudget(
   const sheets = google.sheets({ version: 'v4', auth });
 
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${month}!A2:C`,
-    });
+    const response = await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${month}!A2:C`,
+        }),
+      `readMonthBudget ${month}`,
+    );
 
     const rows = response.data.values ?? [];
     return rows
@@ -879,10 +905,14 @@ export async function writeMonthBudgetRow(
   const auth = authClient(conn);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${month}!A2:C`,
-  });
+  const response = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${month}!A2:C`,
+      }),
+    `writeMonthBudgetRow.get ${month}`,
+  );
 
   const existingRows = response.data.values ?? [];
   let targetRow = -1;
@@ -898,19 +928,27 @@ export async function writeMonthBudgetRow(
   const values = [[row.category, row.limit, row.currency]];
 
   if (targetRow !== -1) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${month}!A${targetRow}:C${targetRow}`,
-      valueInputOption: 'RAW',
-      requestBody: { values },
-    });
+    await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${month}!A${targetRow}:C${targetRow}`,
+          valueInputOption: 'RAW',
+          requestBody: { values },
+        }),
+      `writeMonthBudgetRow.update ${month}`,
+    );
   } else {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${month}!A2:C`,
-      valueInputOption: 'RAW',
-      requestBody: { values },
-    });
+    await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${month}!A2:C`,
+          valueInputOption: 'RAW',
+          requestBody: { values },
+        }),
+      `writeMonthBudgetRow.append ${month}`,
+    );
   }
 }
 

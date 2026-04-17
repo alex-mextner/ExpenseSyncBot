@@ -21,6 +21,7 @@ import {
   readExpensesFromSheet,
   readMonthBudget,
   type SheetRow,
+  withSheetsRetry,
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
 import {
@@ -109,11 +110,19 @@ interface FullSyncReport {
  * Probe a single spreadsheet via spreadsheets.get to test access. Throws on
  * any failure (404, 403, network, etc.) so the surrounding `auditAllYears`
  * can classify it.
+ *
+ * Wrapped in withSheetsRetry so a transient 429 during audit doesn't get
+ * misclassified as unknown_error. With the current backoff schedule the
+ * probe waits up to ~62s before giving up — long enough for a per-minute
+ * quota window to reset.
  */
-async function probeSpreadsheetAccess(conn: GoogleConn, spreadsheetId: string): Promise<void> {
+export async function probeSpreadsheetAccess(
+  conn: GoogleConn,
+  spreadsheetId: string,
+): Promise<void> {
   const auth = getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
   const sheets = google.sheets({ version: 'v4', auth });
-  await sheets.spreadsheets.get({ spreadsheetId });
+  await withSheetsRetry(() => sheets.spreadsheets.get({ spreadsheetId }), `probe ${spreadsheetId}`);
 }
 
 /**

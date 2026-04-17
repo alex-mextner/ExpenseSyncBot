@@ -6,7 +6,7 @@ import type { Budget, Expense } from '../../database/types';
 import { OAuthError } from '../../errors';
 import { buildAmountsRecord } from '../expense-recorder';
 import { type MonthAbbr, monthAbbrFromYYYYMM } from './month-abbr';
-import type { ExpenseRowData, GoogleConn } from './sheets';
+import { type ExpenseRowData, type GoogleConn, isRateLimitError } from './sheets';
 
 /**
  * Classification of why we can't reach a spreadsheet:
@@ -15,6 +15,9 @@ import type { ExpenseRowData, GoogleConn } from './sheets';
  *                     drive.file scope can't see it)
  *   - forbidden     — Drive returned 403 (permission denied without ambiguity)
  *   - token_expired — refresh token revoked / expired
+ *   - rate_limited  — Google quota exhausted (429 / RESOURCE_EXHAUSTED) — only
+ *                     surfaces if internal retry with backoff also exhausted.
+ *                     Must NOT trigger recreate: the sheet likely still works.
  *   - unknown_error — anything else (network, 5xx, malformed response)
  */
 export type SpreadsheetAccessStatus =
@@ -22,6 +25,7 @@ export type SpreadsheetAccessStatus =
   | 'not_found'
   | 'forbidden'
   | 'token_expired'
+  | 'rate_limited'
   | 'unknown_error';
 
 interface SpreadsheetAccessResult {
@@ -62,6 +66,12 @@ export function classifySheetError(err: unknown): SpreadsheetAccessResult {
   const message =
     e.response?.data?.error?.message ?? e.message ?? (err instanceof Error ? err.message : '');
 
+  // Rate-limit detection comes BEFORE 403/404 because Google returns quota
+  // errors sometimes as 403 (`userRateLimitExceeded`) — misclassifying that
+  // as `forbidden` would trigger needless spreadsheet recreation.
+  if (isRateLimitError(err)) {
+    return { status: 'rate_limited', errorMessage: message || 'Quota exceeded' };
+  }
   if (code === 404 || reason === 'notFound') {
     return { status: 'not_found', errorMessage: message || 'File not found' };
   }

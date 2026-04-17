@@ -77,7 +77,9 @@ function formatRepairReport(audit: AuditEntry[], recreated: RecreateResult[]): s
             ? '🔒'
             : entry.status === 'token_expired'
               ? '🔑'
-              : '⚠️';
+              : entry.status === 'rate_limited'
+                ? '⏳'
+                : '⚠️';
     const statusText =
       entry.status === 'ok'
         ? 'доступна'
@@ -87,7 +89,9 @@ function formatRepairReport(audit: AuditEntry[], recreated: RecreateResult[]): s
             ? 'нет прав доступа'
             : entry.status === 'token_expired'
               ? 'токен отозван'
-              : 'ошибка';
+              : entry.status === 'rate_limited'
+                ? 'квота Google исчерпана'
+                : 'ошибка';
     lines.push(`  ${icon} ${entry.year} — ${statusText}`);
   }
 
@@ -96,6 +100,10 @@ function formatRepairReport(audit: AuditEntry[], recreated: RecreateResult[]): s
       lines.push('\n✅ Все таблицы на месте, ничего пересоздавать не нужно.');
     } else if (audit.some((a) => a.status === 'token_expired')) {
       lines.push('\n🔑 Токен Google отозван — используй /reconnect.');
+    } else if (audit.some((a) => a.status === 'rate_limited')) {
+      lines.push(
+        '\n⏳ Квота Google Sheets временно исчерпана. Бот уже ждал и ретраил — не помогло. Повтори /repair через 1–2 минуты.',
+      );
     } else {
       lines.push(
         '\n⚠️ Часть таблиц недоступна, но автоматически пересоздать не получилось. Используй /reconnect.',

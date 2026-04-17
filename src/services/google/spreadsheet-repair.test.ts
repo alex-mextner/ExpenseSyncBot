@@ -58,6 +58,88 @@ describe('classifySheetError', () => {
     expect(classifySheetError(undefined).status).toBe('unknown_error');
     expect(classifySheetError('plain string').status).toBe('unknown_error');
   });
+
+  test('classifies 429 Too Many Requests as rate_limited, not unknown_error', () => {
+    const err = {
+      code: 429,
+      status: 429,
+      message: "Quota exceeded for quota metric 'Read requests'",
+      response: {
+        data: {
+          error: {
+            code: 429,
+            message: 'Quota exceeded',
+            errors: [{ reason: 'rateLimitExceeded', message: 'Quota exceeded' }],
+            status: 'RESOURCE_EXHAUSTED',
+          },
+        },
+      },
+    };
+    const result = classifySheetError(err);
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorMessage?.toLowerCase()).toContain('quota');
+  });
+
+  test('classifies RESOURCE_EXHAUSTED status body as rate_limited', () => {
+    const err = {
+      response: { data: { error: { status: 'RESOURCE_EXHAUSTED', message: 'quota' } } },
+    };
+    expect(classifySheetError(err).status).toBe('rate_limited');
+  });
+
+  test('classifies "Quota exceeded" message text as rate_limited', () => {
+    expect(classifySheetError(new Error('Quota exceeded for read_requests')).status).toBe(
+      'rate_limited',
+    );
+    expect(classifySheetError(new Error('rateLimitExceeded')).status).toBe('rate_limited');
+  });
+
+  test('prefers rate_limited over forbidden when 403 carries a rate-limit reason', () => {
+    // Google occasionally returns quota errors as 403 with reason=userRateLimitExceeded
+    // or rateLimitExceeded (not only 429). Without special-casing, we would incorrectly
+    // classify those as `forbidden` and recreate the user's sheet during quota pressure.
+    const err403UserRateLimit = {
+      code: 403,
+      response: {
+        data: {
+          error: {
+            code: 403,
+            message: 'User Rate Limit Exceeded',
+            errors: [{ reason: 'userRateLimitExceeded', message: 'User Rate Limit Exceeded' }],
+          },
+        },
+      },
+    };
+    expect(classifySheetError(err403UserRateLimit).status).toBe('rate_limited');
+
+    const err403RateLimitExceeded = {
+      code: 403,
+      response: {
+        data: {
+          error: {
+            code: 403,
+            errors: [{ reason: 'rateLimitExceeded' }],
+          },
+        },
+      },
+    };
+    expect(classifySheetError(err403RateLimitExceeded).status).toBe('rate_limited');
+
+    // Regression guard: plain permission-denied 403 must still classify as forbidden.
+    const err403PermissionDenied = {
+      code: 403,
+      response: {
+        data: {
+          error: {
+            code: 403,
+            message: 'The caller does not have permission',
+            errors: [{ reason: 'permissionDenied', message: 'no perms' }],
+          },
+        },
+      },
+    };
+    expect(classifySheetError(err403PermissionDenied).status).toBe('forbidden');
+  });
 });
 
 describe('auditAllYears', () => {
@@ -264,11 +346,13 @@ describe('recreateSpreadsheet', () => {
       { year: 2026, spreadsheetId: 'FORBIDDEN-2026', status: 'forbidden' as const },
       { year: 2027, spreadsheetId: 'TX-2027', status: 'token_expired' as const },
       { year: 2028, spreadsheetId: 'WTF-2028', status: 'unknown_error' as const },
+      { year: 2029, spreadsheetId: 'RL-2029', status: 'rate_limited' as const },
     ];
 
     const results = await recreateLostSpreadsheets(deps, conn, group, audits);
 
-    // Only 2025 and 2026 should be recreated
+    // Only 2025 and 2026 should be recreated — rate_limited must be skipped so
+    // we don't spam Drive with duplicate sheets when the probe lied due to 429.
     expect(results).toHaveLength(2);
     expect(results[0]?.year).toBe(2025);
     expect(results[1]?.year).toBe(2026);
