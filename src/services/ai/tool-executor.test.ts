@@ -192,10 +192,11 @@ mock.module('../google/sheets', () => ({
   readBudgetData: mock(() => Promise.resolve([])),
 }));
 
-// Mock ExpenseRecorder (used by add_expense tool)
+// Mock ExpenseRecorder (used by add_expense / delete_expense tools)
 const mockRecord = mock(() => Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+const mockDeleteFromSheet = mock(() => Promise.resolve({ deletedRowIndex: 5 as number | null }));
 mock.module('../expense-recorder', () => ({
-  getExpenseRecorder: () => ({ record: mockRecord }),
+  getExpenseRecorder: () => ({ record: mockRecord, deleteFromSheet: mockDeleteFromSheet }),
 }));
 
 // Mock BudgetManager (used by set_budget and delete_budget tools)
@@ -270,6 +271,8 @@ function resetAllMocks() {
 
   mockRecord.mockReset();
   mockRecord.mockReturnValue(Promise.resolve({ expense: { id: 42 }, eurAmount: 25.5 }));
+  mockDeleteFromSheet.mockReset();
+  mockDeleteFromSheet.mockReturnValue(Promise.resolve({ deletedRowIndex: 5 as number | null }));
 
   mockCategories.findByGroupId.mockReset();
   mockCategories.findByGroupId.mockReturnValue([]);
@@ -966,21 +969,63 @@ describe('executeDeleteExpense', () => {
   beforeEach(resetAllMocks);
 
   test('deletes expense belonging to this group', async () => {
-    mockExpenses.findById.mockReturnValue(
-      makeExpense({
-        id: 10,
-        user_id: 123,
-        date: '2026-03-01',
-        comment: 'pizza',
-        amount: 12,
-        eur_amount: 12,
-      }),
-    );
+    const expense = makeExpense({
+      id: 10,
+      user_id: 123,
+      date: '2026-03-01',
+      comment: 'pizza',
+      amount: 12,
+      eur_amount: 12,
+    });
+    mockExpenses.findById.mockReturnValue(expense);
 
     const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain('Expense 10 deleted');
+    // Removes the row from Google Sheets BEFORE deleting from DB
+    expect(mockDeleteFromSheet).toHaveBeenCalledWith(1, expense);
     expect(mockExpenses.delete).toHaveBeenCalledWith(10);
+  });
+
+  test('removes legacy "run /sync" hint from response (regression)', async () => {
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({ id: 10, user_id: 123, date: '2026-03-01', comment: 'pizza', amount: 12 }),
+    );
+
+    const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
+    expect(result.output).not.toContain('/sync');
+  });
+
+  test('reports when sheet row was not found (already removed manually)', async () => {
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({ id: 10, user_id: 123, date: '2026-03-01', comment: 'pizza', amount: 12 }),
+    );
+    mockDeleteFromSheet.mockReturnValueOnce(Promise.resolve({ deletedRowIndex: null }));
+
+    const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
+    // Still succeeds — DB delete is the authoritative action
+    expect(result.success).toBe(true);
+    expect(mockExpenses.delete).toHaveBeenCalledWith(10);
+    // The output mentions sheet row was not present
+    expect(result.output).toContain('not found in sheet');
+  });
+
+  test('preserves DB row when sheet delete fails — no silent resurrection via /sync', async () => {
+    // If we deleted the DB row while sheet delete failed, the sheet still holds
+    // the row, and the next /sync (or auto-sync) would re-import it. So we leave
+    // DB untouched and surface a clear error that points at /repair.
+    mockExpenses.findById.mockReturnValue(
+      makeExpense({ id: 10, user_id: 123, date: '2026-03-01', comment: 'pizza', amount: 12 }),
+    );
+    mockDeleteFromSheet.mockReturnValueOnce(Promise.reject(new Error('Sheet API 404 — file gone')));
+
+    const result = await executeTool('delete_expense', { expense_id: 10 }, ctx);
+
+    expect(result.success).toBe(false);
+    expect(mockExpenses.delete).not.toHaveBeenCalled();
+    expect(result.error).toContain('sheet');
+    expect((result.error ?? '').toLowerCase()).toMatch(/404|gone|failed|error/);
+    expect(result.error).toContain('/repair');
   });
 
   test('rejects deletion of expense from different group', async () => {

@@ -60,10 +60,15 @@ describe('getSheetErrorMessage', () => {
     expect(msg).toContain('авторизация');
   });
 
-  test('not_found error mentions sheet inaccessible', () => {
+  test('not_found error points at /repair primarily, /reconnect as fallback', () => {
     const msg = getSheetErrorMessage(new Error('404 Not Found'));
     expect(msg).toContain('недоступна');
+    // /repair is the lightweight path — works without redoing OAuth
+    expect(msg).toContain('/repair');
+    // /reconnect stays as a fallback
     expect(msg).toContain('/reconnect');
+    // /repair must be mentioned before /reconnect in the text
+    expect(msg.indexOf('/repair')).toBeLessThan(msg.indexOf('/reconnect'));
   });
 
   test('rate_limit error suggests waiting', () => {

@@ -6,6 +6,7 @@ import type { CurrencyCode } from '../config/constants';
 import { ExpenseRepository } from '../database/repositories/expense.repository';
 import { ExpenseItemsRepository } from '../database/repositories/expense-items.repository';
 import { GroupRepository } from '../database/repositories/group.repository';
+import { GroupSpreadsheetRepository } from '../database/repositories/group-spreadsheet.repository';
 import { UserRepository } from '../database/repositories/user.repository';
 import { clearTestDb, createTestDb } from '../test-utils/db';
 import {
@@ -59,6 +60,7 @@ describe('ExpenseRecorder', () => {
   let users: UserRepository;
   let expenses: ExpenseRepository;
   let expenseItems: ExpenseItemsRepository;
+  let groupSpreadsheets: GroupSpreadsheetRepository;
   let mockSheetWriter: SheetWriter;
   let mockConverter: EurConverter;
   let recorder: ExpenseRecorder;
@@ -69,10 +71,12 @@ describe('ExpenseRecorder', () => {
     users = new UserRepository(db);
     expenses = new ExpenseRepository(db);
     expenseItems = new ExpenseItemsRepository(db);
+    groupSpreadsheets = new GroupSpreadsheetRepository(db);
 
     mockSheetWriter = {
       appendExpenseRow: mock(() => Promise.resolve()),
       appendExpenseRows: mock(() => Promise.resolve()),
+      findAndDeleteExpenseRow: mock(() => Promise.resolve({ deletedRowIndex: 7 as number | null })),
     };
 
     const testRates: Record<string, number> = { EUR: 1, USD: 0.86, RSD: 0.0085, RUB: 0.01 };
@@ -89,6 +93,7 @@ describe('ExpenseRecorder', () => {
       groups,
       expenses,
       expenseItems,
+      groupSpreadsheets,
       sheetWriter: mockSheetWriter,
       eurConverter: mockConverter,
       // Tests run on a single in-memory DB per file; identity wrapper is fine.
@@ -243,6 +248,43 @@ describe('ExpenseRecorder', () => {
           currency: 'EUR',
         }),
       ).rejects.toThrow('not found');
+    });
+
+    it('writes backdated expense into the spreadsheet for THAT year, not current (regression)', async () => {
+      const { groupId, userId } = seedGroup();
+      // Register a separate 2024 spreadsheet on top of the current-year default
+      groupSpreadsheets.setYear(groupId, 2024, 'sheet-2024');
+
+      await recorder.record(groupId, userId, {
+        date: '2024-07-04',
+        category: 'Trip',
+        comment: 'Paris',
+        amount: 250,
+        currency: 'EUR',
+      });
+
+      const call = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected sheet write call');
+      // Must write into the 2024 sheet, NOT the default current-year sheet-123
+      expect(call[1]).toBe('sheet-2024');
+    });
+
+    it('falls back to current-year spreadsheet when expense year has no registration', async () => {
+      const { groupId, userId } = seedGroup();
+      // Note: no setYear for 2024 — only the default current-year sheet exists
+
+      await recorder.record(groupId, userId, {
+        date: '2024-07-04',
+        category: 'Trip',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+      });
+
+      const call = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected sheet write call');
+      // No 2024 sheet registered → fallback to current year sheet-123
+      expect(call[1]).toBe('sheet-123');
     });
 
     it('does NOT create DB expense if sheet write fails', async () => {
@@ -600,17 +642,94 @@ describe('ExpenseRecorder', () => {
 
       await recorder.pushToSheet(groupId, [e1, e2]);
 
-      // Sheet write called 2 times
-      expect(mockSheetWriter.appendExpenseRow).toHaveBeenCalledTimes(2);
+      // One batched call — not two per-row calls (quota protection)
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(1);
+      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
 
       // Uses eurAmount from expense, NOT recalculated
-      const call1 = (mockSheetWriter.appendExpenseRow as ReturnType<typeof mock>).mock.calls[0];
-      if (!call1) throw new Error('Expected sheet write call');
-      expect(call1[2].eurAmount).toBe(8.5); // From DB, not recalculated
+      const call = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls[0];
+      if (!call) throw new Error('Expected batched sheet write call');
+      const rows = call[2] as Array<{ eurAmount: number }>;
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.eurAmount).toBe(8.5); // From DB, not recalculated
+      expect(rows[1]?.eurAmount).toBe(43);
 
       // DB count unchanged (still 2)
       const all = expenses.findByGroupId(groupId);
       expect(all).toHaveLength(2);
+    });
+
+    it('is a no-op (no API call) for empty array', async () => {
+      const { groupId } = seedGroup();
+      await recorder.pushToSheet(groupId, []);
+      expect(mockSheetWriter.appendExpenseRows).not.toHaveBeenCalled();
+      expect(mockSheetWriter.appendExpenseRow).not.toHaveBeenCalled();
+    });
+
+    it('splits multi-year expense list into per-year batches, each to the matching sheet', async () => {
+      const { groupId, userId } = seedGroup();
+      groupSpreadsheets.setYear(groupId, 2024, 'sheet-2024');
+      groupSpreadsheets.setYear(groupId, 2025, 'sheet-2025');
+      // 2026 uses the default sheet-123 registered by seedGroup's current-year setYear.
+
+      const e2024 = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-06-10',
+        category: 'A',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+      });
+      const e2025 = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2025-03-15',
+        category: 'B',
+        comment: '',
+        amount: 200,
+        currency: 'EUR',
+        eur_amount: 200,
+      });
+      const e2026a = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-01-05',
+        category: 'C',
+        comment: '',
+        amount: 300,
+        currency: 'EUR',
+        eur_amount: 300,
+      });
+      const e2026b = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'D',
+        comment: '',
+        amount: 400,
+        currency: 'EUR',
+        eur_amount: 400,
+      });
+
+      await recorder.pushToSheet(groupId, [e2024, e2025, e2026a, e2026b]);
+
+      // Three batched calls, one per year
+      expect(mockSheetWriter.appendExpenseRows).toHaveBeenCalledTimes(3);
+
+      const calls = (mockSheetWriter.appendExpenseRows as ReturnType<typeof mock>).mock.calls;
+      // Collect (spreadsheetId, row count) per call — order depends on Map iteration
+      // but groupings must be exact.
+      const summary = calls
+        .map((c) => ({ sheet: c[1] as string, count: (c[2] as unknown[]).length }))
+        .sort((a, b) => a.sheet.localeCompare(b.sheet));
+
+      expect(summary).toEqual([
+        { sheet: 'sheet-123', count: 2 }, // 2026: two expenses
+        { sheet: 'sheet-2024', count: 1 },
+        { sheet: 'sheet-2025', count: 1 },
+      ]);
     });
 
     it('throws when no Google connection (refreshToken null)', async () => {
@@ -632,6 +751,159 @@ describe('ExpenseRecorder', () => {
 
     it('throws if group not found', async () => {
       await expect(recorder.pushToSheet(999, [])).rejects.toThrow('not found');
+    });
+  });
+
+  describe('deleteFromSheet()', () => {
+    it('finds and deletes the matching sheet row by expense match criteria', async () => {
+      const { groupId, userId } = seedGroup();
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'Алекс',
+        comment: 'Ноут для умного дома',
+        amount: 41000,
+        currency: 'RSD',
+        eur_amount: 348.5,
+      });
+
+      const result = await recorder.deleteFromSheet(groupId, expense);
+
+      expect(result.deletedRowIndex).toBe(7);
+      expect(mockSheetWriter.findAndDeleteExpenseRow).toHaveBeenCalledTimes(1);
+      const call = (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mock
+        .calls[0];
+      if (!call) throw new Error('Expected sheet delete call');
+      expect(call[0]).toEqual({ refreshToken: 'token-abc', oauthClient: 'legacy' });
+      expect(call[1]).toBe('sheet-123');
+      expect(call[2]).toEqual({
+        date: '2026-04-15',
+        category: 'Алекс',
+        comment: 'Ноут для умного дома',
+        amount: 41000,
+        currency: 'RSD',
+      });
+    });
+
+    it('returns deletedRowIndex=null when sheet has no matching row', async () => {
+      const { groupId, userId } = seedGroup();
+      (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mockReturnValueOnce(
+        Promise.resolve({ deletedRowIndex: null }),
+      );
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'Алекс',
+        comment: 'Ноут для умного дома',
+        amount: 41000,
+        currency: 'RSD',
+        eur_amount: 348.5,
+      });
+
+      const result = await recorder.deleteFromSheet(groupId, expense);
+
+      expect(result.deletedRowIndex).toBeNull();
+    });
+
+    it('skips sheet operation entirely when group has no Google connection', async () => {
+      const { groupId, userId } = seedGroupWithoutGoogle();
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'X',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+      });
+
+      const result = await recorder.deleteFromSheet(groupId, expense);
+
+      expect(mockSheetWriter.findAndDeleteExpenseRow).not.toHaveBeenCalled();
+      expect(result.deletedRowIndex).toBeNull();
+    });
+
+    it('falls back to current-year sheet for delete when expense year has no registration (symmetric with record)', async () => {
+      // Symmetry with record() fallback: if record() wrote a 2024 expense to
+      // the current-year sheet (because no 2024 registration existed), delete
+      // must look there too — otherwise we'd mark the row "not found", delete
+      // the DB row, and /sync would resurrect it from the still-present row.
+      const { groupId, userId } = seedGroup();
+      // NO setYear(groupId, 2024, ...) — expense's year has no registration
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-07-04',
+        category: 'Trip',
+        comment: 'Paris',
+        amount: 250,
+        currency: 'EUR',
+        eur_amount: 250,
+      });
+
+      await recorder.deleteFromSheet(groupId, expense);
+
+      const call = (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mock
+        .calls[0];
+      if (!call) throw new Error('Expected sheet delete call — fallback to current sheet missing');
+      expect(call[1]).toBe('sheet-123'); // current-year fallback
+    });
+
+    it('uses the spreadsheet for the expense YEAR, not the group current-year sheet (regression)', async () => {
+      // Sheet registered for current year (via seedGroup default). Also register an
+      // older year with a DIFFERENT spreadsheet ID — that's the one delete must target.
+      const { groupId, userId } = seedGroup();
+      const group = groups.findById(groupId);
+      if (!group) throw new Error('seed failed');
+      groupSpreadsheets.setYear(groupId, 2024, 'old-year-sheet-id');
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2024-07-04', // past year — NOT current
+        category: 'Алекс',
+        comment: 'Old trip',
+        amount: 500,
+        currency: 'EUR',
+        eur_amount: 500,
+      });
+
+      await recorder.deleteFromSheet(groupId, expense);
+
+      const call = (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mock
+        .calls[0];
+      if (!call) throw new Error('Expected sheet delete call');
+      // Must target the 2024 sheet, NOT the default sheet-123 (current year).
+      expect(call[1]).toBe('old-year-sheet-id');
+    });
+
+    it('propagates sheet errors so the caller can surface them', async () => {
+      const { groupId, userId } = seedGroup();
+      (mockSheetWriter.findAndDeleteExpenseRow as ReturnType<typeof mock>).mockImplementation(
+        () => {
+          throw new Error('Sheets API 404');
+        },
+      );
+
+      const expense = expenses.create({
+        group_id: groupId,
+        user_id: userId,
+        date: '2026-04-15',
+        category: 'X',
+        comment: '',
+        amount: 100,
+        currency: 'EUR',
+        eur_amount: 100,
+      });
+
+      await expect(recorder.deleteFromSheet(groupId, expense)).rejects.toThrow('Sheets API 404');
     });
   });
 });

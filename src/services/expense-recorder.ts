@@ -4,6 +4,7 @@ import type { CurrencyCode } from '../config/constants';
 import type { ExpenseRepository } from '../database/repositories/expense.repository';
 import type { ExpenseItemsRepository } from '../database/repositories/expense-items.repository';
 import type { GroupRepository } from '../database/repositories/group.repository';
+import type { GroupSpreadsheetRepository } from '../database/repositories/group-spreadsheet.repository';
 import type { Expense } from '../database/types';
 import { createLogger } from '../utils/logger.ts';
 import type { ExpenseRowData, GoogleConn } from './google/sheets';
@@ -18,14 +19,19 @@ export function getExpenseRecorder(): RecorderApi {
   if (!_instance) {
     // Lazy-import to break circular dependency chains
     const { database } = require('../database');
-    const { appendExpenseRow, appendExpenseRows } = require('./google/sheets');
+    const {
+      appendExpenseRow,
+      appendExpenseRows,
+      findAndDeleteExpenseRow,
+    } = require('./google/sheets');
     const { convertToEUR, getExchangeRate } = require('./currency/converter');
 
     _instance = new ExpenseRecorder({
       groups: database.groups,
       expenses: database.expenses,
       expenseItems: database.expenseItems,
-      sheetWriter: { appendExpenseRow, appendExpenseRows },
+      groupSpreadsheets: database.groupSpreadsheets,
+      sheetWriter: { appendExpenseRow, appendExpenseRows, findAndDeleteExpenseRow },
       eurConverter: { convertToEUR, getExchangeRate },
       runInTransaction: (fn: () => void) => database.transaction(fn),
     });
@@ -36,15 +42,49 @@ export function getExpenseRecorder(): RecorderApi {
 const logger = createLogger('expense-recorder');
 
 /**
- * Abstraction over Google Sheets append — injected for testability.
+ * Identifying fields used to locate a sheet row when DELETING an expense.
+ *
+ * Notes on fields:
+ * - EUR amount is intentionally excluded — sheet stores it as an INDIRECT
+ *   formula, so the recomputed value can drift from DB-stored eur_amount
+ *   across exchange-rate changes.
+ * - Comment IS included (unlike the dedup key used in sync's
+ *   pushMissingExpensesToSheet, which uses only (date, category, amount,
+ *   currency)). The reason for asymmetry: push-dedup should be fuzzy —
+ *   "don't duplicate-push an expense that's already in the sheet even with
+ *   a different comment". Delete, in contrast, should be precise — "remove
+ *   THIS particular row, not an unrelated expense that happens to share
+ *   date+category+amount".
+ * - If multiple rows match, the first (topmost) one wins. Repeated delete
+ *   calls handle duplicate scenarios naturally.
+ */
+export interface DeleteRowCriteria {
+  date: string;
+  category: string;
+  comment: string;
+  amount: number;
+  currency: CurrencyCode;
+}
+
+/**
+ * Abstraction over Google Sheets writes — injected for testability.
  * `appendExpenseRow` is used for single-row writes (manual expenses).
  * `appendExpenseRows` is used for multi-row batch writes (receipts) — one API call
  * regardless of row count, so the Google Sheets 60 writes/min/user quota isn't
  * exhausted by large receipts.
+ * `findAndDeleteExpenseRow` removes a single matching row from the sheet —
+ * symmetric counterpart to append, used by AI delete_expense and any future
+ * delete UX. Returns the 1-based row index that was deleted, or null if no
+ * matching row was found.
  */
 export interface SheetWriter {
   appendExpenseRow(conn: GoogleConn, spreadsheetId: string, data: ExpenseRowData): Promise<void>;
   appendExpenseRows(conn: GoogleConn, spreadsheetId: string, rows: ExpenseRowData[]): Promise<void>;
+  findAndDeleteExpenseRow(
+    conn: GoogleConn,
+    spreadsheetId: string,
+    criteria: DeleteRowCriteria,
+  ): Promise<{ deletedRowIndex: number | null }>;
 }
 
 /**
@@ -117,6 +157,11 @@ interface ExpenseRecorderDeps {
   groups: GroupRepository;
   expenses: ExpenseRepository;
   expenseItems: ExpenseItemsRepository;
+  /**
+   * Needed so delete (and future per-year writes) can target the correct
+   * spreadsheet by the expense's year — not the group's current-year sheet.
+   */
+  groupSpreadsheets: GroupSpreadsheetRepository;
   sheetWriter: SheetWriter;
   eurConverter: EurConverter;
   /**
@@ -163,6 +208,7 @@ export interface RecorderApi {
     data: RecordReceiptData,
   ): Promise<RecordReceiptResult>;
   pushToSheet(groupId: number, expenseList: Expense[]): Promise<void>;
+  deleteFromSheet(groupId: number, expense: Expense): Promise<{ deletedRowIndex: number | null }>;
 }
 
 /**
@@ -173,6 +219,7 @@ export class ExpenseRecorder implements RecorderApi {
   private groups: GroupRepository;
   private expenses: ExpenseRepository;
   private expenseItems: ExpenseItemsRepository;
+  private groupSpreadsheets: GroupSpreadsheetRepository;
   private sheetWriter: SheetWriter;
   private eurConverter: EurConverter;
   private runInTransaction: (fn: () => void) => void;
@@ -181,6 +228,7 @@ export class ExpenseRecorder implements RecorderApi {
     this.groups = deps.groups;
     this.expenses = deps.expenses;
     this.expenseItems = deps.expenseItems;
+    this.groupSpreadsheets = deps.groupSpreadsheets;
     this.sheetWriter = deps.sheetWriter;
     this.eurConverter = deps.eurConverter;
     this.runInTransaction = deps.runInTransaction;
@@ -194,7 +242,10 @@ export class ExpenseRecorder implements RecorderApi {
     userId: number,
     data: RecordExpenseData,
   ): Promise<RecordExpenseResult> {
-    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.resolveWriteConfigForDate(
+      groupId,
+      data.date,
+    );
 
     const rate = this.eurConverter.getExchangeRate(data.currency);
     const eurAmount = this.eurConverter.convertToEUR(data.amount, data.currency);
@@ -261,7 +312,10 @@ export class ExpenseRecorder implements RecorderApi {
       return { expenses: [], categoriesAffected: [] };
     }
 
-    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
+    const { conn, spreadsheetId, enabledCurrencies } = this.resolveWriteConfigForDate(
+      groupId,
+      data.date,
+    );
 
     // Group items by (category, currency). We group by both — not category
     // alone — because a receipt may legitimately contain items in different
@@ -390,30 +444,96 @@ export class ExpenseRecorder implements RecorderApi {
   }
 
   /**
+   * Remove a single matching row from Google Sheets — symmetric counterpart
+   * to `record()`. Used by AI delete_expense and any future delete UX.
+   *
+   * No-op (returns deletedRowIndex=null) when the group has no Google connection.
+   * Errors from the sheet layer (404, auth, network) propagate so the caller
+   * can decide whether to still proceed with DB deletion.
+   */
+  async deleteFromSheet(
+    groupId: number,
+    expense: Expense,
+  ): Promise<{ deletedRowIndex: number | null }> {
+    // Resolve the target sheet symmetrically with writes: year-specific if
+    // registered, otherwise fall back to the current-year sheet. Without the
+    // fallback, a 2024 expense written into the current sheet (because there
+    // was no 2024 registration at write time) would be marked "not found in
+    // sheet" on delete, the DB row would be removed, and /sync would then
+    // resurrect it from the still-present row in the current sheet.
+    const { conn, spreadsheetId } = this.resolveWriteConfigForDate(groupId, expense.date);
+    if (!conn || !spreadsheetId) {
+      return { deletedRowIndex: null };
+    }
+
+    const result = await this.sheetWriter.findAndDeleteExpenseRow(conn, spreadsheetId, {
+      date: expense.date,
+      category: expense.category,
+      comment: expense.comment,
+      amount: expense.amount,
+      currency: expense.currency as CurrencyCode,
+    });
+
+    logger.info(
+      {
+        expenseId: expense.id,
+        spreadsheetId,
+        deletedRowIndex: result.deletedRowIndex,
+      },
+      `[DELETE] Sheet row delete attempt`,
+    );
+
+    return result;
+  }
+
+  /**
    * Push existing DB expenses to sheet (no new DB entries)
    */
   async pushToSheet(groupId: number, expenseList: Expense[]): Promise<void> {
-    const { conn, spreadsheetId, enabledCurrencies } = this.getGroupConfig(groupId);
-
-    if (!conn || !spreadsheetId) {
+    const base = this.getGroupConfig(groupId);
+    if (!base.conn || !base.spreadsheetId) {
       throw new Error(`Group ${groupId} not connected to Google Sheets`);
     }
 
-    for (const expense of expenseList) {
-      const amounts = buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies);
-      const rate = this.eurConverter.getExchangeRate(expense.currency as CurrencyCode);
+    if (expenseList.length === 0) return;
 
-      await this.sheetWriter.appendExpenseRow(conn, spreadsheetId, {
+    const { conn, enabledCurrencies } = base;
+
+    // Split expenses by their YEAR so each year's rows go to the correct
+    // spreadsheet. Expense list may span multiple years (e.g. /reconnect
+    // after long inactivity, or /push with a custom range).
+    const byYear = new Map<string, Expense[]>();
+    for (const expense of expenseList) {
+      const year = expense.date.slice(0, 4);
+      const arr = byYear.get(year);
+      if (arr) {
+        arr.push(expense);
+      } else {
+        byYear.set(year, [expense]);
+      }
+    }
+
+    for (const [year, expenses] of byYear) {
+      const { spreadsheetId: targetSheet } = this.resolveWriteConfigForDate(
+        groupId,
+        `${year}-01-01`,
+      );
+      if (!targetSheet) continue;
+
+      const rows = expenses.map((expense) => ({
         date: expense.date,
         category: expense.category,
         comment: expense.comment,
-        amounts,
+        amounts: buildAmountsRecord(expense.amount, expense.currency, enabledCurrencies),
         eurAmount: expense.eur_amount,
-        rate,
-      });
-    }
+        rate: this.eurConverter.getExchangeRate(expense.currency as CurrencyCode),
+      }));
 
-    logger.info(`[PUSH] Pushed ${expenseList.length} expenses to sheet`);
+      await this.sheetWriter.appendExpenseRows(conn, targetSheet, rows);
+      logger.info(
+        `[PUSH] Pushed ${rows.length} expenses for ${year} to sheet ${targetSheet} (1 batched call)`,
+      );
+    }
   }
 
   private getGroupConfig(groupId: number): {
@@ -435,5 +555,42 @@ export class ExpenseRecorder implements RecorderApi {
       spreadsheetId: group.spreadsheet_id,
       enabledCurrencies: group.enabled_currencies,
     };
+  }
+
+  /**
+   * Resolve sheet config for a WRITE that has a specific date (record,
+   * recordReceipt, pushToSheet). Backdated expenses must land in the
+   * spreadsheet for THEIR year, not the group's current-year sheet —
+   * otherwise a 2024 expense added in 2026 would end up in the 2026 sheet.
+   *
+   * Fallback: if the expense's year has no registered spreadsheet (e.g.
+   * user only started with the bot this year), fall back to the current
+   * spreadsheet so the row isn't silently lost.
+   */
+  private resolveWriteConfigForDate(
+    groupId: number,
+    dateString: string,
+  ): {
+    conn: GoogleConn | null;
+    spreadsheetId: string | null;
+    enabledCurrencies: CurrencyCode[];
+  } {
+    const base = this.getGroupConfig(groupId);
+    const year = Number.parseInt(dateString.slice(0, 4), 10);
+    if (!Number.isFinite(year)) return base;
+
+    const yearSpreadsheetId = this.groupSpreadsheets.getByYear(groupId, year);
+    if (yearSpreadsheetId) {
+      return { ...base, spreadsheetId: yearSpreadsheetId };
+    }
+
+    // No year-specific sheet — fall back to current-year sheet with a warning
+    if (base.spreadsheetId && base.spreadsheetId !== null) {
+      logger.warn(
+        { groupId, date: dateString, year, fallbackSpreadsheetId: base.spreadsheetId },
+        '[RESOLVE] No spreadsheet registered for expense year — writing to current-year sheet',
+      );
+    }
+    return base;
   }
 }

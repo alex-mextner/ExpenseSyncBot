@@ -1295,6 +1295,136 @@ export async function appendExpenseRowsRaw(
  * Sorted and processed in reverse order to avoid index shifting.
  * Uses the Expenses tab's sheetId (resolved from spreadsheet metadata).
  */
+/**
+ * Convert a sheet date cell to ISO yyyy-MM-dd. Handles two storage shapes:
+ *   - UNFORMATTED_VALUE: the date is a Sheets serial number (days since 1899-12-30)
+ *   - formatted string: already ISO-shaped (e.g. "2026-04-15")
+ */
+function normalizeSheetDate(cell: unknown): string {
+  if (typeof cell === 'number' && Number.isFinite(cell) && cell > 25569 && cell < 99999) {
+    const date = new Date((cell - 25569) * 86400 * 1000);
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(date.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(cell ?? '');
+}
+
+/**
+ * Find the FIRST sheet row matching all criteria fields, delete it, and return
+ * the 1-based row index. Returns `{ deletedRowIndex: null }` if no row matches.
+ *
+ * Matching uses (date, category, comment, amount-in-currency-column). Multiple
+ * matches are intentional: caller deletes one row per call, so repeated calls
+ * naturally clean up duplicates.
+ */
+export async function findAndDeleteExpenseRow(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  criteria: {
+    date: string;
+    category: string;
+    comment: string;
+    amount: number;
+    currency: string;
+  },
+): Promise<{ deletedRowIndex: number | null }> {
+  // Serialize with other operations on this spreadsheet. Without this, two
+  // concurrent deletes can both read the same pre-delete row indices; the
+  // first deleteDimension shifts row numbers, and the second batchUpdate
+  // ends up targeting a stale index — removing the wrong row. Appends use
+  // the same queue for the same reason (row-relative EUR formulas).
+  let capturedResult: { deletedRowIndex: number | null } = { deletedRowIndex: null };
+  await enqueueSheetWrite(spreadsheetId, async () => {
+    capturedResult = await findAndDeleteExpenseRowImpl(conn, spreadsheetId, criteria);
+  });
+  return capturedResult;
+}
+
+async function findAndDeleteExpenseRowImpl(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  criteria: {
+    date: string;
+    category: string;
+    comment: string;
+    amount: number;
+    currency: string;
+  },
+): Promise<{ deletedRowIndex: number | null }> {
+  const auth = authClient(conn);
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  // UNFORMATTED_VALUE so amounts come as numbers (not locale-formatted strings)
+  // and dates as serial numbers (which we normalize back to ISO).
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPENSES_TAB}!A:Z`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+
+  const rows = response.data.values ?? [];
+  if (rows.length < 2) return { deletedRowIndex: null };
+
+  const headers = (rows[0] ?? []) as string[];
+  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? '');
+  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? '');
+  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? '');
+  // `startsWith("EUR ")` alone would also match "EUR (calc)" — the computed
+  // EUR column, not the EUR currency column. Exclude it explicitly so the
+  // match is column-order-independent.
+  const currencyCol = headers.findIndex(
+    (h) => h.startsWith(`${criteria.currency} `) && h !== SPREADSHEET_CONFIG.eurColumnHeader,
+  );
+
+  if (dateCol === -1 || categoryCol === -1 || commentCol === -1 || currencyCol === -1) {
+    logger.warn(
+      {
+        dateCol,
+        categoryCol,
+        commentCol,
+        currencyCol,
+        currency: criteria.currency,
+      },
+      '[SHEETS] findAndDeleteExpenseRow: required column not found',
+    );
+    return { deletedRowIndex: null };
+  }
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[];
+    if (!row) continue;
+
+    const rowDate = normalizeSheetDate(row[dateCol]);
+    if (rowDate !== criteria.date) continue;
+    if (String(row[categoryCol] ?? '') !== criteria.category) continue;
+    if (String(row[commentCol] ?? '') !== criteria.comment) continue;
+
+    const cellAmount = row[currencyCol];
+    const numAmount =
+      typeof cellAmount === 'number' ? cellAmount : Number.parseFloat(String(cellAmount ?? ''));
+    // Epsilon 0.005 = half of the smallest unit for 2-decimal currencies
+    // (cents/копейки). Float round-trip through Sheets can drift by ~1e-14
+    // for fractional values like $12.34; strict equality here would miss
+    // those rows and leave them in the sheet, re-importable via /sync.
+    // The gap between any two realistic neighboring sums (12.34 vs 12.35)
+    // is 0.01 > 0.005, so false positives are impossible.
+    if (!Number.isFinite(numAmount) || Math.abs(numAmount - criteria.amount) > 0.005) continue;
+
+    // Match — delete this row (1-based for the public interface).
+    const oneBasedRowIndex = i + 1;
+    await deleteExpenseRowsByIndex(conn, spreadsheetId, [oneBasedRowIndex]);
+    logger.info(
+      { spreadsheetId, rowIndex: oneBasedRowIndex, criteria },
+      '[SHEETS] findAndDeleteExpenseRow: deleted row',
+    );
+    return { deletedRowIndex: oneBasedRowIndex };
+  }
+
+  return { deletedRowIndex: null };
+}
+
 export async function deleteExpenseRowsByIndex(
   conn: GoogleConn,
   spreadsheetId: string,

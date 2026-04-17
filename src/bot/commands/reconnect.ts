@@ -7,10 +7,12 @@ import { database } from '../../database';
 import type { Expense, Group } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
+import { getExchangeRate } from '../../services/currency/converter';
 import { getExpenseRecorder } from '../../services/expense-recorder';
 import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from '../../services/google/month-abbr';
 import { generateAuthUrl, getAuthenticatedClient } from '../../services/google/oauth';
 import {
+  appendExpenseRows,
   createEmptyMonthTab,
   createExpenseSpreadsheet,
   type GoogleConn,
@@ -21,6 +23,12 @@ import {
   type SheetRow,
   writeMonthBudgetRow,
 } from '../../services/google/sheets';
+import {
+  type AuditEntry,
+  auditAllYears,
+  type RecreateResult,
+  recreateLostSpreadsheets,
+} from '../../services/google/spreadsheet-repair';
 import { createLogger } from '../../utils/logger.ts';
 import { pluralize } from '../../utils/pluralize';
 import type { Ctx } from '../types';
@@ -93,6 +101,75 @@ interface FullSyncReport {
   sheetToDbBudgets: number;
   budgetTabsCreated: string[];
   budgetRowsWritten: number;
+  audit: AuditEntry[];
+  recreated: RecreateResult[];
+}
+
+/**
+ * Probe a single spreadsheet via spreadsheets.get to test access. Throws on
+ * any failure (404, 403, network, etc.) so the surrounding `auditAllYears`
+ * can classify it.
+ */
+async function probeSpreadsheetAccess(conn: GoogleConn, spreadsheetId: string): Promise<void> {
+  const auth = getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.get({ spreadsheetId });
+}
+
+/**
+ * Audit every spreadsheet registered for the group and recreate any that the
+ * bot can no longer reach (404 / 403). Each recreated spreadsheet is freshly
+ * created with the new OAuth token, so `drive.file` scope owns it
+ * unambiguously. Data is repopulated from the local DB.
+ *
+ * Returns the audit + recreate results so the caller can include them in a
+ * user-facing report.
+ */
+export async function auditAndRepairSpreadsheets(
+  group: Group,
+): Promise<{ audit: AuditEntry[]; recreated: RecreateResult[] }> {
+  if (!group.google_refresh_token) {
+    return { audit: [], recreated: [] };
+  }
+
+  const conn = googleConn(group);
+  const registered = database.groupSpreadsheets.listAll(group.id);
+  if (registered.length === 0) {
+    return { audit: [], recreated: [] };
+  }
+
+  const audit = await auditAllYears(probeSpreadsheetAccess, conn, registered);
+  const lost = audit.filter((a) => a.status === 'not_found' || a.status === 'forbidden');
+  if (lost.length === 0) {
+    return { audit, recreated: [] };
+  }
+
+  logger.warn(
+    { groupId: group.id, lost: lost.map((a) => ({ year: a.year, status: a.status })) },
+    '[REPAIR] Lost spreadsheets detected — recreating',
+  );
+
+  const recreated = await recreateLostSpreadsheets(
+    {
+      createExpenseSpreadsheet,
+      appendExpenseRows,
+      writeMonthBudgetRow,
+      loadExpensesForYear: (groupId, year) =>
+        database.expenses
+          .findByGroupId(groupId, 100000)
+          .filter((e) => e.date.startsWith(`${year}-`)),
+      loadBudgetsForYear: (groupId, year) =>
+        database.budgets.findByGroupId(groupId).filter((b) => b.month.startsWith(`${year}-`)),
+      setSpreadsheetIdForYear: (groupId, year, spreadsheetId) =>
+        database.groupSpreadsheets.setYear(groupId, year, spreadsheetId),
+      getExchangeRate,
+    },
+    conn,
+    group,
+    audit,
+  );
+
+  return { audit, recreated };
 }
 
 /**
@@ -119,44 +196,88 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
     sheetToDbBudgets: 0,
     budgetTabsCreated: [],
     budgetRowsWritten: 0,
+    audit: [],
+    recreated: [],
   };
 
   try {
     await sendMessage('🔄 Полная синхронизация...');
 
-    const freshGroup = database.groups.findById(groupId);
-    if (!freshGroup?.google_refresh_token || !freshGroup.spreadsheet_id) {
-      await sendMessage('❌ Токен или таблица не найдены. Попробуй /reconnect ещё раз.');
+    let freshGroup = database.groups.findById(groupId);
+    if (!freshGroup?.google_refresh_token) {
+      await sendMessage('❌ Токен не найден. Попробуй /reconnect ещё раз.');
+      return;
+    }
+
+    // Step -1: Snapshot DB state BEFORE any spreadsheet changes. This is NOT
+    // auto-rollback — we never restore automatically because we can't
+    // distinguish "bad sync corrupted DB" from "user added expenses between
+    // snapshot and failure". Instead the snapshot is a manual recovery point:
+    // if the user sees data loss after /reconnect, they run `/sync rollback`
+    // (handled in sync.ts) to restore from the latest snapshot.
+    //
+    // Limit bump: findByGroupId caps the result. 1M is effectively unbounded
+    // for realistic group sizes while still defending against runaway queries.
+    const snapshotExpenses = database.expenses.findByGroupId(freshGroup.id, 1_000_000);
+    const snapshotBudgets = database.budgets.findByGroupId(freshGroup.id);
+    report.snapshotId = database.syncSnapshots.saveSnapshot(
+      freshGroup.id,
+      snapshotExpenses,
+      snapshotBudgets,
+    );
+    report.snapshotExpenses = snapshotExpenses.length;
+    report.snapshotBudgets = snapshotBudgets.length;
+
+    // Step 0: Audit all year spreadsheets for access. If any are unreachable
+    // (file deleted, scope downgraded, permissions revoked) — recreate them
+    // BEFORE any backup/sync attempts that would just fail with the same 404.
+    const { audit, recreated } = await auditAndRepairSpreadsheets(freshGroup);
+    report.audit = audit;
+    report.recreated = recreated;
+
+    if (recreated.length > 0) {
+      // Reload group — recreate updated group_spreadsheets, so the JOIN result
+      // (group.spreadsheet_id) for the current year is now the new ID.
+      const reloaded = database.groups.findById(groupId);
+      if (reloaded) freshGroup = reloaded;
+    }
+
+    if (!freshGroup.spreadsheet_id) {
+      await sendMessage(
+        formatFullSyncReport(report) +
+          '\n\n❌ После проверки таблиц активной таблицы нет. Используй /connect.',
+      );
       return;
     }
 
     const conn = googleConn(freshGroup);
 
-    // Step 0: Create backups before any modifications
-    const expenses = database.expenses.findByGroupId(freshGroup.id, 100000);
-    const budgets = database.budgets.findByGroupId(freshGroup.id);
-    report.snapshotId = database.syncSnapshots.saveSnapshot(freshGroup.id, expenses, budgets);
-    report.snapshotExpenses = expenses.length;
-    report.snapshotBudgets = budgets.length;
-    report.sheetBackupUrl = await backupSpreadsheet(conn, freshGroup.spreadsheet_id);
+    // Step 1: Backup current-year spreadsheet — but only if it wasn't just
+    // recreated (the new sheet has only DB data, nothing to back up).
+    const currentYear = new Date().getFullYear();
+    const wasRecreatedThisYear = recreated.some((r) => r.year === currentYear);
+    if (!wasRecreatedThisYear) {
+      report.sheetBackupUrl = await backupSpreadsheet(conn, freshGroup.spreadsheet_id);
+    }
 
-    // Step 1: Ensure current-year spreadsheet exists
+    // Step 2: Ensure current-year spreadsheet exists (no-op if recreate or
+    // legacy setYear already wrote a row for this year).
     report.yearCreated = await ensureCurrentYearSpreadsheet(freshGroup);
 
-    // Step 2: Sheet → DB expenses (add-only, never deletes)
+    // Step 3: Sheet → DB expenses (add-only, never deletes)
     report.sheetToDbExpenses = await importExpensesFromSheet(
       freshGroup.id,
       conn,
       freshGroup.spreadsheet_id,
     );
 
-    // Step 3: DB → Sheet expenses (push missing)
+    // Step 4: DB → Sheet expenses (push missing)
     report.dbToSheetExpenses = await pushMissingExpensesToSheet(freshGroup);
 
-    // Step 4: Sheet → DB budgets (import from all month tabs)
+    // Step 5: Sheet → DB budgets (import from all month tabs)
     report.sheetToDbBudgets = await importBudgetsFromSheet(freshGroup);
 
-    // Step 5: DB → Sheet budgets (ensure tabs + write rows)
+    // Step 6: DB → Sheet budgets (ensure tabs + write rows)
     const budgetResult = await syncBudgetsToSheet(freshGroup);
     report.budgetTabsCreated = budgetResult.tabsCreated;
     report.budgetRowsWritten = budgetResult.rowsWritten;
@@ -165,7 +286,9 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
   } catch (err) {
     logger.error({ err }, '[RECONNECT] Full sync failed');
     await sendMessage(
-      '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' + 'Попробуй /sync вручную позже.',
+      '⚠️ Аккаунт подключён, но синхронизация не удалась.\n' +
+        'Попробуй /repair (проверка таблиц) или /sync позже.\n' +
+        'Если заметишь потерю данных — /sync rollback откатит последний снэпшот.',
     );
   }
 }
@@ -250,13 +373,29 @@ async function ensureCurrentYearSpreadsheet(group: Group): Promise<number | null
 }
 
 /**
- * Push DB expenses missing from the current spreadsheet.
+ * Push DB expenses missing from the current-year spreadsheet.
+ *
+ * Scoped deliberately to the CURRENT year:
+ * - We compare DB expenses only against the current-year sheet (that's what
+ *   `group.spreadsheet_id` resolves to via the LEFT JOIN).
+ * - Since `pushToSheet` now routes each expense to its own year sheet, we
+ *   MUST restrict the input to current-year expenses. Without that, a 2024
+ *   DB expense would be flagged "missing from current sheet" (which is
+ *   trivially true — current sheet is 2026) and then get appended to the
+ *   2024 sheet, where it already exists — a duplicate.
+ * - Prior-year sheets are handled by the recreate flow (which repopulates
+ *   them from DB wholesale) or by running /push manually per year.
+ *
  * Returns count of pushed expenses.
  */
 async function pushMissingExpensesToSheet(group: Group): Promise<number> {
   if (!group.google_refresh_token || !group.spreadsheet_id) return 0;
 
-  const dbExpenses = database.expenses.findByGroupId(group.id, 100000);
+  const currentYear = new Date().getFullYear();
+  const currentYearPrefix = `${currentYear}-`;
+
+  const allDbExpenses = database.expenses.findByGroupId(group.id, 100000);
+  const dbExpenses = allDbExpenses.filter((e) => e.date.startsWith(currentYearPrefix));
   if (dbExpenses.length === 0) return 0;
 
   const { expenses: sheetExpenses } = await readExpensesFromSheet(
@@ -280,7 +419,7 @@ async function pushMissingExpensesToSheet(group: Group): Promise<number> {
 
   if (missing.length === 0) return 0;
 
-  logger.info(`[RECONNECT] Pushing ${missing.length} missing expenses to sheet`);
+  logger.info(`[RECONNECT] Pushing ${missing.length} missing current-year expenses to sheet`);
   const recorder = getExpenseRecorder();
   try {
     await recorder.pushToSheet(group.id, missing);
@@ -425,6 +564,40 @@ function formatFullSyncReport(report: FullSyncReport): string {
       );
     }
     if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
+    lines.push('');
+  }
+
+  // Audit + recreate report
+  if (report.recreated.length > 0) {
+    const lostStatuses = new Set(
+      report.audit.filter((a) => a.status !== 'ok').map((a) => a.status),
+    );
+    const reasonHints: string[] = [];
+    if (lostStatuses.has('not_found')) {
+      reasonHints.push(
+        '• таблица удалена/в Корзине',
+        '• новый набор разрешений Google не видит старую таблицу',
+      );
+    }
+    if (lostStatuses.has('forbidden')) {
+      reasonHints.push('• бот лишился доступа (отозван в Google Account)');
+    }
+
+    lines.push('🔧 <b>Восстановление таблиц</b>');
+    if (reasonHints.length > 0) {
+      lines.push('Возможные причины:');
+      for (const h of reasonHints) lines.push(h);
+    }
+    lines.push('');
+    for (const r of report.recreated) {
+      lines.push(
+        `🆕 ${r.year}: новая таблица создана\n` +
+          `   ${r.newSpreadsheetUrl}\n` +
+          `   Залито: ${r.expensesCopied} ${pluralize(r.expensesCopied, 'расход', 'расхода', 'расходов')}, ${r.budgetsCopied} ${pluralize(r.budgetsCopied, 'бюджет', 'бюджета', 'бюджетов')}`,
+      );
+    }
+    lines.push('');
+    lines.push('ℹ️ Старые таблицы остались в твоём Google Drive — удали их вручную, если нужно.');
     lines.push('');
   }
 
