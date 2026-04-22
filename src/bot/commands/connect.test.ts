@@ -354,6 +354,35 @@ describe('/connect currency toggle', () => {
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: 'Группа не найдена' });
     expect(mockGroups.update).not.toHaveBeenCalled();
   });
+
+  test('editText "message is not modified" 400 is swallowed', async () => {
+    mockGroups.findByTelegramGroupId.mockReturnValue(
+      fakeGroup({ enabled_currencies: [] as CurrencyCode[] }),
+    );
+    const ctx = fakeCallbackCtx();
+    (ctx.editText as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      throw new Error('Bad Request: message is not modified');
+    });
+
+    // No throw — the callback must complete normally so the user sees the toast.
+    await handleCurrencyCallback(ctx, 'EUR', -100);
+
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('EUR') }),
+    );
+  });
+
+  test('editText other errors propagate (not swallowed)', async () => {
+    mockGroups.findByTelegramGroupId.mockReturnValue(
+      fakeGroup({ enabled_currencies: [] as CurrencyCode[] }),
+    );
+    const ctx = fakeCallbackCtx();
+    (ctx.editText as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      throw new Error('Bad Request: chat not found');
+    });
+
+    await expect(handleCurrencyCallback(ctx, 'EUR', -100)).rejects.toThrow(/chat not found/);
+  });
 });
 
 // ── handleDefaultCurrencyCallback ─────────────────────────────────────────

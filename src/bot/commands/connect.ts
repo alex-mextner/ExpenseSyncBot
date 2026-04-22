@@ -259,7 +259,7 @@ export async function handleCurrencyCallback(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (!/message is not modified/i.test(msg)) throw err;
+    if (!/\bmessage is not modified\b/i.test(msg)) throw err;
   }
 
   const action_text = enabledCurrencies.includes(currency) ? 'добавлена' : 'удалена';
