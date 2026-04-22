@@ -1197,15 +1197,17 @@ export function runMigrations(db: Database): void {
     {
       name: '045_create_category_emoji_cache',
       up: () => {
-        // Caches semantic-match results for user-defined category names that
-        // don't have an exact entry in CATEGORY_EMOJIS. Keyed by the lowercased
-        // category string; avoids repeated HF inference calls.
+        // Caches LLM-resolved emoji per group × category. Keyed on group_id so
+        // the same category name in different groups can resolve to different
+        // emojis (each group's custom_prompt may define distinct meanings).
         db.exec(`
           CREATE TABLE IF NOT EXISTS category_emoji_cache (
-            category TEXT PRIMARY KEY,
+            group_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
             emoji TEXT NOT NULL,
             matched_key TEXT,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (group_id, category)
           );
         `);
       },

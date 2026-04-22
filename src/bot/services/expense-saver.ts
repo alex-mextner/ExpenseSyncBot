@@ -308,7 +308,7 @@ export async function saveReceiptExpenses(
     : undefined;
 
   await sendMessage(
-    await buildReceiptSummaryMessage(summaryItems),
+    await buildReceiptSummaryMessage(summaryItems, group.id),
     scanButton ? { reply_markup: scanButton } : undefined,
   );
 

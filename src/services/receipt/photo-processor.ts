@@ -358,7 +358,7 @@ export async function showReceiptConfirmationOptions(
 
   // Build summary from items
   const summary = buildSummaryFromItems(pendingItems);
-  const summaryMessage = await formatSummaryMessage(summary);
+  const summaryMessage = await formatSummaryMessage(summary, group.id);
 
   // Store summary in photo queue
   database.photoQueue.update(photoQueueId, {

@@ -31,7 +31,10 @@ const MAX_MESSAGE_LENGTH = 4000;
  * Async because category emoji resolution may hit HF for unknown categories
  * (cached in the category_emoji_cache table after the first lookup).
  */
-export async function buildReceiptSummaryMessage(items: ReceiptSummaryItem[]): Promise<string> {
+export async function buildReceiptSummaryMessage(
+  items: ReceiptSummaryItem[],
+  groupId: number,
+): Promise<string> {
   if (items.length === 0) return '';
 
   const currency = items[0]?.currency ?? ('EUR' as CurrencyCode);
@@ -44,8 +47,9 @@ export async function buildReceiptSummaryMessage(items: ReceiptSummaryItem[]): P
     byCategory.set(item.category, (byCategory.get(item.category) ?? 0) + item.total);
   }
 
-  // Resolve emojis once per unique category (sync exact match + async HF fallback)
-  const emojiByCategory = await resolveCategoryEmojis(Array.from(byCategory.keys()));
+  // Resolve emojis once per unique category (sync exact match + async LLM fallback,
+  // biased by the group's /prompt context)
+  const emojiByCategory = await resolveCategoryEmojis(Array.from(byCategory.keys()), groupId);
 
   const countWord = pluralize(items.length, 'позиция', 'позиции', 'позиций');
   const lines: string[] = [`🧾 <b>Чек обработан — ${items.length} ${countWord}:</b>`];

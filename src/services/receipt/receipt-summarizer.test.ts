@@ -175,7 +175,7 @@ describe('formatSummaryMessage', () => {
       totalAmount: 150,
       currency: 'EUR',
     };
-    const msg = await formatSummaryMessage(summary);
+    const msg = await formatSummaryMessage(summary, 1);
     expect(msg).toContain('Еда');
     expect(msg).toContain('Молоко');
     expect(msg).toContain('Хлеб');
@@ -189,13 +189,13 @@ describe('formatSummaryMessage', () => {
       totalAmount: 10,
       currency: 'RSD',
     };
-    const msg = await formatSummaryMessage(summary);
+    const msg = await formatSummaryMessage(summary, 1);
     expect(msg).toContain('RSD');
   });
 
   it('returns empty string when summary has no categories', async () => {
     const summary: ReceiptSummary = { categories: [], totalAmount: 0, currency: 'EUR' };
-    expect(await formatSummaryMessage(summary)).toBe('');
+    expect(await formatSummaryMessage(summary, 1)).toBe('');
   });
 });
 

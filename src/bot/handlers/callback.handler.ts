@@ -1256,7 +1256,7 @@ async function handleReceiptSummaryAction(
       break;
 
     case 'bulk_edit':
-      await handleReceiptBulkEdit(ctx, queueItem, bot, messageId, chatId);
+      await handleReceiptBulkEdit(ctx, queueItem, group, bot, messageId, chatId);
       break;
 
     case 'itemwise':
@@ -1329,6 +1329,7 @@ async function handleReceiptAcceptAll(
 async function handleReceiptBulkEdit(
   ctx: Ctx['CallbackQuery'],
   queueItem: PhotoQueueItem,
+  group: Group,
   bot: BotInstance,
   messageId?: number,
   chatId?: number,
@@ -1350,7 +1351,7 @@ async function handleReceiptBulkEdit(
     );
 
     const summary = buildSummaryFromItems(items);
-    const summaryText = await formatSummaryMessage(summary);
+    const summaryText = await formatSummaryMessage(summary, group.id);
 
     const message = `${summaryText}\n\n✏️ <i>Напишите корректировку текстом, например:</i>\n<code>перенеси салфетки в Хозтовары</code>`;
 

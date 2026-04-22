@@ -881,7 +881,7 @@ async function notifyReceiptConfirmed(
     currency: item.currency as CurrencyCode,
   }));
 
-  const text = await buildReceiptSummaryMessage(summaryItems);
+  const text = await buildReceiptSummaryMessage(summaryItems, group.id);
   if (!text) return;
 
   const threadId = group.active_topic_id ?? null;
