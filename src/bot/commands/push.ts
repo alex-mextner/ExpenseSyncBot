@@ -26,6 +26,14 @@ function makeExpenseKey(date: string, category: string, amount: number, currency
  */
 function makeSheetRowKey(row: SheetRow): string | null {
   const currencies = Object.keys(row.amounts).sort();
+  if (currencies.length > 1) {
+    // Invariant: multi-currency rows are pre-filtered via `errors` upstream.
+    // If this ever fires, dedup will silently miss the row — surface it.
+    logger.warn(
+      { date: row.date, category: row.category, currencies },
+      '[PUSH] makeSheetRowKey received multi-currency row — dedup may miss it',
+    );
+  }
   const currency = currencies[0];
   if (!currency) return null;
   const amount = row.amounts[currency];
