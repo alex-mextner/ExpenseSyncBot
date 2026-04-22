@@ -250,9 +250,17 @@ export async function handleCurrencyCallback(
     '• Нажми ✅ Далее когда закончишь\n\n' +
     `📊 Выбрано: ${updatedGroup.enabled_currencies.join(', ') || 'нет'}`;
 
-  await ctx.editText(statusText, {
-    reply_markup: keyboard,
-  });
+  // Rapid double-click on the same currency produces identical state — Telegram
+  // then rejects the edit with "Bad Request: message is not modified" (400).
+  // Swallow that specific case; anything else bubbles up.
+  try {
+    await ctx.editText(statusText, {
+      reply_markup: keyboard,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/message is not modified/i.test(msg)) throw err;
+  }
 
   const action_text = enabledCurrencies.includes(currency) ? 'добавлена' : 'удалена';
   await ctx.answerCallbackQuery({ text: `${currency} ${action_text}` });
