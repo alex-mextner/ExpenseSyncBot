@@ -1,7 +1,7 @@
 // Tests for DevPipeline — task lifecycle dispatch, error handling, cancellation, resume.
 // Focuses on the public entry points; lower-level stage implementations
 // (TESTING / shell commands) are out of scope and not exercised.
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 import type { DevTask, UpdateDevTaskData } from './types';
 import { DevTaskState } from './types';
@@ -547,10 +547,27 @@ const _origProcessState = (
 ).processState;
 
 describe('DevPipeline — TESTING stage', () => {
-  // Stub processState so handleTesting's cascade into PULL_REQUEST / IMPLEMENTING
-  // does not run — we assert on the *transition target* instead of driving the
-  // downstream handlers, which require more mocks than this suite sets up.
-  let restoreProcessState: (() => void) | null = null;
+  // Patching DevPipeline.prototype.processState is a GLOBAL mutation shared
+  // across all tests in all describe blocks. Restore it via afterEach — if any
+  // test throws mid-run, cleanup still fires, so a later describe block can't
+  // see our stub. beforeEach sets it up fresh per-test.
+
+  function patchProcessState(onDispatch: (t: DevTask) => void): void {
+    const proto = DevPipeline.prototype as unknown as {
+      processState(t: DevTask): Promise<void>;
+    };
+    proto.processState = async (t: DevTask): Promise<void> => {
+      onDispatch(t);
+    };
+  }
+  function restoreProcessState(): void {
+    const proto = DevPipeline.prototype as unknown as {
+      processState(t: DevTask): Promise<void>;
+    };
+    proto.processState = _origProcessState;
+  }
+
+  afterEach(restoreProcessState);
 
   function testable(): {
     pipeline: TestablePipeline;
@@ -570,27 +587,11 @@ describe('DevPipeline — TESTING stage', () => {
       });
     });
     const pipeline = new TestablePipeline(notify);
-    // Swallow downstream state dispatch: handleTesting runs, transitions task,
-    // then calls processState(updated) — intercept and record instead.
-    const proto = DevPipeline.prototype as unknown as {
-      processState(t: DevTask): Promise<void>;
-    };
-    proto.processState = async (t: DevTask): Promise<void> => {
-      // Record but do nothing — the state has already been written via transition().
+    patchProcessState((t) => {
       (pipeline as unknown as { stateDispatches: DevTask[] }).stateDispatches.push(t);
-    };
-    restoreProcessState = () => {
-      proto.processState = _origProcessState;
-    };
+    });
     return { pipeline, notifyCalls };
   }
-
-  beforeEach(() => {
-    if (restoreProcessState) {
-      restoreProcessState();
-      restoreProcessState = null;
-    }
-  });
 
   test('missing worktree_path throws', async () => {
     const { pipeline } = testable();
