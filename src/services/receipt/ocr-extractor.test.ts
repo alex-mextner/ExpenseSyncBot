@@ -5,12 +5,7 @@
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import path from 'node:path';
-import {
-  mockFetchError,
-  mockFetchJson,
-  mockFetchText,
-  restoreFetch,
-} from '../../test-utils/mocks/fetch';
+import { mockFetchError, mockFetchJson, restoreFetch } from '../../test-utils/mocks/fetch';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -82,7 +77,18 @@ describe('extractTextFromImage', () => {
   it('throws when HuggingFace API returns 503 service unavailable', async () => {
     const { extractTextFromImage } = await import('./ocr-extractor');
 
-    mockFetchText('Service Unavailable', 503);
+    // HF Inference SDK v4 retries infinitely on 503 (unbounded recursion bug in
+    // utils/request.js — `return innerRequest(...)` with no attempt counter).
+    // A mock that returns 503 forever → infinite retry loop → 60+ GB memory
+    // growth and machine crash. First call returns 503 to exercise the retry
+    // path; subsequent calls throw so the retry terminates and our code sees
+    // the failure as expected.
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls++;
+      if (calls === 1) return new Response('Service Unavailable', { status: 503 });
+      throw new Error('simulated downstream failure after one 503');
+    }) as unknown as typeof fetch;
 
     const fakeBuffer = Buffer.from('fake-image-data');
     await expect(extractTextFromImage(fakeBuffer)).rejects.toThrow();

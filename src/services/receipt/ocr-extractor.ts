@@ -17,7 +17,7 @@ export function startTempImageCleanup(): void {
   const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
   const MAX_AGE = 5 * 60 * 1000; // 5 minutes
 
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     try {
       const tempDir = path.join(process.cwd(), 'temp-images');
 
@@ -53,6 +53,11 @@ export function startTempImageCleanup(): void {
       logger.error({ err: error }, '[OCR_CLEANUP] Error during cleanup');
     }
   }, CLEANUP_INTERVAL);
+
+  // Don't block the event loop from shutting down on this interval.
+  // Prod: process.exit is the terminator; tests: spec files can finish
+  // cleanly without hanging forever on the 5-minute timer.
+  timer.unref?.();
 
   logger.info('[OCR_CLEANUP] Started periodic temp image cleanup (every 5 minutes)');
 }
