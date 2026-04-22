@@ -245,7 +245,9 @@ describe('formatSummaryMessage', () => {
       expect(msg).not.toContain('еще');
     });
 
-    it('truncates to 3 items and shows "и еще N позиций" for more than 3', () => {
+    it('truncates to 3 items and shows "и ещё N позиций" for more than 5 (N+2 rule)', () => {
+      // N+2 rule: only truncate when ≥3 items would be hidden. So 4/5 items: show all.
+      // 6 items: show 3, hide 3.
       const summary: ReceiptSummary = {
         categories: [
           {
@@ -256,14 +258,38 @@ describe('formatSummaryMessage', () => {
               { name: 'Item3', total: 3 },
               { name: 'Item4', total: 4 },
               { name: 'Item5', total: 5 },
+              { name: 'Item6', total: 6 },
             ],
           },
         ],
-        totalAmount: 15,
+        totalAmount: 21,
         currency: 'EUR',
       };
-      const msg = formatSummaryMessage(summary, 5);
-      expect(msg).toContain('еще 2');
+      const msg = formatSummaryMessage(summary, 6);
+      expect(msg).toContain('ещё 3');
+      expect(msg).toContain('позиции');
+    });
+
+    it('shows all 4 items without truncation (N+2 rule: remainder < 3)', () => {
+      const summary: ReceiptSummary = {
+        categories: [
+          {
+            name: 'Cat',
+            items: [
+              { name: 'A', total: 1 },
+              { name: 'B', total: 2 },
+              { name: 'C', total: 3 },
+              { name: 'D', total: 4 },
+            ],
+          },
+        ],
+        totalAmount: 10,
+        currency: 'EUR',
+      };
+      const msg = formatSummaryMessage(summary, 4);
+      expect(msg).toContain('A, B, C, D');
+      expect(msg).not.toContain('ещё');
+      expect(msg).not.toContain('еще');
     });
   });
 
@@ -522,7 +548,7 @@ describe('formatSummaryMessage — truncation, pluralization, HTML', () => {
     expect(msg).not.toContain('еще');
   });
 
-  it('shows "еще 1" for 4 items (captures current behavior — violates N+2 rule)', () => {
+  it('shows all 4 items without truncation (N+2 rule: remainder < 3)', () => {
     const summary: ReceiptSummary = {
       categories: [
         {
@@ -539,9 +565,9 @@ describe('formatSummaryMessage — truncation, pluralization, HTML', () => {
       currency: 'EUR',
     };
     const msg = formatSummaryMessage(summary, 4);
-    // NOTE: currently shows "и еще 1 позиций" — violates N+2 rule in CLAUDE.md.
-    // Should show all 4 when remainder is < 3. This test captures current behavior.
-    expect(msg).toContain('еще 1');
+    // N+2: hiding 1 item is noise. Show all four.
+    expect(msg).toContain('A, B, C, D');
+    expect(msg).not.toMatch(/ещё? \d/);
   });
 
   it('renders all categories in order', () => {

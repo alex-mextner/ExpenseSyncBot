@@ -4,6 +4,7 @@ import type { ReceiptItem } from '../../database/types';
 import { formatAmount } from '../../services/currency/converter';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
 
 const logger = createLogger('receipt-summarizer');
@@ -115,22 +116,25 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
  * Format summary for Telegram message
  */
 export function formatSummaryMessage(summary: ReceiptSummary, itemCount: number): string {
-  let message = `🧾 <b>Распознан чек (${itemCount} позиций):</b>\n\n`;
+  const itemsWord = pluralize(itemCount, 'позиция', 'позиции', 'позиций');
+  let message = `🧾 <b>Распознан чек (${itemCount} ${itemsWord}):</b>\n\n`;
 
   for (const category of summary.categories) {
     const emoji = getCategoryEmoji(category.name);
     const itemNames = category.items.map((i) => i.name);
 
-    // Show max 3 items, then "и еще X позиций"
+    // N+2 truncation rule: hide remainder only when ≥3 items would be hidden.
     const maxShow = 3;
     let itemsText: string;
 
-    if (itemNames.length <= maxShow) {
+    if (itemNames.length <= maxShow + 2) {
+      // Show everything — hiding 1 or 2 items is pointless noise.
       itemsText = itemNames.join(', ');
     } else {
       const shown = itemNames.slice(0, maxShow).join(', ');
       const remaining = itemNames.length - maxShow;
-      itemsText = `${shown} и еще ${remaining} позиций`;
+      const word = pluralize(remaining, 'позиция', 'позиции', 'позиций');
+      itemsText = `${shown} и ещё ${remaining} ${word}`;
     }
 
     message += `${emoji} <b>${escapeHtml(category.name)}:</b> ${escapeHtml(itemsText)}\n`;
