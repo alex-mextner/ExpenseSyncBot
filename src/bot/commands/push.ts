@@ -19,13 +19,18 @@ function makeExpenseKey(date: string, category: string, amount: number, currency
 }
 
 /**
- * Extract key from SheetRow (uses first currency found)
+ * Extract key from SheetRow. Sheet rows are always single-currency here —
+ * multi-currency rows are surfaced via `errors` before this runs. To avoid
+ * relying on `Object.entries` iteration order (which is unspecified for
+ * numeric-like keys), sort the currencies alphabetically and take the first.
  */
 function makeSheetRowKey(row: SheetRow): string | null {
-  for (const [currency, amount] of Object.entries(row.amounts)) {
-    return makeExpenseKey(row.date, row.category, amount, currency);
-  }
-  return null;
+  const currencies = Object.keys(row.amounts).sort();
+  const currency = currencies[0];
+  if (!currency) return null;
+  const amount = row.amounts[currency];
+  if (amount === undefined) return null;
+  return makeExpenseKey(row.date, row.category, amount, currency);
 }
 
 /**
