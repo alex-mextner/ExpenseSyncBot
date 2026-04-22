@@ -63,7 +63,7 @@ ${input.advice.substring(0, 2000)}`;
     const text = result.text.trim();
     logger.info(`[ADVICE-VALIDATOR] Result: ${text} (via ${result.providerUsed})`);
 
-    if (text.startsWith('APPROVE')) {
+    if (/^APPROVE\b/.test(text)) {
       return { approved: true };
     }
 
