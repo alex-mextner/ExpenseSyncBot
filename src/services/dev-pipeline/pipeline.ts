@@ -200,6 +200,13 @@ export class DevPipeline {
    * Run a shell command in a working directory. Overridable in tests so the
    * TESTING stage (tsc + bun test) can be exercised without spawning real
    * subprocesses. `nothrow` is implicit — callers inspect `exitCode`.
+   *
+   * ⚠️ SECURITY: `command` is interpolated via Bun Shell's `{ raw }` escape
+   * hatch, which **bypasses shell escaping**. Callers MUST pass only
+   * hard-coded literal strings (e.g. `'bun x tsc --noEmit'`). Never pass
+   * task fields, user input, or any value derived from them — that is a
+   * shell-injection vector. `cwd` IS escaped by Bun Shell's normal
+   * interpolation and is safe.
    */
   protected async runShell(cwd: string, command: string): Promise<ShellResult> {
     const result = await $`cd ${cwd} && ${{ raw: command }}`.nothrow().quiet();
