@@ -176,6 +176,15 @@ function transition(
 }
 
 /**
+ * Shell command result — mirrors the subset of Bun.$ output we actually consume.
+ */
+export interface ShellResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
  * Dev Pipeline class — manages the full lifecycle of dev tasks.
  */
 export class DevPipeline {
@@ -185,6 +194,27 @@ export class DevPipeline {
 
   constructor(notify: NotifyCallback) {
     this.notify = notify;
+  }
+
+  /**
+   * Run a shell command in a working directory. Overridable in tests so the
+   * TESTING stage (tsc + bun test) can be exercised without spawning real
+   * subprocesses. `nothrow` is implicit — callers inspect `exitCode`.
+   *
+   * ⚠️ SECURITY: `command` is interpolated via Bun Shell's `{ raw }` escape
+   * hatch, which **bypasses shell escaping**. Callers MUST pass only
+   * hard-coded literal strings (e.g. `'bun x tsc --noEmit'`). Never pass
+   * task fields, user input, or any value derived from them — that is a
+   * shell-injection vector. `cwd` IS escaped by Bun Shell's normal
+   * interpolation and is safe.
+   */
+  protected async runShell(cwd: string, command: string): Promise<ShellResult> {
+    const result = await $`cd ${cwd} && ${{ raw: command }}`.nothrow().quiet();
+    return {
+      exitCode: result.exitCode,
+      stdout: result.text().trim(),
+      stderr: result.stderr.toString().trim(),
+    };
   }
 
   /**
@@ -960,23 +990,17 @@ WORKFLOW:
 
     // Run type check — tsc writes errors to stdout
     // NOTE: Bun Shell does not support 2>&1 — always read both streams
-    const typeCheckResult = await $`cd ${task.worktree_path} && bun x tsc --noEmit`
-      .nothrow()
-      .quiet();
+    const typeCheckResult = await this.runShell(task.worktree_path, 'bun x tsc --noEmit');
     const typeCheckExitCode = typeCheckResult.exitCode;
     const tscOOM = typeCheckExitCode === 137;
     const typeCheckPassed = typeCheckExitCode === 0 || tscOOM; // OOM is not a type error
-    const tscStdout = typeCheckResult.text().trim();
-    const tscStderr = typeCheckResult.stderr.toString().trim();
     typeCheckOutput = tscOOM
       ? 'tsc killed by OOM (exit 137) — not enough server memory, skipped'
-      : [tscStdout, tscStderr].filter(Boolean).join('\n');
+      : [typeCheckResult.stdout, typeCheckResult.stderr].filter(Boolean).join('\n');
 
     // Run tests — bun test writes header to stdout but results/errors to stderr
-    const testsResult = await $`cd ${task.worktree_path} && bun test`.nothrow().quiet();
-    const testsStdout = testsResult.text().trim();
-    const testsStderr = testsResult.stderr.toString().trim();
-    testsOutput = [testsStdout, testsStderr].filter(Boolean).join('\n');
+    const testsResult = await this.runShell(task.worktree_path, 'bun test');
+    testsOutput = [testsResult.stdout, testsResult.stderr].filter(Boolean).join('\n');
     const testExitCode = testsResult.exitCode;
     const testsPassed = testExitCode === 0;
 

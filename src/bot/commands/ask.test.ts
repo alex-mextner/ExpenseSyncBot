@@ -17,18 +17,21 @@ mock.module('../../utils/logger.ts', () => ({
 
 // ── Database ────────────────────────────────────────────────────────────
 const mockGroups = {
-  findById: mock(() => ({
-    id: 1,
-    telegram_group_id: -1000,
-    default_currency: 'EUR',
-    custom_prompt: null,
-    active_topic_id: null,
-  })),
+  findById: mock<(_id: number) => import('../../database/types').Group | null>(
+    () =>
+      ({
+        id: 1,
+        telegram_group_id: -1000,
+        default_currency: 'EUR',
+        custom_prompt: null,
+        active_topic_id: null,
+      }) as unknown as import('../../database/types').Group,
+  ),
 };
 
 const mockAdviceLogs = {
   getRecentTopics: mock(() => [] as string[]),
-  create: mock(() => undefined),
+  create: mock((_data: Record<string, unknown>) => undefined),
 };
 
 // formatSnapshotForPrompt (real) touches several repos — return empty
@@ -111,6 +114,22 @@ mock.module('../../services/receipt/status-writer', () => ({
 // Advice validator — always approve so these tests focus on streaming safety, not validation.
 mock.module('../../services/ai/advice-validator', () => ({
   validateAdvice: mock(async () => ({ approved: true })),
+}));
+
+// Advice triggers — mockable per test. checkSmartTriggers is imported statically
+// by ask.ts, so we must mock the module BEFORE dynamic-import below.
+const checkSmartTriggersMock = mock<
+  (
+    groupId: number,
+    snapshot: unknown,
+  ) => import('../../services/analytics/types').TriggerResult | null
+>(() => null);
+const recordAdviceSentMock = mock<(groupId: number, tier: string) => void>(() => {});
+mock.module('../../services/analytics/advice-triggers', () => ({
+  checkSmartTriggers: checkSmartTriggersMock,
+  recordAdviceSent: recordAdviceSentMock,
+  checkDailyAdvice: mock(() => null),
+  checkWeeklyAdvice: mock(() => null),
 }));
 
 // ── telegram-sender (used on finalize-error fallback) ───────────────────
@@ -249,3 +268,236 @@ describe('handleAdviceCommand — stream abort safety', () => {
     expect(logMock.error).toHaveBeenCalled();
   });
 });
+
+// Load the validator module handle so we can swap the stub per-test.
+const validatorModule = await import('../../services/ai/advice-validator');
+
+describe('handleAdviceCommand — validation and logging', () => {
+  beforeEach(() => {
+    mockAiStreamRound.mockReset();
+    mockSendMessage.mockClear();
+    mockAdviceLogs.create.mockClear();
+    writerCalls.appended.length = 0;
+    writerCalls.finalized.length = 0;
+    writerCalls.finalizedErrors.length = 0;
+    writerCalls.closed = 0;
+    logMock.error.mockReset();
+    logMock.warn.mockReset();
+    logMock.info.mockReset();
+    // Default: validator approves
+    (validatorModule.validateAdvice as ReturnType<typeof mock>).mockImplementation(async () => ({
+      approved: true,
+    }));
+  });
+
+  test('records advice to adviceLogs on success', async () => {
+    successfulStream(['Совет: не трать больше']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    expect(mockAdviceLogs.create).toHaveBeenCalledTimes(1);
+    const logArg = mockAdviceLogs.create.mock.calls[0]?.[0] as {
+      group_id: number;
+      tier: string;
+      advice_text: string;
+    };
+    expect(logArg.group_id).toBe(1);
+    expect(logArg.tier).toBe('deep');
+    expect(logArg.advice_text).toContain('Совет');
+  });
+
+  test('does NOT record advice when validator rejects', async () => {
+    successfulStream(['hallucinated text']);
+    (validatorModule.validateAdvice as ReturnType<typeof mock>).mockImplementation(async () => ({
+      approved: false,
+      reason: 'generic filler',
+    }));
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    expect(mockAdviceLogs.create).not.toHaveBeenCalled();
+    // Writer is closed without finalize (streamed placeholder is deleted)
+    expect(writerCalls.finalized).toHaveLength(0);
+    expect(writerCalls.closed).toBeGreaterThanOrEqual(1);
+    expect(logMock.warn).toHaveBeenCalled();
+  });
+
+  test('empty advice text (<10 chars after sanitize) short-circuits', async () => {
+    successfulStream(['', '']); // empty stream
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    // No finalize, no advice log entry
+    expect(writerCalls.finalized).toHaveLength(0);
+    expect(mockAdviceLogs.create).not.toHaveBeenCalled();
+  });
+
+  test('strips <think>...</think> blocks from the final message', async () => {
+    successfulStream(['<think>internal reasoning here</think>\n\nFinal advice: ', 'do better']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    expect(writerCalls.finalized).toHaveLength(1);
+    const final = writerCalls.finalized[0] ?? '';
+    expect(final).not.toContain('internal reasoning here');
+    expect(final).not.toContain('<think>');
+    expect(final).toContain('Final advice');
+  });
+
+  test('deep tier header contains "Финансовый обзор"', async () => {
+    // Advice body must be ≥10 chars or ask.ts short-circuits before finalize
+    successfulStream(['Вот финансовая сводка по группе.']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    const final = writerCalls.finalized[0] ?? '';
+    expect(final).toContain('Финансовый обзор');
+    expect(final).toContain('📊');
+  });
+
+  test('custom_prompt appended to base prompt', async () => {
+    successfulStream(['ok']);
+    const groupWithPrompt = {
+      id: 1,
+      telegram_group_id: -1000,
+      default_currency: 'EUR',
+      custom_prompt: 'Speak like a pirate',
+      active_topic_id: null,
+    } as unknown as import('../../database/types').Group;
+    mockGroups.findById.mockReturnValueOnce(groupWithPrompt);
+
+    await handleAdviceCommand(fakeCtx(), groupWithPrompt);
+
+    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
+    const userMsg = opts.messages[0]?.content;
+    const content = typeof userMsg === 'string' ? userMsg : '';
+    expect(content).toContain('КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ');
+    expect(content).toContain('Speak like a pirate');
+  });
+
+  test('no custom_prompt block when group.custom_prompt is null', async () => {
+    successfulStream(['ok']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
+    const content = typeof opts.messages[0]?.content === 'string' ? opts.messages[0].content : '';
+    expect(content).not.toContain('КАСТОМНЫЕ ИНСТРУКЦИИ ГРУППЫ');
+  });
+
+  // (Removed placeholder test: "falls back to plain sendMessage when finalize throws" —
+  // couldn't be implemented cleanly because ask.ts captures StatusWriter at module-init,
+  // so a per-test re-mock of './status-writer' has no effect. The fallback branch is
+  // reachable in practice when StubStatusWriter.finalize rejects — left for a future
+  // refactor that injects StatusWriter as a dependency.)
+
+  test('snapshot fetched exactly once per command call', async () => {
+    successfulStream(['ok']);
+    const spa = await import('../../services/analytics/spending-analytics');
+    (spa.spendingAnalytics.getFinancialSnapshot as ReturnType<typeof mock>).mockClear();
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    expect(spa.spendingAnalytics.getFinancialSnapshot).toHaveBeenCalledTimes(1);
+    expect(spa.spendingAnalytics.getFinancialSnapshot).toHaveBeenCalledWith(1);
+  });
+
+  test('logs "[ADVICE] Generating deep advice" on start', async () => {
+    successfulStream(['ok']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    const infoCalls = logMock.info.mock.calls.map((c) => JSON.stringify(c));
+    expect(infoCalls.some((c) => c.includes('Generating deep advice'))).toBe(true);
+  });
+
+  test('logs "Sent deep advice" on success', async () => {
+    successfulStream(['Вот финансовая сводка по группе с деталями.']);
+
+    await handleAdviceCommand(fakeCtx(), fakeGroup());
+
+    const infoCalls = logMock.info.mock.calls.map((c) => JSON.stringify(c));
+    expect(infoCalls.some((c) => c.includes('Sent deep advice'))).toBe(true);
+  });
+});
+
+// ── maybeSmartAdvice ────────────────────────────────────────────────────
+
+const { maybeSmartAdvice } = await import('./ask');
+
+describe('maybeSmartAdvice', () => {
+  beforeEach(() => {
+    mockAiStreamRound.mockClear();
+    mockAdviceLogs.create.mockClear();
+    writerCalls.appended.length = 0;
+    writerCalls.finalized.length = 0;
+    writerCalls.finalizedErrors.length = 0;
+    writerCalls.closed = 0;
+    logMock.error.mockReset();
+    logMock.warn.mockReset();
+    logMock.info.mockReset();
+  });
+
+  test('does nothing when checkSmartTriggers returns null', async () => {
+    const spy = spyOnChecker(null);
+    await maybeSmartAdvice(1);
+
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    expect(mockAdviceLogs.create).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  test('fires aiStreamRound when trigger is returned', async () => {
+    successfulStream(['quick insight']);
+    const spy = spyOnChecker({
+      type: 'budget_threshold',
+      tier: 'quick',
+      topic: 'budget_threshold:Food:warning',
+      data: { category: 'Food' },
+    });
+
+    await maybeSmartAdvice(1);
+
+    expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
+    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
+    // Quick tier uses 500 max tokens
+    expect(opts.maxTokens).toBe(500);
+    spy.mockRestore();
+  });
+
+  test('swallows errors (does not propagate)', async () => {
+    const spa = await import('../../services/analytics/spending-analytics');
+    (spa.spendingAnalytics.getFinancialSnapshot as ReturnType<typeof mock>).mockImplementationOnce(
+      () => {
+        throw new Error('DB down');
+      },
+    );
+
+    await expect(maybeSmartAdvice(1)).resolves.toBeUndefined();
+    expect(logMock.error).toHaveBeenCalled();
+  });
+
+  test('uses alert tier config (1000 max_tokens) when trigger.tier=alert', async () => {
+    successfulStream(['alert text']);
+    const spy = spyOnChecker({
+      type: 'budget_threshold',
+      tier: 'alert',
+      topic: 'budget_threshold:Food:exceeded',
+      data: { category: 'Food' },
+    });
+
+    await maybeSmartAdvice(1);
+
+    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
+    expect(opts.maxTokens).toBe(1000);
+    spy.mockRestore();
+  });
+});
+
+// helper: sets the mocked checkSmartTriggers return value for the next call
+function spyOnChecker(returnValue: import('../../services/analytics/types').TriggerResult | null): {
+  mockRestore: () => void;
+} {
+  checkSmartTriggersMock.mockImplementationOnce(() => returnValue);
+  return { mockRestore: () => {} };
+}

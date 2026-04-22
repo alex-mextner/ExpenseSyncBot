@@ -21,7 +21,8 @@ import { GroupRepository } from '../../database/repositories/group.repository';
 import { GroupSpreadsheetRepository } from '../../database/repositories/group-spreadsheet.repository';
 import { UserRepository } from '../../database/repositories/user.repository';
 import type { Group } from '../../database/types';
-import { MONTH_ABBREVS } from '../../services/google/month-abbr';
+import { MONTH_ABBREVS, type MonthAbbr } from '../../services/google/month-abbr';
+import type { AuditEntry, RecreateResult } from '../../services/google/spreadsheet-repair';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
 import type { Ctx } from '../types';
 
@@ -37,6 +38,118 @@ mock.module('../../services/bank/telegram-sender', () => ({
   editMessageText: mock(() => Promise.resolve()),
   sendDirect: mock(() => Promise.resolve(null)),
   sendChatAction: mock(() => Promise.resolve()),
+}));
+
+// ── Mocks for fullSyncAfterReconnect dependencies ────────────────────────────
+// These are used by the describe blocks at the bottom of the file. Declared up
+// here so mock.module() applies before the dynamic import of ./reconnect.
+
+const auditAllYearsMock = mock(async (..._args: unknown[]): Promise<AuditEntry[]> => []);
+const recreateLostSpreadsheetsMock = mock(
+  async (..._args: unknown[]): Promise<RecreateResult[]> => [],
+);
+
+mock.module('../../services/google/spreadsheet-repair', () => ({
+  auditAllYears: auditAllYearsMock,
+  recreateLostSpreadsheets: recreateLostSpreadsheetsMock,
+}));
+
+const driveCopyMock = mock(async (_args: unknown) => ({ data: { id: 'BACKUP-ID' } }));
+const driveFilesListMock = mock(async (_args: unknown) => ({ data: { files: [] } }));
+const driveFilesUpdateMock = mock(async (_args: unknown) => ({ data: {} }));
+const sheetsSpreadsheetsGetMock = mock(async (_args: unknown) => ({ data: {} }));
+
+mock.module('googleapis', () => ({
+  google: {
+    sheets: () => ({
+      spreadsheets: {
+        get: sheetsSpreadsheetsGetMock,
+      },
+    }),
+    drive: () => ({
+      files: {
+        copy: driveCopyMock,
+        list: driveFilesListMock,
+        update: driveFilesUpdateMock,
+      },
+    }),
+  },
+}));
+
+const generateAuthUrlMock = mock((..._args: unknown[]) => 'https://fake-oauth-url');
+const getAuthenticatedClientMock = mock((..._args: unknown[]) => ({}));
+
+mock.module('../../services/google/oauth', () => ({
+  generateAuthUrl: generateAuthUrlMock,
+  getAuthenticatedClient: getAuthenticatedClientMock,
+  isTokenExpiredError: () => false,
+  encryptToken: (t: string) => t,
+  decryptToken: (t: string) => t,
+}));
+
+const createExpenseSpreadsheetMock = mock(async (..._args: unknown[]) => ({
+  spreadsheetId: 'NEW-SHEET',
+  spreadsheetUrl: 'https://docs.google.com/d/NEW-SHEET',
+}));
+const appendExpenseRowsMock = mock(async (..._args: unknown[]) => {});
+const readExpensesFromSheetMock = mock(async (..._args: unknown[]) => ({
+  expenses: [],
+  errors: [],
+  eurMismatches: [],
+}));
+const listMonthTabsMock = mock(async (..._args: unknown[]): Promise<MonthAbbr[]> => []);
+const createEmptyMonthTabMock = mock(async (..._args: unknown[]) => {});
+const readMonthBudgetMock = mock(
+  async (
+    ..._args: unknown[]
+  ): Promise<Array<{ category: string; limit: number; currency: CurrencyCode }>> => [],
+);
+const writeMonthBudgetRowMock = mock(async (..._args: unknown[]) => {});
+
+mock.module('../../services/google/sheets', () => ({
+  createExpenseSpreadsheet: createExpenseSpreadsheetMock,
+  appendExpenseRows: appendExpenseRowsMock,
+  readExpensesFromSheet: readExpensesFromSheetMock,
+  listMonthTabs: listMonthTabsMock,
+  createEmptyMonthTab: createEmptyMonthTabMock,
+  readMonthBudget: readMonthBudgetMock,
+  writeMonthBudgetRow: writeMonthBudgetRowMock,
+  googleConn: (group: { google_refresh_token: string | null; oauth_client: string }) => ({
+    refreshToken: group.google_refresh_token ?? '',
+    oauthClient: group.oauth_client,
+  }),
+  withSheetsRetry: async <T>(fn: () => Promise<T>) => fn(),
+  isRateLimitError: () => false,
+}));
+
+const pushToSheetMock = mock(async (..._args: unknown[]) => {});
+
+mock.module('../../services/expense-recorder', () => ({
+  getExpenseRecorder: () => ({
+    pushToSheet: pushToSheetMock,
+  }),
+  buildAmountsRecord: () => ({}),
+}));
+
+const importFromSheetMock = mock((..._args: unknown[]) => ({}));
+
+mock.module('../../services/budget-manager', () => ({
+  getBudgetManager: () => ({
+    importFromSheet: importFromSheetMock,
+  }),
+}));
+
+mock.module('../../services/currency/converter', () => ({
+  getExchangeRate: () => 1,
+  convertToEUR: (x: number) => x,
+  convertCurrency: (x: number) => x,
+  formatAmount: (x: number, c: string) => `${x} ${c}`,
+}));
+
+const importExpensesFromSheetMock = mock(async (..._args: unknown[]): Promise<number> => 0);
+
+mock.module('./sync', () => ({
+  importExpensesFromSheet: importExpensesFromSheetMock,
 }));
 
 const { handleReconnectCommand } = await import('./reconnect');
