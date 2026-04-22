@@ -90,6 +90,17 @@ export function buildSummaryFromItems(items: ReceiptItem[]): ReceiptSummary {
     byCategory.get(cat)?.push(item);
   }
 
+  // If the receipt contains mixed currencies, summing `total` blindly is wrong.
+  // Warn so the caller can investigate — the summary still uses items[0].currency
+  // for display (most receipts are single-currency; mixed is a data-quality issue).
+  const currencies = new Set(items.map((i) => i.currency).filter((c) => !!c));
+  if (currencies.size > 1) {
+    logger.warn(
+      { currencies: Array.from(currencies) },
+      '[SUMMARY] Receipt has mixed currencies — total may be incorrect',
+    );
+  }
+
   return {
     categories: Array.from(byCategory.entries()).map(([name, catItems]) => ({
       name,
