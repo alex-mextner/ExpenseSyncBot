@@ -73,7 +73,8 @@ export function buildBankManageKeyboard(conn: BankConnection, expanded = false):
 }
 
 export function timeSince(isoDate: string): string {
-  const diff = Date.now() - new Date(isoDate).getTime();
+  // Clock drift / bad inputs → clamp to 0 to avoid "-10 мин" display.
+  const diff = Math.max(0, Date.now() - new Date(isoDate).getTime());
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins} мин`;
   return `${Math.floor(mins / 60)} ч`;
