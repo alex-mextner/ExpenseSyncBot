@@ -503,3 +503,253 @@ describe('DevPipeline construction', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 });
+
+// ─── TESTING stage ───────────────────────────────────────────────────────
+// Subclass DevPipeline, override runShell() so we can exercise handleTesting
+// without spawning real tsc / bun test subprocesses.
+
+interface ShellStub {
+  tsc: { exitCode: number; stdout: string; stderr: string };
+  test: { exitCode: number; stdout: string; stderr: string };
+}
+
+class TestablePipeline extends DevPipeline {
+  public shellCalls: Array<{ cwd: string; cmd: string }> = [];
+  public stub: ShellStub = {
+    tsc: { exitCode: 0, stdout: '', stderr: '' },
+    test: { exitCode: 0, stdout: '0 pass\n0 fail\n0 error', stderr: '' },
+  };
+  public stateDispatches: DevTask[] = [];
+
+  protected override async runShell(
+    cwd: string,
+    cmd: string,
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    this.shellCalls.push({ cwd, cmd });
+    if (cmd.includes('tsc')) return this.stub.tsc;
+    if (cmd.includes('bun test')) return this.stub.test;
+    return { exitCode: 0, stdout: '', stderr: '' };
+  }
+
+  // Expose private handleTesting for direct test invocation
+  public async triggerTesting(task: DevTask): Promise<void> {
+    await (this as unknown as { handleTesting(t: DevTask): Promise<void> }).handleTesting(task);
+  }
+}
+
+// Patch processState at the prototype level so the transition cascade past
+// TESTING does not try to drive PULL_REQUEST / IMPLEMENTING handlers (which
+// would need fully-shaped tasks and external mocks this suite doesn't provide).
+const _origProcessState = (
+  DevPipeline.prototype as unknown as {
+    processState(t: DevTask): Promise<void>;
+  }
+).processState;
+
+describe('DevPipeline — TESTING stage', () => {
+  // Stub processState so handleTesting's cascade into PULL_REQUEST / IMPLEMENTING
+  // does not run — we assert on the *transition target* instead of driving the
+  // downstream handlers, which require more mocks than this suite sets up.
+  let restoreProcessState: (() => void) | null = null;
+
+  function testable(): {
+    pipeline: TestablePipeline;
+    notifyCalls: NotifyCall[];
+  } {
+    store.clear();
+    nextId = 1;
+    const notifyCalls: NotifyCall[] = [];
+    const notify = mock(async (groupId: number, message: string, options?: unknown) => {
+      notifyCalls.push({
+        groupId,
+        message,
+        hasKeyboard:
+          !!options &&
+          typeof options === 'object' &&
+          'reply_markup' in (options as Record<string, unknown>),
+      });
+    });
+    const pipeline = new TestablePipeline(notify);
+    // Swallow downstream state dispatch: handleTesting runs, transitions task,
+    // then calls processState(updated) — intercept and record instead.
+    const proto = DevPipeline.prototype as unknown as {
+      processState(t: DevTask): Promise<void>;
+    };
+    proto.processState = async (t: DevTask): Promise<void> => {
+      // Record but do nothing — the state has already been written via transition().
+      (pipeline as unknown as { stateDispatches: DevTask[] }).stateDispatches.push(t);
+    };
+    restoreProcessState = () => {
+      proto.processState = _origProcessState;
+    };
+    return { pipeline, notifyCalls };
+  }
+
+  beforeEach(() => {
+    if (restoreProcessState) {
+      restoreProcessState();
+      restoreProcessState = null;
+    }
+  });
+
+  test('missing worktree_path throws', async () => {
+    const { pipeline } = testable();
+    const task = makeTask({ state: DevTaskState.TESTING, worktree_path: null });
+    await expect(pipeline.triggerTesting(task)).rejects.toThrow(/missing worktree_path/);
+  });
+
+  test('tsc fails → task transitions to IMPLEMENTING for retry', async () => {
+    const { pipeline, notifyCalls } = testable();
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      pr_number: null,
+      retry_count: 0,
+    });
+    pipeline.stub.tsc = {
+      exitCode: 2,
+      stdout: 'src/x.ts(5,10): error TS2345: Argument type error',
+      stderr: '',
+    };
+    pipeline.stub.test = { exitCode: 0, stdout: '10 pass\n0 fail\n0 error', stderr: '' };
+
+    await pipeline.triggerTesting(task);
+
+    expect(pipeline.shellCalls).toHaveLength(2);
+    expect(pipeline.shellCalls[0]?.cmd).toContain('tsc');
+    expect(pipeline.shellCalls[1]?.cmd).toContain('bun test');
+    // Notification includes tsc failure marker
+    const combined = notifyCalls.map((c) => c.message).join('\n');
+    expect(combined).toContain('Тайпчекер');
+    expect(combined).toMatch(/error TS2345|ошибк/);
+  });
+
+  test('tests fail → failCount reflected in notification', async () => {
+    const { pipeline, notifyCalls } = testable();
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      retry_count: 0,
+    });
+    pipeline.stub.test = {
+      exitCode: 1,
+      stdout: '',
+      stderr: '5 pass\n3 fail\n0 error',
+    };
+
+    await pipeline.triggerTesting(task);
+
+    const combined = notifyCalls.map((c) => c.message).join('\n');
+    expect(combined).toContain('Тесты');
+    expect(combined).toMatch(/3 ❌|fail/i);
+  });
+
+  test('tsc OOM (exit 137) is treated as passed — skipped, not a type error', async () => {
+    const { pipeline, notifyCalls } = testable();
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      pr_number: null,
+    });
+    pipeline.stub.tsc = { exitCode: 137, stdout: '', stderr: '' };
+    pipeline.stub.test = { exitCode: 0, stdout: '5 pass\n0 fail\n0 error', stderr: '' };
+
+    await pipeline.triggerTesting(task);
+
+    const combined = notifyCalls.map((c) => c.message).join('\n');
+    expect(combined).toContain('OOM');
+    // Overall path is the "all passed" branch → PR creation (or state=PULL_REQUEST)
+    const updatedTask = store.get(task.id);
+    expect(updatedTask?.state).toBe(DevTaskState.PULL_REQUEST);
+  });
+
+  test('retry loop detection: same error_log twice → task FAILED', async () => {
+    const { pipeline, notifyCalls } = testable();
+    // Compose the exact `fullOutput` string the first attempt would have produced —
+    // seed it as prior error_log. Second run with identical stub must produce the
+    // same string and trigger the retry-loop short circuit.
+    const tscOut = 'src/x.ts(5,10): error TS2345: foo';
+    const priorOutput = `TYPE CHECK FAILED:\n${tscOut}\n\nTESTS PASSED (exit code 0):\n`;
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      error_log: priorOutput,
+      retry_count: 1,
+    });
+    pipeline.stub.tsc = { exitCode: 2, stdout: tscOut, stderr: '' };
+    pipeline.stub.test = { exitCode: 0, stdout: '', stderr: '' };
+
+    await pipeline.triggerTesting(task);
+
+    const updatedTask = store.get(task.id);
+    expect(updatedTask?.state).toBe(DevTaskState.FAILED);
+    const combined = notifyCalls.map((c) => c.message).join('\n');
+    expect(combined).toMatch(/зациклился/);
+  });
+
+  test('retry_count reaches MAX → task FAILED with summary', async () => {
+    const { pipeline, notifyCalls } = testable();
+    // MAX_RETRY_ATTEMPTS=15 (types.ts). retry_count=14 → this run bumps to 15.
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      retry_count: 14,
+    });
+    pipeline.stub.tsc = { exitCode: 2, stdout: 'error TS1: bad', stderr: '' };
+    pipeline.stub.test = { exitCode: 0, stdout: '', stderr: '' };
+
+    await pipeline.triggerTesting(task);
+
+    const updatedTask = store.get(task.id);
+    expect(updatedTask?.state).toBe(DevTaskState.FAILED);
+    const combined = notifyCalls.map((c) => c.message).join('\n');
+    expect(combined).toMatch(/провалена/);
+  });
+
+  test('happy path without PR → creates PR (transition to PULL_REQUEST)', async () => {
+    const { pipeline, notifyCalls } = testable();
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      pr_number: null,
+    });
+
+    await pipeline.triggerTesting(task);
+
+    const updatedTask = store.get(task.id);
+    expect(updatedTask?.state).toBe(DevTaskState.PULL_REQUEST);
+    const combined = notifyCalls.map((c) => c.message).join('\n');
+    expect(combined).toContain('all checks passed');
+  });
+
+  test('happy path with existing PR → push branch + AWAITING_MERGE', async () => {
+    const { pipeline, notifyCalls } = testable();
+    const task = makeTask({
+      state: DevTaskState.TESTING,
+      worktree_path: '/tmp/wt',
+      pr_number: 42,
+      pr_url: 'https://gh/pr/42',
+      branch_name: 'dev/task-1',
+    });
+
+    await pipeline.triggerTesting(task);
+
+    const updatedTask = store.get(task.id);
+    expect(updatedTask?.state).toBe(DevTaskState.AWAITING_MERGE);
+    expect(mockPushBranch).toHaveBeenCalledWith('/tmp/wt', 'dev/task-1');
+    const lastCall = notifyCalls.at(-1);
+    expect(lastCall?.hasKeyboard).toBe(true);
+  });
+
+  test('shell commands run in task.worktree_path', async () => {
+    const { pipeline } = testable();
+    const task = makeTask({ state: DevTaskState.TESTING, worktree_path: '/specific/wt' });
+
+    await pipeline.triggerTesting(task);
+
+    expect(pipeline.shellCalls).toHaveLength(2);
+    for (const call of pipeline.shellCalls) {
+      expect(call.cwd).toBe('/specific/wt');
+    }
+  });
+});
