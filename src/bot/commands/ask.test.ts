@@ -429,6 +429,7 @@ describe('maybeSmartAdvice', () => {
   beforeEach(() => {
     mockAiStreamRound.mockClear();
     mockAdviceLogs.create.mockClear();
+    recordAdviceSentMock.mockClear();
     writerCalls.appended.length = 0;
     writerCalls.finalized.length = 0;
     writerCalls.finalizedErrors.length = 0;
@@ -447,21 +448,43 @@ describe('maybeSmartAdvice', () => {
     spy.mockRestore();
   });
 
-  test('fires aiStreamRound when trigger is returned', async () => {
-    successfulStream(['quick insight']);
-    const spy = spyOnChecker({
-      type: 'budget_threshold',
-      tier: 'quick',
+  test('logs suppressed advice and persists cooldown when trigger fires', async () => {
+    const trigger = {
+      type: 'budget_threshold' as const,
+      tier: 'quick' as const,
       topic: 'budget_threshold:Food:warning',
       data: { category: 'Food' },
-    });
+    };
+    const spy = spyOnChecker(trigger);
 
     await maybeSmartAdvice(1);
 
-    expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
-    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
-    // Quick tier uses 500 max tokens
-    expect(opts.maxTokens).toBe(500);
+    // Auto-advice must NOT hit the AI provider or Telegram.
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+
+    // Trigger, severity, and context snapshot are logged for offline review.
+    const suppressedLog = logMock.info.mock.calls.find((c) =>
+      JSON.stringify(c).includes('Auto-advice suppressed'),
+    );
+    expect(suppressedLog).toBeDefined();
+    const [logPayload] = suppressedLog as [Record<string, unknown>, string];
+    expect(logPayload).toMatchObject({
+      groupId: 1,
+      trigger: { type: 'budget_threshold', tier: 'quick', topic: trigger.topic },
+    });
+    expect(typeof logPayload['context']).toBe('string');
+
+    // Cooldown is recorded so the same topic is not re-logged on every call.
+    expect(recordAdviceSentMock).toHaveBeenCalledWith(1, 'quick');
+    expect(mockAdviceLogs.create).toHaveBeenCalledTimes(1);
+    const createArg = mockAdviceLogs.create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createArg).toMatchObject({
+      group_id: 1,
+      tier: 'quick',
+      trigger_type: 'budget_threshold',
+      topic: trigger.topic,
+      advice_text: '[auto-advice suppressed]',
+    });
     spy.mockRestore();
   });
 
@@ -477,8 +500,7 @@ describe('maybeSmartAdvice', () => {
     expect(logMock.error).toHaveBeenCalled();
   });
 
-  test('uses alert tier config (1000 max_tokens) when trigger.tier=alert', async () => {
-    successfulStream(['alert text']);
+  test('persists the trigger tier verbatim for alert triggers', async () => {
     const spy = spyOnChecker({
       type: 'budget_threshold',
       tier: 'alert',
@@ -488,8 +510,10 @@ describe('maybeSmartAdvice', () => {
 
     await maybeSmartAdvice(1);
 
-    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
-    expect(opts.maxTokens).toBe(1000);
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    expect(recordAdviceSentMock).toHaveBeenCalledWith(1, 'alert');
+    const createArg = mockAdviceLogs.create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createArg?.['tier']).toBe('alert');
     spy.mockRestore();
   });
 });
