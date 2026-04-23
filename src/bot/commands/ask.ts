@@ -212,7 +212,9 @@ export async function handleAdviceCommand(ctx: Ctx['Command'], group: Group): Pr
 }
 
 /**
- * Check smart triggers and maybe send advice
+ * Check smart triggers. Auto-advice is disabled — we log the trigger and its
+ * context (expenses, budgets, anomalies) instead of sending to chat.
+ * Manual /advice (tier: 'deep') still works via handleAdviceCommand → sendSmartAdvice.
  */
 export async function maybeSmartAdvice(groupId: number): Promise<void> {
   try {
@@ -221,10 +223,36 @@ export async function maybeSmartAdvice(groupId: number): Promise<void> {
 
     if (!trigger) return;
 
+    const group = database.groups.findById(groupId);
+    const displayCurrency = group?.default_currency ?? BASE_CURRENCY;
+    const snapshotText = formatSnapshotForPrompt(snapshot, groupId, displayCurrency);
+    const severity = computeOverallSeverity(snapshot);
+
     logger.info(
-      `[ADVICE] Smart trigger fired: ${trigger.type} (tier: ${trigger.tier}) for group ${groupId}`,
+      {
+        groupId,
+        trigger: {
+          type: trigger.type,
+          tier: trigger.tier,
+          topic: trigger.topic,
+          data: trigger.data,
+        },
+        severity,
+        context: snapshotText,
+      },
+      '[ADVICE] Auto-advice suppressed — trigger would have fired',
     );
-    await sendSmartAdvice(groupId, trigger, snapshot);
+
+    // Persist cooldowns so the same topic/tier is not re-logged every run.
+    recordAdviceSent(groupId, trigger.tier);
+    database.adviceLogs.create({
+      group_id: groupId,
+      tier: trigger.tier,
+      trigger_type: trigger.type,
+      trigger_data: JSON.stringify(trigger.data),
+      topic: trigger.topic,
+      advice_text: '[auto-advice suppressed]',
+    });
   } catch (error) {
     logger.error({ err: error }, '[ADVICE] Error in smart advice check');
   }
