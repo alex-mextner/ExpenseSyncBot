@@ -1,5 +1,6 @@
 /** Smart advice trigger logic — decides when to send proactive financial insights to groups */
 import { format, startOfMonth } from 'date-fns';
+import { env } from '../../config/env';
 import { database } from '../../database';
 import { computeOverallSeverity } from './formatters';
 import { spendingAnalytics } from './spending-analytics';
@@ -53,94 +54,100 @@ export function checkSmartTriggers(
 
   // Priority order: budget_threshold > anomaly > velocity_spike > weekly_check > first_expense_of_month
 
-  // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
-  for (const br of snap.burnRates) {
-    // Skip projection-based alerts (critical/warning) in the first 5 days —
-    // projections are too unreliable with so little data. Only fire if actually exceeded.
-    if (br.status !== 'exceeded' && br.days_elapsed < 5) continue;
+  // Tier-2 "⚠️ Финансовый алерт" messages (budget threshold, category anomaly,
+  // TA anomaly) are gated behind FINANCIAL_ALERTS_ENABLED. The flag defaults to
+  // off — the alert text is noisy and many groups don't want it. Quick-tier
+  // triggers below (velocity, weekly check, etc.) are unaffected.
+  if (env.FINANCIAL_ALERTS_ENABLED) {
+    // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
+    for (const br of snap.burnRates) {
+      // Skip projection-based alerts (critical/warning) in the first 5 days —
+      // projections are too unreliable with so little data. Only fire if actually exceeded.
+      if (br.status !== 'exceeded' && br.days_elapsed < 5) continue;
 
-    if (br.status === 'exceeded' && br.budget_limit > 0) {
-      const topic = `budget_threshold:${br.category}:exceeded`;
-      if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
-        if (canSendAdvice(groupId, 'alert')) {
-          return {
-            type: 'budget_threshold',
-            tier: 'alert',
-            topic,
-            data: {
-              category: br.category,
-              spent: br.spent,
-              limit: br.budget_limit,
-              currency: br.currency,
-            },
-          };
-        }
-      }
-    } else if (
-      (br.status === 'critical' || br.status === 'warning') &&
-      br.budget_limit > 0 &&
-      projectionConfident
-    ) {
-      const threshold = br.status === 'critical' ? '100' : '80';
-      const topic = `budget_threshold:${br.category}:${threshold}`;
-      if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
-        if (canSendAdvice(groupId, 'alert')) {
-          return {
-            type: 'budget_threshold',
-            tier: 'alert',
-            topic,
-            data: {
-              category: br.category,
-              projected: br.projected_total,
-              limit: br.budget_limit,
-              currency: br.currency,
-            },
-          };
-        }
-      }
-    }
-  }
-
-  // === Trigger 2: Category anomaly (> 1.5x average) ===
-  for (const anomaly of snap.anomalies) {
-    if (anomaly.severity === 'significant' || anomaly.severity === 'extreme') {
-      const topic = `anomaly:${anomaly.category}`;
-      if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
-        if (canSendAdvice(groupId, 'alert')) {
-          return {
-            type: 'anomaly',
-            tier: 'alert',
-            topic,
-            data: {
-              category: anomaly.category,
-              current: anomaly.current_month_total,
-              average: anomaly.avg_3_month,
-              ratio: anomaly.deviation_ratio,
-            },
-          };
-        }
-      }
-    }
-  }
-
-  // === Trigger 2b: TA anomaly (multi-method consensus) ===
-  if (snap.technicalAnalysis) {
-    for (const cat of snap.technicalAnalysis.categories) {
-      if (cat.anomaly.isAnomaly && cat.anomaly.anomalyCount >= 2) {
-        const topic = `ta_anomaly:${cat.category}`;
+      if (br.status === 'exceeded' && br.budget_limit > 0) {
+        const topic = `budget_threshold:${br.category}:exceeded`;
         if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
           if (canSendAdvice(groupId, 'alert')) {
             return {
-              type: 'ta_anomaly',
+              type: 'budget_threshold',
               tier: 'alert',
               topic,
               data: {
-                category: cat.category,
-                anomaly_count: cat.anomaly.anomalyCount,
-                z_score: cat.anomaly.zScore.zScore,
-                direction: cat.anomaly.zScore.direction,
+                category: br.category,
+                spent: br.spent,
+                limit: br.budget_limit,
+                currency: br.currency,
               },
             };
+          }
+        }
+      } else if (
+        (br.status === 'critical' || br.status === 'warning') &&
+        br.budget_limit > 0 &&
+        projectionConfident
+      ) {
+        const threshold = br.status === 'critical' ? '100' : '80';
+        const topic = `budget_threshold:${br.category}:${threshold}`;
+        if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+          if (canSendAdvice(groupId, 'alert')) {
+            return {
+              type: 'budget_threshold',
+              tier: 'alert',
+              topic,
+              data: {
+                category: br.category,
+                projected: br.projected_total,
+                limit: br.budget_limit,
+                currency: br.currency,
+              },
+            };
+          }
+        }
+      }
+    }
+
+    // === Trigger 2: Category anomaly (> 1.5x average) ===
+    for (const anomaly of snap.anomalies) {
+      if (anomaly.severity === 'significant' || anomaly.severity === 'extreme') {
+        const topic = `anomaly:${anomaly.category}`;
+        if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+          if (canSendAdvice(groupId, 'alert')) {
+            return {
+              type: 'anomaly',
+              tier: 'alert',
+              topic,
+              data: {
+                category: anomaly.category,
+                current: anomaly.current_month_total,
+                average: anomaly.avg_3_month,
+                ratio: anomaly.deviation_ratio,
+              },
+            };
+          }
+        }
+      }
+    }
+
+    // === Trigger 2b: TA anomaly (multi-method consensus) ===
+    if (snap.technicalAnalysis) {
+      for (const cat of snap.technicalAnalysis.categories) {
+        if (cat.anomaly.isAnomaly && cat.anomaly.anomalyCount >= 2) {
+          const topic = `ta_anomaly:${cat.category}`;
+          if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+            if (canSendAdvice(groupId, 'alert')) {
+              return {
+                type: 'ta_anomaly',
+                tier: 'alert',
+                topic,
+                data: {
+                  category: cat.category,
+                  anomaly_count: cat.anomaly.anomalyCount,
+                  z_score: cat.anomaly.zScore.zScore,
+                  direction: cat.anomaly.zScore.direction,
+                },
+              };
+            }
           }
         }
       }

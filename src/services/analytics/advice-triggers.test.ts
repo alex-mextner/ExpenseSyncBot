@@ -51,6 +51,11 @@ mock.module('../../database', () => ({
   }),
 }));
 
+// FINANCIAL_ALERTS_ENABLED defaults to false in production. Tier-1/2/2b alert
+// tests below assume alerts are on; we flip it in the gate-specific test block.
+const mockEnv: { FINANCIAL_ALERTS_ENABLED: boolean } = { FINANCIAL_ALERTS_ENABLED: true };
+mock.module('../../config/env', () => ({ env: mockEnv }));
+
 // Load real SpendingAnalytics with the mocked database so other test files
 // that run after this one can still get the real class from the module cache.
 const { SpendingAnalytics } = await import('./spending-analytics');
@@ -124,6 +129,10 @@ beforeEach(() => {
   mockExpenses.getCountForRange.mockImplementation(() => 0);
   mockBankConnections.findActiveByGroupId.mockImplementation(() => []);
   mockBankTransactions.findPendingByConnectionId.mockImplementation(() => []);
+
+  // Default: alerts on for the rest of the suite. Gate-specific tests below
+  // flip this to false explicitly.
+  mockEnv.FINANCIAL_ALERTS_ENABLED = true;
 
   // Clear cooldowns by recording a zeroed-out state:
   // Since cooldowns is a private Map, we can't clear it directly.
@@ -1119,5 +1128,91 @@ describe('ta_trend_change trigger', () => {
 
     const result = checkSmartTriggers(1, snapshot);
     expect(result === null || result.type !== 'ta_trend_change').toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// FINANCIAL_ALERTS_ENABLED gate — alert-tier triggers default to off
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('FINANCIAL_ALERTS_ENABLED gate', () => {
+  beforeEach(() => {
+    // Tuesday — silence weekly_check so a null result means "alert suppressed",
+    // not "weekly_check fired instead".
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    mockEnv.FINANCIAL_ALERTS_ENABLED = false;
+  });
+
+  test('budget exceeded does NOT fire when flag is off', () => {
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Food',
+          spent: 600,
+          budget_limit: 500,
+        }),
+      ],
+    });
+
+    expect(checkSmartTriggers(7001, snapshot)).toBeNull();
+  });
+
+  test('budget warning does NOT fire when flag is off', () => {
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Transport',
+          projected_total: 700,
+          budget_limit: 500,
+        }),
+      ],
+    });
+
+    expect(checkSmartTriggers(7002, snapshot)).toBeNull();
+  });
+
+  test('category anomaly does NOT fire when flag is off', () => {
+    const snapshot = buildTriggerSnapshot({
+      anomalies: [buildAnomaly({ severity: 'extreme' })],
+    });
+
+    expect(checkSmartTriggers(7003, snapshot)).toBeNull();
+  });
+
+  test('quick-tier triggers still fire when flag is off (velocity_spike)', () => {
+    const snapshot = buildTriggerSnapshot({
+      velocity: {
+        trend: 'accelerating',
+        acceleration: 75,
+        period_1_daily_avg: 20,
+        period_2_daily_avg: 35,
+      },
+    });
+
+    const result = checkSmartTriggers(7004, snapshot);
+    expect(result).not.toBeNull();
+    expect(result?.tier).toBe('quick');
+    expect(result?.type).toBe('velocity_spike');
+  });
+
+  test('budget exceeded fires when flag is flipped back on', () => {
+    mockEnv.FINANCIAL_ALERTS_ENABLED = true;
+
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Food',
+          spent: 600,
+          budget_limit: 500,
+        }),
+      ],
+    });
+
+    const result = checkSmartTriggers(7005, snapshot);
+    expect(result?.tier).toBe('alert');
+    expect(result?.type).toBe('budget_threshold');
   });
 });
