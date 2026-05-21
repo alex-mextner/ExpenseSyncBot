@@ -2,7 +2,7 @@
 // Note: uses in-memory SQLite — isFirstRun is always true, auth state does not persist between runs.
 import { Database } from 'bun:sqlite'
 import { createInterface } from 'node:readline'
-import { mkdirSync, createWriteStream } from 'node:fs'
+import { mkdirSync, appendFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createZenMoneyShim } from '../libs/zenmoney-shim'
 
@@ -73,12 +73,15 @@ const logDir = resolve(import.meta.dir, '../logs/zen-run')
 mkdirSync(logDir, { recursive: true })
 const logTs = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
 const logPath = resolve(logDir, `${pluginName}-${logTs}.log`)
-const logFile = createWriteStream(logPath, { flags: 'a' })
-const origStderrWrite = process.stderr.write.bind(process.stderr)
-process.stderr.write = (chunk: Parameters<typeof process.stderr.write>[0], ...args: Parameters<typeof process.stderr.write>[1 | 2][]) => {
-  logFile.write(chunk)
-  return origStderrWrite(chunk, ...(args as []))
-}
+// Bun's console.log/error don't flush through process.stderr.write reliably.
+// Use sync appendFileSync so every write lands before process exits.
+const serialize = (...args: unknown[]) => args.map(a => typeof a === 'string' ? a : Bun.inspect(a)).join(' ') + '\n'
+const _log = console.log.bind(console)
+const _err = console.error.bind(console)
+const writeLog = (line: string) => appendFileSync(logPath, line)
+console.log = (...args: unknown[]) => { writeLog(serialize(...args)); _log(...args) }
+console.error = (...args: unknown[]) => { writeLog(serialize(...args)); _err(...args) }
+
 console.error(`[zen-run] Log: ${logPath}`)
 
 // readline for OTP prompts
