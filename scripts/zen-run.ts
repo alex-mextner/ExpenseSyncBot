@@ -81,8 +81,9 @@ db.exec(`
 `)
 
 // Log file: logs/zen-run/<plugin>-<timestamp>.log
-// Intercept process.stdout.write + process.stderr.write — the only layer that reliably
-// catches output from dynamically imported bundles that bind console at parse time.
+// Intercept at every level: process streams + console methods.
+// console.debug (used by fetchJson for HTTP logs) bypasses process.stdout.write in Bun,
+// so we override it explicitly. appendFileSync is synchronous — every write lands immediately.
 const logDir = resolve(import.meta.dir, '../logs/zen-run')
 mkdirSync(logDir, { recursive: true })
 const logTs = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -91,6 +92,9 @@ const writeLog = (chunk: unknown) => {
   if (typeof chunk === 'string') appendFileSync(logPath, chunk)
   else if (chunk instanceof Uint8Array) appendFileSync(logPath, chunk)
 }
+const logArgs = (...args: unknown[]) =>
+  appendFileSync(logPath, args.map(a => (typeof a === 'string' ? a : Bun.inspect(a))).join(' ') + '\n')
+
 const _stdout = process.stdout.write.bind(process.stdout)
 const _stderr = process.stderr.write.bind(process.stderr)
 process.stdout.write = (chunk: Parameters<typeof process.stdout.write>[0], ...rest: Parameters<typeof process.stdout.write>[1 | 2][]) => {
@@ -99,6 +103,17 @@ process.stdout.write = (chunk: Parameters<typeof process.stdout.write>[0], ...re
 process.stderr.write = (chunk: Parameters<typeof process.stderr.write>[0], ...rest: Parameters<typeof process.stderr.write>[1 | 2][]) => {
   writeLog(chunk); return _stderr(chunk, ...(rest as []))
 }
+// Override console methods that Bun routes outside process.stdout.write
+const _clog = console.log.bind(console)
+const _cerr = console.error.bind(console)
+const _cwarn = console.warn.bind(console)
+const _cdebug = console.debug.bind(console)
+const _cinfo = console.info.bind(console)
+console.log = (...a) => { logArgs(...a); _clog(...a) }
+console.error = (...a) => { logArgs(...a); _cerr(...a) }
+console.warn = (...a) => { logArgs(...a); _cwarn(...a) }
+console.debug = (...a) => { logArgs(...a); _cdebug(...a) }
+console.info = (...a) => { logArgs(...a); _cinfo(...a) }
 
 console.error(`[zen-run] Log: ${logPath}`)
 if (stateFile) console.error(`[zen-run] State file: ${stateFile} (${existsSync(stateFile) ? 'existing' : 'new'})`)
