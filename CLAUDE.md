@@ -830,6 +830,14 @@ bun scripts/zen-run.ts <plugin-name> --phone <phone> --password <password> [othe
 
 The run must complete without errors and return at least 1 account. A fix is not done until this passes — test credentials for kapitalbank-uz / apelsin-uz are in `.env` as `ZEN_TEST_*`.
 
+**Important:** The Bash tool runs with closed stdin — `readline` / OTP prompts will fail immediately. If the plugin requires interactive OTP input, you cannot run it yourself. Tell the user to run it with the `!` prefix in Claude Code input:
+
+```
+! bun scripts/zen-run.ts apelsin-uz --phone 998910104912 --password "..."
+```
+
+The `!` prefix attaches the user's interactive terminal, so they can type the OTP code when prompted.
+
 ### ZenPlugins-Specific Conventions
 
 - **No trailing semicolons** (ASI style)
