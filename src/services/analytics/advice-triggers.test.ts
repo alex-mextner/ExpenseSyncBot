@@ -162,6 +162,25 @@ describe('checkSmartTriggers', () => {
     expect(result).toBeNull();
   });
 
+  test('suppressed logs consume daily quota — 4th trigger is silently dropped', () => {
+    // Known behavior: advice_log rows with advice_text='[auto-advice suppressed]'
+    // count toward MAX_AUTO_ADVICE_PER_DAY (3) just like real sends.
+    // After 3 suppressed logs, countToday=3 and no further triggers are returned.
+    const snapshot = buildTriggerSnapshot({
+      burnRates: [buildBurnRate({ status: 'exceeded', spent: 600 })],
+    });
+
+    // Simulate: 2 suppressed logs already written today
+    mockAdviceLogs.countToday.mockImplementation(() => 2);
+    const thirdResult = checkSmartTriggers(9995, snapshot);
+    expect(thirdResult).not.toBeNull(); // 2 < 3, still fires
+
+    // After the 3rd log is written, quota is exhausted
+    mockAdviceLogs.countToday.mockImplementation(() => 3);
+    const fourthResult = checkSmartTriggers(9995, snapshot);
+    expect(fourthResult).toBeNull(); // 3 >= 3, dropped
+  });
+
   test('budget exceeded triggers alert', () => {
     const snapshot = buildTriggerSnapshot({
       burnRates: [

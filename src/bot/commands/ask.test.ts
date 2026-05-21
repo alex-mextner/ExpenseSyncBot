@@ -516,6 +516,29 @@ describe('maybeSmartAdvice', () => {
     expect(createArg?.['tier']).toBe('alert');
     spy.mockRestore();
   });
+
+  test('second call blocked by cooldown/quota produces no side effects', async () => {
+    // First call: trigger fires and is suppressed
+    spyOnChecker({
+      type: 'budget_threshold',
+      tier: 'quick',
+      topic: 'budget_threshold:Food:warning',
+      data: { category: 'Food' },
+    });
+    await maybeSmartAdvice(1);
+
+    const createCallsAfterFirst = mockAdviceLogs.create.mock.calls.length;
+    const recordCallsAfterFirst = recordAdviceSentMock.mock.calls.length;
+
+    // Second call: checkSmartTriggers returns null (cooldown/quota blocked it)
+    // Default mock returns null — no extra setup needed.
+    await maybeSmartAdvice(1);
+
+    expect(mockAdviceLogs.create.mock.calls.length).toBe(createCallsAfterFirst);
+    expect(recordAdviceSentMock.mock.calls.length).toBe(recordCallsAfterFirst);
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
 });
 
 // helper: sets the mocked checkSmartTriggers return value for the next call
