@@ -2,6 +2,7 @@
 // Note: uses in-memory SQLite — isFirstRun is always true, auth state does not persist between runs.
 import { Database } from 'bun:sqlite'
 import { createInterface } from 'node:readline'
+import { mkdirSync, createWriteStream } from 'node:fs'
 import { resolve } from 'node:path'
 import { createZenMoneyShim } from '../libs/zenmoney-shim'
 
@@ -66,6 +67,19 @@ db.exec(`
     PRIMARY KEY (connection_id, key)
   )
 `)
+
+// Log file: logs/zen-run/<plugin>-<timestamp>.log — captures all stderr output
+const logDir = resolve(import.meta.dir, '../logs/zen-run')
+mkdirSync(logDir, { recursive: true })
+const logTs = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+const logPath = resolve(logDir, `${pluginName}-${logTs}.log`)
+const logFile = createWriteStream(logPath, { flags: 'a' })
+const origStderrWrite = process.stderr.write.bind(process.stderr)
+process.stderr.write = (chunk: Parameters<typeof process.stderr.write>[0], ...args: Parameters<typeof process.stderr.write>[1 | 2][]) => {
+  logFile.write(chunk)
+  return origStderrWrite(chunk, ...(args as []))
+}
+console.error(`[zen-run] Log: ${logPath}`)
 
 // readline for OTP prompts
 const rl = createInterface({ input: process.stdin, output: process.stderr })
