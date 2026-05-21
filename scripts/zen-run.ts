@@ -1,8 +1,8 @@
 // CLI runner for ZenPlugins — runs a bank plugin without the bot for manual testing.
-// Note: uses in-memory SQLite — isFirstRun is always true, auth state does not persist between runs.
+// With --state-file, auth state persists between runs so myid/OTP only needed on first run.
 import { Database } from 'bun:sqlite'
 import { createInterface } from 'node:readline'
-import { mkdirSync, appendFileSync } from 'node:fs'
+import { mkdirSync, appendFileSync, readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createZenMoneyShim } from '../libs/zenmoney-shim'
 
@@ -10,8 +10,10 @@ const [pluginName, ...rest] = process.argv.slice(2)
 
 if (!pluginName) {
   console.error('Usage: bun scripts/zen-run.ts <plugin-name> [--key value ...] [--from YYYY-MM-DD] [--env-prefix PREFIX]')
+  console.error('         [--state-file /path/to/state.db]  persist auth state between runs')
+  console.error('         [--picture /path/to/photo.jpg]    provide selfie for myid.uz verification')
   console.error('Example: bun scripts/zen-run.ts apelsin-uz --env-prefix ZEN_TEST')
-  console.error('         bun scripts/zen-run.ts apelsin-uz --phone 998901234567 --password Secret1')
+  console.error('         bun scripts/zen-run.ts kapitalbank-uz --env-prefix ZEN_TEST --state-file /tmp/kapital.db --picture ~/selfie.jpg')
   process.exit(1)
 }
 
@@ -55,14 +57,22 @@ if (isNaN(fromDate.getTime())) {
 }
 const toDate = new Date()
 
-// Credentials: all flags except 'from' go to preferences
+// --state-file: persist auth state between runs so myid/OTP only needed once.
+// Without it, in-memory DB means isFirstRun is always true.
+const stateFile = flags['state-file']
+delete flags['state-file']
+
+// --picture: path to a JPEG selfie for myid.uz face verification (kapitalbank-uz first run).
+const picturePath = flags['picture']
+delete flags['picture']
+
+// Credentials: all remaining flags go to preferences
 const preferences: Record<string, string> = { ...flags }
 delete preferences['from']
 
-// In-memory SQLite with the required table
-const db = new Database(':memory:')
+const db = stateFile ? new Database(stateFile) : new Database(':memory:')
 db.exec(`
-  CREATE TABLE bank_plugin_state (
+  CREATE TABLE IF NOT EXISTS bank_plugin_state (
     connection_id INTEGER NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
@@ -91,6 +101,7 @@ process.stderr.write = (chunk: Parameters<typeof process.stderr.write>[0], ...re
 }
 
 console.error(`[zen-run] Log: ${logPath}`)
+if (stateFile) console.error(`[zen-run] State file: ${stateFile} (${existsSync(stateFile) ? 'existing' : 'new'})`)
 
 // Catch anything that escapes the main try/catch (e.g. errors inside dynamically loaded modules)
 process.on('uncaughtException', (err) => {
@@ -107,7 +118,16 @@ const rl = createInterface({ input: process.stdin, output: process.stderr })
 const readLineImpl = (prompt: string): Promise<string> =>
   new Promise(resolve => rl.question(`\n[OTP] ${prompt}: `, resolve))
 
-const shim = createZenMoneyShim(1, db, preferences, readLineImpl)
+// takePicture: read JPEG from --picture path if provided, otherwise fail with a clear message.
+const takePictureImpl = picturePath
+  ? async (_format: string): Promise<Blob> => {
+      console.error(`[zen-run] Reading picture from: ${picturePath}`)
+      const bytes = readFileSync(picturePath)
+      return new Blob([bytes], { type: 'image/jpeg' })
+    }
+  : undefined
+
+const shim = createZenMoneyShim(1, db, preferences, readLineImpl, takePictureImpl)
 ;(globalThis as unknown as Record<string, unknown>)['ZenMoney'] = shim
 
 const pluginPath = resolve(
