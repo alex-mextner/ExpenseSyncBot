@@ -832,13 +832,12 @@ bun scripts/zen-run.ts <plugin-name> --env-prefix ZEN_TEST [--from YYYY-MM-DD]
 
 The run must complete without errors and return at least 1 account. A fix is not done until this passes — test credentials for kapitalbank-uz / apelsin-uz are in `.env` as `ZEN_TEST_*`.
 
-**Important:** The Bash tool runs with closed stdin — `readline` / OTP prompts will fail immediately. If the plugin requires interactive OTP input, you cannot run it yourself. Tell the user to run it with the `!` prefix in Claude Code input:
+**Important:** The Bash tool runs with closed stdin — `readline` / OTP prompts fail immediately. Bank plugins that require OTP on first run cannot be demonstrated from the Bash tool. **Do not attempt to run them yourself.** Instead, tell the user:
 
-```
-! bun scripts/zen-run.ts apelsin-uz --env-prefix ZEN_TEST
-```
+> "Запусти в строке ввода: `! bun scripts/zen-run.ts <plugin> --env-prefix ZEN_TEST`
+> Когда придёт SMS — введи код в промпт `[OTP]`. Лог сохранится в `logs/zen-run/`."
 
-The `!` prefix attaches the user's interactive terminal, so they can type the OTP code when prompted.
+The `!` prefix runs the command in the user's interactive terminal where stdin is a real TTY. Never spam the script — each run sends a real SMS. The API rate-limits after ~3 requests per minute (`otp_already_requested`).
 
 ### ZenPlugins-Specific Conventions
 
