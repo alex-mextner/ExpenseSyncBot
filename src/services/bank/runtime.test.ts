@@ -156,6 +156,20 @@ describe('ZenMoney runtime shim', () => {
     await expect(shim.readLine('prompt')).resolves.toBe('');
   });
 
+  test('takePicture throws when no impl provided', async () => {
+    const shim = createZenMoneyShim(connectionId, db, {});
+    await expect(shim.takePicture('jpeg')).rejects.toThrow(
+      'ZenMoney.takePicture is not supported in automated sync mode',
+    );
+  });
+
+  test('takePicture resolves via injected impl', async () => {
+    const blob = new Blob(['img'], { type: 'image/jpeg' });
+    const impl = (_fmt: string) => Promise.resolve(blob);
+    const shimWithPic = createZenMoneyShim(connectionId, db, {}, undefined, impl);
+    await expect(shimWithPic.takePicture('jpeg')).resolves.toBe(blob);
+  });
+
   test('getPreferences returns empty object when none supplied', () => {
     const shim = createZenMoneyShim(connectionId, db, {});
     expect(shim.getPreferences()).toEqual({});

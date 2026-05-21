@@ -117,7 +117,9 @@ export function createZenMoneyShim(
 
     takePicture(format: string): Promise<Blob> {
       if (takePictureImpl) return takePictureImpl(format);
-      throw new Error('ZenMoney.takePicture is not supported in automated sync mode');
+      return Promise.reject(
+        new Error('ZenMoney.takePicture is not supported in automated sync mode'),
+      );
     },
 
     setResult(data: unknown): void {
