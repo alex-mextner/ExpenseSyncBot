@@ -427,45 +427,124 @@ const { maybeSmartAdvice } = await import('./ask');
 
 describe('maybeSmartAdvice', () => {
   beforeEach(() => {
-    mockAiStreamRound.mockClear();
+    mockSendMessage.mockClear();
     mockAdviceLogs.create.mockClear();
+    mockAiStreamRound.mockReset();
+    recordAdviceSentMock.mockClear();
+    checkSmartTriggersMock.mockReset().mockReturnValue(null);
+    logMock.error.mockReset();
+    logMock.info.mockReset();
+    logMock.warn.mockReset();
     writerCalls.appended.length = 0;
     writerCalls.finalized.length = 0;
     writerCalls.finalizedErrors.length = 0;
     writerCalls.closed = 0;
-    logMock.error.mockReset();
-    logMock.warn.mockReset();
-    logMock.info.mockReset();
   });
+
+  const budgetExceededTrigger = {
+    type: 'budget_threshold' as const,
+    tier: 'alert' as const,
+    topic: 'budget_threshold:Food:exceeded',
+    data: { category: 'Food', spent: 620, limit: 500, currency: 'EUR' },
+  };
+
+  const velocityTrigger = {
+    type: 'velocity_spike' as const,
+    tier: 'quick' as const,
+    topic: 'velocity_spike',
+    data: { acceleration: 80, recent_avg: 60, earlier_avg: 30 },
+  };
 
   test('does nothing when checkSmartTriggers returns null', async () => {
-    const spy = spyOnChecker(null);
     await maybeSmartAdvice(1);
 
-    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
     expect(mockAdviceLogs.create).not.toHaveBeenCalled();
-    spy.mockRestore();
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 
-  test('fires aiStreamRound when trigger is returned', async () => {
-    successfulStream(['quick insight']);
-    const spy = spyOnChecker({
-      type: 'budget_threshold',
-      tier: 'quick',
-      topic: 'budget_threshold:Food:warning',
-      data: { category: 'Food' },
-    });
+  test('budget_exceeded: sends factual message to chat regardless of AUTO_ADVICE_ENABLED', async () => {
+    // Flag is off by default in tests — this path must fire anyway
+    checkSmartTriggersMock.mockReturnValueOnce(budgetExceededTrigger);
+
+    await maybeSmartAdvice(1);
+
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    const [msg] = mockSendMessage.mock.calls[0] as unknown as [string];
+    expect(msg).toContain('Food');
+    expect(msg).toContain('бюджет превышен');
+    expect(msg).toContain('124%');
+    // No AI generation — this is a simple factual message
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('budget_exceeded: writes to advice_log so monthly dedup fires next time', async () => {
+    // The advice_log entry is what hasTopicThisMonth finds on the next call,
+    // preventing a second notification this month.
+    checkSmartTriggersMock.mockReturnValueOnce(budgetExceededTrigger);
+
+    await maybeSmartAdvice(1);
+
+    expect(mockAdviceLogs.create).toHaveBeenCalledTimes(1);
+    const arg = mockAdviceLogs.create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(arg['group_id']).toBe(1);
+    expect(arg['tier']).toBe('alert');
+    expect(arg['topic']).toBe('budget_threshold:Food:exceeded');
+    // advice_text contains the message text, not a suppression marker
+    expect(arg['advice_text']).not.toBe('[auto-advice suppressed]');
+    expect(typeof arg['advice_text']).toBe('string');
+  });
+
+  test('other trigger + AUTO_ADVICE_ENABLED=true: calls AI via sendSmartAdvice', async () => {
+    const envModule = await import('../../config/env');
+    (envModule.env as unknown as Record<string, unknown>)['AUTO_ADVICE_ENABLED'] = true;
+
+    checkSmartTriggersMock.mockReturnValueOnce(velocityTrigger);
+    mockAiStreamRound.mockImplementationOnce(
+      async (_opts: unknown, callbacks?: { onTextDelta?: (t: string) => void }) => {
+        callbacks?.onTextDelta?.('траты растут');
+        return {
+          text: 'траты растут',
+          toolCalls: [],
+          finishReason: 'stop',
+          assistantMessage: { role: 'assistant', content: 'траты растут' },
+          providerUsed: 'mock',
+        };
+      },
+    );
 
     await maybeSmartAdvice(1);
 
     expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
-    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
-    // Quick tier uses 500 max tokens
-    expect(opts.maxTokens).toBe(500);
-    spy.mockRestore();
+    expect(logMock.error).not.toHaveBeenCalled();
+
+    (envModule.env as unknown as Record<string, unknown>)['AUTO_ADVICE_ENABLED'] = false;
   });
 
-  test('swallows errors (does not propagate)', async () => {
+  test('other trigger + AUTO_ADVICE_ENABLED=false: logs suppressed, no message, persists cooldown', async () => {
+    checkSmartTriggersMock.mockReturnValueOnce(velocityTrigger);
+
+    await maybeSmartAdvice(1);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockAiStreamRound).not.toHaveBeenCalled();
+    // Cooldown recorded so same tier doesn't re-fire within 4h
+    expect(recordAdviceSentMock).toHaveBeenCalledWith(1, 'quick');
+    // advice_log written so monthly dedup works
+    expect(mockAdviceLogs.create).toHaveBeenCalledTimes(1);
+    const arg = mockAdviceLogs.create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(arg['advice_text']).toBe('[auto-advice suppressed]');
+    // Full context logged for offline analysis
+    const suppressedLog = logMock.info.mock.calls.find((c) =>
+      JSON.stringify(c).includes('Auto-advice suppressed'),
+    );
+    expect(suppressedLog).toBeDefined();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('swallows errors without propagating', async () => {
     const spa = await import('../../services/analytics/spending-analytics');
     (spa.spendingAnalytics.getFinancialSnapshot as ReturnType<typeof mock>).mockImplementationOnce(
       () => {
@@ -476,28 +555,4 @@ describe('maybeSmartAdvice', () => {
     await expect(maybeSmartAdvice(1)).resolves.toBeUndefined();
     expect(logMock.error).toHaveBeenCalled();
   });
-
-  test('uses alert tier config (1000 max_tokens) when trigger.tier=alert', async () => {
-    successfulStream(['alert text']);
-    const spy = spyOnChecker({
-      type: 'budget_threshold',
-      tier: 'alert',
-      topic: 'budget_threshold:Food:exceeded',
-      data: { category: 'Food' },
-    });
-
-    await maybeSmartAdvice(1);
-
-    const [opts] = mockAiStreamRound.mock.calls[0] as unknown as [StreamRoundOptions];
-    expect(opts.maxTokens).toBe(1000);
-    spy.mockRestore();
-  });
 });
-
-// helper: sets the mocked checkSmartTriggers return value for the next call
-function spyOnChecker(returnValue: import('../../services/analytics/types').TriggerResult | null): {
-  mockRestore: () => void;
-} {
-  checkSmartTriggersMock.mockImplementationOnce(() => returnValue);
-  return { mockRestore: () => {} };
-}
