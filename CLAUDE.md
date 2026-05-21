@@ -779,6 +779,15 @@ When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
 - **No `import from 'bun:test'`** — use Jest/bun globals (`describe`, `it`, `expect`, etc.) directly
 - **Mock pattern**: `global.fetch = async (url, init?) => new Response(...)` — real `Response`, not a cast
 - **Install deps**: `npm install --ignore-scripts` (bun fails on some git-sourced deps like `pdf-extraction`)
+- **Run `ts-standard <files>`** before committing to verify linting on changed files
+- **Braces on `if`-guards**: match the FILE's existing style, not the linter's minimum. `.ts` files use multi-line `{\n  ...\n}`; `.js` files use inline `{ continue }` — match whichever is in that file.
+- **Type casts in tests**: use the actual type, not `never[]`. ❌ `null as unknown as never[]` ✅ `null as unknown as CardProductV2[]`
+- **Test scope**: guard tests test the guard only — don't add cases that test pre-existing behavior (e.g. "empty array returns []" when empty was always handled).
+- **Test placement**: check the existing `__tests__/` structure before creating new directories.
+
+### One PR per Bank Plugin
+
+Fixes in different bank plugins (tbc-ge, priorbank, etc.) must be in **separate PRs** — even if the bug pattern is identical. Each bank is an independent concern, reviewable and revertable independently. Stacked PRs are fine (PR B targets PR A's branch as base).
 
 ## UX Conventions
 
