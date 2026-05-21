@@ -64,8 +64,10 @@ describe('decryptToken', () => {
   it('throws on tampered ciphertext', () => {
     const encrypted = encryptToken('secret', TEST_KEY);
     const [iv, tag, ct] = encrypted.split(':') as [string, string, string];
-    // Flip a byte in the ciphertext
-    const tampered = `${iv}:${tag}:${ct.slice(0, -2)}ff`;
+    // XOR last byte with 0xff — always differs from original regardless of its value
+    const lastByte = parseInt(ct.slice(-2), 16);
+    const flippedByte = (lastByte ^ 0xff).toString(16).padStart(2, '0');
+    const tampered = `${iv}:${tag}:${ct.slice(0, -2)}${flippedByte}`;
     expect(() => decryptToken(tampered, TEST_KEY)).toThrow();
   });
 
