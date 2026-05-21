@@ -778,6 +778,58 @@ When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
 
 **After every commit in the submodule**: push the branch to the fork immediately — `git -C src/services/bank/ZenPlugins push fork <branch>`. Don't leave local-only commits in submodules.
 
+### develop Branch — Bot's Running State
+
+The bot always runs from a `develop` branch in the fork, not from any individual PR branch. `develop` aggregates all open (not-yet-merged) fixes so the bot gets them all at once.
+
+**Workflow:**
+
+1. When you create a fix branch (`fix/foo`) and push it to the fork, cherry-pick its commits onto `develop` too:
+   ```bash
+   git -C src/services/bank/ZenPlugins checkout develop
+   git -C src/services/bank/ZenPlugins cherry-pick <commit-sha>
+   git -C src/services/bank/ZenPlugins push fork develop
+   ```
+
+2. Point the bot submodule at `develop`:
+   ```bash
+   # .gitmodules branch = develop
+   git -C src/services/bank/ZenPlugins checkout develop
+   cd /path/to/ExpenseSyncBot && git add src/services/bank/ZenPlugins && git commit -m "chore(bank): pin ZenPlugins to develop"
+   ```
+
+3. When a PR merges upstream, rebase `develop` on fresh upstream master — git will drop the cherry-picked commit automatically (same patch):
+   ```bash
+   git -C src/services/bank/ZenPlugins fetch origin
+   git -C src/services/bank/ZenPlugins checkout develop
+   git -C src/services/bank/ZenPlugins rebase origin/master
+   git -C src/services/bank/ZenPlugins push fork develop --force-with-lease
+   ```
+   Then update the submodule pointer in the bot repo.
+
+**Rule**: `develop` must always be rebased on upstream `origin/master`, never on `fork/master`. Fork master may diverge.
+
+### Codex Review Before Opening a ZenPlugins PR
+
+Before `gh pr create --repo zenmoney/ZenPlugins`, run codex on the PR diff:
+
+```bash
+git -C src/services/bank/ZenPlugins diff origin/master...<fix-branch> > /tmp/zenplugins-pr.diff
+codex exec "Review this ZenPlugins PR diff for style compliance and correctness. Check: no trailing semicolons (ASI style), no bun:test imports, proper error types (TemporaryError/InvalidLoginOrPasswordError), test scope (guard tests only), no extra features. Report issues with file:line." < /tmp/zenplugins-pr.diff
+```
+
+Address every issue before opening the PR.
+
+### CLI Demonstration Before Considering a Plugin Fix Done
+
+After fixing a bank plugin, run it end-to-end with real credentials using the CLI runner:
+
+```bash
+bun scripts/zen-run.ts <plugin-name> --phone <phone> --password <password> [other flags]
+```
+
+The run must complete without errors and return at least 1 account. A fix is not done until this passes — test credentials for kapitalbank-uz / apelsin-uz are in `.env` as `ZEN_TEST_*`.
+
 ### ZenPlugins-Specific Conventions
 
 - **No trailing semicolons** (ASI style)
