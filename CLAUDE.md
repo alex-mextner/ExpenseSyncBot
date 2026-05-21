@@ -765,12 +765,16 @@ Third-party submodules must be excluded from `biome.jsonc`. Biome v2+ syntax: us
 
 When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
 1. Fork the repo to your own account (`alex-mextner/ZenPlugins`)
-2. Commit the fix to a branch in the fork
-3. Update `.gitmodules` to point to the fork URL
-4. On the server: `git submodule update --remote` fetches from the fork
-5. **Open a draft PR from the fork branch to upstream `zenmoney/ZenPlugins`** — NOT within the fork itself. Always draft until explicitly ready to merge upstream.
+2. **Branch from upstream master** — `git checkout -b fix/foo origin/master` — never from fork master
+3. Cherry-pick or commit the fix onto that branch
+4. Verify: `git log origin/master..fix/foo --oneline` — must show ONLY your commit(s), nothing else
+5. Push branch to fork: `git push fork fix/foo`
+6. Update `.gitmodules` to point to the fork URL; on the server: `git submodule update --remote`
+7. **Open a draft PR from the fork branch to upstream `zenmoney/ZenPlugins`** — NOT within the fork itself. Always draft until explicitly ready to merge upstream.
 
-**Critical**: `gh pr create --repo zenmoney/ZenPlugins --head alex-mextner:<branch> --draft` — PRs go to upstream, not to `alex-mextner/ZenPlugins`. Creating PRs inside the fork (branch → fork master) is pointless.
+**Critical**: `gh pr create --repo zenmoney/ZenPlugins --head alex-mextner:<branch> --draft`
+- PRs go to **upstream** `zenmoney/ZenPlugins`, never to `alex-mextner/ZenPlugins` (that's your fork)
+- Branch must be from **upstream master** — fork master may have commits not yet in upstream, which would pollute the PR
 
 **After every commit in the submodule**: push the branch to the fork immediately — `git -C src/services/bank/ZenPlugins push fork <branch>`. Don't leave local-only commits in submodules.
 
