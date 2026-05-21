@@ -68,19 +68,25 @@ db.exec(`
   )
 `)
 
-// Log file: logs/zen-run/<plugin>-<timestamp>.log — captures all stderr output
+// Log file: logs/zen-run/<plugin>-<timestamp>.log
+// Intercept process.stdout.write + process.stderr.write — the only layer that reliably
+// catches output from dynamically imported bundles that bind console at parse time.
 const logDir = resolve(import.meta.dir, '../logs/zen-run')
 mkdirSync(logDir, { recursive: true })
 const logTs = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
 const logPath = resolve(logDir, `${pluginName}-${logTs}.log`)
-// Bun's console.log/error don't flush through process.stderr.write reliably.
-// Use sync appendFileSync so every write lands before process exits.
-const serialize = (...args: unknown[]) => args.map(a => typeof a === 'string' ? a : Bun.inspect(a)).join(' ') + '\n'
-const _log = console.log.bind(console)
-const _err = console.error.bind(console)
-const writeLog = (line: string) => appendFileSync(logPath, line)
-console.log = (...args: unknown[]) => { writeLog(serialize(...args)); _log(...args) }
-console.error = (...args: unknown[]) => { writeLog(serialize(...args)); _err(...args) }
+const writeLog = (chunk: unknown) => {
+  if (typeof chunk === 'string') appendFileSync(logPath, chunk)
+  else if (chunk instanceof Uint8Array) appendFileSync(logPath, chunk)
+}
+const _stdout = process.stdout.write.bind(process.stdout)
+const _stderr = process.stderr.write.bind(process.stderr)
+process.stdout.write = (chunk: Parameters<typeof process.stdout.write>[0], ...rest: Parameters<typeof process.stdout.write>[1 | 2][]) => {
+  writeLog(chunk); return _stdout(chunk, ...(rest as []))
+}
+process.stderr.write = (chunk: Parameters<typeof process.stderr.write>[0], ...rest: Parameters<typeof process.stderr.write>[1 | 2][]) => {
+  writeLog(chunk); return _stderr(chunk, ...(rest as []))
+}
 
 console.error(`[zen-run] Log: ${logPath}`)
 
