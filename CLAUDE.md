@@ -764,11 +764,13 @@ Third-party submodules must be excluded from `biome.jsonc`. Biome v2+ syntax: us
 ### Submodule Fork Workflow
 
 When the upstream repo is read-only (e.g. `zenmoney/ZenPlugins`):
-1. Fork the repo to your own account
-2. Commit the fix to the fork
+1. Fork the repo to your own account (`alex-mextner/ZenPlugins`)
+2. Commit the fix to a branch in the fork
 3. Update `.gitmodules` to point to the fork URL
 4. On the server: `git submodule update --remote` fetches from the fork
-5. Open a PR to upstream — when merged, revert `.gitmodules` to the upstream URL
+5. **Open a draft PR from the fork branch to upstream `zenmoney/ZenPlugins`** — NOT within the fork itself. Always draft until explicitly ready to merge upstream.
+
+**Critical**: `gh pr create --repo zenmoney/ZenPlugins --head alex-mextner:<branch> --draft` — PRs go to upstream, not to `alex-mextner/ZenPlugins`. Creating PRs inside the fork (branch → fork master) is pointless.
 
 **After every commit in the submodule**: push the branch to the fork immediately — `git -C src/services/bank/ZenPlugins push fork <branch>`. Don't leave local-only commits in submodules.
 
