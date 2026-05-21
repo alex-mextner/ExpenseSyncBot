@@ -87,12 +87,15 @@ export function createZenMoneyShim(
     },
 
     setData(key: string, value: unknown): void {
-      upsertState.run(connectionId, key, JSON.stringify(value));
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) return; // JSON.stringify(undefined) === undefined — skip
+      upsertState.run(connectionId, key, serialized);
     },
 
     saveData(key?: string, value?: unknown): void {
       if (key !== undefined) {
-        upsertState.run(connectionId, key, JSON.stringify(value));
+        const serialized = JSON.stringify(value);
+        if (serialized !== undefined) upsertState.run(connectionId, key, serialized);
       }
       // No-arg variant: all writes are synchronous, nothing to flush.
     },
