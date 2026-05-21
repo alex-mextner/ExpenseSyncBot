@@ -20,7 +20,17 @@ for (let i = 0; i < rest.length; i += 2) {
   if (key && val !== undefined) flags[key] = val
 }
 
+if (rest.length % 2 !== 0) {
+  console.error(`[zen-run] Flag "--${rest[rest.length - 1]?.replace(/^--/, '')}" has no value.`)
+  process.exit(1)
+}
+
 const fromDate = flags['from'] ? new Date(flags['from']) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+
+if (isNaN(fromDate.getTime())) {
+  console.error(`[zen-run] Invalid --from date: "${flags['from']}". Use YYYY-MM-DD format.`)
+  process.exit(1)
+}
 const toDate = new Date()
 
 // Credentials: all flags except 'from' go to preferences
@@ -66,10 +76,13 @@ const pluginModule = await import(pluginPath) as { scrape: (args: {
   isFirstRun: boolean
 }) => Promise<{ accounts: unknown[]; transactions: unknown[] }> }
 
-const result = await pluginModule.scrape({ preferences, fromDate, toDate, isFirstRun })
-
-rl.close()
-
-console.log(JSON.stringify({ accounts: result.accounts, transactions: result.transactions }, null, 2))
-
-console.error(`[zen-run] Done: ${result.accounts.length} accounts, ${result.transactions.length} transactions`)
+try {
+  const result = await pluginModule.scrape({ preferences, fromDate, toDate, isFirstRun })
+  console.log(JSON.stringify({ accounts: result.accounts, transactions: result.transactions }, null, 2))
+  console.error(`[zen-run] Done: ${result.accounts.length} accounts, ${result.transactions.length} transactions`)
+} catch (err) {
+  console.error('[zen-run] Plugin error:', err)
+  process.exit(1)
+} finally {
+  rl.close()
+}
