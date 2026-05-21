@@ -33,12 +33,14 @@ if (rest.length % 2 !== 0) {
   process.exit(1)
 }
 
-// --env-prefix ZEN_TEST maps ZEN_TEST_PHONE → phone, ZEN_TEST_PASSWORD → password, etc.
+// --env-prefix ZEN_TEST maps ZEN_TEST_PHONE → phone, ZEN_TEST_IS_RESIDENT → isResident, etc.
+// Suffix is snake_case-converted to camelCase so plugin preference keys like isResident match.
 if (flags['env-prefix']) {
   const prefix = flags['env-prefix'].toUpperCase() + '_'
+  const toCamel = (s: string) => s.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase())
   for (const [k, v] of Object.entries(process.env)) {
     if (k.startsWith(prefix) && v !== undefined) {
-      const key = k.slice(prefix.length).toLowerCase()
+      const key = toCamel(k.slice(prefix.length))
       if (!(key in flags)) flags[key] = v
     }
   }
