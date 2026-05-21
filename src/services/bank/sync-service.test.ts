@@ -747,6 +747,58 @@ describe('runSyncCycle — unknown bank', () => {
   });
 });
 
+describe('runSyncCycle — fromDate normalization', () => {
+  it('floors last_sync_at to start of previous UTC day', async () => {
+    const conn = seedConnection({ last_sync_at: '2026-05-21T14:00:00.000Z' });
+
+    let capturedFromDate: Date | undefined;
+    scrapeImpl.fn = async (args) => {
+      capturedFromDate = args.fromDate;
+      return { accounts: [], transactions: [] };
+    };
+
+    await triggerManualSync(conn.id);
+
+    // 2026-05-21 minus 1 day = 2026-05-20, start of UTC day = 00:00:00.000Z
+    expect(capturedFromDate?.toISOString()).toBe('2026-05-20T00:00:00.000Z');
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  it('uses start-of-day 30 days ago when last_sync_at is null', async () => {
+    const conn = seedConnection({ last_sync_at: null });
+
+    let capturedFromDate: Date | undefined;
+    scrapeImpl.fn = async (args) => {
+      capturedFromDate = args.fromDate;
+      return { accounts: [], transactions: [] };
+    };
+
+    const before = new Date();
+    await triggerManualSync(conn.id);
+    const after = new Date();
+
+    // Expected: start of UTC day 30 days ago.
+    // Compute bounds: floor(before - 30d) .. floor(after - 30d) — same day in practice.
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const lowerBound = new Date(
+      Math.floor((before.getTime() - 30 * msPerDay) / msPerDay) * msPerDay,
+    );
+    const upperBound = new Date(
+      Math.floor((after.getTime() - 30 * msPerDay) / msPerDay) * msPerDay,
+    );
+
+    expect(capturedFromDate).toBeDefined();
+    expect(capturedFromDate?.getTime()).toBeGreaterThanOrEqual(lowerBound.getTime());
+    expect(capturedFromDate?.getTime()).toBeLessThanOrEqual(upperBound.getTime());
+    // Time component must be exactly midnight UTC.
+    expect(capturedFromDate?.getUTCHours()).toBe(0);
+    expect(capturedFromDate?.getUTCMinutes()).toBe(0);
+    expect(capturedFromDate?.getUTCSeconds()).toBe(0);
+    expect(capturedFromDate?.getUTCMilliseconds()).toBe(0);
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+});
+
 describe('runSyncCycle — inactive connection', () => {
   it('returns early when connection status is not active', async () => {
     const conn = seedConnection({ status: 'disconnected' });

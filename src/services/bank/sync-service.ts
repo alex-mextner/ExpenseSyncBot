@@ -1,7 +1,7 @@
 // Bank sync service — periodic sync via node-cron every 30 min.
 // Upserts accounts/transactions from connected banks, sends confirmation cards.
 
-import { format, subDays } from 'date-fns';
+import { format, startOfDay, subDays } from 'date-fns';
 import cron from 'node-cron';
 import { env } from '../../config/env';
 import { database } from '../../database';
@@ -123,7 +123,11 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       }
     }
 
-    const fromDate = conn.last_sync_at ? new Date(conn.last_sync_at) : subDays(new Date(), 30);
+    // Floor to start of yesterday so timezone-bucketed APIs (e.g. TBC-GE Georgia midnight
+    // = UTC 20:00 prev day) don't get filtered out by a precise intra-day timestamp.
+    const fromDate = conn.last_sync_at
+      ? startOfDay(subDays(new Date(conn.last_sync_at), 1))
+      : startOfDay(subDays(new Date(), 30));
     const toDate = new Date();
 
     const group = database.groups.findById(conn.group_id);
@@ -246,6 +250,15 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       };
 
       const { scrape } = await plugin.plugin();
+      logger.info(
+        {
+          connectionId,
+          bank: conn.bank_name,
+          fromDate: fromDate.toISOString(),
+          toDate: toDate.toISOString(),
+        },
+        'Starting scrape',
+      );
       const rawResult = (await scrape({ preferences, fromDate, toDate })) as
         | Partial<ScrapeResult>
         | undefined;
@@ -258,6 +271,10 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
         ...(rawResult?.transactions ?? []),
         ...(shim._getCollectedTransactions() as ZenTransaction[]),
       ];
+      logger.info(
+        { connectionId, bank: conn.bank_name, rawTxCount: transactions.length },
+        'Scrape returned',
+      );
 
       const setResultData = shim._getSetResult() as Partial<ScrapeResult> | undefined;
       if (setResultData) {
