@@ -92,6 +92,16 @@ process.stderr.write = (chunk: Parameters<typeof process.stderr.write>[0], ...re
 
 console.error(`[zen-run] Log: ${logPath}`)
 
+// Catch anything that escapes the main try/catch (e.g. errors inside dynamically loaded modules)
+process.on('uncaughtException', (err) => {
+  console.error('[zen-run] Uncaught exception:', err)
+  process.exit(1)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[zen-run] Unhandled rejection:', reason)
+  process.exit(1)
+})
+
 // readline for OTP prompts
 const rl = createInterface({ input: process.stdin, output: process.stderr })
 const readLineImpl = (prompt: string): Promise<string> =>
@@ -113,14 +123,14 @@ console.error(`[zen-run] Loading plugin: ${pluginName}`)
 console.error(`[zen-run] isFirstRun: ${isFirstRun}`)
 console.error(`[zen-run] fromDate: ${fromDate.toISOString()}`)
 
-const pluginModule = await import(pluginPath) as { scrape: (args: {
-  preferences: Record<string, string>
-  fromDate: Date
-  toDate: Date
-  isFirstRun: boolean
-}) => Promise<{ accounts: unknown[]; transactions: unknown[] }> }
-
 try {
+  const pluginModule = await import(pluginPath) as { scrape: (args: {
+    preferences: Record<string, string>
+    fromDate: Date
+    toDate: Date
+    isFirstRun: boolean
+  }) => Promise<{ accounts: unknown[]; transactions: unknown[] }> }
+
   const result = await pluginModule.scrape({ preferences, fromDate, toDate, isFirstRun })
   console.log(JSON.stringify({ accounts: result.accounts, transactions: result.transactions }, null, 2))
   console.error(`[zen-run] Done: ${result.accounts.length} accounts, ${result.transactions.length} transactions`)
