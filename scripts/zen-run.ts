@@ -8,8 +8,9 @@ import { createZenMoneyShim } from '../libs/zenmoney-shim'
 const [pluginName, ...rest] = process.argv.slice(2)
 
 if (!pluginName) {
-  console.error('Usage: bun scripts/zen-run.ts <plugin-name> [--key value ...] [--from YYYY-MM-DD]')
-  console.error('Example: bun scripts/zen-run.ts apelsin-uz --phone 998901234567 --password Secret1')
+  console.error('Usage: bun scripts/zen-run.ts <plugin-name> [--key value ...] [--from YYYY-MM-DD] [--env-prefix PREFIX]')
+  console.error('Example: bun scripts/zen-run.ts apelsin-uz --env-prefix ZEN_TEST')
+  console.error('         bun scripts/zen-run.ts apelsin-uz --phone 998901234567 --password Secret1')
   process.exit(1)
 }
 
@@ -29,6 +30,18 @@ for (let i = 0; i < rest.length; i += 2) {
 if (rest.length % 2 !== 0) {
   console.error(`[zen-run] Flag "--${rest[rest.length - 1]?.replace(/^--/, '')}" has no value.`)
   process.exit(1)
+}
+
+// --env-prefix ZEN_TEST maps ZEN_TEST_PHONE → phone, ZEN_TEST_PASSWORD → password, etc.
+if (flags['env-prefix']) {
+  const prefix = flags['env-prefix'].toUpperCase() + '_'
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith(prefix) && v !== undefined) {
+      const key = k.slice(prefix.length).toLowerCase()
+      if (!(key in flags)) flags[key] = v
+    }
+  }
+  delete flags['env-prefix']
 }
 
 const fromDate = flags['from'] ? new Date(flags['from']) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)

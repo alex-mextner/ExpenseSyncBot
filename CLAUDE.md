@@ -825,15 +825,17 @@ Address every issue before opening the PR.
 After fixing a bank plugin, run it end-to-end with real credentials using the CLI runner:
 
 ```bash
-bun scripts/zen-run.ts <plugin-name> --phone <phone> --password <password> [other flags]
+bun scripts/zen-run.ts <plugin-name> --env-prefix ZEN_TEST [--from YYYY-MM-DD]
 ```
+
+`--env-prefix ZEN_TEST` maps env vars automatically: `ZEN_TEST_PHONE` → `phone`, `ZEN_TEST_PASSWORD` → `password`, etc. Credentials stay in `.env`, never appear in the command. Individual flags (`--phone`, `--password`) override env vars if provided alongside `--env-prefix`.
 
 The run must complete without errors and return at least 1 account. A fix is not done until this passes — test credentials for kapitalbank-uz / apelsin-uz are in `.env` as `ZEN_TEST_*`.
 
 **Important:** The Bash tool runs with closed stdin — `readline` / OTP prompts will fail immediately. If the plugin requires interactive OTP input, you cannot run it yourself. Tell the user to run it with the `!` prefix in Claude Code input:
 
 ```
-! bun scripts/zen-run.ts apelsin-uz --phone 998910104912 --password "..."
+! bun scripts/zen-run.ts apelsin-uz --env-prefix ZEN_TEST
 ```
 
 The `!` prefix attaches the user's interactive terminal, so they can type the OTP code when prompted.
