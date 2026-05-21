@@ -1,4 +1,5 @@
 // CLI runner for ZenPlugins — runs a bank plugin without the bot for manual testing.
+// Note: uses in-memory SQLite — isFirstRun is always true, auth state does not persist between runs.
 import { Database } from 'bun:sqlite'
 import { createInterface } from 'node:readline'
 import { resolve } from 'node:path'
@@ -15,7 +16,12 @@ if (!pluginName) {
 // Parse --key value pairs from remaining args
 const flags: Record<string, string> = {}
 for (let i = 0; i < rest.length; i += 2) {
-  const key = rest[i]?.replace(/^--/, '')
+  const raw = rest[i]
+  if (!raw?.startsWith('--')) {
+    console.error(`[zen-run] Expected --flag, got: "${raw}". All credentials must use --key value format.`)
+    process.exit(1)
+  }
+  const key = raw.slice(2)
   const val = rest[i + 1]
   if (key && val !== undefined) flags[key] = val
 }
