@@ -20,7 +20,6 @@ import {
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
-import { formatAmount } from '../../services/currency/converter';
 import { StatusWriter } from '../../services/receipt/status-writer';
 import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
@@ -227,35 +226,6 @@ export async function maybeSmartAdvice(groupId: number): Promise<void> {
     const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
     const trigger = checkSmartTriggers(groupId, snapshot);
     if (!trigger) return;
-
-    // Budget actually exceeded — always notify, once per month per category.
-    if (trigger.topic.endsWith(':exceeded')) {
-      const { category, spent, limit, currency } = trigger.data as {
-        category: string;
-        spent: number;
-        limit: number;
-        currency: string;
-      };
-      const pct = Math.round((spent / limit) * 100);
-      const text =
-        `⚠️ <b>${category}</b>: бюджет превышен\n` +
-        `${formatAmount(spent, currency)} / ${formatAmount(limit, currency)} · ${pct}%`;
-
-      // Write to DB before sending — prevents race condition where two concurrent
-      // expense additions both pass hasTopicThisMonth before either commits.
-      database.adviceLogs.create({
-        group_id: groupId,
-        tier: trigger.tier,
-        trigger_type: trigger.type,
-        trigger_data: JSON.stringify(trigger.data),
-        topic: trigger.topic,
-        advice_text: text,
-      });
-      recordAdviceSent(groupId, trigger.tier);
-      await sendMessage(text);
-      logger.info({ groupId, topic: trigger.topic, pct }, '[ADVICE] Budget exceeded alert sent');
-      return;
-    }
 
     // Other triggers: send to chat when flag is on.
     if (env.AUTO_ADVICE_ENABLED) {

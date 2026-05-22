@@ -441,13 +441,6 @@ describe('maybeSmartAdvice', () => {
     writerCalls.closed = 0;
   });
 
-  const budgetExceededTrigger = {
-    type: 'budget_threshold' as const,
-    tier: 'alert' as const,
-    topic: 'budget_threshold:Food:exceeded',
-    data: { category: 'Food', spent: 620, limit: 500, currency: 'EUR' },
-  };
-
   const velocityTrigger = {
     type: 'velocity_spike' as const,
     tier: 'quick' as const,
@@ -462,58 +455,6 @@ describe('maybeSmartAdvice', () => {
     expect(mockAdviceLogs.create).not.toHaveBeenCalled();
     expect(mockAiStreamRound).not.toHaveBeenCalled();
     expect(logMock.error).not.toHaveBeenCalled();
-  });
-
-  test('budget_exceeded: sends factual message to chat regardless of AUTO_ADVICE_ENABLED', async () => {
-    // Flag is off by default in tests — this path must fire anyway
-    checkSmartTriggersMock.mockReturnValueOnce(budgetExceededTrigger);
-
-    await maybeSmartAdvice(1);
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    const [msg] = mockSendMessage.mock.calls[0] as unknown as [string];
-    expect(msg).toContain('Food');
-    expect(msg).toContain('бюджет превышен');
-    expect(msg).toContain('124%');
-    // No AI generation — this is a simple factual message
-    expect(mockAiStreamRound).not.toHaveBeenCalled();
-    expect(logMock.error).not.toHaveBeenCalled();
-  });
-
-  test('budget_exceeded: writes to advice_log so monthly dedup fires next time', async () => {
-    // The advice_log entry is what hasTopicThisMonth finds on the next call,
-    // preventing a second notification this month.
-    checkSmartTriggersMock.mockReturnValueOnce(budgetExceededTrigger);
-
-    await maybeSmartAdvice(1);
-
-    expect(mockAdviceLogs.create).toHaveBeenCalledTimes(1);
-    const arg = mockAdviceLogs.create.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(arg['group_id']).toBe(1);
-    expect(arg['tier']).toBe('alert');
-    expect(arg['topic']).toBe('budget_threshold:Food:exceeded');
-    // advice_text contains the message text, not a suppression marker
-    expect(arg['advice_text']).not.toBe('[auto-advice suppressed]');
-    expect(typeof arg['advice_text']).toBe('string');
-    // in-memory cooldown also updated
-    expect(recordAdviceSentMock).toHaveBeenCalledWith(1, 'alert');
-  });
-
-  test('budget_exceeded: advice_log written BEFORE sendMessage to prevent concurrent duplicate', async () => {
-    // Race condition: two expenses arrive almost simultaneously. Both can pass
-    // hasTopicThisMonth if the DB write happens after the async sendMessage.
-    // This test fails if the order is reversed.
-    checkSmartTriggersMock.mockReturnValueOnce(budgetExceededTrigger);
-
-    let createAlreadyCalledAtSendTime = false;
-    mockSendMessage.mockImplementationOnce(async () => {
-      createAlreadyCalledAtSendTime = mockAdviceLogs.create.mock.calls.length > 0;
-      return null;
-    });
-
-    await maybeSmartAdvice(1);
-
-    expect(createAlreadyCalledAtSendTime).toBe(true);
   });
 
   test('other trigger + AUTO_ADVICE_ENABLED=true: calls AI via sendSmartAdvice', async () => {

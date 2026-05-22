@@ -55,28 +55,11 @@ export function checkSmartTriggers(
 
   // === Trigger 1: Budget threshold crossing (>80%, >100%) ===
   for (const br of snap.burnRates) {
-    // Skip projection-based alerts (critical/warning) in the first 5 days —
-    // projections are too unreliable with so little data. Only fire if actually exceeded.
-    if (br.status !== 'exceeded' && br.days_elapsed < 5) continue;
+    // Skip projection-based alerts in the first 5 days — projections are too
+    // unreliable with so little data. `exceeded` is handled by checkBudgetLimit.
+    if (br.days_elapsed < 5) continue;
 
-    if (br.status === 'exceeded' && br.budget_limit > 0) {
-      const topic = `budget_threshold:${br.category}:exceeded`;
-      if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
-        if (canSendAdvice(groupId, 'alert')) {
-          return {
-            type: 'budget_threshold',
-            tier: 'alert',
-            topic,
-            data: {
-              category: br.category,
-              spent: br.spent,
-              limit: br.budget_limit,
-              currency: br.currency,
-            },
-          };
-        }
-      }
-    } else if (
+    if (
       (br.status === 'critical' || br.status === 'warning') &&
       br.budget_limit > 0 &&
       projectionConfident
