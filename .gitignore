@@ -50,3 +50,4 @@ debug-images/
 .claude/worktrees/.playwright-mcp
 .playwright-mcp
 .claude/worktrees/
+/*.ab

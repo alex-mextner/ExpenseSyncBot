@@ -811,16 +811,20 @@ The bot always runs from a `develop` branch in the fork, not from any individual
 
 **Rule**: `develop` must always be rebased on upstream `origin/master`, never on `fork/master`. Fork master may diverge.
 
-### Codex Review Before Opening a ZenPlugins PR
+### Review Before Opening a ZenPlugins PR
 
-Before `gh pr create --repo zenmoney/ZenPlugins`, run codex on the PR diff:
+Before `gh pr create --repo zenmoney/ZenPlugins`, run both reviews:
+
+**1. `/ultrareview` or `/review`** — in-session review pass on the branch changes.
+
+**2. Codex diff review:**
 
 ```bash
 git -C src/services/bank/ZenPlugins diff origin/master...<fix-branch> > /tmp/zenplugins-pr.diff
 codex exec "Review this ZenPlugins PR diff for style compliance and correctness. Check: no trailing semicolons (ASI style), no bun:test imports, proper error types (TemporaryError/InvalidLoginOrPasswordError), test scope (guard tests only), no extra features. Report issues with file:line." < /tmp/zenplugins-pr.diff
 ```
 
-Address every issue before opening the PR.
+Address every issue before opening the PR. When codex flags something that contradicts primary-source evidence (jadx decompilation, live traffic capture), document why the finding is a false positive in the PR description — don't blindly revert correct fixes.
 
 ### CLI Demonstration Before Considering a Plugin Fix Done
 
