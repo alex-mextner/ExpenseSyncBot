@@ -495,6 +495,25 @@ describe('maybeSmartAdvice', () => {
     // advice_text contains the message text, not a suppression marker
     expect(arg['advice_text']).not.toBe('[auto-advice suppressed]');
     expect(typeof arg['advice_text']).toBe('string');
+    // in-memory cooldown also updated
+    expect(recordAdviceSentMock).toHaveBeenCalledWith(1, 'alert');
+  });
+
+  test('budget_exceeded: advice_log written BEFORE sendMessage to prevent concurrent duplicate', async () => {
+    // Race condition: two expenses arrive almost simultaneously. Both can pass
+    // hasTopicThisMonth if the DB write happens after the async sendMessage.
+    // This test fails if the order is reversed.
+    checkSmartTriggersMock.mockReturnValueOnce(budgetExceededTrigger);
+
+    let createAlreadyCalledAtSendTime = false;
+    mockSendMessage.mockImplementationOnce(async () => {
+      createAlreadyCalledAtSendTime = mockAdviceLogs.create.mock.calls.length > 0;
+      return null;
+    });
+
+    await maybeSmartAdvice(1);
+
+    expect(createAlreadyCalledAtSendTime).toBe(true);
   });
 
   test('other trigger + AUTO_ADVICE_ENABLED=true: calls AI via sendSmartAdvice', async () => {

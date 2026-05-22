@@ -241,7 +241,8 @@ export async function maybeSmartAdvice(groupId: number): Promise<void> {
         `⚠️ <b>${category}</b>: бюджет превышен\n` +
         `${formatAmount(spent, currency)} / ${formatAmount(limit, currency)} · ${pct}%`;
 
-      await sendMessage(text);
+      // Write to DB before sending — prevents race condition where two concurrent
+      // expense additions both pass hasTopicThisMonth before either commits.
       database.adviceLogs.create({
         group_id: groupId,
         tier: trigger.tier,
@@ -250,6 +251,8 @@ export async function maybeSmartAdvice(groupId: number): Promise<void> {
         topic: trigger.topic,
         advice_text: text,
       });
+      recordAdviceSent(groupId, trigger.tier);
+      await sendMessage(text);
       logger.info({ groupId, topic: trigger.topic, pct }, '[ADVICE] Budget exceeded alert sent');
       return;
     }
