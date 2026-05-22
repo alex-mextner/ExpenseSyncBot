@@ -38,6 +38,7 @@ interface EnvConfig {
   BOT_ADMIN_CHAT_ID: number | null;
   LARGE_TX_THRESHOLD_EUR: number;
   AI_DEBUG_LOGS: boolean;
+  AUTO_ADVICE_ENABLED: boolean;
   NODE_ENV: 'development' | 'production';
   MINIAPP_URL: string | undefined;
   MINIAPP_SHORTNAME: string | undefined;
@@ -89,6 +90,7 @@ function validateEnv(): EnvConfig {
       : null,
     LARGE_TX_THRESHOLD_EUR: parseInt(process.env['LARGE_TX_THRESHOLD_EUR'] || '100', 10),
     AI_DEBUG_LOGS: process.env['AI_DEBUG_LOGS'] === 'true',
+    AUTO_ADVICE_ENABLED: process.env['AUTO_ADVICE_ENABLED'] === 'true',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'production') || 'development',
     MINIAPP_URL: getEnvVariable('MINIAPP_URL', false) || undefined,
     MINIAPP_SHORTNAME: getEnvVariable('MINIAPP_SHORTNAME', false) || undefined,

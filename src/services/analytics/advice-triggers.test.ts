@@ -162,28 +162,23 @@ describe('checkSmartTriggers', () => {
     expect(result).toBeNull();
   });
 
-  test('budget exceeded triggers alert', () => {
+  test('suppressed logs consume daily quota — 4th trigger is silently dropped', () => {
+    // Known behavior: advice_log rows with advice_text='[auto-advice suppressed]'
+    // count toward MAX_AUTO_ADVICE_PER_DAY (3) just like real sends.
+    // After 3 suppressed logs, countToday=3 and no further triggers are returned.
     const snapshot = buildTriggerSnapshot({
-      burnRates: [
-        buildBurnRate({
-          status: 'exceeded',
-          category: 'Food',
-          spent: 600,
-          budget_limit: 500,
-          currency: 'EUR',
-        }),
-      ],
+      burnRates: [buildBurnRate({ status: 'exceeded', spent: 600 })],
     });
 
-    const result = checkSmartTriggers(9997, snapshot);
-    expect(result).not.toBeNull();
-    expect(result?.type).toBe('budget_threshold');
-    expect(result?.tier).toBe('alert');
-    expect(result?.topic).toContain('Food');
-    expect(result?.topic).toContain('exceeded');
-    expect(result?.data['category']).toBe('Food');
-    expect(result?.data['spent']).toBe(600);
-    expect(result?.data['limit']).toBe(500);
+    // Simulate: 2 suppressed logs already written today
+    mockAdviceLogs.countToday.mockImplementation(() => 2);
+    const thirdResult = checkSmartTriggers(9995, snapshot);
+    expect(thirdResult).not.toBeNull(); // 2 < 3, still fires
+
+    // After the 3rd log is written, quota is exhausted
+    mockAdviceLogs.countToday.mockImplementation(() => 3);
+    const fourthResult = checkSmartTriggers(9995, snapshot);
+    expect(fourthResult).toBeNull(); // 3 >= 3, dropped
   });
 
   test('budget warning triggers alert with projected data', () => {
@@ -297,39 +292,6 @@ describe('checkSmartTriggers', () => {
 
     const result = checkSmartTriggers(8002, snapshot);
     expect(result).toBeNull();
-  });
-
-  test('low-confidence projection still fires EXCEEDED alert (fact, not projection)', () => {
-    // `exceeded` means spent >= limit — that is a hard fact, no extrapolation
-    // involved. It must still fire even when the month is young, because the
-    // user has already blown past the budget regardless of projection math.
-    const snapshot = buildTriggerSnapshot({
-      burnRates: [
-        buildBurnRate({
-          status: 'exceeded',
-          category: 'Developer',
-          spent: 600,
-          budget_limit: 500,
-          currency: 'EUR',
-          days_elapsed: 2,
-        }),
-      ],
-      projection: {
-        days_elapsed: 2,
-        days_in_month: 30,
-        current_total: 600,
-        projected_total: 9000,
-        projected_vs_last_month: 1500,
-        confidence: 'low',
-        category_projections: [],
-      },
-    });
-
-    const result = checkSmartTriggers(8003, snapshot);
-    expect(result).not.toBeNull();
-    expect(result?.type).toBe('budget_threshold');
-    expect(result?.topic).toContain('exceeded');
-    expect(result?.data['spent']).toBe(600);
   });
 
   test('null projection (too early in month) suppresses warning/critical alerts', () => {
@@ -450,9 +412,16 @@ describe('checkSmartTriggers', () => {
     expect(result?.data['acceleration']).toBe(100);
   });
 
-  test('budget exceeded takes priority over anomaly (priority order)', () => {
+  test('budget warning takes priority over anomaly (priority order)', () => {
     const snapshot = buildTriggerSnapshot({
-      burnRates: [buildBurnRate({ status: 'exceeded', category: 'Food', spent: 600 })],
+      burnRates: [
+        buildBurnRate({
+          status: 'warning',
+          category: 'Food',
+          projected_total: 600,
+          budget_limit: 500,
+        }),
+      ],
       anomalies: [buildAnomaly({ severity: 'extreme' })],
     });
 
@@ -499,9 +468,9 @@ describe('recordAdviceSent + cooldown', () => {
     // Use a unique groupId to avoid interference from other tests
     const groupId = 7001;
 
-    // First call: budget exceeded should fire
+    // First call: anomaly (alert tier) should fire
     const snapshot = buildTriggerSnapshot({
-      burnRates: [buildBurnRate({ status: 'exceeded', category: 'A', spent: 600 })],
+      anomalies: [buildAnomaly({ category: 'A', severity: 'significant' })],
     });
 
     const first = checkSmartTriggers(groupId, snapshot);
@@ -512,9 +481,9 @@ describe('recordAdviceSent + cooldown', () => {
     recordAdviceSent(groupId, 'alert');
     recordAdviceSent(groupId, 'quick');
 
-    // Second call with a different exceeded budget — should be blocked by cooldown
+    // Second call with another anomaly — should be blocked by cooldown
     const snapshot2 = buildTriggerSnapshot({
-      burnRates: [buildBurnRate({ status: 'exceeded', category: 'B', spent: 700 })],
+      anomalies: [buildAnomaly({ category: 'B', severity: 'extreme' })],
     });
 
     const second = checkSmartTriggers(groupId, snapshot2);
@@ -600,18 +569,28 @@ describe('edge cases', () => {
     expect(result).toBeNull();
   });
 
-  test('multiple budgets: only the first exceeded one fires', () => {
+  test('multiple budgets: only the first warning one fires', () => {
     const snapshot = buildTriggerSnapshot({
       burnRates: [
         buildBurnRate({ status: 'on_track', category: 'Food', spent: 100 }),
-        buildBurnRate({ status: 'exceeded', category: 'Transport', spent: 600 }),
-        buildBurnRate({ status: 'exceeded', category: 'Rent', spent: 1200 }),
+        buildBurnRate({
+          status: 'warning',
+          category: 'Transport',
+          projected_total: 600,
+          budget_limit: 500,
+        }),
+        buildBurnRate({
+          status: 'critical',
+          category: 'Rent',
+          projected_total: 1200,
+          budget_limit: 1000,
+        }),
       ],
     });
     const result = checkSmartTriggers(8004, snapshot);
     expect(result).not.toBeNull();
     expect(result?.type).toBe('budget_threshold');
-    // First exceeded budget fires (Transport comes before Rent)
+    // First non-on_track budget fires (Transport comes before Rent)
     expect(result?.data['category']).toBe('Transport');
   });
 
@@ -792,14 +771,14 @@ describe('edge cases', () => {
     expect(result).toBeNull();
   });
 
-  test('exceeded status still fires even in first 5 days', () => {
-    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+  test('exceeded status never fires from checkSmartTriggers (handled by checkBudgetLimit)', () => {
+    setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
     const snapshot = buildNeutralSnapshot({
       burnRates: [
         buildBurnRate({
           status: 'exceeded',
           category: 'Car',
-          days_elapsed: 3,
+          days_elapsed: 10,
           spent: 600,
           budget_limit: 500,
           currency: 'EUR',
@@ -807,9 +786,8 @@ describe('edge cases', () => {
       ],
     });
     const result = checkSmartTriggers(9052, snapshot);
-    expect(result).not.toBeNull();
-    expect(result?.type).toBe('budget_threshold');
-    expect(result?.topic).toContain('exceeded');
+    // exceeded is handled by checkBudgetLimit in expense-saver.ts, not here
+    expect(result).toBeNull();
   });
 
   test('critical alert fires after day 5', () => {
@@ -831,11 +809,16 @@ describe('edge cases', () => {
     expect(result?.type).toBe('budget_threshold');
   });
 
-  test('budget_limit=0 with status exceeded does NOT trigger (disabled category)', () => {
+  test('exceeded status is never returned by checkSmartTriggers (handled by checkBudgetLimit)', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
     const snapshot = buildTriggerSnapshot({
       burnRates: [
-        buildBurnRate({ status: 'exceeded', category: 'Путешествия', budget_limit: 0, spent: 0 }),
+        buildBurnRate({
+          status: 'exceeded',
+          category: 'Путешествия',
+          budget_limit: 500,
+          spent: 600,
+        }),
       ],
     });
     const result = checkSmartTriggers(9001, snapshot);
@@ -875,9 +858,9 @@ describe('edge cases', () => {
   });
 
   test('all trigger types return correct tier', () => {
-    // alert tier
+    // alert tier — anomaly fires at alert tier
     const alertSnap = buildTriggerSnapshot({
-      burnRates: [buildBurnRate({ status: 'exceeded' })],
+      anomalies: [buildAnomaly({ severity: 'significant' })],
     });
     const alertResult = checkSmartTriggers(8015, alertSnap);
     expect(alertResult?.tier).toBe('alert');

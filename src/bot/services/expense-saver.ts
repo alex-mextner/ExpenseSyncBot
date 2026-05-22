@@ -193,8 +193,28 @@ async function checkBudgetLimit(
     let message = '';
 
     if (progress.is_exceeded) {
+      // Dedup: send once per month per category so repeated expenses don't spam.
+      const topic = `budget_threshold:${category}:exceeded`;
+      const monthStartISO = `${monthStart}T00:00:00`;
+      if (database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStartISO)) return;
+
       message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
       message += `${emoji} ${category}: ${progressText}`;
+
+      // Write before send to prevent race condition with concurrent expense additions.
+      database.adviceLogs.create({
+        group_id: groupId,
+        tier: 'alert',
+        trigger_type: 'budget_threshold',
+        trigger_data: JSON.stringify({
+          category,
+          spent: spentInCurrency,
+          limit: budget.limit_amount,
+          currency: budgetCurrency,
+        }),
+        topic,
+        advice_text: message,
+      });
     } else if (progress.is_warning) {
       message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
       message += `${emoji} ${category}: ${progressText}`;

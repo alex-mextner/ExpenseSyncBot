@@ -212,19 +212,61 @@ export async function handleAdviceCommand(ctx: Ctx['Command'], group: Group): Pr
 }
 
 /**
- * Check smart triggers and maybe send advice
+ * Check smart triggers and dispatch:
+ *   budget_threshold:exceeded → always send factual message to chat + write advice_log
+ *   other trigger, AUTO_ADVICE_ENABLED=true  → send AI advice via sendSmartAdvice
+ *   other trigger, AUTO_ADVICE_ENABLED=false → log context for analysis only
+ *
+ * Once-per-month dedup for budget_exceeded: checkSmartTriggers calls hasTopicThisMonth
+ * before returning the trigger, so if we wrote an advice_log entry this month it returns
+ * null before we even get here.
  */
 export async function maybeSmartAdvice(groupId: number): Promise<void> {
   try {
     const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
     const trigger = checkSmartTriggers(groupId, snapshot);
-
     if (!trigger) return;
 
-    logger.info(
-      `[ADVICE] Smart trigger fired: ${trigger.type} (tier: ${trigger.tier}) for group ${groupId}`,
+    // Other triggers: send to chat when flag is on.
+    if (env.AUTO_ADVICE_ENABLED) {
+      await sendSmartAdvice(groupId, trigger, snapshot);
+      recordAdviceSent(groupId, trigger.tier);
+      return;
+    }
+
+    // Flag is off: log trigger context for offline analysis.
+    // recordAdviceSent sets in-memory cooldown so the same tier doesn't re-fire
+    // on every expense within the cooldown window (4h quick / 1h alert).
+    // advice_log entry activates hasTopicThisMonth dedup for monthly triggers.
+    const group = database.groups.findById(groupId);
+    const snapshotText = formatSnapshotForPrompt(
+      snapshot,
+      groupId,
+      group?.default_currency ?? BASE_CURRENCY,
     );
-    await sendSmartAdvice(groupId, trigger, snapshot);
+    logger.info(
+      {
+        groupId,
+        trigger: {
+          type: trigger.type,
+          tier: trigger.tier,
+          topic: trigger.topic,
+          data: trigger.data,
+        },
+        severity: computeOverallSeverity(snapshot),
+        context: snapshotText,
+      },
+      '[ADVICE] Auto-advice suppressed — trigger would have fired',
+    );
+    recordAdviceSent(groupId, trigger.tier);
+    database.adviceLogs.create({
+      group_id: groupId,
+      tier: trigger.tier,
+      trigger_type: trigger.type,
+      trigger_data: JSON.stringify(trigger.data),
+      topic: trigger.topic,
+      advice_text: '[auto-advice suppressed]',
+    });
   } catch (error) {
     logger.error({ err: error }, '[ADVICE] Error in smart advice check');
   }
@@ -361,8 +403,6 @@ async function sendSmartAdvice(
       );
     }
 
-    // Record advice in log and update cooldown
-    recordAdviceSent(groupId, tier);
     database.adviceLogs.create({
       group_id: groupId,
       tier,
