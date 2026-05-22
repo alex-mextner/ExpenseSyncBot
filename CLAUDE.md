@@ -669,6 +669,8 @@ Use these MCP servers proactively whenever they can help:
 - Specs: `docs/specs/YYYY-MM-DD-<topic>.md` — design documents and feature specifications
 - Plans: `docs/plans/YYYY-MM-DD-<topic>.md` — implementation plans with task breakdowns
 
+**Plans and specs MUST be committed and pushed** — they are part of the codebase, not ephemeral scratch files. After saving a plan or spec, `git add docs/` and commit it on the feature branch. Never leave them untracked.
+
 **OVERRIDE:** Skills that default to `docs/superpowers/plans/` or similar paths MUST use `docs/plans/` and `docs/specs/` instead. No `superpowers/` subdirectory.
 
 ## Logging
