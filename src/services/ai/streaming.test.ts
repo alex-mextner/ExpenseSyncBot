@@ -383,19 +383,16 @@ describe('aiStreamRound fallback chain', () => {
     expect(result.providerUsed).toContain('Gemini');
   });
 
-  it('aborts cleanly when signal triggers before stream start', async () => {
+  it('stops the chain immediately when the overall signal is pre-aborted', async () => {
+    // When the caller's overall deadline has already passed, trying any provider
+    // is pointless — the chain must abort at once with an AbortError-classified error,
+    // NOT loop through all three providers.
     const clientsMod = await import('./clients');
-    const createMock = mock(async (_params: unknown, opts?: { signal?: AbortSignal }) => {
-      // Simulate SDK v6: a pre-aborted signal yields an APIError with undefined status
-      if (opts?.signal?.aborted) {
-        throw new OpenAI.APIError(undefined as unknown as number, {}, 'aborted', new Headers());
-      }
-      return {
-        [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: 'nope' }, finish_reason: 'stop' }] };
-        },
-      };
-    });
+    const createMock = mock(async () => ({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { content: 'nope' }, finish_reason: 'stop' }] };
+      },
+    }));
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
@@ -409,15 +406,112 @@ describe('aiStreamRound fallback chain', () => {
     const controller = new AbortController();
     controller.abort();
 
-    // All providers abort → aggregated error with 3 provider failures
-    await expect(
-      streamingModule.aiStreamRound({
+    try {
+      await streamingModule.aiStreamRound({
         messages: [{ role: 'user', content: 'hi' }],
         maxTokens: 50,
         chain: 'smart',
         signal: controller.signal,
-      }),
-    ).rejects.toThrow(/All 3 providers/);
+      });
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect((err as Error).name).toBe('AbortError');
+    }
+    // No provider should have been called — the overall signal was already aborted.
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('per-provider timeout fires → falls back to next provider with a FRESH (non-aborted) signal', async () => {
+    // Problem A regression: the first provider hangs until its OWN per-provider
+    // timeout fires. The fallback must reach the second provider with a signal that
+    // is NOT aborted (the shared-signal bug would hand it the already-aborted signal).
+    // On the OLD code the first provider's hang never resolves → the test times out.
+    const clientsMod = await import('./clients');
+    const calls: string[] = [];
+    const secondSignalStates: Array<boolean | undefined> = [];
+
+    const createMock = mock(
+      async (
+        params: OpenAI.ChatCompletionCreateParamsStreaming,
+        opts?: { signal?: AbortSignal },
+      ) => {
+        calls.push(params.model);
+        if (params.model === 'test-model') {
+          // Hang until our injected per-provider timeout aborts this provider's signal.
+          await new Promise<void>((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => {
+              const err = new Error('aborted by per-provider timeout');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+          throw new Error('unreachable');
+        }
+        // Second provider: record whether its signal is fresh (not aborted).
+        secondSignalStates.push(opts?.signal?.aborted);
+        return {
+          [Symbol.asyncIterator]: async function* () {
+            yield { choices: [{ delta: { content: 'fresh fallback' }, finish_reason: 'stop' }] };
+          },
+        };
+      },
+    );
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+      chat: { completions: { create: createMock } },
+    } as unknown as OpenAI);
+    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+      chat: { completions: { create: createMock } },
+    } as unknown as OpenAI);
+
+    const result = await streamingModule.aiStreamRound({
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 50,
+      chain: 'smart',
+      perProviderTimeoutMs: 20,
+    });
+
+    expect(result.text).toBe('fresh fallback');
+    expect(result.providerUsed).toContain('Gemini');
+    expect(calls).toEqual(['test-model', 'gemini-test']);
+    // The second provider received a fresh, non-aborted signal.
+    expect(secondSignalStates).toEqual([false]);
+  });
+
+  it('per-provider timeout fires but overall signal also aborted → stops the chain', async () => {
+    // If the caller's overall deadline passed while the first provider was running,
+    // the chain must NOT try the next provider — it throws an AbortError instead.
+    const clientsMod = await import('./clients');
+    const calls: string[] = [];
+    const overallController = new AbortController();
+
+    const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      calls.push(params.model);
+      // First provider: abort the OVERALL signal, then reject as if its own timeout fired.
+      overallController.abort();
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      throw err;
+    });
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+      chat: { completions: { create: createMock } },
+    } as unknown as OpenAI);
+    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+      chat: { completions: { create: createMock } },
+    } as unknown as OpenAI);
+
+    try {
+      await streamingModule.aiStreamRound({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 50,
+        chain: 'smart',
+        signal: overallController.signal,
+      });
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect((err as Error).name).toBe('AbortError');
+    }
+    // Only the first provider was tried — overall deadline stops the chain.
+    expect(calls).toEqual(['test-model']);
   });
 
   it('tool-call resolution: handles missing tc.index (HF Router quirk)', async () => {
