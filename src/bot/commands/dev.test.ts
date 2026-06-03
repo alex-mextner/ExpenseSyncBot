@@ -64,6 +64,7 @@ const mockGroups = {
     active_topic_id: null,
     oauth_client: 'legacy',
     bank_panel_summary_message_id: null,
+    bank_cards_enabled: 1,
     created_at: '2026-04-19T00:00:00Z',
     updated_at: '2026-04-19T00:00:00Z',
   })),
@@ -166,6 +167,7 @@ const group: Group = {
   active_topic_id: null,
   oauth_client: 'legacy',
   bank_panel_summary_message_id: null,
+  bank_cards_enabled: 1,
   created_at: '2026-04-19T00:00:00Z',
   updated_at: '2026-04-19T00:00:00Z',
 };

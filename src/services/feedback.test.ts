@@ -72,6 +72,7 @@ describe('sendFeedback', () => {
       active_topic_id: null,
       oauth_client: 'legacy' as const,
       bank_panel_summary_message_id: null,
+      bank_cards_enabled: 1,
       created_at: '',
       updated_at: '',
     });
@@ -113,6 +114,7 @@ describe('sendFeedback', () => {
       active_topic_id: null,
       oauth_client: 'legacy' as const,
       bank_panel_summary_message_id: null,
+      bank_cards_enabled: 1,
       created_at: '',
       updated_at: '',
     });

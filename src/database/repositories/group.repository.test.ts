@@ -60,6 +60,11 @@ describe('GroupRepository', () => {
       expect(group.active_topic_id).toBeNull();
     });
 
+    test('new group has bank_cards_enabled defaulting to 0 (off)', () => {
+      const group = repo.create({ telegram_group_id: 109 });
+      expect(group.bank_cards_enabled).toBe(0);
+    });
+
     test('created_at and updated_at are populated', () => {
       const group = repo.create({ telegram_group_id: 107 });
       expect(group.created_at).toBeTruthy();
@@ -160,6 +165,19 @@ describe('GroupRepository', () => {
       repo.update(407, { active_topic_id: 10 });
       const updated = repo.update(407, { active_topic_id: null });
       expect(updated?.active_topic_id).toBeNull();
+    });
+
+    test('updates bank_cards_enabled to 1 (on)', () => {
+      repo.create({ telegram_group_id: 409 });
+      const updated = repo.update(409, { bank_cards_enabled: 1 });
+      expect(updated?.bank_cards_enabled).toBe(1);
+    });
+
+    test('flips bank_cards_enabled back to 0 (off)', () => {
+      repo.create({ telegram_group_id: 410 });
+      repo.update(410, { bank_cards_enabled: 1 });
+      const updated = repo.update(410, { bank_cards_enabled: 0 });
+      expect(updated?.bank_cards_enabled).toBe(0);
     });
 
     test('returns null for non-existent telegram_group_id', () => {

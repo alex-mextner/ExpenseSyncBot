@@ -1371,6 +1371,19 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '050_add_bank_cards_enabled_to_groups',
+      up: () => {
+        const check = db.query<{ count: number }, []>(`
+          SELECT COUNT(*) as count FROM pragma_table_info('groups')
+          WHERE name = 'bank_cards_enabled'
+        `);
+        if (check.get()?.count === 0) {
+          db.exec(`ALTER TABLE groups ADD COLUMN bank_cards_enabled INTEGER NOT NULL DEFAULT 0`);
+          logger.info('✓ Added bank_cards_enabled to groups');
+        }
+      },
+    },
   ];
 
   // Check and run migrations
