@@ -103,6 +103,24 @@ export function recordProviderResponded(key: string, now: number): void {
   }
 }
 
+/**
+ * Rate-limit/quota failures are immediately demoted instead of waiting for three connection
+ * failures. `cooldownMs` should come from Retry-After/reset metadata when available; callers use
+ * a conservative fallback otherwise. This state shares the same endpoint-level key as connection
+ * failures, so smart/fast variants of one provider cool down together.
+ */
+export function recordProviderRateLimit(key: string, now: number, cooldownMs: number): void {
+  const until = now + Math.max(1_000, cooldownMs);
+  const existing = health.get(key);
+  if (!existing) {
+    health.set(key, { failures: 0, clusterStartedAt: now, demotedUntil: until });
+    return;
+  }
+  existing.failures = 0;
+  existing.clusterStartedAt = now;
+  existing.demotedUntil = Math.max(existing.demotedUntil, until);
+}
+
 /** True while provider `key` is inside its demotion cooldown. */
 export function isProviderDemoted(key: string, now: number): boolean {
   const existing = health.get(key);

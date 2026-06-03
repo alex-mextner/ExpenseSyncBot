@@ -5,6 +5,7 @@ import {
   isProviderDemoted,
   orderByHealth,
   recordProviderConnectionFailure,
+  recordProviderRateLimit,
   recordProviderReachable,
   recordProviderResponded,
   resetProviderBreaker,
@@ -39,6 +40,22 @@ describe('provider-breaker', () => {
     recordProviderConnectionFailure('gemini', 1_000);
     recordProviderConnectionFailure('gemini', 2_000);
     expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['zai', 'hf', 'gemini']);
+  });
+
+  it('immediately demotes a rate-limited provider for the supplied cooldown', () => {
+    recordProviderRateLimit('zai', 10_000, 120_000);
+
+    expect(isProviderDemoted('zai', 129_999)).toBe(true);
+    expect(isProviderDemoted('zai', 130_000)).toBe(false);
+    expect(orderByHealth(slots, 20_000).map((s) => s.key)).toEqual(['gemini', 'hf', 'zai']);
+  });
+
+  it('rate-limit cooldown never shortens an existing longer cooldown', () => {
+    recordProviderRateLimit('zai', 10_000, 300_000);
+    recordProviderRateLimit('zai', 20_000, 30_000);
+
+    expect(isProviderDemoted('zai', 309_999)).toBe(true);
+    expect(isProviderDemoted('zai', 310_000)).toBe(false);
   });
 
   it('rehabilitates the provider after the cooldown elapses', () => {

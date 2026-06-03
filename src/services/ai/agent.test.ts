@@ -83,6 +83,23 @@ function makeTextResult(text: string): StreamRoundResult {
   };
 }
 
+/** Build a StreamRoundResult that requests a single tool call (no text yet) */
+function makeToolCallResult(toolName: string): StreamRoundResult {
+  return {
+    text: '',
+    toolCalls: [{ id: 'call_1', name: toolName, arguments: '{}' }],
+    finishReason: 'tool_calls',
+    assistantMessage: {
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: toolName, arguments: '{}' } },
+      ],
+    },
+    providerUsed: 'mock',
+  };
+}
+
 /**
  * Mock aiStreamRound to return a text response, also calling onTextDelta for each chunk.
  * Uses mockImplementationOnce.
@@ -963,6 +980,67 @@ describe('ExpenseBotAgent', () => {
 
       expect(sentText().some((t) => t.includes('Ошибка AI'))).toBe(true);
       expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
+    });
+  });
+  // -- run() -- multi-round completion & overall timeout ---------------------
+
+  describe('run() -- multi-round completion', () => {
+    beforeEach(() => {
+      mockExecuteTool.mockClear();
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
+    });
+
+    it('completes a 3-round query (tool, tool, final text) without an overall abort', async () => {
+      // Problem B regression: a legitimate multi-round query must finish. Each round
+      // is a separate aiStreamRound call — the first two request tool calls, the third
+      // returns the final answer. With mocks there is no real wall-clock delay, so this
+      // guards that the tool loop completes across rounds and the agent returns the text.
+      mockAiStreamRound
+        .mockImplementationOnce(async () => makeToolCallResult('get_expenses'))
+        .mockImplementationOnce(async () => makeToolCallResult('calculate'))
+        .mockImplementationOnce(async (_opts, callbacks) => {
+          const text = 'Final answer after 3 rounds';
+          callbacks.onTextDelta?.(text);
+          return makeTextResult(text);
+        });
+
+      const result = await agent.run(
+        'How much did I spend last month?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+
+      expect(result).toContain('Final answer after 3 rounds');
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(2);
+    });
+
+    it('overall-deadline abort yields the timeout message, not the generic AI error', async () => {
+      // Acceptance criterion 3: a truly-stuck run is bounded by the overall cap and
+      // surfaces "Время ожидания истекло", NOT "Ошибка AI". The streaming layer throws
+      // a plain Error with name='AbortError' when the overall signal fires.
+      const abortError = new Error('AI overall deadline exceeded');
+      abortError.name = 'AbortError';
+      mockIsRetryableError.mockReturnValue(true);
+      mockGetBackoffDelay.mockReturnValue(0);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'timeout',
+        userMessage: '⏳ Время ожидания истекло. Попробуйте ещё раз.',
+      });
+      mockAiStreamRound.mockRejectedValue(abortError);
+
+      const { AgentError } = await import('../../errors');
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentError);
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('ожидания');
+        expect((err as InstanceType<typeof AgentError>).userMessage).not.toContain('Ошибка AI');
+      }
     });
   });
 });
