@@ -247,6 +247,7 @@ function makeGroup(overrides: Partial<Group> = {}): Group {
     custom_prompt: null,
     active_topic_id: null,
     bank_panel_summary_message_id: null,
+    bank_cards_enabled: 1,
     oauth_client: 'current',
     created_at: '',
     updated_at: '',

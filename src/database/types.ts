@@ -18,6 +18,8 @@ export interface Group {
   custom_prompt: string | null;
   active_topic_id: number | null;
   bank_panel_summary_message_id: number | null;
+  /** 0 = bank sync sends no automatic confirmation cards; 1 = cards enabled */
+  bank_cards_enabled: number;
   oauth_client: OAuthClientType;
   created_at: string;
   updated_at: string;
@@ -38,6 +40,7 @@ export interface UpdateGroupData {
   custom_prompt?: string | null;
   active_topic_id?: number | null;
   bank_panel_summary_message_id?: number | null;
+  bank_cards_enabled?: number;
   oauth_client?: OAuthClientType;
 }
 

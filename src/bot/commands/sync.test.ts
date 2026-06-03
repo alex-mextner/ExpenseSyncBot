@@ -178,6 +178,7 @@ function fakeGroup(): GoogleConnectedGroup {
     oauth_client: 'current',
     active_topic_id: null,
     bank_panel_summary_message_id: null,
+    bank_cards_enabled: 1,
     title: null,
     invite_link: null,
     custom_prompt: null,
