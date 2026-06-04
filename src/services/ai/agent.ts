@@ -34,7 +34,13 @@ const logger = createLogger('agent');
 export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 const MAX_TOOL_ROUNDS = 10;
-const AGENT_TIMEOUT_MS = 60_000;
+/**
+ * Overall wall-clock cap for one agent run (all rounds + all retries combined).
+ * A legitimate multi-round query with a slow model needs well over 60s, so this
+ * is generous; it only bounds a truly-stuck run. Per-provider timeouts (in
+ * streaming.ts) catch individual hung providers much sooner.
+ */
+const AGENT_TIMEOUT_MS = 180_000;
 const MAX_API_RETRIES = 2; // 3 attempts total (1 initial + 2 retries)
 
 export class ExpenseBotAgent {
@@ -201,35 +207,44 @@ export class ExpenseBotAgent {
     debugCtx: AiDebugRunContext | null,
     toolCallNames: string[],
   ): Promise<{ text: string; toolCount: number }> {
-    for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+    // One overall deadline spanning all retries — a truly-stuck run is bounded
+    // by AGENT_TIMEOUT_MS, not AGENT_TIMEOUT_MS × attempts. Once it fires, the
+    // signal stays aborted, so any retry attempt aborts immediately.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
-      try {
-        return await this.runAgentLoop(
-          messages,
-          writer,
-          debugCtx,
-          controller.signal,
-          toolCallNames,
-        );
-      } catch (error) {
-        if (attempt < MAX_API_RETRIES && isRetryableError(error)) {
-          const delay = getBackoffDelay(attempt, error);
-          const errName = error instanceof Error ? error.message : String(error);
-          logger.warn(
-            `[AGENT] Attempt ${attempt + 1}/${MAX_API_RETRIES + 1} failed (${errName}), retrying in ${delay}ms`,
+    try {
+      for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
+        try {
+          return await this.runAgentLoop(
+            messages,
+            writer,
+            debugCtx,
+            controller.signal,
+            toolCallNames,
           );
-          writer.reset();
-          toolCallNames.length = 0;
-          await this.sleep(delay);
-          continue;
-        }
+        } catch (error) {
+          // Overall deadline fired — stop retrying, surface the timeout.
+          if (controller.signal.aborted) {
+            throw error;
+          }
+          if (attempt < MAX_API_RETRIES && isRetryableError(error)) {
+            const delay = getBackoffDelay(attempt, error);
+            const errName = error instanceof Error ? error.message : String(error);
+            logger.warn(
+              `[AGENT] Attempt ${attempt + 1}/${MAX_API_RETRIES + 1} failed (${errName}), retrying in ${delay}ms`,
+            );
+            writer.reset();
+            toolCallNames.length = 0;
+            await this.sleep(delay);
+            continue;
+          }
 
-        throw error;
-      } finally {
-        clearTimeout(timeout);
+          throw error;
+        }
       }
+    } finally {
+      clearTimeout(timeout);
     }
     throw new Error('[AGENT] Retry loop exhausted');
   }

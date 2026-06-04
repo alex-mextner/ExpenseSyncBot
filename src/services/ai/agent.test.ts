@@ -35,6 +35,12 @@ mock.module('./response-validator', () => ({
   validateResponse: mock(async () => ({ approved: true })),
 }));
 
+// Mock tool execution so multi-round tests don't hit the real DB.
+const mockExecuteTool = mock(async () => ({ success: true, output: 'tool ok' }));
+mock.module('./tool-executor', () => ({
+  executeTool: mockExecuteTool,
+}));
+
 import { ExpenseBotAgent } from './agent';
 import type { AgentContext } from './types';
 
@@ -59,6 +65,23 @@ function makeTextResult(text: string): StreamRoundResult {
     toolCalls: [],
     finishReason: 'stop',
     assistantMessage: { role: 'assistant', content: text },
+    providerUsed: 'mock',
+  };
+}
+
+/** Build a StreamRoundResult that requests a single tool call (no text yet) */
+function makeToolCallResult(toolName: string): StreamRoundResult {
+  return {
+    text: '',
+    toolCalls: [{ id: 'call_1', name: toolName, arguments: '{}' }],
+    finishReason: 'tool_calls',
+    assistantMessage: {
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: toolName, arguments: '{}' } },
+      ],
+    },
     providerUsed: 'mock',
   };
 }
@@ -621,6 +644,64 @@ describe('ExpenseBotAgent', () => {
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
       ).rejects.toBeInstanceOf(TypeError);
+    });
+  });
+
+  // -- run() -- multi-round completion & overall timeout ---------------------
+
+  describe('run() -- multi-round completion', () => {
+    beforeEach(() => {
+      mockExecuteTool.mockClear();
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
+    });
+
+    it('completes a 3-round query (tool, tool, final text) without an overall abort', async () => {
+      // Problem B regression: a legitimate multi-round query must finish. Each round
+      // is a separate aiStreamRound call — the first two request tool calls, the third
+      // returns the final answer. With mocks there is no real wall-clock delay, so this
+      // guards that the tool loop completes across rounds and the agent returns the text.
+      mockAiStreamRound
+        .mockImplementationOnce(async () => makeToolCallResult('get_expenses'))
+        .mockImplementationOnce(async () => makeToolCallResult('calculate'))
+        .mockImplementationOnce(async (_opts, callbacks) => {
+          const text = 'Final answer after 3 rounds';
+          callbacks.onTextDelta?.(text);
+          return makeTextResult(text);
+        });
+
+      const result = await agent.run(
+        'How much did I spend last month?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+
+      expect(result).toContain('Final answer after 3 rounds');
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(2);
+    });
+
+    it('overall-deadline abort yields the timeout message, not the generic AI error', async () => {
+      // Acceptance criterion 3: a truly-stuck run is bounded by the overall cap and
+      // surfaces "Время ожидания истекло", NOT "Ошибка AI". The streaming layer throws
+      // a plain Error with name='AbortError' when the overall signal fires.
+      const abortError = new Error('AI overall deadline exceeded');
+      abortError.name = 'AbortError';
+      mockIsRetryableError.mockReturnValue(true);
+      mockGetBackoffDelay.mockReturnValue(0);
+      mockAiStreamRound.mockRejectedValue(abortError);
+
+      const { AgentError } = await import('../../errors');
+      try {
+        await agent.run('question', [], mockBot as unknown as import('gramio').Bot);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentError);
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('ожидания');
+        expect((err as InstanceType<typeof AgentError>).userMessage).not.toContain('Ошибка AI');
+      }
     });
   });
 });

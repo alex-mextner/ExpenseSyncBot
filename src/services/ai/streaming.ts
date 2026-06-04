@@ -26,6 +26,14 @@ const logger = createLogger('ai-streaming');
 
 const DEFAULT_TEMPERATURE = 0.3;
 
+/**
+ * Per-provider wall-clock budget. Each provider in the fallback chain gets its
+ * own fresh timeout — a slow/hung provider aborts after this and the loop tries
+ * the next one with a clean signal. NOT shared across providers, so one stuck
+ * provider does not poison the fallback chain.
+ */
+const PER_PROVIDER_TIMEOUT_MS = 45_000;
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type ChainName = 'smart' | 'fast' | 'ocr';
@@ -53,7 +61,10 @@ export interface StreamRoundOptions {
   temperature?: number;
   /** Which chain to run. Default: 'smart'. */
   chain?: ChainName;
+  /** Overall caller deadline. When aborted, the fallback chain stops immediately. */
   signal?: AbortSignal;
+  /** Per-provider timeout override (defaults to PER_PROVIDER_TIMEOUT_MS). For tests. */
+  perProviderTimeoutMs?: number;
 }
 
 export interface StreamCallbacks {
@@ -62,6 +73,17 @@ export interface StreamCallbacks {
 }
 
 // ── Error helpers (exported for tests) ──────────────────────────────────────
+
+/**
+ * Build an Error classified as an abort. A plain Error with name='AbortError'
+ * (not a DOMException) so upstream `error.name === 'AbortError'` checks match
+ * the existing convention and the timeout user message fires.
+ */
+function makeAbortError(message: string): Error {
+  const err = new Error(message);
+  err.name = 'AbortError';
+  return err;
+}
 
 /** Provider-down: 5xx, timeout, network. Means "try next", retrying same provider is hopeless. */
 function isProviderDown(error: unknown): boolean {
@@ -304,11 +326,29 @@ export async function aiStreamRound(
   }
 
   const providerErrors: Array<{ name: string; error: Error }> = [];
+  const perProviderTimeoutMs = options.perProviderTimeoutMs ?? PER_PROVIDER_TIMEOUT_MS;
 
   for (const slot of chain) {
+    // Overall caller deadline already passed — trying more providers is pointless.
+    if (options.signal?.aborted) {
+      logger.warn('[AI_STREAM] Overall deadline exceeded, stopping fallback chain');
+      throw makeAbortError('AI overall deadline exceeded');
+    }
+
+    // Each provider gets its own fresh timeout combined with the overall signal.
+    // A slow provider aborts after perProviderTimeoutMs without poisoning the next one.
+    const perProviderController = new AbortController();
+    const perProviderTimeout = setTimeout(
+      () => perProviderController.abort(),
+      perProviderTimeoutMs,
+    );
+    const combinedSignal = options.signal
+      ? AbortSignal.any([options.signal, perProviderController.signal])
+      : perProviderController.signal;
+
     try {
       logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
-      return await slot.stream(options, wrappedCallbacks);
+      return await slot.stream({ ...options, signal: combinedSignal }, wrappedCallbacks);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       providerErrors.push({ name: slot.name, error: lastError });
@@ -322,10 +362,19 @@ export async function aiStreamRound(
         throw error;
       }
 
+      // Overall deadline fired (not just this provider's timeout) — stop the chain
+      // and signal a timeout so the caller surfaces the "time exceeded" message.
+      if (options.signal?.aborted) {
+        logger.warn('[AI_STREAM] Overall deadline exceeded mid-provider, stopping fallback chain');
+        throw makeAbortError('AI overall deadline exceeded');
+      }
+
       // Always try the next provider in the chain.
       // isRetryableError is for same-provider retry (backoff), not for fallback decisions.
       // Different providers have different quirks — one may fail where another succeeds.
       logger.warn(`[AI_STREAM] ${slot.name} failed, trying next provider`);
+    } finally {
+      clearTimeout(perProviderTimeout);
     }
   }
 
