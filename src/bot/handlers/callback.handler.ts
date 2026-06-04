@@ -42,6 +42,7 @@ import {
 import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { cancelPendingFeedback } from '../commands/feedback';
+import { handleSettingsBankCardsToggle } from '../commands/settings';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
@@ -103,6 +104,15 @@ export async function handleCallbackQuery(
         const msgId = ctx.message?.id;
         if (msgId && chatId) {
           await bot.api.deleteMessage({ chat_id: chatId, message_id: msgId });
+        }
+        break;
+      }
+
+      case 'settings': {
+        if (params[0] === 'bankcards') {
+          await handleSettingsBankCardsToggle(ctx);
+        } else {
+          await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
         }
         break;
       }

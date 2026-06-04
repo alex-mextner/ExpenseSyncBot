@@ -63,6 +63,7 @@ const GROUP: Group = {
   active_topic_id: 77,
   oauth_client: 'legacy',
   bank_panel_summary_message_id: null,
+  bank_cards_enabled: 1,
   created_at: '',
   updated_at: '',
 };

@@ -28,6 +28,7 @@ function makeGroup(id: number, telegramGroupId: number): Group {
     active_topic_id: null,
     oauth_client: 'legacy' as const,
     bank_panel_summary_message_id: null,
+    bank_cards_enabled: 1,
     created_at: '2024-01-01',
     updated_at: '2024-01-01',
   };
