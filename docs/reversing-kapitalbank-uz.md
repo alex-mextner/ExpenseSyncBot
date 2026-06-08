@@ -26,6 +26,23 @@ This doc is the methodology. The plugin lives in
 
 ---
 
+## Concrete setup (this dev machine)
+
+The values used historically, so you don't re-derive them each time:
+
+- **Interceptor:** mitmproxy installed at `~/.local/bin/{mitmproxy,mitmweb,mitmdump}`. CA certs
+  in `~/.mitmproxy/` (`mitmproxy-ca-cert.pem` etc.) — already trusted on the test phone.
+- **Mac LAN IP:** `192.168.0.18`. Proxy port used: **`8082`** (non-standard, picked to avoid
+  clashes). The phone gets `192.168.0.18:8082`.
+- **Test phone:** Samsung (Android 13), adb serial `RZ8R72YBZXL`. No sniffer app installed —
+  capture is purely via the adb-set system proxy. The bot's device fingerprint mimics a Samsung
+  `o1s` / `SM-G991B` (see `X-Device-Info` and the shim `device` block).
+- **Test credentials:** in `.env` as `ZEN_TEST_*` (`ZEN_TEST_PHONE`, `ZEN_TEST_PASSWORD`, plus
+  `ZEN_TEST_PINFL`, `ZEN_TEST_BDAY`, `ZEN_TEST_ISRESIDENT` for the myId path). `--env-prefix
+  ZEN_TEST` maps them to plugin preferences automatically.
+
+---
+
 ## Tooling
 
 ### Traffic capture: mitmproxy + adb global proxy (the setup that already exists here)
