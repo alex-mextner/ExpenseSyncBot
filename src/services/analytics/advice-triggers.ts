@@ -245,22 +245,29 @@ export function checkSmartTriggers(
   }
 
   // === Trigger 7: Pending bank transactions need review ===
-  const pendingConnections = database.bankConnections.findActiveByGroupId(groupId);
-  let totalPending = 0;
-  for (const conn of pendingConnections) {
-    totalPending += database.bankTransactions.findPendingByConnectionId(conn.id).length;
-  }
-  if (totalPending > 0) {
-    // Embed today's date to allow daily reminders (unlike other triggers which use monthly dedup)
-    const topic = `pending_bank_transactions:${today}`;
-    if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
-      if (canSendAdvice(groupId, 'quick')) {
-        return {
-          type: 'pending_bank_transactions',
-          tier: 'quick',
-          topic,
-          data: { count: totalPending },
-        };
+  // Only nag when the group actually receives bank confirmation cards. With cards
+  // off (the default), debits are still stored as 'pending' but there is no in-chat
+  // path to confirm them, so a "N pending transactions" reminder points at something
+  // the user deliberately chose not to be bothered by and cannot act on.
+  const group = database.groups.findById(groupId);
+  if (group?.bank_cards_enabled) {
+    const pendingConnections = database.bankConnections.findActiveByGroupId(groupId);
+    let totalPending = 0;
+    for (const conn of pendingConnections) {
+      totalPending += database.bankTransactions.findPendingByConnectionId(conn.id).length;
+    }
+    if (totalPending > 0) {
+      // Embed today's date to allow daily reminders (unlike other triggers which use monthly dedup)
+      const topic = `pending_bank_transactions:${today}`;
+      if (!database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStart)) {
+        if (canSendAdvice(groupId, 'quick')) {
+          return {
+            type: 'pending_bank_transactions',
+            tier: 'quick',
+            topic,
+            data: { count: totalPending },
+          };
+        }
       }
     }
   }
