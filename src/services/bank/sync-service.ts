@@ -380,7 +380,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     // When off, sync is balance/history-only: transactions stay in the DB as
     // pending, but no AI prefill is spent and no unsolicited cards are sent.
     if (group.bank_cards_enabled) {
-      await pushAutomaticCards(newPendingTxs, conn, group, connectionId, today);
+      await pushAutomaticCards(newPendingTxs, conn, group, today);
     } else if (newPendingTxs.length > 0) {
       logger.info(
         { connectionId, groupId: group.id, pending: newPendingTxs.length },
@@ -628,15 +628,15 @@ function extractTime(dateStr: string): string | null {
 }
 
 /**
- * Phase 2+3 of a sync cycle: AI-prefill the new pending transactions, push a
- * confirmation card for each of today's, and send an old-tx summary for the rest.
- * Called only when the group has bank cards enabled (the gate lives in runSyncCycle).
+ * Runs the chat-card steps of a sync cycle: AI-prefill the new pending
+ * transactions, push a confirmation card for each of today's, and send an
+ * old-tx summary for the rest. Called only when the group has bank cards
+ * enabled (the gate lives in runSyncCycle).
  */
 async function pushAutomaticCards(
   newPendingTxs: BankTransaction[],
   conn: BankConnection,
   group: Group,
-  connectionId: number,
   today: string,
 ): Promise<void> {
   // Phase 2: batch AI pre-fill for all new pending transactions
@@ -660,7 +660,7 @@ async function pushAutomaticCards(
 
     // Skip cards for transactions from excluded accounts
     if (inserted.account_id) {
-      const accounts = database.bankAccounts.findByConnectionId(connectionId);
+      const accounts = database.bankAccounts.findByConnectionId(conn.id);
       const account = accounts.find((a) => a.account_id === inserted.account_id);
       if (account?.is_excluded === 1) continue;
     }
