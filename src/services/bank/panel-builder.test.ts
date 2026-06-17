@@ -448,6 +448,18 @@ describe('bank cards off hint', () => {
     expect(buildBankStatusText(baseConn)).not.toContain('/settings');
   });
 
+  test('cards off: balance-only section hides the "recent operations" list', () => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 0 });
+    mockTxs.findPendingByConnectionId = () => [
+      makeBankTransaction({ amount: 25, currency: 'EUR', merchant: 'Stale', status: 'pending' }),
+    ];
+    const text = buildBankStatusText(baseConn);
+    // Stale pending rows must not show — they'd contradict the "только баланс" hint.
+    expect(text).not.toContain('Последние операции');
+    expect(text).toContain('Баланс');
+    mockTxs.findPendingByConnectionId = () => [];
+  });
+
   test('buildBankStatusText omits the hint when the group is missing', () => {
     mockGroups.findById = () => null;
     // No group resolved → cardsEnabled false → hint shown (fail-visible, not hidden)

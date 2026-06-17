@@ -495,8 +495,10 @@ describe('bank setup/wizard callbacks', () => {
       reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
     };
     expect(call.text).toContain('TBC (GE)');
-    // Cards are off by default — the info screen must say so and point at /settings,
-    // not promise AI categories / confirmation / Sheets sync that won't happen yet.
+    // Default is balance-only — the info screen must say balance still syncs, that
+    // transactions/cards are off by default, and point at /settings — not promise
+    // AI categories / confirmation / Sheets sync that won't happen yet.
+    expect(call.text).toMatch(/баланс/i);
     expect(call.text).toMatch(/выключен/i);
     expect(call.text).toContain('/settings');
     expect(call.reply_markup.inline_keyboard[0]?.[0]?.callback_data).toBe(

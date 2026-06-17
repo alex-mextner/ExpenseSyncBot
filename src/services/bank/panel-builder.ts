@@ -27,8 +27,10 @@ function cardsEnabledForConnection(conn: BankConnection): boolean {
  * Per-connection status section (balance, recent operations, errors).
  * Does NOT include the cards-off hint — that is panel-level and added once by the
  * public builders, so the combined multi-bank panel never repeats it per section.
+ * When cards are off the sync is balance-only, so the "recent operations" list is
+ * omitted — otherwise stale pending rows would contradict the "только баланс" hint.
  */
-function renderBankSection(conn: BankConnection): string {
+function renderBankSection(conn: BankConnection, cardsEnabled: boolean): string {
   const accounts = database.bankAccounts.findByConnectionId(conn.id);
 
   const syncLine = conn.last_sync_at
@@ -44,7 +46,9 @@ function renderBankSection(conn: BankConnection): string {
         ? 'балансы не найдены'
         : 'балансы загрузятся после первой синхронизации';
 
-  const pendingTxs = database.bankTransactions.findPendingByConnectionId(conn.id).slice(0, 3);
+  const pendingTxs = cardsEnabled
+    ? database.bankTransactions.findPendingByConnectionId(conn.id).slice(0, 3)
+    : [];
   const txLines =
     pendingTxs.length > 0
       ? '\n\nПоследние операции:\n' +
@@ -70,7 +74,8 @@ function renderBankSection(conn: BankConnection): string {
  * /bank view, sync-service status edits, and panel navigation alike.
  */
 export function buildBankStatusText(conn: BankConnection): string {
-  return `${renderBankSection(conn)}${bankCardsOffHint(cardsEnabledForConnection(conn))}`;
+  const cardsEnabled = cardsEnabledForConnection(conn);
+  return `${renderBankSection(conn, cardsEnabled)}${bankCardsOffHint(cardsEnabled)}`;
 }
 
 /**
@@ -118,11 +123,12 @@ export function buildCombinedBankStatusText(
   connections: BankConnection[],
   totalEur: number,
 ): string {
-  // Sections render without the hint; it is appended once below the total. All
-  // connections in a panel belong to the same group, so the first one decides it.
-  const sections = connections.map(renderBankSection).join('\n\n');
+  // All connections in a panel belong to the same group, so the first one decides
+  // the cards state. Sections render without the hint (appended once below the total)
+  // but DO respect cardsEnabled so the balance-only sections drop their tx lines.
   const first = connections[0];
   const cardsEnabled = first ? cardsEnabledForConnection(first) : true;
+  const sections = connections.map((conn) => renderBankSection(conn, cardsEnabled)).join('\n\n');
   return `${sections}\n\nИтого: ~${totalEur.toFixed(0)} EUR${bankCardsOffHint(cardsEnabled)}`;
 }
 
