@@ -1,6 +1,6 @@
 // Tests for panel-builder — status text, keyboard generation, and timeSince helper.
 
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import type { BankAccount, BankTransaction } from '../../database/types';
 import { makeBankTransaction } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
@@ -12,9 +12,15 @@ const mockAccounts: { findByConnectionId: (id: number) => BankAccount[] } = {
 const mockTxs: { findPendingByConnectionId: (id: number) => BankTransaction[] } = {
   findPendingByConnectionId: () => [],
 };
+// buildBankStatusText resolves the cards-off hint from the owning group. Default
+// to cards-on (no hint) so unrelated panel tests are unaffected; hint tests override.
+const mockGroups: { findById: (id: number) => { bank_cards_enabled: number } | null } = {
+  findById: () => ({ bank_cards_enabled: 1 }),
+};
 
 mock.module('../../database', () => ({
   database: mockDatabase({
+    groups: { findById: mock((id: number) => mockGroups.findById(id)) },
     bankAccounts: { findByConnectionId: mock((id: number) => mockAccounts.findByConnectionId(id)) },
     bankTransactions: {
       findPendingByConnectionId: mock((id: number) => mockTxs.findPendingByConnectionId(id)),
@@ -421,6 +427,45 @@ describe('buildCombinedBankStatusText', () => {
     const text = buildCombinedBankStatusText([baseConn], 0);
     expect(text).toContain(baseConn.display_name);
     expect(text).toContain('Итого: ~0 EUR');
+  });
+});
+
+describe('bank cards off hint', () => {
+  afterEach(() => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 1 });
+  });
+
+  test('buildBankStatusText appends the hint when the group has cards off', () => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 0 });
+    const text = buildBankStatusText(baseConn);
+    expect(text).toContain('выключены');
+    expect(text).toContain('/settings');
+  });
+
+  test('buildBankStatusText omits the hint when cards are on', () => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 1 });
+    expect(buildBankStatusText(baseConn)).not.toContain('/settings');
+  });
+
+  test('buildBankStatusText omits the hint when the group is missing', () => {
+    mockGroups.findById = () => null;
+    // No group resolved → cardsEnabled false → hint shown (fail-visible, not hidden)
+    expect(buildBankStatusText(baseConn)).toContain('/settings');
+  });
+
+  test('buildCombinedBankStatusText shows the hint exactly once across multiple banks', () => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 0 });
+    const c1 = { ...baseConn, id: 1, display_name: 'A' };
+    const c2 = { ...baseConn, id: 2, display_name: 'B' };
+    const text = buildCombinedBankStatusText([c1, c2], 1234);
+    expect(text).toContain('выключены');
+    expect(text.match(/\/settings/g)?.length).toBe(1);
+    expect(text.match(/выключены/g)?.length).toBe(1);
+  });
+
+  test('buildCombinedBankStatusText omits the hint when cards are on', () => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 1 });
+    expect(buildCombinedBankStatusText([baseConn], 0)).not.toContain('/settings');
   });
 });
 
