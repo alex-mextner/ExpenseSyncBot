@@ -845,7 +845,7 @@ describe('runSyncCycle — bank_cards_enabled toggle', () => {
     });
   }
 
-  it('cards disabled: inserts transactions but sends no cards and skips prefill', async () => {
+  it('cards disabled: balance-only — upserts accounts but does not store or card transactions', async () => {
     const conn = seedConnection({}, { bank_cards_enabled: 0 });
 
     const today = todayStr();
@@ -873,24 +873,27 @@ describe('runSyncCycle — bank_cards_enabled toggle', () => {
 
     await triggerManualSync(conn.id);
 
-    // Phase 1 still runs — both transactions inserted into DB.
-    expect(bankTxInsertIgnoreMock).toHaveBeenCalledTimes(2);
-    expect(store.transactions.length).toBe(2);
+    // Balance still syncs — account upserted so /bank can show the balance.
+    expect(bankAccountsUpsertMock).toHaveBeenCalledTimes(1);
+    expect(bankAccountsUpsertMock.mock.calls[0]?.[0]).toMatchObject({
+      account_id: 'acc1',
+      balance: 100,
+    });
 
-    // Phase 2 (AI prefill) skipped entirely — no Anthropic spend.
+    // Transactions are NOT synced when cards are off: none inserted, none stored.
+    expect(bankTxInsertIgnoreMock).not.toHaveBeenCalled();
+    expect(store.transactions.length).toBe(0);
+
+    // No AI prefill, no confirmation card, no old-tx summary.
     expect(prefillMock).not.toHaveBeenCalled();
-
-    // Phase 3 — no per-tx confirmation card.
     expect(findConfirmationCard()).toBeUndefined();
-
-    // notifyOldTransactions — no summary card.
     expect(findOldTxSummaryCard()).toBeUndefined();
 
-    // An info log notes cards are disabled for the group.
-    const disabledLog = logMock.info.mock.calls.find(
-      (c) => typeof c[1] === 'string' && c[1].includes('cards disabled'),
+    // An info log notes the balance-only sync.
+    const balanceOnlyLog = logMock.info.mock.calls.find(
+      (c) => typeof c[1] === 'string' && c[1].includes('balance-only'),
     );
-    expect(disabledLog).toBeTruthy();
+    expect(balanceOnlyLog).toBeTruthy();
 
     // Success path — failures still reset, no error logs.
     expect(logMock.error).not.toHaveBeenCalled();

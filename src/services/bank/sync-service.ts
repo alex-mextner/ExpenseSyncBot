@@ -334,57 +334,59 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
       });
     }
 
-    // Load approved merchant rules once for this cycle
-    const approvedRules = database.merchantRules.findApproved();
-    const today = format(new Date(), 'yyyy-MM-dd');
-
-    // Phase 1: insert all transactions into DB
-    const newPendingTxs: BankTransaction[] = [];
-    for (const tx of transactions) {
-      const amount = Math.abs(tx.sum);
-      if (amount === 0) continue;
-
-      const signType = determineSignType(tx);
-      // Credit/incoming transactions are stored for reference but not confirmed as expenses
-      const status: BankTransaction['status'] =
-        signType === 'debit' ? 'pending' : 'skipped_reversal';
-
-      // Apply merchant normalization
-      const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
-
-      const txDate = tx.date.includes('T') ? (tx.date.split('T')[0] ?? tx.date) : tx.date;
-      const txTime = extractTime(tx.date);
-
-      const inserted = database.bankTransactions.insertIgnore({
-        connection_id: connectionId,
-        external_id: tx.id,
-        account_id: tx.account ?? null,
-        date: txDate,
-        time: txTime,
-        amount,
-        sign_type: signType,
-        currency: tx.currency,
-        merchant: tx.merchant ?? null,
-        merchant_normalized: merchantNormalized,
-        mcc: tx.mcc ?? null,
-        raw_data: JSON.stringify(tx),
-        status,
-      });
-
-      if (inserted && status === 'pending') {
-        newPendingTxs.push(inserted);
-      }
-    }
-
-    // Automatic confirmation cards are opt-in per group (bank_cards_enabled).
-    // When off, sync is balance/history-only: transactions stay in the DB as
-    // pending, but no AI prefill is spent and no unsolicited cards are sent.
+    // Transaction sync is opt-in per group (bank_cards_enabled). When off, the
+    // cycle is balance-only: accounts/balances above are still upserted so /bank
+    // shows the balance, but transactions are neither stored nor carded — so no
+    // pending backlog accumulates while cards are off.
     if (group.bank_cards_enabled) {
+      // Load approved merchant rules once for this cycle
+      const approvedRules = database.merchantRules.findApproved();
+      const today = format(new Date(), 'yyyy-MM-dd');
+
+      // Phase 1: insert all transactions into DB
+      const newPendingTxs: BankTransaction[] = [];
+      for (const tx of transactions) {
+        const amount = Math.abs(tx.sum);
+        if (amount === 0) continue;
+
+        const signType = determineSignType(tx);
+        // Credit/incoming transactions are stored for reference but not confirmed as expenses
+        const status: BankTransaction['status'] =
+          signType === 'debit' ? 'pending' : 'skipped_reversal';
+
+        // Apply merchant normalization
+        const merchantNormalized = applyMerchantRules(tx.merchant, approvedRules);
+
+        const txDate = tx.date.includes('T') ? (tx.date.split('T')[0] ?? tx.date) : tx.date;
+        const txTime = extractTime(tx.date);
+
+        const inserted = database.bankTransactions.insertIgnore({
+          connection_id: connectionId,
+          external_id: tx.id,
+          account_id: tx.account ?? null,
+          date: txDate,
+          time: txTime,
+          amount,
+          sign_type: signType,
+          currency: tx.currency,
+          merchant: tx.merchant ?? null,
+          merchant_normalized: merchantNormalized,
+          mcc: tx.mcc ?? null,
+          raw_data: JSON.stringify(tx),
+          status,
+        });
+
+        if (inserted && status === 'pending') {
+          newPendingTxs.push(inserted);
+        }
+      }
+
+      // Phase 2+3: AI prefill, per-tx confirmation cards, and old-tx summary
       await pushAutomaticCards(newPendingTxs, conn, group, today);
-    } else if (newPendingTxs.length > 0) {
+    } else {
       logger.info(
-        { connectionId, groupId: group.id, pending: newPendingTxs.length },
-        'Bank cards disabled for group — stored transactions without sending cards',
+        { connectionId, groupId: group.id, transactions: transactions.length },
+        'Bank cards disabled for group — balance-only sync, transactions skipped',
       );
     }
 
