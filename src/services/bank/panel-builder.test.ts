@@ -424,6 +424,34 @@ describe('buildCombinedBankStatusText', () => {
   });
 });
 
+describe('bank cards off hint', () => {
+  test('buildBankStatusText appends the hint when cards are off', () => {
+    const text = buildBankStatusText(baseConn, false);
+    expect(text).toContain('выключены');
+    expect(text).toContain('/settings');
+  });
+
+  test('buildBankStatusText omits the hint when cards are on', () => {
+    expect(buildBankStatusText(baseConn, true)).not.toContain('/settings');
+  });
+
+  test('buildBankStatusText omits the hint by default', () => {
+    expect(buildBankStatusText(baseConn)).not.toContain('/settings');
+  });
+
+  test('buildCombinedBankStatusText shows the hint exactly once across multiple banks', () => {
+    const c1 = { ...baseConn, id: 1, display_name: 'A' };
+    const c2 = { ...baseConn, id: 2, display_name: 'B' };
+    const text = buildCombinedBankStatusText([c1, c2], 1234, false);
+    expect(text).toContain('выключены');
+    expect(text.match(/\/settings/g)?.length).toBe(1);
+  });
+
+  test('buildCombinedBankStatusText omits the hint when cards are on', () => {
+    expect(buildCombinedBankStatusText([baseConn], 0, true)).not.toContain('/settings');
+  });
+});
+
 describe('buildCombinedBankKeyboard', () => {
   test('per-bank: sync button present when active + synced + no failures', () => {
     const conn = {

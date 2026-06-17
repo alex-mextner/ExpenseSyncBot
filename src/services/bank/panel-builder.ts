@@ -7,7 +7,17 @@ export interface PanelButton {
   callback_data: string;
 }
 
-export function buildBankStatusText(conn: BankConnection): string {
+/**
+ * Reminder appended to the /bank panel when chat cards are off, so transactions
+ * that sync silently into the DB aren't a mystery and the user knows how to enable them.
+ */
+function bankCardsOffHint(cardsEnabled: boolean | undefined): string {
+  return cardsEnabled === false
+    ? '\n\n🔕 Карточки транзакций в чате выключены — включить в /settings'
+    : '';
+}
+
+export function buildBankStatusText(conn: BankConnection, cardsEnabled?: boolean): string {
   const accounts = database.bankAccounts.findByConnectionId(conn.id);
 
   const syncLine = conn.last_sync_at
@@ -40,7 +50,7 @@ export function buildBankStatusText(conn: BankConnection): string {
       ? `\n⚠️ Ошибка синхронизации: ${conn.last_error}`
       : '';
 
-  return `🏦 ${conn.display_name} · ${syncLine} · ${statusEmoji}\nБаланс: ${balanceLine}${txLines}${errorLine}`;
+  return `🏦 ${conn.display_name} · ${syncLine} · ${statusEmoji}\nБаланс: ${balanceLine}${txLines}${errorLine}${bankCardsOffHint(cardsEnabled)}`;
 }
 
 /**
@@ -87,9 +97,11 @@ export function timeSince(isoDate: string): string {
 export function buildCombinedBankStatusText(
   connections: BankConnection[],
   totalEur: number,
+  cardsEnabled?: boolean,
 ): string {
+  // Per-section text omits the hint (cardsEnabled not forwarded) so it appears once below the total.
   const sections = connections.map((conn) => buildBankStatusText(conn)).join('\n\n');
-  return `${sections}\n\nИтого: ~${totalEur.toFixed(0)} EUR`;
+  return `${sections}\n\nИтого: ~${totalEur.toFixed(0)} EUR${bankCardsOffHint(cardsEnabled)}`;
 }
 
 /**

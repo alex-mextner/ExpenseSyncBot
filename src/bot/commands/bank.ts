@@ -297,7 +297,11 @@ async function showBanksPanel(
   // Send one combined message for all banks
   const accounts = database.bankAccounts.findByGroupId(group.id);
   const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
-  const text = buildCombinedBankStatusText(connections, totalEur);
+  const text = buildCombinedBankStatusText(
+    connections,
+    totalEur,
+    Boolean(group.bank_cards_enabled),
+  );
   const keyboard = buildCombinedBankKeyboard(connections);
 
   const sent = await sendMessage(text, {
@@ -332,7 +336,7 @@ async function showBankStatus(
       // already gone
     }
   }
-  const text = buildBankStatusText(conn);
+  const text = buildBankStatusText(conn, Boolean(group.bank_cards_enabled));
   const sent = await sendMessage(text, {
     reply_markup: {
       inline_keyboard: buildBankManageKeyboard(conn, explicit),
