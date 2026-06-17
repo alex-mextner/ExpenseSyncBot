@@ -438,7 +438,8 @@ describe('bank cards off hint', () => {
   test('buildBankStatusText appends the hint when the group has cards off', () => {
     mockGroups.findById = () => ({ bank_cards_enabled: 0 });
     const text = buildBankStatusText(baseConn);
-    expect(text).toContain('выключены');
+    expect(text).toContain('не синхронизируются');
+    expect(text).toContain('баланс');
     expect(text).toContain('/settings');
   });
 
@@ -458,9 +459,9 @@ describe('bank cards off hint', () => {
     const c1 = { ...baseConn, id: 1, display_name: 'A' };
     const c2 = { ...baseConn, id: 2, display_name: 'B' };
     const text = buildCombinedBankStatusText([c1, c2], 1234);
-    expect(text).toContain('выключены');
+    expect(text).toContain('не синхронизируются');
     expect(text.match(/\/settings/g)?.length).toBe(1);
-    expect(text.match(/выключены/g)?.length).toBe(1);
+    expect(text.match(/не синхронизируются/g)?.length).toBe(1);
   });
 
   test('buildCombinedBankStatusText omits the hint when cards are on', () => {

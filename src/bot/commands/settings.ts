@@ -23,7 +23,7 @@ export function buildSettingsView(group: Group): { text: string; keyboard: Inlin
   text += `💱 Валюта по умолчанию: ${group.default_currency}\n`;
   text += `💵 Включенные валюты: ${group.enabled_currencies.join(', ')}\n`;
   text += `📊 Таблица: ${group.spreadsheet_id ? 'настроена' : 'не настроена'}\n`;
-  text += `🔔 Карточки банковских транзакций: ${cardsOn ? 'вкл' : 'выкл'}\n`;
+  text += `🔔 Карточки банковских транзакций: ${cardsOn ? 'вкл' : 'выкл (только баланс)'}\n`;
 
   const keyboard = new InlineKeyboard().text(
     cardsOn ? '🔕 Выключить карточки банка' : '🔔 Включить карточки банка',

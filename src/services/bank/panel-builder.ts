@@ -8,11 +8,14 @@ export interface PanelButton {
 }
 
 /**
- * Reminder appended to the /bank panel when chat cards are off, so transactions
- * that sync silently into the DB aren't a mystery and the user knows how to enable them.
+ * Reminder appended to the /bank panel when chat cards are off. In that mode the
+ * sync is balance-only (transactions are not pulled at all), so the panel explains
+ * why no transactions show up and how to turn them back on.
  */
 function bankCardsOffHint(cardsEnabled: boolean): string {
-  return cardsEnabled ? '' : '\n\n🔕 Карточки транзакций в чате выключены — включить в /settings';
+  return cardsEnabled
+    ? ''
+    : '\n\n🔕 Транзакции банка не синхронизируются — виден только баланс. Включить в /settings';
 }
 
 /** Whether the group that owns this connection currently has chat cards enabled. */
