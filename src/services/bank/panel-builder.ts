@@ -15,7 +15,17 @@ function bankCardsOffHint(cardsEnabled: boolean): string {
   return cardsEnabled ? '' : '\n\n🔕 Карточки транзакций в чате выключены — включить в /settings';
 }
 
-export function buildBankStatusText(conn: BankConnection, cardsEnabled = true): string {
+/** Whether the group that owns this connection currently has chat cards enabled. */
+function cardsEnabledForConnection(conn: BankConnection): boolean {
+  return Boolean(database.groups.findById(conn.group_id)?.bank_cards_enabled);
+}
+
+/**
+ * Per-connection status section (balance, recent operations, errors).
+ * Does NOT include the cards-off hint — that is panel-level and added once by the
+ * public builders, so the combined multi-bank panel never repeats it per section.
+ */
+function renderBankSection(conn: BankConnection): string {
   const accounts = database.bankAccounts.findByConnectionId(conn.id);
 
   const syncLine = conn.last_sync_at
@@ -48,7 +58,16 @@ export function buildBankStatusText(conn: BankConnection, cardsEnabled = true): 
       ? `\n⚠️ Ошибка синхронизации: ${conn.last_error}`
       : '';
 
-  return `🏦 ${conn.display_name} · ${syncLine} · ${statusEmoji}\nБаланс: ${balanceLine}${txLines}${errorLine}${bankCardsOffHint(cardsEnabled)}`;
+  return `🏦 ${conn.display_name} · ${syncLine} · ${statusEmoji}\nБаланс: ${balanceLine}${txLines}${errorLine}`;
+}
+
+/**
+ * Single-connection panel text. The cards-off hint is resolved from the owning
+ * group here, so it persists across every render of the panel — the initial
+ * /bank view, sync-service status edits, and panel navigation alike.
+ */
+export function buildBankStatusText(conn: BankConnection): string {
+  return `${renderBankSection(conn)}${bankCardsOffHint(cardsEnabledForConnection(conn))}`;
 }
 
 /**
@@ -95,10 +114,12 @@ export function timeSince(isoDate: string): string {
 export function buildCombinedBankStatusText(
   connections: BankConnection[],
   totalEur: number,
-  cardsEnabled = true,
 ): string {
-  // Sections use the default cardsEnabled=true (no hint) so the hint appears once below the total.
-  const sections = connections.map((conn) => buildBankStatusText(conn)).join('\n\n');
+  // Sections render without the hint; it is appended once below the total. All
+  // connections in a panel belong to the same group, so the first one decides it.
+  const sections = connections.map(renderBankSection).join('\n\n');
+  const first = connections[0];
+  const cardsEnabled = first ? cardsEnabledForConnection(first) : true;
   return `${sections}\n\nИтого: ~${totalEur.toFixed(0)} EUR${bankCardsOffHint(cardsEnabled)}`;
 }
 
