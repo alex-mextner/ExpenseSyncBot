@@ -380,74 +380,7 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
     // When off, sync is balance/history-only: transactions stay in the DB as
     // pending, but no AI prefill is spent and no unsolicited cards are sent.
     if (group.bank_cards_enabled) {
-      // Phase 2: batch AI pre-fill for all new pending transactions
-      const prefillResults = await preFillTransactions(newPendingTxs, group.id);
-      for (let i = 0; i < newPendingTxs.length; i++) {
-        const tx = newPendingTxs[i];
-        const prefilled = prefillResults[i];
-        if (tx && prefilled) {
-          database.bankTransactions.setPrefill(tx.id, prefilled.category, '');
-        }
-      }
-
-      // Phase 3: send confirmation cards — only for today's transactions
-      for (let i = 0; i < newPendingTxs.length; i++) {
-        const inserted = newPendingTxs[i];
-        const prefilled = prefillResults[i];
-        if (!inserted || !prefilled) continue;
-
-        // Skip cards for old transactions — stored in DB but no card sent
-        if (inserted.date !== today) continue;
-
-        // Skip cards for transactions from excluded accounts
-        if (inserted.account_id) {
-          const accounts = database.bankAccounts.findByConnectionId(connectionId);
-          const account = accounts.find((a) => a.account_id === inserted.account_id);
-          if (account?.is_excluded === 1) continue;
-        }
-
-        // Large transaction: compare EUR equivalent to threshold
-        const amountInEur = convertAnyToEUR(inserted.amount, inserted.currency);
-        const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
-
-        const cardText = formatConfirmationCard(
-          inserted,
-          prefilled.category,
-          conn.display_name,
-          isLarge,
-        );
-
-        const result = await withChatContext(
-          group.telegram_group_id,
-          conn.panel_message_thread_id,
-          () =>
-            sendMessage(cardText, {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '✅ Принять', callback_data: `bank_confirm:${inserted.id}` },
-                    { text: '✏️ Исправить', callback_data: `bank_edit:${inserted.id}` },
-                  ],
-                ],
-              },
-            }),
-        );
-
-        if (result) {
-          database.bankTransactions.setTelegramMessageId(inserted.id, result.message_id);
-        }
-      }
-
-      // Notify about old (non-today) transactions that were inserted this cycle
-      const oldTxsWithPrefill = newPendingTxs
-        .map((tx, i) => ({
-          tx,
-          category: prefillResults[i]?.category ?? tx.prefill_category ?? '—',
-        }))
-        .filter(({ tx }) => tx.date !== today);
-      if (oldTxsWithPrefill.length > 0) {
-        await notifyOldTransactions(oldTxsWithPrefill, conn, group);
-      }
+      await pushAutomaticCards(newPendingTxs, conn, group, connectionId, today);
     } else if (newPendingTxs.length > 0) {
       logger.info(
         { connectionId, groupId: group.id, pending: newPendingTxs.length },
@@ -692,6 +625,88 @@ function extractTime(dateStr: string): string | null {
   // Strip timezone offset and seconds — keep HH:MM
   const hhmm = timePart.slice(0, 5);
   return /^\d{2}:\d{2}$/.test(hhmm) ? hhmm : null;
+}
+
+/**
+ * Phase 2+3 of a sync cycle: AI-prefill the new pending transactions, push a
+ * confirmation card for each of today's, and send an old-tx summary for the rest.
+ * Called only when the group has bank cards enabled (the gate lives in runSyncCycle).
+ */
+async function pushAutomaticCards(
+  newPendingTxs: BankTransaction[],
+  conn: BankConnection,
+  group: Group,
+  connectionId: number,
+  today: string,
+): Promise<void> {
+  // Phase 2: batch AI pre-fill for all new pending transactions
+  const prefillResults = await preFillTransactions(newPendingTxs, group.id);
+  for (let i = 0; i < newPendingTxs.length; i++) {
+    const tx = newPendingTxs[i];
+    const prefilled = prefillResults[i];
+    if (tx && prefilled) {
+      database.bankTransactions.setPrefill(tx.id, prefilled.category, '');
+    }
+  }
+
+  // Phase 3: send confirmation cards — only for today's transactions
+  for (let i = 0; i < newPendingTxs.length; i++) {
+    const inserted = newPendingTxs[i];
+    const prefilled = prefillResults[i];
+    if (!inserted || !prefilled) continue;
+
+    // Skip cards for old transactions — stored in DB but no card sent
+    if (inserted.date !== today) continue;
+
+    // Skip cards for transactions from excluded accounts
+    if (inserted.account_id) {
+      const accounts = database.bankAccounts.findByConnectionId(connectionId);
+      const account = accounts.find((a) => a.account_id === inserted.account_id);
+      if (account?.is_excluded === 1) continue;
+    }
+
+    // Large transaction: compare EUR equivalent to threshold
+    const amountInEur = convertAnyToEUR(inserted.amount, inserted.currency);
+    const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
+
+    const cardText = formatConfirmationCard(
+      inserted,
+      prefilled.category,
+      conn.display_name,
+      isLarge,
+    );
+
+    const result = await withChatContext(
+      group.telegram_group_id,
+      conn.panel_message_thread_id,
+      () =>
+        sendMessage(cardText, {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Принять', callback_data: `bank_confirm:${inserted.id}` },
+                { text: '✏️ Исправить', callback_data: `bank_edit:${inserted.id}` },
+              ],
+            ],
+          },
+        }),
+    );
+
+    if (result) {
+      database.bankTransactions.setTelegramMessageId(inserted.id, result.message_id);
+    }
+  }
+
+  // Notify about old (non-today) transactions that were inserted this cycle
+  const oldTxsWithPrefill = newPendingTxs
+    .map((tx, i) => ({
+      tx,
+      category: prefillResults[i]?.category ?? tx.prefill_category ?? '—',
+    }))
+    .filter(({ tx }) => tx.date !== today);
+  if (oldTxsWithPrefill.length > 0) {
+    await notifyOldTransactions(oldTxsWithPrefill, conn, group);
+  }
 }
 
 function formatConfirmationCard(
