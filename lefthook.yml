@@ -1,6 +1,8 @@
 pre-commit:
   parallel: true
   commands:
+    global-git-hooks-dispatcher:
+      run: '"${XDG_CONFIG_HOME:-$HOME/.config}/git/run-global-hooks" pre-commit'
     typecheck:
       run: bun run type-check
     lint:
@@ -10,5 +12,11 @@ pre-commit:
 pre-push:
   parallel: true
   commands:
+    global-git-hooks-dispatcher:
+      run: '"${XDG_CONFIG_HOME:-$HOME/.config}/git/run-global-hooks" pre-push'
     tests:
       run: bun run test
+commit-msg:
+  commands:
+    global-git-hooks-dispatcher:
+      run: '"${XDG_CONFIG_HOME:-$HOME/.config}/git/run-global-hooks" commit-msg {1}'
