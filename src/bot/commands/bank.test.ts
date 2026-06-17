@@ -495,6 +495,10 @@ describe('bank setup/wizard callbacks', () => {
       reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
     };
     expect(call.text).toContain('TBC (GE)');
+    // Cards are off by default — the info screen must say so and point at /settings,
+    // not promise AI categories / confirmation / Sheets sync that won't happen yet.
+    expect(call.text).toMatch(/выключен/i);
+    expect(call.text).toContain('/settings');
     expect(call.reply_markup.inline_keyboard[0]?.[0]?.callback_data).toBe(
       'bank_wizard_start:tbc-ge',
     );

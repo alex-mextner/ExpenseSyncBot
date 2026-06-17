@@ -983,11 +983,10 @@ function buildFieldPromptText(field: CredentialField | undefined): string {
 function buildWizardInfoText(bankName: string): string {
   return (
     `🏦 ${bankName}\n\n` +
-    `После подключения бот будет автоматически:\n` +
-    `• Получать транзакции каждые 30 минут\n` +
-    `• Предлагать категорию через ИИ\n` +
-    `• Ждать твоего подтверждения перед записью\n` +
-    `• Синхронизировать с Google Sheets\n\n` +
+    `После подключения бот будет автоматически получать транзакции и баланс каждые 30 минут.\n\n` +
+    `Карточки транзакций в чате (предложить категорию через ИИ, дождаться твоего ` +
+    `подтверждения и записать расход в Google Sheets) по умолчанию выключены — ` +
+    `включи их в /settings, когда будешь готов.\n\n` +
     `Транзакции получаем через ZenPlugins — open-source: github.com/zenmoney/ZenPlugins`
   );
 }
