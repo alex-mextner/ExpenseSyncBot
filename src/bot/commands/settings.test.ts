@@ -166,6 +166,8 @@ describe('/settings', () => {
 
     const msg = sendMessageMock.mock.calls[0]?.[0] as string;
     expect(msg).toContain('Карточки банковских транзакций: выкл');
+    // Off state must clarify that only the balance keeps syncing.
+    expect(msg).toContain('только баланс');
 
     const opts = sendMessageMock.mock.calls[0]?.[1] as { reply_markup?: unknown } | undefined;
     expect(opts?.reply_markup).toBeDefined();

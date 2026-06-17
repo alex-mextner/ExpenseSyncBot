@@ -438,13 +438,26 @@ describe('bank cards off hint', () => {
   test('buildBankStatusText appends the hint when the group has cards off', () => {
     mockGroups.findById = () => ({ bank_cards_enabled: 0 });
     const text = buildBankStatusText(baseConn);
-    expect(text).toContain('выключены');
+    expect(text).toContain('не синхронизируются');
+    expect(text).toContain('баланс');
     expect(text).toContain('/settings');
   });
 
   test('buildBankStatusText omits the hint when cards are on', () => {
     mockGroups.findById = () => ({ bank_cards_enabled: 1 });
     expect(buildBankStatusText(baseConn)).not.toContain('/settings');
+  });
+
+  test('cards off: balance-only section hides the "recent operations" list', () => {
+    mockGroups.findById = () => ({ bank_cards_enabled: 0 });
+    mockTxs.findPendingByConnectionId = () => [
+      makeBankTransaction({ amount: 25, currency: 'EUR', merchant: 'Stale', status: 'pending' }),
+    ];
+    const text = buildBankStatusText(baseConn);
+    // Stale pending rows must not show — they'd contradict the "только баланс" hint.
+    expect(text).not.toContain('Последние операции');
+    expect(text).toContain('Баланс');
+    mockTxs.findPendingByConnectionId = () => [];
   });
 
   test('buildBankStatusText omits the hint when the group is missing', () => {
@@ -458,9 +471,9 @@ describe('bank cards off hint', () => {
     const c1 = { ...baseConn, id: 1, display_name: 'A' };
     const c2 = { ...baseConn, id: 2, display_name: 'B' };
     const text = buildCombinedBankStatusText([c1, c2], 1234);
-    expect(text).toContain('выключены');
+    expect(text).toContain('не синхронизируются');
     expect(text.match(/\/settings/g)?.length).toBe(1);
-    expect(text.match(/выключены/g)?.length).toBe(1);
+    expect(text.match(/не синхронизируются/g)?.length).toBe(1);
   });
 
   test('buildCombinedBankStatusText omits the hint when cards are on', () => {
