@@ -134,6 +134,11 @@ mock.module('../commands/feedback', () => ({
   cancelPendingFeedback: cancelFeedbackMock,
 }));
 
+const settingsMocks = {
+  handleSettingsBankCardsToggle: mock(() => Promise.resolve()),
+};
+mock.module('../commands/settings', () => settingsMocks);
+
 // ─── sync-service (sendOldTransactionCards, skipOldTransactions) ──────────────
 const sendOldMock = mock(() => Promise.resolve(0));
 const skipOldMock = mock(() => Promise.resolve(0));
@@ -235,6 +240,7 @@ const resetables: ReturnType<typeof mock>[] = [
   ...Object.values(bankMocks),
   ...Object.values(connectMocks),
   ...Object.values(disconnectMocks),
+  ...Object.values(settingsMocks),
   logMock.error,
   logMock.warn,
   logMock.info,
@@ -311,6 +317,23 @@ describe('handleCallbackQuery — routing table', () => {
       await handleCallbackQuery(ctx as never, fakeBot() as never);
       expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
         expect.objectContaining({ text: expect.stringContaining('Подтверждено') }),
+      );
+    });
+  });
+
+  describe('settings routing', () => {
+    test('routes "settings:bankcards" → handleSettingsBankCardsToggle', async () => {
+      const ctx = fakeCallbackCtx('settings:bankcards');
+      await handleCallbackQuery(ctx as never, fakeBot() as never);
+      expect(settingsMocks.handleSettingsBankCardsToggle).toHaveBeenCalledTimes(1);
+    });
+
+    test('routes unknown "settings:garbage" → Invalid parameters answer', async () => {
+      const ctx = fakeCallbackCtx('settings:garbage');
+      await handleCallbackQuery(ctx as never, fakeBot() as never);
+      expect(settingsMocks.handleSettingsBankCardsToggle).not.toHaveBeenCalled();
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Invalid parameters' }),
       );
     });
   });

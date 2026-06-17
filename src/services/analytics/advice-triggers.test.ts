@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
-import type { BankConnection, BankTransaction } from '../../database/types';
+import type { BankConnection, BankTransaction, Group } from '../../database/types';
 import { buildNeutralSnapshot } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
 import type { CategoryTaAnalysis } from './ta/analyzer';
@@ -32,6 +32,13 @@ const mockBankTransactions = {
   findByGroupId: mock(() => [] as BankTransaction[]),
 };
 
+// Trigger 7 only nags when the group receives bank cards, so it loads the group
+// to read bank_cards_enabled. Default to cards-on so unrelated trigger tests are
+// unaffected; the cards-off test overrides this explicitly.
+const mockGroups = {
+  findById: mock(() => ({ bank_cards_enabled: 1 }) as unknown as Group),
+};
+
 const mockBankAccounts = {
   findByGroupId: mock(() => []),
 };
@@ -42,6 +49,7 @@ const mockRecurringPatterns = {
 
 mock.module('../../database', () => ({
   database: mockDatabase({
+    groups: mockGroups,
     adviceLogs: mockAdviceLogs,
     expenses: mockExpenses,
     bankConnections: mockBankConnections,
@@ -124,6 +132,7 @@ beforeEach(() => {
   mockExpenses.getCountForRange.mockImplementation(() => 0);
   mockBankConnections.findActiveByGroupId.mockImplementation(() => []);
   mockBankTransactions.findPendingByConnectionId.mockImplementation(() => []);
+  mockGroups.findById.mockImplementation(() => ({ bank_cards_enabled: 1 }) as unknown as Group);
 
   // Clear cooldowns by recording a zeroed-out state:
   // Since cooldowns is a private Map, we can't clear it directly.
@@ -908,6 +917,26 @@ describe('edge cases', () => {
     // mockBankConnections returns [] by default (reset in beforeEach)
     const snapshot = buildTriggerSnapshot();
     const result = checkSmartTriggers(8018, snapshot);
+
+    expect(result).toBeNull();
+  });
+
+  test('pending_bank_transactions does NOT fire when bank cards are disabled', () => {
+    // Tuesday — no weekly_check interference
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+
+    // Pending txs exist, but the group has cards off: with no in-chat confirm
+    // path the reminder would point at something the user cannot act on.
+    mockGroups.findById.mockImplementation(() => ({ bank_cards_enabled: 0 }) as unknown as Group);
+    mockBankConnections.findActiveByGroupId.mockImplementation(
+      () => [{ id: 42 }] as BankConnection[],
+    );
+    mockBankTransactions.findPendingByConnectionId.mockImplementation(
+      () => [{ id: 1 }, { id: 2 }, { id: 3 }] as BankTransaction[],
+    );
+
+    const snapshot = buildTriggerSnapshot();
+    const result = checkSmartTriggers(8019, snapshot);
 
     expect(result).toBeNull();
   });

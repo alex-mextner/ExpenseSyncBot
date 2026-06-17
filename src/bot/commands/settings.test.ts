@@ -28,9 +28,24 @@ mock.module('../../services/bank/telegram-sender', () => ({
   deleteMessage: mock(() => Promise.resolve()),
 }));
 
+// ── Database ──────────────────────────────────────────────────────────────
+
+const groupsFindByTelegramGroupIdMock = mock((_id: number): Group | null => null);
+const groupsUpdateMock = mock((_id: number, _data: Partial<Group>): Group | null => null);
+mock.module('../../database', () => ({
+  database: {
+    groups: {
+      findByTelegramGroupId: groupsFindByTelegramGroupIdMock,
+      update: groupsUpdateMock,
+    },
+  },
+}));
+
 // ── Import after mocks ────────────────────────────────────────────────────
 
-const { handleSettingsCommand } = await import('./settings');
+const { handleSettingsCommand, handleSettingsBankCardsToggle, buildSettingsView } = await import(
+  './settings'
+);
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -52,14 +67,26 @@ function fakeGroup(overrides: Partial<Group> = {}): Group {
     active_topic_id: null,
     oauth_client: 'current',
     bank_panel_summary_message_id: null,
+    bank_cards_enabled: 0,
     created_at: '',
     updated_at: '',
     ...overrides,
   } as Group;
 }
 
+function fakeCallbackCtx(): Ctx['CallbackQuery'] {
+  return {
+    message: { chat: { id: -100, type: 'supergroup' } },
+    from: { id: 1 },
+    answerCallbackQuery: mock(() => Promise.resolve()),
+    editText: mock(() => Promise.resolve()),
+  } as unknown as Ctx['CallbackQuery'];
+}
+
 beforeEach(() => {
   sendMessageMock.mockReset().mockResolvedValue(null);
+  groupsFindByTelegramGroupIdMock.mockReset().mockReturnValue(null);
+  groupsUpdateMock.mockReset().mockReturnValue(null);
   logMock.error.mockReset();
   logMock.warn.mockReset();
 });
@@ -132,5 +159,64 @@ describe('/settings', () => {
 
     const errMsg = sendMessageMock.mock.calls[1]?.[0] as string;
     expect(errMsg).toContain('непредвиденная');
+  });
+
+  test('renders bank-cards state and a toggle button reflecting it', async () => {
+    await handleSettingsCommand(fakeCtx(), fakeGroup({ bank_cards_enabled: 0 }));
+
+    const msg = sendMessageMock.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('Карточки банковских транзакций: выкл');
+
+    const opts = sendMessageMock.mock.calls[0]?.[1] as { reply_markup?: unknown } | undefined;
+    expect(opts?.reply_markup).toBeDefined();
+    const view = buildSettingsView(fakeGroup({ bank_cards_enabled: 0 }));
+    expect(view.text).toContain('выкл');
+    expect(JSON.stringify(view.keyboard)).toContain('Включить карточки банка');
+
+    const onView = buildSettingsView(fakeGroup({ bank_cards_enabled: 1 }));
+    expect(onView.text).toContain('Карточки банковских транзакций: вкл');
+    expect(JSON.stringify(onView.keyboard)).toContain('Выключить карточки банка');
+  });
+});
+
+describe('/settings bank-cards toggle', () => {
+  test('flips bank_cards_enabled from 0 to 1 and re-renders', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 0 }));
+    groupsUpdateMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 1 }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsBankCardsToggle(ctx);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { bank_cards_enabled: 1 });
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const editedText = editText.mock.calls[0]?.[0] as string;
+    expect(editedText).toContain('Карточки банковских транзакций: вкл');
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('flips bank_cards_enabled from 1 to 0 and re-renders', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 1 }));
+    groupsUpdateMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 0 }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsBankCardsToggle(ctx);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { bank_cards_enabled: 0 });
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const editedText = editText.mock.calls[0]?.[0] as string;
+    expect(editedText).toContain('Карточки банковских транзакций: выкл');
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('answers with error and does not update when group is missing', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(null);
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsBankCardsToggle(ctx);
+
+    expect(groupsUpdateMock).not.toHaveBeenCalled();
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect(answer.mock.calls[0]?.[0]).toMatchObject({ text: 'Группа не настроена' });
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 });

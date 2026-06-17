@@ -182,6 +182,9 @@ function buildGroup(overrides: Partial<Group> = {}): Group {
     custom_prompt: null,
     active_topic_id: null,
     bank_panel_summary_message_id: null,
+    // On by default in fixtures: the existing suite asserts cards/prefill fire.
+    // The opt-out behaviour is covered by its own describe block with an explicit 0.
+    bank_cards_enabled: 1,
     oauth_client: 'current',
     created_at: '',
     updated_at: '',
@@ -335,13 +338,16 @@ const todayStr = (): string => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
-function seedConnection(overrides: Partial<BankConnection> = {}): BankConnection {
+function seedConnection(
+  overrides: Partial<BankConnection> = {},
+  groupOverrides: Partial<Group> = {},
+): BankConnection {
   const conn = buildConnection(overrides);
   store.connections.set(conn.id, conn);
   store.credentials.set(conn.id, JSON.stringify({ login: 'u', password: 'p' }));
   // Populate plugin state so cron sync path is allowed.
   store.pluginState.set(conn.id, new Map([['auth', '{}']]));
-  store.groups.set(conn.group_id, buildGroup({ id: conn.group_id }));
+  store.groups.set(conn.group_id, buildGroup({ id: conn.group_id, ...groupOverrides }));
   return conn;
 }
 
@@ -814,6 +820,113 @@ describe('runSyncCycle — inactive connection', () => {
     await triggerManualSync(9999);
 
     expect(prefillMock).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('runSyncCycle — bank_cards_enabled toggle', () => {
+  function findConfirmationCard() {
+    return sendMessageMock.mock.calls.find((c) => {
+      const opts = c[1] as { reply_markup?: { inline_keyboard?: unknown[][] } } | undefined;
+      const firstRow = opts?.reply_markup?.inline_keyboard?.[0] as
+        | Array<{ callback_data?: string }>
+        | undefined;
+      return firstRow?.[0]?.callback_data?.startsWith('bank_confirm:') ?? false;
+    });
+  }
+
+  function findOldTxSummaryCard() {
+    return sendMessageMock.mock.calls.find((c) => {
+      const opts = c[1] as { reply_markup?: { inline_keyboard?: unknown[][] } } | undefined;
+      const firstRow = opts?.reply_markup?.inline_keyboard?.[0] as
+        | Array<{ callback_data?: string }>
+        | undefined;
+      return firstRow?.[0]?.callback_data?.startsWith('bank_show_old:') ?? false;
+    });
+  }
+
+  it('cards disabled: inserts transactions but sends no cards and skips prefill', async () => {
+    const conn = seedConnection({}, { bank_cards_enabled: 0 });
+
+    const today = todayStr();
+    scrapeImpl.fn = async () => ({
+      accounts: [{ id: 'acc1', title: 'Main', balance: 100, instrument: 'EUR', type: 'checking' }],
+      transactions: [
+        {
+          id: 'tx-today',
+          date: `${today}T12:00:00Z`,
+          sum: -25,
+          currency: 'EUR',
+          account: 'acc1',
+          merchant: 'TodayStore',
+        },
+        {
+          id: 'tx-old',
+          date: '2020-01-15T12:00:00Z',
+          sum: -15,
+          currency: 'EUR',
+          account: 'acc1',
+          merchant: 'OldStore',
+        },
+      ],
+    });
+
+    await triggerManualSync(conn.id);
+
+    // Phase 1 still runs — both transactions inserted into DB.
+    expect(bankTxInsertIgnoreMock).toHaveBeenCalledTimes(2);
+    expect(store.transactions.length).toBe(2);
+
+    // Phase 2 (AI prefill) skipped entirely — no Anthropic spend.
+    expect(prefillMock).not.toHaveBeenCalled();
+
+    // Phase 3 — no per-tx confirmation card.
+    expect(findConfirmationCard()).toBeUndefined();
+
+    // notifyOldTransactions — no summary card.
+    expect(findOldTxSummaryCard()).toBeUndefined();
+
+    // An info log notes cards are disabled for the group.
+    const disabledLog = logMock.info.mock.calls.find(
+      (c) => typeof c[1] === 'string' && c[1].includes('cards disabled'),
+    );
+    expect(disabledLog).toBeTruthy();
+
+    // Success path — failures still reset, no error logs.
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  it('cards enabled: prefill runs, confirmation card and old-tx summary are sent', async () => {
+    const conn = seedConnection({}, { bank_cards_enabled: 1 });
+
+    const today = todayStr();
+    scrapeImpl.fn = async () => ({
+      accounts: [],
+      transactions: [
+        {
+          id: 'tx-today',
+          date: `${today}T12:00:00Z`,
+          sum: -25,
+          currency: 'EUR',
+          account: 'acc1',
+          merchant: 'TodayStore',
+        },
+        {
+          id: 'tx-old',
+          date: '2020-01-15T12:00:00Z',
+          sum: -15,
+          currency: 'EUR',
+          account: 'acc1',
+          merchant: 'OldStore',
+        },
+      ],
+    });
+
+    await triggerManualSync(conn.id);
+
+    expect(prefillMock).toHaveBeenCalledTimes(1);
+    expect(findConfirmationCard()).toBeTruthy();
+    expect(findOldTxSummaryCard()).toBeTruthy();
     expect(logMock.error).not.toHaveBeenCalled();
   });
 });
