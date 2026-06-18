@@ -1,5 +1,14 @@
 # ExpenseSyncBot Project Guide
 
+> **Portable dev rules live in the global agent-tools skills:**
+> github.com/alex-mextner/agent-tools (`skills/universal/` + `skills/by-type/bot,backend`).
+> They cover the generic discipline (atomic commits, TDD red-first, dead-code investigation,
+> systematic debugging, no type-escape-hatches, comment/naming hygiene, fail-closed security,
+> atomic DB transactions, multi-provider AI fallback, telegram API limits / tone-of-voice, etc.).
+> This file keeps only what is **specific to ExpenseSyncBot** — its architecture, file paths,
+> commands, deploy, and the project-specific nuances of the otherwise-portable rules.
+> Read both: the skills for the "why", this file for the "here".
+
 ## Project Overview
 
 ExpenseSyncBot is a Telegram bot for tracking expenses and syncing them to Google Sheets. It supports multi-currency expenses, AI-powered expense analysis, category detection, and budget management.
@@ -548,22 +557,16 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 
 ### Foundational Rules
 
-- Doing it right is better than doing it fast. NEVER skip steps or take shortcuts.
-- Tedious, systematic work is often the correct solution. Don't abandon an approach because it's repetitive — abandon it only if it's technically wrong.
-- ALWAYS STOP and ask for clarification rather than making assumptions.
-- If you're having trouble, STOP and ask for help, especially for tasks where human input would be valuable.
-- When you disagree with an approach, push back. Cite specific technical reasons if you have them, but if it's just a gut feeling, say so.
+> Portable: see global skills `smallest-change`, `yagni-kiss-dry`, `systematic-debugging`.
+> (Do it right over fast; push back with technical reasons; STOP and ask rather than assume.)
 
 ### Writing Code
 
-- Make the SMALLEST reasonable changes to achieve the desired outcome.
-- STRONGLY prefer simple, clean, maintainable solutions over clever or complex ones. Readability and maintainability are PRIMARY CONCERNS.
-- WORK HARD to reduce code duplication, even if the refactoring takes extra effort.
-- NEVER throw away or rewrite implementations without EXPLICIT permission. If considering this, STOP and ask first.
-- MATCH the style and formatting of surrounding code, even if it differs from standard style guides. Consistency within a file trumps external standards.
-- Fix broken things immediately when you find them. Don't ask permission to fix bugs.
-- **Comments hygiene**: when refactoring, verify no useful comments were accidentally deleted.
-  Check: `git diff | grep "^-.*\/\/"`. Never silently drop comments.
+> Portable basics live in the global skills `smallest-change`, `yagni-kiss-dry`,
+> `comment-hygiene`, `dependency-version-ranges`, `no-type-escape-hatches`, `unused-params`,
+> `no-silent-fallbacks`, `fail-closed-security` (backend), `atomic-db-transactions` (backend).
+> Project-specific deltas this repo enforces on top of those:
+
 - **Dependency versions always use `^`** (e.g. `"gramio": "^0.4.11"`). Never pin exact versions.
 - **No `any`/`as any`/`Function`** — proper typing only.
 - **`as unknown as T` and `as unknown` are banned except as absolute last resort.** Before using either:
@@ -579,48 +582,26 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 - **Security checks fail-closed**: when a guard function is injected/optional, the absent-function default is `false` (deny), never `true` (allow).
 - **Multi-step DB operations are atomic**: SELECT followed by UPDATE on the same rows must be wrapped in a transaction. Without it, concurrent writes can corrupt data.
 
-### Naming
+### Naming & Code Comments
 
-- Names MUST tell what code does, not how it's implemented or its history
-- NEVER use implementation details in names (e.g., "ZodValidator", "MCPWrapper", "JSONParser")
-- NEVER use temporal/historical context in names (e.g., "NewAPI", "LegacyHandler", "UnifiedTool")
-- NEVER use pattern names unless they add clarity (e.g., prefer "Tool" over "ToolFactory")
-
-### Code Comments
-
-- NEVER add comments explaining that something is "improved", "better", "new", "enhanced", or referencing what it used to be
-- NEVER add instructional comments: "copy this pattern", "use this instead", "prefer X over Y"
-- Comments should explain WHAT the code does or WHY it exists, not how it's better than something else
-- NEVER remove code comments unless you can PROVE they are actively false
-- NEVER refer to temporal context in comments ("recently refactored", "moved", "new")
-- All code files MUST start with a brief 1-2 line comment explaining what the file does
+> Portable: see global skills `naming`, `comment-hygiene`, `file-header-comments`.
+> (Names say what, not how/when; no "improved"/"new"/instructional comments; never delete a
+> comment you can't prove false; every file opens with a 1-2 line what-it-does header.)
 
 ### Systematic Debugging
 
-Follow this framework for ANY technical issue:
-
-1. **Root Cause Investigation** (BEFORE attempting fixes): read error messages carefully, reproduce consistently, check recent changes
-2. **Pattern Analysis**: find working examples, compare against references, identify differences
-3. **Hypothesis and Testing**: form single hypothesis, make smallest possible change, verify before continuing
-4. **Implementation**: NEVER add multiple fixes at once. If first fix doesn't work, STOP and re-analyze rather than adding more fixes
+> Portable: see global skill `systematic-debugging` (root-cause first; one hypothesis,
+> one smallest change, verify before adding another; never stack fixes blindly).
 
 ### Testing
 
-- **Always write tests**: new functionality must include unit tests; bug fixes must include regression tests that reproduce the bug before the fix.
-- **TDD workflow** (mandatory for new features and bugfixes):
-  1. Write a failing test that validates the desired behavior
-  2. Run the test — confirm it fails for the RIGHT reason (not a syntax error or wrong import)
-  3. Write ONLY enough code to make the test pass
-  4. Run the test — confirm it passes
-  5. Refactor while keeping tests green
-- **Exception: reviewed code without tests** — if implementation was already reviewed and approved but tests were skipped, do NOT delete the code. Write comprehensive tests against the existing implementation instead. If tests reveal bugs, fix the code.
-- **Tests must exercise production code**: never reimplement logic in tests.
-- NEVER delete a failing test. Investigate and fix the root cause.
-- **Changing tests to match code is a red flag**: always analyze WHY.
-- **Every commit must have tests**: no committing code without corresponding test coverage. Tests are NOT a "separate task" — they are part of the same unit of work as the code they cover. Never defer tests to a follow-up.
-- **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
+> Generic test discipline lives in the global skills `tdd-red-first` and `test-discipline`
+> (red-first TDD; never delete a failing test; never reimplement logic in tests; changing
+> a test to match code is a red flag; every commit ships its tests; regression test before
+> each bugfix; reviewed-but-untested code → backfill tests, don't delete). The bullets below
+> are **ExpenseSyncBot-specific** test plumbing — keep these, they are not in any skill:
+
 - **Maintain ~80% test coverage**: run `bun test --coverage` regularly. New files must have corresponding test files.
-- **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
 - **`mock.module()` is safe** — each test file runs in its own process via `scripts/test-runner.ts`. Use `mock.module()` freely for mocking dependencies. Use `spyOn` when you need to assert call counts or arguments on a real implementation.
 - **Database in tests uses `:memory:`** — `initDatabase()` detects `NODE_ENV=test` and uses in-memory SQLite instead of file-based `./data/expenses.db`. This prevents `SQLITE_BUSY_RECOVERY` errors when 14 parallel test processes compete for the same database file. Never change this to file-based in tests.
 - **Always run tests via `bun run test`** (isolated runner), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
@@ -644,13 +625,12 @@ Follow this framework for ANY technical issue:
 
 ### Version Control
 
-- NEVER use `git add -A` without checking `git status` first
-- Commit frequently throughout development, even if high-level tasks are not yet done
-- NEVER skip, evade, or disable a pre-commit hook
-- **NEVER use `git add -A`** without checking `git status` first.
-- **Worktree workflow**: when working in a worktree, **NEVER push directly to main** (`git push origin branch:main`). Accumulate all commits in the worktree branch, then merge or create a PR at the end. Pushing each commit to main produces noisy history and bypasses review. Never `cd` into the main repo from a worktree — it has the user's in-progress changes.
-- **Deferred findings**: when skipping a review finding (out of scope, pre-existing), create a GitHub
-  issue for it. Don't silently drop known issues.
+> Portable: global skills `atomic-commits`, `pre-commit-gate`, `ai-review-before-commit`,
+> `push-regularly`, `deferred-findings-tracking`, `worktree-isolation`. (No blind `git add -A`;
+> commit frequently; never skip a pre-commit hook; defer findings to a GitHub issue, never drop
+> them; in a worktree never push straight to main and never `cd` into the main checkout.)
+> ExpenseSyncBot-specific gate on top of those:
+
 - **Before every commit** (3-stage review, mandatory even if the user just says "commit"):
   1. Run `bunx knip` — fix unused exports, dependencies, and files.
   2. Self-review your own changes.
@@ -726,14 +706,9 @@ All user-facing bot messages must follow these rules:
 
 ## Session Wrap-Up
 
-**MANDATORY after EVERY completed task — no exceptions, no skipping in rapid iterations.**
-
-After each task (push, fix, review-and-fix, deploy — any unit of work), answer these two questions out loud before responding to the next message:
-
-1. **Всё ли сделано из того, что просили?** — go through the original request point by point. Did any sub-task get quietly skipped?
-2. **Есть ли что улучшить, исправить или убрать?** — name specific things, not vague hints. Open issues? Known limitations introduced? Stale comments or dead code noticed?
-
-Also scan the conversation history for items explicitly deferred, noted as "pending", or silently dropped mid-discussion. Surface them as concrete suggestions.
+> Portable: global skill `task-completion-selfcheck` — after EVERY completed unit of work,
+> walk the original request point by point (did any sub-task get quietly skipped?), name
+> concrete improvements/cleanups, and surface anything deferred or silently dropped mid-thread.
 
 **At the end of each session**, document any new hard-won lessons in the relevant section of this file. If lessons don't fit an existing section, add a new one. This is mandatory — knowledge that lives only in chat history is lost.
 
@@ -875,6 +850,10 @@ Example with max 10 visible items:
 Formula: `if (total - maxVisible < 3) showAll; else truncate;`
 
 ## Telegram Bot API Limits
+
+> The generic limit table also lives in the global skill `telegram-api-limits`. Kept inline
+> here because of the project-specific `callback_data` guidance (`fitCallbackData` in
+> `keyboards.ts`, Cyrillic-byte budget).
 
 ### Message length
 - `sendMessage` / `editMessageText`: **4 096 chars**
