@@ -119,8 +119,11 @@ export function extractTextFromHTML(html: string): string {
   // receipt data, NEVER re-rendered as HTML — and the generic `<[^>]+>` pass below
   // flattens any residual tag fragment, so this is not an HTML-injection sink. A single
   // O(n) pass keeps it safe on attacker-influenceable (QR-controlled) receipt HTML.
+  // Both replaces draw js/incomplete-multi-character-sanitization (CodeQL distrusts
+  // every regex tag-stripper); the suppression is justified per the rationale above.
   // codeql[js/incomplete-multi-character-sanitization]: not an HTML sink (see above).
   let text = html.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+  // codeql[js/incomplete-multi-character-sanitization]: not an HTML sink (see above).
   text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
 
   // Remove remaining HTML tags
