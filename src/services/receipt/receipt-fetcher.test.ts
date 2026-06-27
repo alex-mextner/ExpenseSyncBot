@@ -226,6 +226,14 @@ describe('extractTextFromHTML', () => {
       expect(result).toContain('Sum 7');
     });
 
+    // js/bad-tag-filter: an end tag with junk before `>` (`</script foo>`) must still
+    // close the block. The previous `</script\s*>` pattern would leave the body in.
+    it('removes a script block whose end tag carries junk before >', () => {
+      const result = extractTextFromHTML('<script>steal()</script foo><p>Due 8</p>');
+      expect(result).not.toContain('steal');
+      expect(result).toContain('Due 8');
+    });
+
     // Mirror of the script cases for <style>: same end-tag-whitespace and
     // reassembly handling must hold, so a regression in the style branch is caught.
     it('removes a style block whose end tag has trailing whitespace', () => {
@@ -246,10 +254,10 @@ describe('extractTextFromHTML', () => {
       expect(extractTextFromHTML('&amp;lt;b&amp;gt;')).toBe('&lt;b&gt;');
     });
 
-    // Termination + plain-text output on deeply nested input. The MAX_STRIP_PASSES
-    // cap guarantees the function returns regardless of nesting depth, and the
-    // generic flatten leaves no angle brackets in the output.
-    it('terminates and returns tag-free text on deeply nested input', () => {
+    // Plain-text output on deeply nested input: the generic `<[^>]+>` flatten is a
+    // single global pass that removes every complete tag, so no angle brackets
+    // remain regardless of nesting depth (and there is no superlinear loop to abuse).
+    it('returns tag-free text on deeply nested input', () => {
       const deep = `${'<div>'.repeat(5000)}Amount 5${'</div>'.repeat(5000)}`;
       const result = extractTextFromHTML(deep);
       expect(result).toContain('Amount 5');

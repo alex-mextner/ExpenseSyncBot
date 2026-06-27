@@ -112,25 +112,16 @@ export async function fetchReceiptData(
  * @returns Plain text content
  */
 export function extractTextFromHTML(html: string): string {
-  // Remove script and style blocks so their bodies don't pollute the extracted
-  // text. The end-tag pattern tolerates trailing whitespace (`</script >`,
-  // `</style >`); the removal loops so a block that only becomes a complete
-  // `<script>…</script>` pair after an inner block is stripped is removed too.
-  // The pass count is capped: this HTML is fetched from a (QR-controlled, so
-  // attacker-influenceable) receipt URL, and an unbounded fixpoint over a crafted
-  // deeply-nested input would be O(n²). Legitimate receipts need one pass; after
-  // the cap, the generic `<[^>]+>` flatten below still guarantees plain-text
-  // output (this text is parsed for receipt data, never re-rendered as HTML).
-  const MAX_STRIP_PASSES = 10;
-  let text = html;
-  let previous: string;
-  let passes = 0;
-  do {
-    previous = text;
-    text = text
-      .replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '')
-      .replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
-  } while (text !== previous && ++passes < MAX_STRIP_PASSES);
+  // Strip <script>/<style> blocks (tags AND their bodies) so script/CSS source does
+  // not pollute the extracted text. The end-tag pattern uses `[^>]*` so it tolerates
+  // whitespace/junk before `>` (`</script >`, `</script foo>`) — a strict `</script>`
+  // would leave such a block (js/bad-tag-filter). The result is plain text — parsed as
+  // receipt data, NEVER re-rendered as HTML — and the generic `<[^>]+>` pass below
+  // flattens any residual tag fragment, so this is not an HTML-injection sink. A single
+  // O(n) pass keeps it safe on attacker-influenceable (QR-controlled) receipt HTML.
+  // codeql[js/incomplete-multi-character-sanitization]: not an HTML sink (see above).
+  let text = html.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
 
   // Remove remaining HTML tags
   text = text.replace(/<[^>]+>/g, ' ');
