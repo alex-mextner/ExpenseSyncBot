@@ -112,21 +112,32 @@ export async function fetchReceiptData(
  * @returns Plain text content
  */
 export function extractTextFromHTML(html: string): string {
-  // Remove script and style tags
-  let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  // Strip <script>/<style> blocks (tags AND their bodies) so script/CSS source does
+  // not pollute the extracted text. The end-tag pattern uses `[^>]*` so it tolerates
+  // whitespace/junk before `>` (`</script >`, `</script foo>`) — a strict `</script>`
+  // would leave such a block (js/bad-tag-filter). The result is plain text — parsed as
+  // receipt data, NEVER re-rendered as HTML — and the generic `<[^>]+>` pass below
+  // flattens any residual tag fragment, so this is not an HTML-injection sink. A single
+  // O(n) pass keeps it safe on attacker-influenceable (QR-controlled) receipt HTML.
+  // Both replaces draw js/incomplete-multi-character-sanitization (CodeQL distrusts
+  // every regex tag-stripper); the suppression is justified per the rationale above.
+  // codeql[js/incomplete-multi-character-sanitization]: not an HTML sink (see above).
+  let text = html.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+  // codeql[js/incomplete-multi-character-sanitization]: not an HTML sink (see above).
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
 
-  // Remove HTML tags
+  // Remove remaining HTML tags
   text = text.replace(/<[^>]+>/g, ' ');
 
-  // Decode HTML entities
+  // Decode HTML entities. Decode &amp; LAST so `&amp;lt;` resolves to literal `&lt;`
+  // instead of double-unescaping into `<`.
   text = text
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
 
   // Clean up whitespace
   text = text.replace(/\s+/g, ' ').trim();

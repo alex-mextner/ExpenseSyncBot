@@ -27,6 +27,11 @@
   "peerDependencies": {
     "typescript": "^5"
   },
+  "overrides": {
+    "minimatch": "^9.0.6",
+    "glob": "^10.5.0",
+    "jws": "^4.0.1"
+  },
   "dependencies": {
     "@octokit/rest": "^22.0.1",
     "big.js": "^7.0.1",

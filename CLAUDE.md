@@ -546,13 +546,14 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 
 ## Development Philosophy
 
-### Foundational Rules
-
-- Doing it right is better than doing it fast. NEVER skip steps or take shortcuts.
-- Tedious, systematic work is often the correct solution. Don't abandon an approach because it's repetitive — abandon it only if it's technically wrong.
-- ALWAYS STOP and ask for clarification rather than making assumptions.
-- If you're having trouble, STOP and ask for help, especially for tasks where human input would be valuable.
-- When you disagree with an approach, push back. Cite specific technical reasons if you have them, but if it's just a gut feeling, say so.
+> Generic engineering discipline — foundational rules, naming, comment hygiene, and
+> systematic debugging — is now provisioned as the universal agent-skills layer (via
+> `rig`, see `rig.yaml`). Those skills (`smallest-change`, `naming`, `comment-hygiene`,
+> `systematic-debugging`, `yagni-kiss-dry`, `dead-code-investigation`, etc.) load
+> automatically in any harness. This section keeps only the rules that carry
+> **project-specific** detail (the TS/casting rules, this repo's test harness, and the
+> knip/codex version-control flow); the purely generic restatements were removed to
+> avoid a stale duplicate of the universal layer.
 
 ### Writing Code
 
@@ -579,30 +580,10 @@ ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
 - **Security checks fail-closed**: when a guard function is injected/optional, the absent-function default is `false` (deny), never `true` (allow).
 - **Multi-step DB operations are atomic**: SELECT followed by UPDATE on the same rows must be wrapped in a transaction. Without it, concurrent writes can corrupt data.
 
-### Naming
-
-- Names MUST tell what code does, not how it's implemented or its history
-- NEVER use implementation details in names (e.g., "ZodValidator", "MCPWrapper", "JSONParser")
-- NEVER use temporal/historical context in names (e.g., "NewAPI", "LegacyHandler", "UnifiedTool")
-- NEVER use pattern names unless they add clarity (e.g., prefer "Tool" over "ToolFactory")
-
-### Code Comments
-
-- NEVER add comments explaining that something is "improved", "better", "new", "enhanced", or referencing what it used to be
-- NEVER add instructional comments: "copy this pattern", "use this instead", "prefer X over Y"
-- Comments should explain WHAT the code does or WHY it exists, not how it's better than something else
-- NEVER remove code comments unless you can PROVE they are actively false
-- NEVER refer to temporal context in comments ("recently refactored", "moved", "new")
-- All code files MUST start with a brief 1-2 line comment explaining what the file does
-
-### Systematic Debugging
-
-Follow this framework for ANY technical issue:
-
-1. **Root Cause Investigation** (BEFORE attempting fixes): read error messages carefully, reproduce consistently, check recent changes
-2. **Pattern Analysis**: find working examples, compare against references, identify differences
-3. **Hypothesis and Testing**: form single hypothesis, make smallest possible change, verify before continuing
-4. **Implementation**: NEVER add multiple fixes at once. If first fix doesn't work, STOP and re-analyze rather than adding more fixes
+> Naming, code-comment hygiene, and systematic-debugging guidance previously inlined here
+> are covered by the universal `naming`, `comment-hygiene`, and `systematic-debugging`
+> skills. One project-specific rule retained: **all code files MUST start with a brief
+> 1-2 line header comment explaining what the file does** (see `file-header-comments`).
 
 ### Testing
 

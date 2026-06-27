@@ -399,7 +399,7 @@ async function sendSmartAdvice(
       logger.error({ err: finalErr }, '[ADVICE] Finalize edit failed, sending plain fallback');
       await writer.close();
       await sendMessage(
-        `${tierConfig.emoji} ${tierConfig.title.replace(/<[^>]+>/g, '')}\n\n${stripAllHtml(cleanAdvice)}`,
+        `${tierConfig.emoji} ${stripAllHtml(tierConfig.title)}\n\n${stripAllHtml(cleanAdvice)}`,
       );
     }
 

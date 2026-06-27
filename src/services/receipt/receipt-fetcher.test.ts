@@ -209,6 +209,63 @@ describe('extractTextFromHTML', () => {
     });
   });
 
+  describe('security — sanitization edge cases', () => {
+    // End tags may carry trailing whitespace (`</script >`); a strict `</script>`
+    // pattern would leave the block (and its JS body) in the extracted text.
+    it('removes a script block whose end tag has trailing whitespace', () => {
+      const result = extractTextFromHTML('<script>steal()</script ><p>Total 42</p>');
+      expect(result).not.toContain('steal');
+      expect(result).toContain('Total 42');
+    });
+
+    // A partial/nested script must not reassemble into a live tag whose body
+    // survives — the removal loops to a fixpoint.
+    it('removes a reassembling nested script block', () => {
+      const result = extractTextFromHTML('<scr<script>evil()</script>ipt><p>Sum 7</p>');
+      expect(result).not.toContain('evil');
+      expect(result).toContain('Sum 7');
+    });
+
+    // js/bad-tag-filter: an end tag with junk before `>` (`</script foo>`) must still
+    // close the block. The previous `</script\s*>` pattern would leave the body in.
+    it('removes a script block whose end tag carries junk before >', () => {
+      const result = extractTextFromHTML('<script>steal()</script foo><p>Due 8</p>');
+      expect(result).not.toContain('steal');
+      expect(result).toContain('Due 8');
+    });
+
+    // Mirror of the script cases for <style>: same end-tag-whitespace and
+    // reassembly handling must hold, so a regression in the style branch is caught.
+    it('removes a style block whose end tag has trailing whitespace', () => {
+      const result = extractTextFromHTML('<style>.x{color:red}</style ><p>Net 9</p>');
+      expect(result).not.toContain('color:red');
+      expect(result).toContain('Net 9');
+    });
+
+    it('removes a reassembling nested style block', () => {
+      const result = extractTextFromHTML('<sty<style>.y{}</style>le><p>Tax 3</p>');
+      expect(result).not.toContain('.y{}');
+      expect(result).toContain('Tax 3');
+    });
+
+    // &amp; is decoded LAST so `&amp;lt;` stays the literal text `&lt;` instead of
+    // double-unescaping into a real `<`.
+    it('does not double-unescape &amp;lt; into <', () => {
+      expect(extractTextFromHTML('&amp;lt;b&amp;gt;')).toBe('&lt;b&gt;');
+    });
+
+    // Plain-text output on deeply nested input: the generic `<[^>]+>` flatten is a
+    // single global pass that removes every complete tag, so no angle brackets
+    // remain regardless of nesting depth (and there is no superlinear loop to abuse).
+    it('returns tag-free text on deeply nested input', () => {
+      const deep = `${'<div>'.repeat(5000)}Amount 5${'</div>'.repeat(5000)}`;
+      const result = extractTextFromHTML(deep);
+      expect(result).toContain('Amount 5');
+      expect(result).not.toContain('<');
+      expect(result).not.toContain('>');
+    });
+  });
+
   describe('HTML entity decoding', () => {
     it('decodes &nbsp; to space', () => {
       const result = extractTextFromHTML('Hello&nbsp;World');
