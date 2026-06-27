@@ -93,6 +93,17 @@ describe('sanitizeHtmlForTelegram', () => {
     expect(first).toBe(second);
   });
 
+  // SECURITY: &amp; is decoded LAST, so an already-escaped `&amp;lt;b&amp;gt;`
+  // stays escaped instead of double-unescaping into a real `<b>` tag, and the
+  // function stays idempotent on that input (a prior bug collapsed it on re-run).
+  test('SECURITY: does not double-unescape &amp;lt; and stays idempotent', () => {
+    const escaped = '&amp;lt;b&amp;gt;';
+    const first = sanitizeHtmlForTelegram(escaped);
+    expect(first).not.toContain('<b>');
+    expect(first).toContain('&amp;lt;');
+    expect(sanitizeHtmlForTelegram(first)).toBe(first);
+  });
+
   // ── Streaming scenarios (unclosed tags from AI) ────────────────────
 
   test('STREAMING: closes unclosed <i> at end of text', () => {
@@ -208,6 +219,16 @@ describe('sanitizeHtmlForTelegram', () => {
     expect(result).toContain('<b>');
     expect(result).toContain('text');
   });
+
+  // SECURITY: exercises restoreAllowedAttributes' attribute decode path (the most
+  // sensitive — it parses href). An escaped `&amp;lt;script&amp;gt;` inside an
+  // href must NOT double-unescape into a live `<script>` in the attribute value.
+  test('SECURITY: href value does not double-unescape &amp;lt; into a live tag', () => {
+    const html = '<a href="https://x.com/?q=&amp;lt;script&amp;gt;">link</a>';
+    const result = sanitizeHtmlForTelegram(html);
+    expect(result).not.toMatch(/<script/i);
+    expect(result).toContain('href="https://x.com/?q=');
+  });
 });
 
 // ── processThinkTags ────────────────────────────────────────────────
@@ -265,6 +286,23 @@ describe('stripAllHtml', () => {
 
   test('handles nested tags', () => {
     expect(stripAllHtml('<b><i>nested</i></b>')).toBe('nested');
+  });
+
+  // SECURITY: a single tag-strip pass is an incomplete sanitizer — a partial match
+  // like `<scr<script>ipt>` reassembles into a live `<script>` after one removal.
+  // stripAllHtml loops to a fixpoint, so no live tag may survive.
+  test('SECURITY: strips reassembling nested script (no residual live tag)', () => {
+    const evil = '<scr<script>ipt>alert(1)</scr</script>ipt>';
+    const result = stripAllHtml(evil);
+    expect(result).not.toMatch(/<script/i);
+    expect(result).not.toContain('<');
+  });
+
+  // SECURITY: &amp; must be decoded LAST, otherwise `&amp;lt;` double-unescapes
+  // into a real `<` (an injection vector). It must stay the literal text `&lt;`.
+  test('SECURITY: does not double-unescape &amp;lt; into <', () => {
+    expect(stripAllHtml('&amp;lt;script&amp;gt;')).toBe('&lt;script&gt;');
+    expect(stripAllHtml('&amp;lt;script&amp;gt;')).not.toContain('<script>');
   });
 });
 

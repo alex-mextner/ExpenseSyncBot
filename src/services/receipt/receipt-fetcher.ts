@@ -112,21 +112,38 @@ export async function fetchReceiptData(
  * @returns Plain text content
  */
 export function extractTextFromHTML(html: string): string {
-  // Remove script and style tags
-  let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  // Remove script and style blocks so their bodies don't pollute the extracted
+  // text. The end-tag pattern tolerates trailing whitespace (`</script >`,
+  // `</style >`); the removal loops so a block that only becomes a complete
+  // `<script>…</script>` pair after an inner block is stripped is removed too.
+  // The pass count is capped: this HTML is fetched from a (QR-controlled, so
+  // attacker-influenceable) receipt URL, and an unbounded fixpoint over a crafted
+  // deeply-nested input would be O(n²). Legitimate receipts need one pass; after
+  // the cap, the generic `<[^>]+>` flatten below still guarantees plain-text
+  // output (this text is parsed for receipt data, never re-rendered as HTML).
+  const MAX_STRIP_PASSES = 10;
+  let text = html;
+  let previous: string;
+  let passes = 0;
+  do {
+    previous = text;
+    text = text
+      .replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+  } while (text !== previous && ++passes < MAX_STRIP_PASSES);
 
-  // Remove HTML tags
+  // Remove remaining HTML tags
   text = text.replace(/<[^>]+>/g, ' ');
 
-  // Decode HTML entities
+  // Decode HTML entities. Decode &amp; LAST so `&amp;lt;` resolves to literal `&lt;`
+  // instead of double-unescaping into `<`.
   text = text
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
 
   // Clean up whitespace
   text = text.replace(/\s+/g, ' ').trim();

@@ -37,8 +37,9 @@ const ALLOWED_TAGS = [
 function restoreAllowedAttributes(tag: string, escapedAttrs: string): string {
   if (!escapedAttrs) return '';
 
-  // Unescape to parse attributes
-  const attrs = escapedAttrs.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  // Unescape to parse attributes. Decode &amp; LAST so an input like `&amp;lt;`
+  // resolves to the literal text `&lt;` instead of double-unescaping into `<`.
+  const attrs = escapedAttrs.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
   const t = tag.toLowerCase();
 
@@ -117,8 +118,9 @@ export function closeUnmatchedTags(html: string): string {
  */
 export function sanitizeHtmlForTelegram(text: string): string {
   // Decode existing entities first so re-sanitizing is idempotent.
-  // &amp; → & → &amp; (same result), so calling twice is safe.
-  const decoded = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  // &amp; → & → &amp; (same result), so calling twice is safe. Decode &amp; LAST
+  // so `&amp;lt;` resolves to literal `&lt;` rather than double-unescaping into `<`.
+  const decoded = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
   // Step 1: Escape ALL special characters
   let result = decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -168,12 +170,26 @@ export function truncateForTelegram(
  * Strip ALL HTML tags and decode entities back to plain text.
  */
 export function stripAllHtml(text: string): string {
-  return text
-    .replace(/<[^>]*>/g, '')
+  // Strip tags to a fixpoint. For this generalized `<[^>]*>` pattern a single
+  // global pass already removes every complete tag (any `<` that has a later `>`
+  // is consumed; only danglers with no following `>` can remain), so the loop is
+  // belt-and-suspenders here — but it is the complete-sanitization form the CodeQL
+  // js/incomplete-multi-character-sanitization gate expects and stays correct if
+  // the pattern is ever narrowed to a specific tag name.
+  let stripped = text;
+  let previous: string;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<[^>]*>/g, '');
+  } while (stripped !== previous);
+
+  // Decode entities with &amp; LAST so `&amp;lt;` becomes literal `&lt;` instead of
+  // double-unescaping into `<`.
+  return stripped
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"');
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
 }
 
 // MarkdownV2 special chars per Telegram docs: _ * [ ] ( ) ~ ` > # + - = | { } . !
