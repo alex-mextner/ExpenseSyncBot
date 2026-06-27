@@ -27,6 +27,10 @@
 # Usage: sh ci/leftover-grep/leftover-grep.sh
 set -euo pipefail
 
+# Record whether a base was EXPLICITLY requested via the environment BEFORE the default
+# assignment masks it — the fail-closed path below distinguishes "CI passed me a base that
+# must resolve" from "nobody set one, fall back to main/full-tree" (agent-tools#129).
+if [ -n "${LEFTOVER_BASE+x}" ]; then LEFTOVER_BASE_EXPLICIT=1; else LEFTOVER_BASE_EXPLICIT=0; fi
 LEFTOVER_BASE="${LEFTOVER_BASE:-origin/main}"
 LEFTOVER_HEAD="${LEFTOVER_HEAD:-HEAD}"
 LEFTOVER_INCLUDE="${LEFTOVER_INCLUDE:-\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cpp|hpp|cs|php|swift|sh)$}"
@@ -36,10 +40,24 @@ ALLOW_CONSOLE="${ALLOW_CONSOLE:-0}"
 LEFTOVER_FULLTREE="${LEFTOVER_FULLTREE:-0}"
 
 # Resolve a base ref or empty (-> full-tree scan).
+#
+# Fail-closed rule (agent-tools#129): if a base was EXPLICITLY requested (LEFTOVER_BASE set
+# in the environment, as the tamper-resistant workflow does) but it does not resolve, do NOT
+# silently fall back to a full-tree scan — that floods false positives, or worse, a downstream
+# merge-base failure no-ops the gate. Fail the gate so the missing base is visible. Only when
+# NO base was requested at all (local/default use) do we fall back to main -> full-tree.
 base=""
 if [ "$LEFTOVER_FULLTREE" != "1" ]; then
-  if git rev-parse --verify --quiet "$LEFTOVER_BASE" >/dev/null 2>&1; then base="$LEFTOVER_BASE"
-  elif git rev-parse --verify --quiet main >/dev/null 2>&1; then base="main"; fi
+  if git rev-parse --verify --quiet "$LEFTOVER_BASE" >/dev/null 2>&1; then
+    base="$LEFTOVER_BASE"
+  elif [ "$LEFTOVER_BASE_EXPLICIT" = "1" ]; then
+    # An explicit base was requested (CI) but is unreachable — fail closed rather than
+    # silently full-tree-scanning (flood) or no-op'ing.
+    echo "[leftover] FAIL — requested diff base '$LEFTOVER_BASE' does not resolve; refusing to scan nothing (or flood). Fetch enough history, or set LEFTOVER_FULLTREE=1 to scan the whole tree on purpose." >&2
+    exit 1
+  elif git rev-parse --verify --quiet main >/dev/null 2>&1; then
+    base="main"
+  fi
 fi
 
 # Collect (file, lineno, line) tuples for ADDED lines (diff) or all lines (full tree).
@@ -72,6 +90,18 @@ report() { # <severity> <file> <lineno> <rule> <text>
 
 if [ -n "$base" ]; then echo "[leftover] scanning diff vs ${base} ..." >&2; else echo "[leftover] scanning full tree ..." >&2; fi
 
+# Collect the lines to scan into a temp file FIRST, then check emit_lines' exit status.
+# Reading via process substitution (`done < <(emit_lines)`) discards emit_lines' failure —
+# a `git diff` error (e.g. an unreachable merge-base from a too-shallow head, agent-tools#129)
+# would be swallowed and the gate would PASS having scanned nothing. A block-tier gate must
+# fail CLOSED instead, so we materialize the lines and gate on $?.
+lines_file="$(mktemp)"
+trap 'rm -f "$lines_file"' EXIT
+if ! emit_lines >"$lines_file"; then
+  echo "[leftover] FAIL — could not compute the lines to scan (diff/base error). A blocking gate must not pass having scanned nothing." >&2
+  exit 1
+fi
+
 while IFS=$'\t' read -r file ln text; do
   [ -n "${file:-}" ] || continue
   printf '%s' "$file" | grep -qE "$LEFTOVER_INCLUDE" || continue
@@ -81,8 +111,11 @@ while IFS=$'\t' read -r file ln text; do
   printf '%s' "$text" | grep -qE '\.only\(|(^|[^a-zA-Z])f(describe|it|test)\(' && report BLOCK "$file" "$ln" "focused-test" "$text"
   # debugger
   printf '%s' "$text" | grep -qE '(^|[^a-zA-Z])debugger;?\s*$' && report BLOCK "$file" "$ln" "debugger" "$text"
-  # merge conflict markers
-  printf '%s' "$text" | grep -qE '^(<{7}|={7}|>{7})( |$)' && report BLOCK "$file" "$ln" "merge-marker" "$text"
+  # merge conflict markers. Only the unambiguous START (<<<<<<<) and END (>>>>>>>) markers
+  # are flagged: a bare `=======` (exactly 7 `=`) is ALSO a common decorative source
+  # separator (agent-tools#129 false positive), and a real conflict is already caught by its
+  # surrounding <<<<<<< / >>>>>>> markers, so dropping the middle marker loses no real catch.
+  printf '%s' "$text" | grep -qE '^(<{7}|>{7})( |$)' && report BLOCK "$file" "$ln" "merge-marker" "$text"
   # console.log/debug
   if printf '%s' "$text" | grep -qE 'console\.(log|debug)\('; then
     [ "$ALLOW_CONSOLE" = "1" ] && report WARN "$file" "$ln" "console" "$text" || report BLOCK "$file" "$ln" "console" "$text"
@@ -91,7 +124,7 @@ while IFS=$'\t' read -r file ln text; do
   if printf '%s' "$text" | grep -qE '(TODO|FIXME)'; then
     printf '%s' "$text" | grep -qE "($TICKET_REGEX)" || report BLOCK "$file" "$ln" "untracked-todo" "$text"
   fi
-done < <(emit_lines)
+done <"$lines_file"
 
 echo "[leftover] $violations blocking, $warnings warning(s)." >&2
 [ "$violations" = "0" ] || { echo "[leftover] FAIL — remove the leftovers above (or reference a ticket on the TODO)." >&2; exit 1; }

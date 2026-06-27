@@ -15,10 +15,12 @@
 #   "error warning"  — error + warning gate (recommended; this is the default)
 # Notes (recommendations) are always reported, never gating.
 #
-# IN-SOURCE SUPPRESSION: a finding is suppressed iff the flagged line OR the line directly
-# above it carries `// codeql[<exact-rule-id>]`. Keeps suppressions greppable, reviewable,
-# and reasoned — not a silent baseline. (When `upload:false`, codeql-action does NOT run
-# its own alert-suppression queries, so this gate implements suppression itself.)
+# IN-SOURCE SUPPRESSION: a finding is suppressed iff the flagged line OR ANY line in the
+# contiguous comment block directly above it carries `// codeql[<exact-rule-id>]` (a
+# multi-line justification works; the walk stops at the first blank/non-comment line so a
+# marker can't leak across statements). Keeps suppressions greppable, reviewable, and
+# reasoned — not a silent baseline. (When `upload:false`, codeql-action does NOT run its
+# own alert-suppression queries, so this gate implements suppression itself.)
 #
 # LANGUAGES / PINNING: same as ci/codeql/workflow.yml — edit the matrix; codeql-action is
 # pinned by major tag per GitHub convention.
@@ -102,7 +104,27 @@ jobs:
               echo "No presence heuristic for '$LANGUAGE'; running analysis unconditionally."
               exit 0 ;;
           esac
-          if git ls-files | grep -qiE "$pattern"; then
+          # Do NOT pipe `git ls-files | grep -q` (agent-tools#129): under `pipefail`, grep -q
+          # exits 0 on the FIRST match and closes the pipe, so git ls-files dies with SIGPIPE
+          # (141) and the pipeline status becomes 141 even though source WAS found → the `if`
+          # takes the else branch → CodeQL silently SKIPS a language it should scan (the gate
+          # self-disables). Materialize the file list first, then grep it with no pipe, and
+          # fail the gate if listing the tracked files itself errors (never skip on a detect
+          # error — that is also a silent self-disable).
+          tracked="$(git ls-files)" || {
+            echo "::error::CodeQL detect: 'git ls-files' failed for ${LANGUAGE} — cannot determine source presence. Failing closed." >&2
+            exit 1
+          }
+          # grep WITHOUT -q and WITHOUT a pipe: feed the file list as a here-string so nothing
+          # can die of SIGPIPE, and read grep's own exit code (0 = matched, 1 = no match, >1 =
+          # grep error). `|| match_rc=$?` keeps `set -e` from aborting on the no-match case.
+          match_rc=0
+          grep -qiE "$pattern" <<<"$tracked" || match_rc=$?
+          if [ "$match_rc" -gt 1 ]; then
+            echo "::error::CodeQL detect: grep errored (rc=$match_rc) for ${LANGUAGE} — cannot determine source presence. Failing closed." >&2
+            exit 1
+          fi
+          if [ "$match_rc" -eq 0 ]; then
             echo "has_source=true" >> "$GITHUB_OUTPUT"
             echo "Found ${LANGUAGE} source — running CodeQL."
           else

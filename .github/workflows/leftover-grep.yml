@@ -55,10 +55,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
         run: |
+          set -euo pipefail
           # Fetch the PR head object into the local repo so `git diff` can reach it. We do
           # NOT check it out and NOT run anything from it — it's only diffed + grepped.
-          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          #
+          # CRITICAL (agent-tools#129): fetch ENOUGH history for a real merge-base. A
+          # `--depth=1` head shares NO reachable common ancestor with origin/<base>, so the
+          # three-dot diff `base...HEAD` in leftover-grep.sh either errors (gate would no-op)
+          # or diffs against an empty tree (false-positive flood). The base was checked out
+          # with fetch-depth: 0 (full history); deepen the head fetch until a merge-base is
+          # reachable, then verify one exists — fail the gate if it doesn't.
+          git fetch --no-tags origin "$HEAD_SHA"
+          if ! git merge-base "origin/${BASE_REF}" "$HEAD_SHA" >/dev/null 2>&1; then
+            # Rare: shallow base or unrelated histories. Deepen both sides, then re-check.
+            git fetch --no-tags --unshallow origin "$HEAD_SHA" 2>/dev/null || true
+            git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" || true
+            if ! git merge-base "origin/${BASE_REF}" "$HEAD_SHA" >/dev/null 2>&1; then
+              echo "::error::leftover-grep: no merge-base between origin/${BASE_REF} and the PR head — cannot compute the added-lines diff. Failing closed (a blocking gate must not silently scan nothing)." >&2
+              exit 1
+            fi
+          fi
 
       # codeql[actions/cache-poisoning/poisonable-step]
       # Justified: same as above — this step only runs the trusted BASE-branch gate script

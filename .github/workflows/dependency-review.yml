@@ -12,16 +12,42 @@
 # that, add an OSS license gate (license-checker / cargo-deny / pip-licenses) — see the
 # ci/license-policy/ template and agent-tools#21.
 #
-# INSTALL: copy to .github/workflows/dependency-review.yml. Add the toolchain setup your
-# repo's ecosystems need (see the commented examples below). If your repo already has its
-# own dependency-audit job, you don't need this one.
+# INSTALL: copy to .github/workflows/dependency-review.yml. `setup-bun` ships ENABLED below
+# because the bot repos this provisions into use `bun.lock` — without the `bun` toolchain on
+# PATH, dep-audit.sh fail-CLOSES on a `bun.lock` repo (it finds the lockfile, can't find its
+# auditor, and reds CI). Add/trim the toolchain for YOUR other ecosystems (see the commented
+# examples) and pin every action to a commit SHA. If your repo already has its own
+# dependency-audit job, you don't need this one.
+#   NOTE: installing the bun *toolchain* (`setup-bun` puts the `bun` binary on PATH) is NOT
+#   the forbidden `bun install` — `setup-bun` runs no project code and no lifecycle scripts;
+#   only the trusted base dep-audit.sh runs, and `bun audit` merely READS the lockfile.
+#
+# TAMPER-RESISTANCE — why `pull_request_target` (agent-tools#129):
+#   A merge-BLOCKING gate must not run a script the PR itself can edit (a PR could weaken the
+#   very gate it has to pass). This gate now mirrors ci/leftover-grep: under
+#   `pull_request_target` the BASE-branch (trusted) copy of this workflow AND of
+#   `dep-audit.sh` run — the PR's version is ignored. The PR's MANIFESTS/LOCKFILES are
+#   fetched as DATA into a side path and audited there: native auditors (npm/pnpm/yarn/bun
+#   audit, pip-audit, cargo-audit) only READ the lockfile and query an advisory DB — they do
+#   not run the package's install/lifecycle scripts — so no PR-controlled code executes.
+#   HARD RULE: do NOT add an `npm install` / `bun install` / build step here, and do NOT
+#   check out the PR head onto the workspace — that WOULD execute PR code under the
+#   privileged trigger. We only `git worktree` the fetched head into a sibling dir and audit
+#   its lockfiles with the trusted script.
+#   Caveat: like any base-run gate, it does NOT run on the PR that first introduces it.
 
 name: dependency-review
 
 on:
-  pull_request:
+  pull_request_target:
   push:
     branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: 'Commit SHA to audit (required for manual runs)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -31,18 +57,53 @@ jobs:
     name: dependency-review
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout BASE branch (trusted script)
+        # Default ref under pull_request_target = base. The gate SCRIPT that runs is the
+        # trusted base copy, not the PR's.
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # Set up the toolchain(s) dep-audit.sh needs for YOUR repo's ecosystems. Pin each
-      # action to a commit SHA. ubuntu-latest already ships node+npm, so npm-only repos
-      # need nothing extra. Examples:
-      #   - uses: oven-sh/setup-bun@<pinned-sha>      # bun.lock     -> bun audit
+      # Toolchain the auditors need. `setup-bun` is ON by default: without it a `bun.lock`
+      # repo fail-CLOSES (dep-audit.sh can't find `bun` -> gate red). This installs a trusted,
+      # SHA-pinned action — NOT PR code, and NOT `bun install` (no project/lifecycle scripts
+      # run; `bun audit` only reads the lockfile). ubuntu-latest already ships node+npm, so
+      # npm-only repos need nothing extra. Pin each action to a commit SHA. Add/trim for YOUR
+      # ecosystems:
       #   - uses: actions/setup-node@<pinned-sha>     # package-lock -> npm/pnpm/yarn audit
       #   - uses: actions/setup-python@<pinned-sha>   # pyproject    -> pip-audit (pipx install pip-audit)
       #   - run: rustup default stable                # Cargo.lock   -> cargo audit (cargo install cargo-audit)
+      - name: Set up bun (bun.lock -> bun audit)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
+      # codeql[actions/untrusted-checkout/medium]
+      # Justified: under pull_request_target this fetches the PR head as a git OBJECT only —
+      # it is never checked out onto the workspace and never executed. The PR's lockfiles are
+      # audited as DATA by native auditors (which do not run package install scripts). The
+      # CodeQL `actions` self-gate flags any PR-head fetch in a privileged trigger; this one
+      # is safe by construction, so it is suppressed greppably rather than left to block.
+      - name: Fetch the PR head commit as DATA (not checked out / not executed)
+        # For push events there is no PR — audit the pushed tree in place (CHECKOUT_DIR=.).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
+        run: |
+          set -eu
+          if [ -z "${HEAD_SHA:-}" ]; then
+            # push / no PR: audit the already-checked-out base tree.
+            echo "AUDIT_DIR=." >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # Fetch the PR head object and materialize it in a SIDE worktree we never execute
+          # from. dep-audit.sh's auditors only read its lockfiles.
+          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          git worktree add --detach ../pr-head "$HEAD_SHA"
+          echo "AUDIT_DIR=../pr-head" >> "$GITHUB_ENV"
+
+      # codeql[actions/cache-poisoning/poisonable-step]
+      # Justified: this step runs the trusted BASE-branch dep-audit.sh against the PR's
+      # lockfiles as data. The native auditors do not execute package install/lifecycle
+      # scripts, so no PR-controlled code runs and no cache is poisoned. Suppressed greppably.
       - name: Dependency audit (OSS — whole-tree vulns, fail on high+)
         # dep-audit.sh fails CLOSED if it finds a manifest whose auditor isn't installed
-        # (set DEP_AUDIT_ALLOW_MISSING=1 to intentionally skip a missing ecosystem).
-        run: sh ci/dependency-review/dep-audit.sh
+        # (set DEP_AUDIT_ALLOW_MISSING=1 to intentionally skip a missing ecosystem). The
+        # trusted base script runs; AUDIT_DIR holds the PR head's lockfiles (or '.' on push).
+        run: sh "$GITHUB_WORKSPACE/ci/dependency-review/dep-audit.sh" "$AUDIT_DIR"
