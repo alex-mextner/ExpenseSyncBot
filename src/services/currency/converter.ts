@@ -27,6 +27,7 @@ const FALLBACK_RATES_STR: Record<CurrencyCode, string> = {
   INR: '0.011', // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
   LKR: '0.0028', // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
   AED: '0.25', // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
+  EGP: '0.018', // 1 EGP = 0.018 EUR (approx 55.5 EGP = 1 EUR)
 };
 
 const FALLBACK_RATES: Record<CurrencyCode, number> = Object.fromEntries(
@@ -122,6 +123,7 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
       INR: 1 / (data.rates['INR'] || 1),
       LKR: 1 / (data.rates['LKR'] || 1),
       AED: 1 / (data.rates['AED'] || 1),
+      EGP: 1 / (data.rates['EGP'] || 1),
     };
 
     // Build string-precision rates for Big.js arithmetic.
@@ -142,6 +144,7 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
       INR: toRateStr('INR'),
       LKR: toRateStr('LKR'),
       AED: toRateStr('AED'),
+      EGP: toRateStr('EGP'),
     };
 
     // Store rates for known currencies only — populated lazily as new currencies are encountered.
@@ -167,6 +170,7 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
     logger.info(`  /1 INR = €${(1 / rates.INR).toFixed(6)}`);
     logger.info(`  /1 LKR = €${(1 / rates.LKR).toFixed(6)}`);
     logger.info(`  /1 AED = €${(1 / rates.AED).toFixed(4)}`);
+    logger.info(`  /1 EGP = €${(1 / rates.EGP).toFixed(6)}`);
 
     return rates;
   } catch (error) {

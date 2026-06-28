@@ -545,6 +545,10 @@ export const CURRENCY_ALIASES: Record<string, string> = {
   дирхам: 'AED',
   дирхама: 'AED',
   дирхамов: 'AED',
+
+  // Egyptian Pound
+  egp: 'EGP',
+  егп: 'EGP',
 };
 
 /**
@@ -563,6 +567,7 @@ export const SUPPORTED_CURRENCIES = [
   'INR',
   'LKR',
   'AED',
+  'EGP',
 ] as const;
 
 export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
