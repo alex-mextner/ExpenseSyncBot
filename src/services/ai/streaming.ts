@@ -12,13 +12,23 @@
  * Fallback rules:
  *  - Any error (including 4xx)             → try next provider in the chain
  *  - Provider streams text then fails      → propagate (cannot splice another model's output)
- *  - All providers exhausted               → propagate the last error
+ *  - All providers exhausted               → throw an aggregated error (status/code chosen
+ *                                            order-independently, see pickRepresentativeError)
+ *
+ * A circuit breaker (provider-breaker.ts) demotes a provider that hits repeated connection-type
+ * failures to the back of the chain for a cooldown, so a flapping endpoint stops being tried first.
  */
 
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
 import { geminiClient, hfClient, zaiClient } from './clients';
+import {
+  orderByHealth,
+  recordProviderConnectionFailure,
+  recordProviderReachable,
+  recordProviderResponded,
+} from './provider-breaker';
 
 const logger = createLogger('ai-streaming');
 
@@ -63,47 +73,67 @@ export interface StreamCallbacks {
 
 // ── Error helpers (exported for tests) ──────────────────────────────────────
 
-/** Provider-down: 5xx, timeout, network. Means "try next", retrying same provider is hopeless. */
+// Internal tag: marks a thrown stream error as "the provider had already emitted output (text or a
+// tool-call chunk) before failing" — i.e. it was reachable. A Symbol keeps it off any real error
+// shape so it never collides with status/code/message.
+const PROVIDER_RESPONDED: unique symbol = Symbol('providerResponded');
+interface RespondedTag {
+  [PROVIDER_RESPONDED]?: boolean;
+}
+
+function markProviderResponded(error: unknown, responded: boolean): void {
+  if (responded && error && typeof error === 'object') {
+    (error as RespondedTag)[PROVIDER_RESPONDED] = true;
+  }
+}
+
+function providerResponded(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as RespondedTag)[PROVIDER_RESPONDED]);
+}
+
+/**
+ * Provider-down: 5xx or a connection/network failure. Means "try next", retrying same provider is
+ * hopeless. A DEFINED status is authoritative (only >= 500 is down) — a concrete 4xx is a client
+ * error and stays non-retryable even if its message mentions "connection"/"timed out", matching
+ * classifyAiError (which keeps a non-429 4xx generic). Only a STATUS-LESS error falls through to
+ * isConnectionLike (code/message), so an `APIConnectionError` outage aggregate (no status, joined
+ * "Connection error" message) is still recognised. (429 retryability is handled by isRetryableError.)
+ */
 function isProviderDown(error: unknown): boolean {
-  if (error instanceof OpenAI.APIError && error.status !== undefined && error.status >= 500) {
-    return true;
-  }
-  if (error instanceof Error) {
-    if (error.message.includes('timed out')) return true;
-    const code = (error as NodeJS.ErrnoException).code;
-    if (
-      code &&
-      ['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'ENOTFOUND'].includes(code)
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const status = numericStatus(error);
+  if (status !== undefined) return status >= 500;
+  return isConnectionLike(error);
 }
 
 /**
  * Retryable for same-provider retry (backoff): 429, 5xx, timeout, abort.
  * NOT used for cross-provider fallback — the chain always tries the next provider.
+ * Status is read structurally so the aggregate chain error (a plain `Error` with a copied transient
+ * `status`) stays retryable — otherwise a chain that ends in 5xx/429 would silently lose its retry.
  */
 export function isRetryableError(error: unknown): boolean {
   if (isProviderDown(error)) return true;
+  if (numericStatus(error) === 429) return true;
   if (error instanceof Error && error.name === 'AbortError') return true;
   // OpenAI SDK v6: APIUserAbortError extends APIError with status=undefined —
   // catches abort errors that don't set .name to 'AbortError'.
   if (error instanceof OpenAI.APIError && error.status === undefined) return true;
-  if (error instanceof OpenAI.APIError) {
-    return error.status === 429 || (error.status ?? 0) >= 500;
-  }
   return false;
 }
 
 /** Exponential backoff: 2s → 6s → 18s capped at 30s. 429 uses Retry-After if present. */
 export function getBackoffDelay(attempt: number, error: unknown): number {
-  if (error instanceof OpenAI.APIError && error.status === 429) {
-    const retryAfter = error.headers?.['retry-after'];
-    if (retryAfter) {
-      const seconds = Number.parseInt(retryAfter, 10);
-      if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
+  // Read 429 structurally so the aggregate chain error (a plain Error with a copied status) also
+  // gets the rate-limit backoff, not the generic exponential one. Retry-After is read only off a
+  // real APIError — a chain-wide 429 aggregate loses the provider's Retry-After and uses the flat
+  // 5000ms floor; a 529 aggregate falls to the exponential path (acceptable, low frequency).
+  if (numericStatus(error) === 429) {
+    if (error instanceof OpenAI.APIError) {
+      const retryAfter = error.headers?.['retry-after'];
+      if (retryAfter) {
+        const seconds = Number.parseInt(retryAfter, 10);
+        if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
+      }
     }
     return 5000;
   }
@@ -113,7 +143,10 @@ export function getBackoffDelay(attempt: number, error: unknown): number {
 // ── Provider slots ──────────────────────────────────────────────────────────
 
 interface ProviderSlot {
+  /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.1)". */
   name: string;
+  /** Stable endpoint id shared across chains/models ('zai'/'gemini'/'hf') — the breaker key. */
+  key: string;
   stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<StreamRoundResult>;
 }
 
@@ -121,9 +154,15 @@ interface ProviderSlot {
  * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
  * (z.ai, Gemini, HF) via the shared OpenAI SDK.
  */
-function streamingSlot(name: string, getClient: () => OpenAI, model: string): ProviderSlot {
+function streamingSlot(
+  name: string,
+  key: string,
+  getClient: () => OpenAI,
+  model: string,
+): ProviderSlot {
   return {
     name,
+    key,
     stream: async (opts, cbs) => {
       const params: OpenAI.ChatCompletionCreateParamsStreaming = {
         model,
@@ -146,51 +185,59 @@ function streamingSlot(name: string, getClient: () => OpenAI, model: string): Pr
       let lastToolCallKey = -1;
       let finishReason = 'stop';
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
-        if (!delta) continue;
+      try {
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta;
+          if (!delta) continue;
 
-        if (delta.content) {
-          text += delta.content;
-          cbs.onTextDelta?.(delta.content);
-        }
+          if (delta.content) {
+            text += delta.content;
+            cbs.onTextDelta?.(delta.content);
+          }
 
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            // Resolve index: some providers (HF Router, early Gemini) omit tc.index.
-            // Fallback: new tool call if id/name present, otherwise append to last.
-            let key: number;
-            if (typeof tc.index === 'number') {
-              key = tc.index;
-            } else if (tc.id || tc.function?.name) {
-              key = toolCalls.size;
-            } else if (lastToolCallKey >= 0) {
-              key = lastToolCallKey;
-            } else {
-              continue;
-            }
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              // Resolve index: some providers (HF Router, early Gemini) omit tc.index.
+              // Fallback: new tool call if id/name present, otherwise append to last.
+              let key: number;
+              if (typeof tc.index === 'number') {
+                key = tc.index;
+              } else if (tc.id || tc.function?.name) {
+                key = toolCalls.size;
+              } else if (lastToolCallKey >= 0) {
+                key = lastToolCallKey;
+              } else {
+                continue;
+              }
 
-            const existing = toolCalls.get(key);
-            if (existing) {
-              existing.args += tc.function?.arguments ?? '';
-              if (tc.id && !existing.id) existing.id = tc.id;
-              if (tc.function?.name && !existing.name) existing.name = tc.function.name;
-            } else {
-              const tcName = tc.function?.name ?? '';
-              if (tcName) cbs.onToolCallStart?.(tcName);
-              toolCalls.set(key, {
-                id: tc.id ?? '',
-                name: tcName,
-                args: tc.function?.arguments ?? '',
-              });
-              lastToolCallKey = key;
+              const existing = toolCalls.get(key);
+              if (existing) {
+                existing.args += tc.function?.arguments ?? '';
+                if (tc.id && !existing.id) existing.id = tc.id;
+                if (tc.function?.name && !existing.name) existing.name = tc.function.name;
+              } else {
+                const tcName = tc.function?.name ?? '';
+                if (tcName) cbs.onToolCallStart?.(tcName);
+                toolCalls.set(key, {
+                  id: tc.id ?? '',
+                  name: tcName,
+                  args: tc.function?.arguments ?? '',
+                });
+                lastToolCallKey = key;
+              }
             }
           }
-        }
 
-        if (chunk.choices[0]?.finish_reason) {
-          finishReason = chunk.choices[0].finish_reason;
+          if (chunk.choices[0]?.finish_reason) {
+            finishReason = chunk.choices[0].finish_reason;
+          }
         }
+      } catch (streamError) {
+        // Tag whether ANY output (text or a tool-call chunk — even before a tool name arrives) was
+        // received before the drop. The chain uses this so the breaker doesn't treat a late drop
+        // after a real response as "provider unreachable".
+        markProviderResponded(streamError, text.length > 0 || toolCalls.size > 0);
+        throw streamError;
       }
 
       const toolCallsArray: StreamToolCall[] = [...toolCalls.values()].map((tc) => ({
@@ -239,24 +286,34 @@ function streamingSlot(name: string, getClient: () => OpenAI, model: string): Pr
 
 function buildSmartChain(): ProviderSlot[] {
   return [
-    streamingSlot(`z.ai (${env.AI_MODEL})`, zaiClient, env.AI_MODEL),
-    streamingSlot(`Gemini (${env.GEMINI_MODEL})`, geminiClient, env.GEMINI_MODEL),
-    streamingSlot(`HF (${env.HF_MODEL})`, hfClient, env.HF_MODEL),
+    streamingSlot(`z.ai (${env.AI_MODEL})`, 'zai', zaiClient, env.AI_MODEL),
+    streamingSlot(`Gemini (${env.GEMINI_MODEL})`, 'gemini', geminiClient, env.GEMINI_MODEL),
+    streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL),
   ];
 }
 
 function buildFastChain(): ProviderSlot[] {
   return [
-    streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, zaiClient, env.AI_FAST_MODEL),
-    streamingSlot(`Gemini (${env.GEMINI_FAST_MODEL})`, geminiClient, env.GEMINI_FAST_MODEL),
-    streamingSlot(`HF (${env.HF_FAST_MODEL})`, hfClient, env.HF_FAST_MODEL),
+    streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, 'zai', zaiClient, env.AI_FAST_MODEL),
+    streamingSlot(
+      `Gemini (${env.GEMINI_FAST_MODEL})`,
+      'gemini',
+      geminiClient,
+      env.GEMINI_FAST_MODEL,
+    ),
+    streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL),
   ];
 }
 
 function buildOcrChain(): ProviderSlot[] {
   return [
-    streamingSlot(`Gemini (${env.GEMINI_VISION_MODEL})`, geminiClient, env.GEMINI_VISION_MODEL),
-    streamingSlot(`HF (${env.HF_VISION_MODEL})`, hfClient, env.HF_VISION_MODEL),
+    streamingSlot(
+      `Gemini (${env.GEMINI_VISION_MODEL})`,
+      'gemini',
+      geminiClient,
+      env.GEMINI_VISION_MODEL,
+    ),
+    streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL),
   ];
 }
 
@@ -269,6 +326,54 @@ function buildChain(chain: ChainName): ProviderSlot[] {
     case 'ocr':
       return buildOcrChain();
   }
+}
+
+function numericStatus(error: unknown): number | undefined {
+  // Optional chain: isProviderDown/isRetryableError call this on `unknown`, which may be a thrown
+  // null/undefined/primitive — those must classify as not-retryable, never throw a TypeError.
+  const status = (error as { status?: unknown } | null | undefined)?.status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+/**
+ * Pick the error whose status/code best represents an all-providers-failed chain. The aggregate
+ * feeds BOTH the user-facing classifier (classifyAiError) and the retry decision (isRetryableError),
+ * so a transient signal must win over a co-occurring 4xx — otherwise a chain where one provider 400s
+ * and the rest 5xx would lose its retry. Priority:
+ *   1. 429 (rate limit) / 529 (overloaded) — the most actionable, retryable signals.
+ *   2. any other transient failure — a 5xx response or a connection error — → provider_down + retry.
+ *   3. otherwise a 4xx response — the request itself is the problem (generic, not retryable).
+ *   4. fallback (the last error) when nothing else matched.
+ *
+ * The resulting CATEGORY is independent of the order providers were tried (the breaker can reorder
+ * the chain). The exact status WITHIN a tier follows try order — but every error in a tier maps to
+ * the same classifyAiError/isRetryableError category, so the user-facing outcome is stable.
+ */
+export function pickRepresentativeError(errors: Error[], fallback: Error | null): Error | null {
+  const rateLimited = errors.find((e) => numericStatus(e) === 429);
+  if (rateLimited) return rateLimited;
+  const overloaded = errors.find((e) => numericStatus(e) === 529);
+  if (overloaded) return overloaded;
+
+  const transient = errors.find((e) => {
+    const status = numericStatus(e);
+    return (status !== undefined && status >= 500) || (status === undefined && isConnectionLike(e));
+  });
+  if (transient) return transient;
+
+  const clientError = errors.find((e) => numericStatus(e) !== undefined);
+  return clientError ?? fallback;
+}
+
+/**
+ * Breaker-specific: only a STATUS-less connection error is a true "provider unreachable" event.
+ * A 4xx/5xx response — even one whose message happens to mention "connection" / "timed out" — means
+ * the provider WAS reachable, so it must not demote it (isConnectionLike also matches by message and
+ * would otherwise count such responses).
+ */
+function isUnreachableFailure(error: unknown): boolean {
+  if (numericStatus(error) !== undefined) return false;
+  return isConnectionLike(error);
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -287,12 +392,17 @@ export async function aiStreamRound(
   callbacks: StreamCallbacks = {},
 ): Promise<StreamRoundResult> {
   const chainName: ChainName = options.chain ?? 'smart';
-  const chain = buildChain(chainName);
+  // Round-start snapshot used ONLY to order the chain: demoted providers (repeated connection
+  // failures) drop to the back instead of being tried first; they're never removed. Breaker
+  // mutations below read a fresh `Date.now()` at failure time so a cooldown that expires mid-round
+  // is honored (the boundary check `demotedUntil <= now` must not use a stale anchor).
+  const now = Date.now();
+  const chain = orderByHealth(buildChain(chainName), now);
   let lastError: Error | null = null;
+  // Once text reaches the user we cannot splice another model's output on a fallback. (Whether the
+  // provider was reachable before a failure is read separately, off the thrown error's tag.)
   let textEmitted = false;
 
-  // Wrap callbacks to track whether text was actually sent to the user —
-  // if so, we cannot splice another model's output in a fallback.
   const wrappedCallbacks: StreamCallbacks = {
     onTextDelta: (text) => {
       textEmitted = true;
@@ -308,18 +418,43 @@ export async function aiStreamRound(
   for (const slot of chain) {
     try {
       logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
-      return await slot.stream(options, wrappedCallbacks);
+      const result = await slot.stream(options, wrappedCallbacks);
+      recordProviderReachable(slot.key); // a clean round rehabilitates a previously-demoted slot
+      return result;
     } catch (error) {
+      // A fresh read at FAILURE time — the round-start `now` (used only for orderByHealth) can
+      // predate a cooldown that expires mid-round, which would wrongly skip clearing an expired
+      // half-open demotion or extend a cooldown from a stale anchor.
+      const failedAt = Date.now();
       lastError = error instanceof Error ? error : new Error(String(error));
       providerErrors.push({ name: slot.name, error: lastError });
       logger.error({ err: lastError }, `[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
 
-      // Text already sent to user — can't splice another model's output
+      // Text already sent to user — can't splice another model's output. The provider proved it was
+      // reachable (it streamed text), so reset its connection-failure cluster before bailing out.
       if (textEmitted) {
+        if (!isAbortLike(lastError)) recordProviderResponded(slot.key, failedAt);
         logger.error(
           `[AI_STREAM] ${slot.name} died mid-stream after text was emitted — cannot fallback`,
         );
         throw error;
+      }
+
+      // An abort (the agent's 60s timeout / caller cancellation) is not evidence about the provider
+      // — it neither proves nor disproves reachability — so it must leave the breaker untouched.
+      // Otherwise: a truly unreachable failure (no status, connection-like, AND no output this
+      // attempt) demotes; anything else means the provider answered (a 4xx/5xx status, a plain
+      // reachable error like the empty-response above, or a late drop AFTER it streamed text/
+      // tool-calls), so it only resets the connection-failure counter (recordProviderResponded —
+      // does NOT lift an active demotion; only a clean round does).
+      // Read the responded tag off the ORIGINAL thrown value — it's set on `error`, while `lastError`
+      // may be a fresh wrapper Error (for a non-Error throw) that never carried the tag.
+      if (!isAbortLike(lastError)) {
+        if (isUnreachableFailure(lastError) && !providerResponded(error)) {
+          recordProviderConnectionFailure(slot.key, failedAt);
+        } else {
+          recordProviderResponded(slot.key, failedAt);
+        }
       }
 
       // Always try the next provider in the chain.
@@ -338,14 +473,19 @@ export async function aiStreamRound(
   const aggregated = new Error(
     `All ${providerErrors.length} providers in ${chainName} chain failed: ${summary}`,
   );
-  // Preserve the last error's properties (status, code) for upstream error
-  // classification (classifyAiError reads error.status and error.code) — keeps an
-  // all-connection-failure chain classifiable even when the joined message text
-  // doesn't obviously read as a network error.
-  if (lastError) {
+  // Carry status/code for upstream classification (classifyAiError) and retry (isRetryableError),
+  // both of which read error.status/code. The choice must NOT depend on which provider failed LAST
+  // — the breaker can reorder the chain, so "last error" is unstable. pickRepresentativeError
+  // prefers a transient signal (429/529/5xx/connection → retryable provider_down) over a co-occurring
+  // 4xx, so a chain where one provider 400s and the rest are down still reads as "try later".
+  const representative = pickRepresentativeError(
+    providerErrors.map((e) => e.error),
+    lastError,
+  );
+  if (representative) {
     Object.assign(aggregated, {
-      status: (lastError as { status?: number }).status,
-      code: (lastError as { code?: string }).code,
+      status: (representative as { status?: number }).status,
+      code: (representative as { code?: string }).code,
     });
   }
   throw aggregated;
@@ -405,6 +545,11 @@ function errorText(error: unknown): string {
 }
 
 /** The agent's abort timer fired (or a user/SDK abort) — distinct from a provider being down. */
+// INVARIANT (the provider breaker depends on this): this must distinguish APIUserAbortError (an
+// abort → skip the breaker) from APIConnectionError (a real outage → must demote). Both are
+// `APIError` with `status === undefined`, so the match is by name/message ("aborted"), NEVER by
+// `status === undefined` — broadening it that way would silently stop demoting real connection
+// outages, the main case the breaker exists for.
 function isAbortLike(error: unknown): boolean {
   if (
     error instanceof Error &&
