@@ -58,8 +58,6 @@ export type EditableGroupSettingKey = Exclude<
 
 // ── Setting definition shape ──────────────────────────────────────────────────
 
-export type GroupSettingKind = 'currency' | 'currency_multi' | 'toggle' | 'topic' | 'text';
-
 export type SettingParseResult<V> = { ok: true; value: V } | { ok: false; error: string };
 
 interface BaseSettingDef {
