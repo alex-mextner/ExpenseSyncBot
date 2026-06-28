@@ -32,13 +32,27 @@ mock.module('./streaming', () => ({
   classifyAiError: mockClassifyAiError,
 }));
 
+const mockValidateResponse = mock<
+  (input: {
+    userMessage: string;
+    toolCalls: string[];
+    response: string;
+  }) => Promise<{ approved: true } | { approved: false; reason: string }>
+>(async () => ({ approved: true }));
 mock.module('./response-validator', () => ({
-  validateResponse: mock(async () => ({ approved: true })),
+  validateResponse: mockValidateResponse,
 }));
 
 const mockReportAiFailureToAdmin = mock<(input: unknown) => Promise<void>>(() => Promise.resolve());
 mock.module('./error-reporter', () => ({
   reportAiFailureToAdmin: mockReportAiFailureToAdmin,
+}));
+
+const mockExecuteTool = mock<(name: string, input: unknown, ctx: unknown) => Promise<unknown>>(
+  async () => ({ success: true, output: 'ok', data: { total: 100 }, summary: 'done' }),
+);
+mock.module('./tool-executor', () => ({
+  executeTool: mockExecuteTool,
 }));
 
 import { ExpenseBotAgent } from './agent';
@@ -83,6 +97,24 @@ function mockStreamReturn(chunks: string[] = ['ok']) {
   });
 }
 
+/** Queue a single tool-calling round (no text), so runAgentLoop executes a tool then loops. */
+function mockToolCallRound(name: string, args = '{}') {
+  mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
+    callbacks.onToolCallStart?.(name);
+    return {
+      text: '',
+      toolCalls: [{ id: 'call_1', name, arguments: args }],
+      finishReason: 'tool_calls',
+      assistantMessage: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name, arguments: args } }],
+      },
+      providerUsed: 'mock',
+    } satisfies StreamRoundResult;
+  });
+}
+
 /** Extract the LAST call's options from mockAiStreamRound (most recent invocation) */
 function getLastCallOpts(): import('./streaming').StreamRoundOptions {
   const calls = mockAiStreamRound.mock.calls;
@@ -121,6 +153,16 @@ describe('ExpenseBotAgent', () => {
     mockGetBackoffDelay.mockClear();
     mockClassifyAiError.mockClear();
     mockReportAiFailureToAdmin.mockClear();
+    // mockReset (not mockClear) so any queued one-shot impl can't leak into the next test.
+    mockValidateResponse.mockReset();
+    mockValidateResponse.mockResolvedValue({ approved: true });
+    mockExecuteTool.mockReset();
+    mockExecuteTool.mockResolvedValue({
+      success: true,
+      output: 'ok',
+      data: { total: 100 },
+      summary: 'done',
+    });
 
     // Default: errors are not retryable (unless overridden per test)
     mockIsRetryableError.mockReturnValue(false);
@@ -188,6 +230,98 @@ describe('ExpenseBotAgent', () => {
 
       await agent.run('How much did I spend?', [], mockBot as unknown as import('gramio').Bot);
       expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-run when the initial answer passes validation', async () => {
+      mockStreamReturn(['fine answer']);
+
+      const result = await agent.run('q', [], mockBot as unknown as import('gramio').Bot);
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
+      expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+      expect(result).toBe('fine answer');
+    });
+
+    it('skips validation entirely when the initial answer already called tools', async () => {
+      mockToolCallRound('get_expenses'); // initial round 1: calls a tool
+      mockStreamReturn(['grounded answer']); // initial round 2: final text
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      // Tool-grounded → the validation pass is never entered.
+      expect(mockValidateResponse).not.toHaveBeenCalled();
+      expect(result).toBe('grounded answer');
+    });
+
+    it('caps at exactly one re-run (validates once) and surfaces the retry on a reject', async () => {
+      // Initial answer and the retry both call no tools; the validator rejects the initial.
+      mockStreamReturn(['initial bad answer']);
+      mockStreamReturn(['retry bad answer']);
+      mockValidateResponse.mockResolvedValue({ approved: false, reason: 'no tools used' });
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      // Exactly one re-run: initial + one retry = 2 stream calls, never a 3rd (no 60s loop).
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+      // Validated only ONCE (the initial) — the retry is surfaced without a second validator call.
+      expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+      // Surfaced answer is the retry (the last attempt) rather than an error/abort.
+      expect(result).toBe('retry bad answer');
+      // A validation cap is a quality event, NOT a failure — it must not page the admin.
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('trusts a retry that calls tools (no second validation of grounded data)', async () => {
+      mockStreamReturn(['initial bad answer']); // initial: no tools → rejected
+      mockToolCallRound('get_expenses'); // retry round 1: calls a tool
+      mockStreamReturn(['grounded answer']); // retry round 2: final text after the tool
+      mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      // Only the initial answer was validated; the tool-grounded retry is trusted.
+      expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+      expect(result).toBe('grounded answer');
+    });
+
+    it('returns empty (caller treats as silent) when the capped retry produced no text', async () => {
+      mockStreamReturn(['initial bad answer']); // non-empty, rejected
+      mockStreamReturn([]); // retry streams nothing
+      mockValidateResponse.mockResolvedValue({ approved: false, reason: 'no tools used' });
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      // The return value is the retry's getText() = '' (NOT the stale initial). The writer's
+      // finalize() substitutes a placeholder for display, but the returned/history text is '',
+      // which the caller (ask.ts: `if (!finalResponse) return;`) treats as a silent no-op.
+      expect(result).toBe('');
+    });
+
+    it('propagates a retry failure to the catch path (AgentError + admin report)', async () => {
+      mockStreamReturn(['initial bad answer']); // initial: no tools
+      mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+      const retryErr = Object.assign(new Error('retry stream failed'), { status: 500 });
+      mockAiStreamRound.mockImplementationOnce(() => Promise.reject(retryErr)); // the re-run throws
+
+      const { AgentError } = await import('../../errors');
+      await expect(
+        agent.run('How much did I spend?', [], mockBot as unknown as import('gramio').Bot),
+      ).rejects.toBeInstanceOf(AgentError);
+      // The retry error propagated through finalizeWithValidation into run()'s catch.
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
     });
 
     it('passes maxTokens to aiStreamRound', async () => {

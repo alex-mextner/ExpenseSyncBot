@@ -84,50 +84,20 @@ export class ExpenseBotAgent {
         return '';
       }
 
-      // --- Validation pass (always runs when no tools were called AND tools were available) ---
-      // Skip if the model already called tools (data is real) or if no tools existed at all.
+      // --- Validation pass (runs only when no tools were called AND tools were available) ---
+      // If the model already called tools the data is real; if no tools existed there's nothing
+      // to validate against.
       if (toolCallNames.length === 0 && TOOL_DEFINITIONS.length > 0) {
-        const validation = await validateResponse({
+        const validated = await this.finalizeWithValidation({
           userMessage,
-          toolCalls: toolCallNames,
-          response: finalText,
+          messages,
+          writer,
+          debugCtx,
+          toolCallNames,
+          initial: { text: finalText, toolCount: totalToolCalls },
         });
-
-        if (!validation.approved) {
-          logger.info(`[AGENT] Validation REJECTED: ${validation.reason}`);
-
-          writer.reset();
-          toolCallNames.length = 0;
-
-          const retryController = new AbortController();
-          const retryTimeout = setTimeout(() => retryController.abort(), AGENT_TIMEOUT_MS);
-
-          messages.push({ role: 'assistant', content: finalText });
-          messages.push({
-            role: 'user',
-            content: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${validation.reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
-          });
-
-          try {
-            const retry = await this.runAgentLoop(
-              messages,
-              writer,
-              debugCtx,
-              retryController.signal,
-              toolCallNames,
-            );
-            finalText = retry.text;
-            totalToolCalls = retry.toolCount;
-
-            logger.info(
-              `[AGENT] Retry response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
-            );
-          } finally {
-            clearTimeout(retryTimeout);
-          }
-        } else {
-          logger.info('[AGENT] Validation APPROVED');
-        }
+        finalText = validated.text;
+        totalToolCalls = validated.toolCount;
       }
 
       debugCtx?.logAiText(finalText);
@@ -237,6 +207,104 @@ export class ExpenseBotAgent {
       }
     }
     throw new Error('[AGENT] Retry loop exhausted');
+  }
+
+  /**
+   * Validate the no-tool answer and, on a REJECT, re-run the agent EXACTLY ONCE. The re-run is
+   * then surfaced as-is: trusted if it grounded itself in tool calls, otherwise surfaced
+   * best-effort with a warning. We deliberately do NOT re-validate the re-run — at a one-retry
+   * cap a second validator verdict can't change the outcome (we surface the re-run either way),
+   * so re-validating would only add a second validator round-trip on the unhappy path.
+   */
+  private async finalizeWithValidation(args: {
+    userMessage: string;
+    messages: OpenAI.ChatCompletionMessageParam[];
+    writer: TelegramStreamWriter;
+    debugCtx: AiDebugRunContext | null;
+    toolCallNames: string[];
+    initial: { text: string; toolCount: number };
+  }): Promise<{ text: string; toolCount: number }> {
+    const { userMessage, messages, writer, debugCtx, toolCallNames, initial } = args;
+
+    const validation = await validateResponse({
+      userMessage,
+      toolCalls: toolCallNames,
+      response: initial.text,
+    });
+    if (validation.approved) {
+      logger.info('[AGENT] Validation APPROVED');
+      return initial;
+    }
+
+    logger.info(`[AGENT] Validation REJECTED: ${validation.reason} — re-running once`);
+    const retry = await this.rerunAfterRejection({
+      messages,
+      writer,
+      debugCtx,
+      toolCallNames,
+      rejectedText: initial.text,
+      reason: validation.reason,
+    });
+
+    // Surface the re-run either way; the only difference is how we log it.
+    if (toolCallNames.length > 0) {
+      // The re-run grounded its answer in tool calls — trust it (same rule as the entry guard).
+      logger.info('[AGENT] Retry called tools — accepted');
+    } else {
+      // Cap: one re-run already happened and it still called no tools. Surface the re-run's answer
+      // (already streamed to the user) instead of looping toward the per-attempt timeout. This is
+      // a quality cap, not a failure — no exception, and since no tools were called nothing was
+      // mutated/persisted — so it stays a warn, not an admin failure report.
+      logger.warn(
+        { reason: validation.reason },
+        '[AGENT] Validator rejected and the retry still used no tools — capping, surfacing best-effort answer',
+      );
+    }
+    return retry;
+  }
+
+  /**
+   * Re-run the agent loop after a validator rejection, prompting it to use tools this time.
+   * Intentionally a single attempt via `runAgentLoop` (not `runWithRetry`): the initial run
+   * already spent its backoff budget, and capping the re-run at one attempt bounds total latency
+   * — a transient error here propagates to the caller's catch instead of compounding the wait.
+   */
+  private async rerunAfterRejection(args: {
+    messages: OpenAI.ChatCompletionMessageParam[];
+    writer: TelegramStreamWriter;
+    debugCtx: AiDebugRunContext | null;
+    toolCallNames: string[];
+    rejectedText: string;
+    reason: string;
+  }): Promise<{ text: string; toolCount: number }> {
+    const { messages, writer, debugCtx, toolCallNames, rejectedText, reason } = args;
+    writer.reset();
+    toolCallNames.length = 0;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+
+    messages.push({ role: 'assistant', content: rejectedText });
+    messages.push({
+      role: 'user',
+      content: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
+    });
+
+    try {
+      const retry = await this.runAgentLoop(
+        messages,
+        writer,
+        debugCtx,
+        controller.signal,
+        toolCallNames,
+      );
+      logger.info(
+        `[AGENT] Retry response (${retry.text.length} chars): "${retry.text.substring(0, 200)}${retry.text.length > 200 ? '...' : ''}"`,
+      );
+      return retry;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   protected async sleep(ms: number): Promise<void> {

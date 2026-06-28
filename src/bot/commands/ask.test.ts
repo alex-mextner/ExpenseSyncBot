@@ -136,6 +136,10 @@ mock.module('../../services/analytics/advice-triggers', () => ({
 const mockSendMessage = mock(async () => null);
 mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: mockSendMessage,
+  // error-reporter.ts (pulled in transitively via the agent) does `import { sendDirect }`, so this
+  // module mock must export it or bun fails the test at link time with
+  // "Export named 'sendDirect' not found". ask.ts itself never calls sendDirect.
+  sendDirect: mock(async () => null),
   editMessageText: mock(async () => undefined),
   deleteMessage: mock(async () => undefined),
   sendChatAction: mock(async () => undefined),
