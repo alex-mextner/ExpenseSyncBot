@@ -22,17 +22,37 @@ const mockAiStreamRound =
 
 const mockIsRetryableError = mock<(error: unknown) => boolean>();
 const mockGetBackoffDelay = mock<(attempt: number, error: unknown) => number>();
-const mockFormatApiError = mock<(error: unknown) => string>();
+const mockClassifyAiError =
+  mock<(error: unknown) => import('./streaming').AiErrorClassification | null>();
 
 mock.module('./streaming', () => ({
   aiStreamRound: mockAiStreamRound,
   isRetryableError: mockIsRetryableError,
   getBackoffDelay: mockGetBackoffDelay,
-  formatApiError: mockFormatApiError,
+  classifyAiError: mockClassifyAiError,
 }));
 
+const mockValidateResponse = mock<
+  (input: {
+    userMessage: string;
+    toolCalls: string[];
+    response: string;
+  }) => Promise<{ approved: true } | { approved: false; reason: string }>
+>(async () => ({ approved: true }));
 mock.module('./response-validator', () => ({
-  validateResponse: mock(async () => ({ approved: true })),
+  validateResponse: mockValidateResponse,
+}));
+
+const mockReportAiFailureToAdmin = mock<(input: unknown) => Promise<void>>(() => Promise.resolve());
+mock.module('./error-reporter', () => ({
+  reportAiFailureToAdmin: mockReportAiFailureToAdmin,
+}));
+
+const mockExecuteTool = mock<(name: string, input: unknown, ctx: unknown) => Promise<unknown>>(
+  async () => ({ success: true, output: 'ok', data: { total: 100 }, summary: 'done' }),
+);
+mock.module('./tool-executor', () => ({
+  executeTool: mockExecuteTool,
 }));
 
 import { ExpenseBotAgent } from './agent';
@@ -77,6 +97,24 @@ function mockStreamReturn(chunks: string[] = ['ok']) {
   });
 }
 
+/** Queue a single tool-calling round (no text), so runAgentLoop executes a tool then loops. */
+function mockToolCallRound(name: string, args = '{}') {
+  mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
+    callbacks.onToolCallStart?.(name);
+    return {
+      text: '',
+      toolCalls: [{ id: 'call_1', name, arguments: args }],
+      finishReason: 'tool_calls',
+      assistantMessage: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name, arguments: args } }],
+      },
+      providerUsed: 'mock',
+    } satisfies StreamRoundResult;
+  });
+}
+
 /** Extract the LAST call's options from mockAiStreamRound (most recent invocation) */
 function getLastCallOpts(): import('./streaming').StreamRoundOptions {
   const calls = mockAiStreamRound.mock.calls;
@@ -113,12 +151,27 @@ describe('ExpenseBotAgent', () => {
     mockAiStreamRound.mockClear();
     mockIsRetryableError.mockClear();
     mockGetBackoffDelay.mockClear();
-    mockFormatApiError.mockClear();
+    mockClassifyAiError.mockClear();
+    mockReportAiFailureToAdmin.mockClear();
+    // mockReset (not mockClear) so any queued one-shot impl can't leak into the next test.
+    mockValidateResponse.mockReset();
+    mockValidateResponse.mockResolvedValue({ approved: true });
+    mockExecuteTool.mockReset();
+    mockExecuteTool.mockResolvedValue({
+      success: true,
+      output: 'ok',
+      data: { total: 100 },
+      summary: 'done',
+    });
 
     // Default: errors are not retryable (unless overridden per test)
     mockIsRetryableError.mockReturnValue(false);
     mockGetBackoffDelay.mockReturnValue(0);
-    mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
+    // Default: classify as a generic recognized AI error (wrapped + sent to user).
+    mockClassifyAiError.mockReturnValue({
+      kind: 'generic',
+      userMessage: '\u274c Ошибка AI. Попробуйте позже.',
+    });
   });
 
   afterEach(() => {
@@ -177,6 +230,98 @@ describe('ExpenseBotAgent', () => {
 
       await agent.run('How much did I spend?', [], mockBot as unknown as import('gramio').Bot);
       expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-run when the initial answer passes validation', async () => {
+      mockStreamReturn(['fine answer']);
+
+      const result = await agent.run('q', [], mockBot as unknown as import('gramio').Bot);
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(1);
+      expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+      expect(result).toBe('fine answer');
+    });
+
+    it('skips validation entirely when the initial answer already called tools', async () => {
+      mockToolCallRound('get_expenses'); // initial round 1: calls a tool
+      mockStreamReturn(['grounded answer']); // initial round 2: final text
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      // Tool-grounded → the validation pass is never entered.
+      expect(mockValidateResponse).not.toHaveBeenCalled();
+      expect(result).toBe('grounded answer');
+    });
+
+    it('caps at exactly one re-run (validates once) and surfaces the retry on a reject', async () => {
+      // Initial answer and the retry both call no tools; the validator rejects the initial.
+      mockStreamReturn(['initial bad answer']);
+      mockStreamReturn(['retry bad answer']);
+      mockValidateResponse.mockResolvedValue({ approved: false, reason: 'no tools used' });
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      // Exactly one re-run: initial + one retry = 2 stream calls, never a 3rd (no 60s loop).
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+      // Validated only ONCE (the initial) — the retry is surfaced without a second validator call.
+      expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+      // Surfaced answer is the retry (the last attempt) rather than an error/abort.
+      expect(result).toBe('retry bad answer');
+      // A validation cap is a quality event, NOT a failure — it must not page the admin.
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('trusts a retry that calls tools (no second validation of grounded data)', async () => {
+      mockStreamReturn(['initial bad answer']); // initial: no tools → rejected
+      mockToolCallRound('get_expenses'); // retry round 1: calls a tool
+      mockStreamReturn(['grounded answer']); // retry round 2: final text after the tool
+      mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      // Only the initial answer was validated; the tool-grounded retry is trusted.
+      expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+      expect(result).toBe('grounded answer');
+    });
+
+    it('returns empty (caller treats as silent) when the capped retry produced no text', async () => {
+      mockStreamReturn(['initial bad answer']); // non-empty, rejected
+      mockStreamReturn([]); // retry streams nothing
+      mockValidateResponse.mockResolvedValue({ approved: false, reason: 'no tools used' });
+
+      const result = await agent.run(
+        'How much did I spend?',
+        [],
+        mockBot as unknown as import('gramio').Bot,
+      );
+      // The return value is the retry's getText() = '' (NOT the stale initial). The writer's
+      // finalize() substitutes a placeholder for display, but the returned/history text is '',
+      // which the caller (ask.ts: `if (!finalResponse) return;`) treats as a silent no-op.
+      expect(result).toBe('');
+    });
+
+    it('propagates a retry failure to the catch path (AgentError + admin report)', async () => {
+      mockStreamReturn(['initial bad answer']); // initial: no tools
+      mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+      const retryErr = Object.assign(new Error('retry stream failed'), { status: 500 });
+      mockAiStreamRound.mockImplementationOnce(() => Promise.reject(retryErr)); // the re-run throws
+
+      const { AgentError } = await import('../../errors');
+      await expect(
+        agent.run('How much did I spend?', [], mockBot as unknown as import('gramio').Bot),
+      ).rejects.toBeInstanceOf(AgentError);
+      // The retry error propagated through finalizeWithValidation into run()'s catch.
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
     });
 
     it('passes maxTokens to aiStreamRound', async () => {
@@ -394,7 +539,10 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Rate limit exceeded'), { status: 429 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u23f3 Слишком много запросов к AI. Подождите минуту.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '\u23f3 Слишком много запросов к AI. Подождите минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(apiError);
 
       const { AgentError } = await import('../../errors');
@@ -413,7 +561,10 @@ describe('ExpenseBotAgent', () => {
       const overloadedError = Object.assign(new Error('Overloaded'), { status: 529 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u26a1 AI сервер перегружен. Попробуйте позже.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'overloaded',
+        userMessage: '\u26a1 AI сервер перегружен. Попробуйте позже.',
+      });
       mockAiStreamRound.mockRejectedValue(overloadedError);
 
       const { AgentError } = await import('../../errors');
@@ -426,11 +577,15 @@ describe('ExpenseBotAgent', () => {
       }
     });
 
-    it('throws AgentError on other API error after retries', async () => {
+    it('throws AgentError on provider 5xx (provider_down) after retries', async () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(apiError);
 
       const { AgentError } = await import('../../errors');
@@ -439,7 +594,9 @@ describe('ExpenseBotAgent', () => {
         expect.unreachable('should have thrown');
       } catch (err) {
         expect(err).toBeInstanceOf(AgentError);
-        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('Ошибка AI');
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain(
+          'временно недоступен',
+        );
       }
     });
 
@@ -448,6 +605,10 @@ describe('ExpenseBotAgent', () => {
       abortError.name = 'AbortError';
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'timeout',
+        userMessage: '\u23f3 Время ожидания истекло. Попробуйте ещё раз.',
+      });
       mockAiStreamRound.mockRejectedValue(abortError);
 
       const { AgentError } = await import('../../errors');
@@ -464,7 +625,6 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
       mockAiStreamRound.mockRejectedValue(apiError);
 
       try {
@@ -501,7 +661,6 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
       mockAiStreamRound.mockRejectedValue(apiError);
 
       try {
@@ -518,11 +677,35 @@ describe('ExpenseBotAgent', () => {
       expect(errorCall).toBeTruthy();
     });
 
+    it('reports the failure to the admin (fire-and-forget) on a terminal error', async () => {
+      const apiError = Object.assign(new Error('Server error'), { status: 500 });
+      mockIsRetryableError.mockReturnValue(true);
+      mockGetBackoffDelay.mockReturnValue(0);
+      mockAiStreamRound.mockRejectedValue(apiError);
+
+      try {
+        await agent.run('change currency', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
+      const [input] = mockReportAiFailureToAdmin.mock.calls[0] as [
+        { userMessage: string; error: unknown; telegramGroupId: number },
+      ];
+      expect(input.userMessage).toContain('change currency');
+      expect(input.error).toBe(apiError);
+    });
+
+    it('does NOT report to the admin on a successful run', async () => {
+      mockStreamReturn(['All good.']);
+      await agent.run('hello', [], mockBot as unknown as import('gramio').Bot);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
     it('cleans up placeholder message on error', async () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
       mockAiStreamRound.mockRejectedValue(apiError);
 
       try {
@@ -549,7 +732,10 @@ describe('ExpenseBotAgent', () => {
     it('wraps error with status:429 (non-API class) as AgentError', async () => {
       const rawErr = Object.assign(new Error('Rate limit exceeded'), { status: 429 });
       mockIsRetryableError.mockReturnValue(false);
-      mockFormatApiError.mockReturnValue('\u23f3 Слишком много запросов к AI. Подождите минуту.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '\u23f3 Слишком много запросов к AI. Подождите минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(rawErr);
 
       const { AgentError } = await import('../../errors');
@@ -561,7 +747,11 @@ describe('ExpenseBotAgent', () => {
     it('wraps error with status:500 (non-API class) as AgentError', async () => {
       const serverErr = Object.assign(new Error('Internal server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(false);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(serverErr);
 
       const { AgentError } = await import('../../errors');
@@ -574,6 +764,11 @@ describe('ExpenseBotAgent', () => {
       const timeoutErr = Object.assign(new Error('Request timed out'), { code: 'ETIMEDOUT' });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(timeoutErr);
 
       const { AgentError } = await import('../../errors');
@@ -587,6 +782,11 @@ describe('ExpenseBotAgent', () => {
     it('wraps ECONNREFUSED error as AgentError', async () => {
       const connErr = Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' });
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(connErr);
 
       const { AgentError } = await import('../../errors');
@@ -598,6 +798,11 @@ describe('ExpenseBotAgent', () => {
     it('wraps ENOTFOUND error as AgentError', async () => {
       const dnsErr = Object.assign(new Error('DNS lookup failed'), { code: 'ENOTFOUND' });
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(dnsErr);
 
       const { AgentError } = await import('../../errors');
@@ -609,6 +814,11 @@ describe('ExpenseBotAgent', () => {
     it('sends network error message to user', async () => {
       const connErr = Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' });
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(connErr);
 
       try {
@@ -619,7 +829,8 @@ describe('ExpenseBotAgent', () => {
       const sendCalls = mockBot.api.sendMessage.mock.calls;
       const errorCall = sendCalls.find(
         (c: unknown[]) =>
-          typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка сети'),
+          typeof c[0] === 'object' &&
+          (c[0] as { text?: string }).text?.includes('временно недоступен'),
       );
       expect(errorCall).toBeTruthy();
     });
@@ -627,11 +838,126 @@ describe('ExpenseBotAgent', () => {
     it('rethrows unknown error without wrapping', async () => {
       const unknownErr = new TypeError('Unexpected type error');
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue(null);
       mockAiStreamRound.mockRejectedValue(unknownErr);
 
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
       ).rejects.toBeInstanceOf(TypeError);
+      // A non-AI error is not an "AI failure" — it must not be reported to the admin.
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+  });
+
+  // -- run() -- admin paging gate + user-facing string surfacing -------------
+  // Only genuine failures (provider_down / generic) page the admin; transient/user-side classes
+  // (rate_limit / overloaded / timeout) surface a user message but must NOT spam the operator.
+  // The real error→message mapping is pinned in streaming.test.ts; here we assert the agent SENDS
+  // the classified string to the user (via bot.api.sendMessage) and applies the paging gate.
+  describe('run() -- admin paging gate and user message surfacing', () => {
+    beforeEach(() => {
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
+      mockIsRetryableError.mockReturnValue(false); // go straight to the terminal catch
+    });
+
+    /** All text strings the agent sent to the user this run (placeholder + error message). */
+    function sentText(): string[] {
+      return mockBot.api.sendMessage.mock.calls
+        .map((c: unknown[]) =>
+          typeof c[0] === 'object' ? (c[0] as { text?: string }).text : undefined,
+        )
+        .filter((t): t is string => typeof t === 'string');
+    }
+
+    it('rate_limit (429): surfaces the rate-limit message and does NOT page the admin', async () => {
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '⏳ Слишком много запросов к AI. Подожди минуту.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('429'), { status: 429 }));
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('Слишком много запросов к AI'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('overloaded (529): surfaces the overloaded message and does NOT page the admin', async () => {
+      mockClassifyAiError.mockReturnValue({
+        kind: 'overloaded',
+        userMessage: '⚡ AI сервер перегружен. Попробуй позже.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('529'), { status: 529 }));
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('перегружен'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('timeout (60s abort): surfaces the timeout message and does NOT page the admin', async () => {
+      const abortErr = new Error('The operation was aborted');
+      abortErr.name = 'AbortError';
+      mockClassifyAiError.mockReturnValue({
+        kind: 'timeout',
+        userMessage: '⏳ Время ожидания истекло. Попробуй ещё раз.',
+      });
+      mockAiStreamRound.mockRejectedValue(abortErr);
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('Время ожидания истекло'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('provider_down (connection/5xx): surfaces the outage message AND pages the admin', async () => {
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('down'), { code: 'ECONNRESET' }));
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('временно недоступен'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
+    });
+
+    it('exhausted-chain empty-response (generic): user gets the generic message AND the admin is paged (no silent rethrow)', async () => {
+      // Regression for the empty-response bypass: classifyAiError now returns generic (not null) for
+      // the "All N providers … chain failed" empty-response aggregate (pinned in streaming.test.ts),
+      // so the agent surfaces a user message and pages the admin via the generic path instead of
+      // rethrowing the raw aggregate after deleting the in-progress message.
+      const emptyAggregate = new Error(
+        'All 3 providers in smart chain failed: z.ai (glm): Provider z.ai (glm) returned empty ' +
+          'response (no text, no tool calls) — treating as failure; Gemini (g): returned empty ' +
+          'response; HF (h): returned empty response',
+      );
+      mockClassifyAiError.mockReturnValue({
+        kind: 'generic',
+        userMessage: '❌ Ошибка AI. Попробуй позже.',
+      });
+      mockAiStreamRound.mockRejectedValue(emptyAggregate);
+
+      const { AgentError } = await import('../../errors');
+      await expect(
+        agent.run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot),
+      ).rejects.toBeInstanceOf(AgentError); // AgentError, NOT the raw aggregate rethrown
+
+      expect(sentText().some((t) => t.includes('Ошибка AI'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
     });
   });
 });
