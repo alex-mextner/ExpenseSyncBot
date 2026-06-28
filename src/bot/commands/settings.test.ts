@@ -46,6 +46,7 @@ mock.module('../../database', () => ({
 const { handleSettingsCommand, handleSettingsCallback, buildSettingsView } = await import(
   './settings'
 );
+const { GROUP_SETTINGS } = await import('../../services/settings/group-settings-registry');
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -86,7 +87,8 @@ function fakeCallbackCtx(): Ctx['CallbackQuery'] {
 beforeEach(() => {
   sendMessageMock.mockReset().mockResolvedValue(null);
   groupsFindByTelegramGroupIdMock.mockReset().mockReturnValue(null);
-  groupsUpdateMock.mockReset().mockReturnValue(null);
+  // Default: update persists (returns the row). Tests for failed writes override this.
+  groupsUpdateMock.mockReset().mockReturnValue(fakeGroup());
   logMock.error.mockReset();
   logMock.warn.mockReset();
 });
@@ -123,36 +125,54 @@ describe('/settings rendering', () => {
     expect(logMock.error).not.toHaveBeenCalled();
   });
 
-  test('main keyboard exposes an action per setting', () => {
-    const view = buildSettingsView(fakeGroup({ bank_cards_enabled: 0 }));
-    const json = JSON.stringify(view.keyboard);
-    expect(json).toContain('Сменить валюту по умолчанию');
-    expect(json).toContain('settings:edit:default_currency');
-    expect(json).toContain('Изменить набор валют');
-    expect(json).toContain('settings:medit:enabled_currencies');
-    expect(json).toContain('Включить карточки банка');
-    expect(json).toContain('settings:set:bank_cards_enabled:on');
+  // Menu-side analogue of the registry enforcement test: EVERY registry setting must
+  // produce a reachable button. A new GROUP_SETTINGS entry that gets no button fails here.
+  test('every GROUP_SETTINGS key produces a reachable menu button', () => {
+    const json = JSON.stringify(buildSettingsView(fakeGroup()).keyboard);
+    for (const key of Object.keys(GROUP_SETTINGS)) {
+      expect(json).toContain(key);
+    }
+  });
+
+  test('main keyboard dispatches the right sub-action per kind', () => {
+    const json = JSON.stringify(buildSettingsView(fakeGroup({ bank_cards_enabled: 0 })).keyboard);
+    expect(json).toContain('settings:edit:default_currency'); // currency
+    expect(json).toContain('settings:medit:enabled_currencies'); // currency_multi
+    expect(json).toContain('settings:set:bank_cards_enabled:on'); // toggle (off → "on")
+    expect(json).toContain('settings:tedit:active_topic_id'); // topic
+    expect(json).toContain('settings:xedit:custom_prompt'); // text
   });
 
   test('bank-cards button reflects current state and clarifies off = balance only', () => {
     const off = buildSettingsView(fakeGroup({ bank_cards_enabled: 0 }));
     expect(off.text).toContain('Карточки банковских транзакций: выкл (только баланс)');
-    expect(JSON.stringify(off.keyboard)).toContain('Включить карточки банка');
+    expect(JSON.stringify(off.keyboard)).toContain('settings:set:bank_cards_enabled:on');
 
     const on = buildSettingsView(fakeGroup({ bank_cards_enabled: 1 }));
     expect(on.text).toContain('Карточки банковских транзакций: вкл');
-    expect(JSON.stringify(on.keyboard)).toContain('Выключить карточки банка');
+    expect(JSON.stringify(on.keyboard)).toContain('settings:set:bank_cards_enabled:off');
   });
 
-  test('clear buttons appear only when custom_prompt / topic are set', () => {
-    const empty = buildSettingsView(fakeGroup({ custom_prompt: null, active_topic_id: null }));
-    expect(JSON.stringify(empty.keyboard)).not.toContain('Очистить AI-промпт');
-    expect(JSON.stringify(empty.keyboard)).not.toContain('Сбросить топик');
+  // The global sanitizeOutgoingMessages hook re-decodes &lt;…&gt; and restores whitelisted
+  // tags, so entity-escaping would be undone. We neutralize tag chars with guillemets so a
+  // user's custom_prompt can never render as active formatting / a link in the menu.
+  test('neutralizes angle brackets in user-controlled values (no injection survives sanitizer)', () => {
+    const view = buildSettingsView(fakeGroup({ custom_prompt: '<b>x</b> <a href="z">l</a>' }));
+    expect(view.text).not.toContain('<b>');
+    expect(view.text).not.toContain('<a ');
+    expect(view.text).not.toContain('</');
+    // Look-alike guillemets are not tag characters; the sanitizer leaves them untouched.
+    expect(view.text).toContain('‹b›x‹/b›');
+  });
 
-    const set = buildSettingsView(fakeGroup({ custom_prompt: 'Be brief', active_topic_id: 42 }));
-    const json = JSON.stringify(set.keyboard);
-    expect(json).toContain('settings:set:custom_prompt:clear');
-    expect(json).toContain('settings:set:active_topic_id:clear');
+  test('neutralizes PRE-ENCODED tag delimiters too (sanitizer would decode &lt;…&gt;)', () => {
+    const view = buildSettingsView(
+      fakeGroup({ custom_prompt: '&lt;a href="https://x"&gt;click&lt;/a&gt;' }),
+    );
+    // No &lt;/&gt; left for the outgoing HTML sanitizer to decode back into a real tag.
+    expect(view.text).not.toContain('&lt;');
+    expect(view.text).not.toContain('&gt;');
+    expect(view.text).toContain('‹a href=');
   });
 
   test('sends friendly error message and logs when sender throws', async () => {
@@ -181,6 +201,8 @@ describe('/settings callbacks', () => {
     expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { bank_cards_enabled: 1 });
     const editText = ctx.editText as ReturnType<typeof mock>;
     expect(editText).toHaveBeenCalled();
+    // Re-render must use HTML parse mode to match sendMessage, so escapeHtml is consistent.
+    expect(editText.mock.calls[0]?.[1]).toMatchObject({ parse_mode: 'HTML' });
     expect(logMock.error).not.toHaveBeenCalled();
     expect(logMock.warn).not.toHaveBeenCalled();
   });
@@ -301,6 +323,118 @@ describe('/settings callbacks', () => {
     const editText = ctx.editText as ReturnType<typeof mock>;
     const kbJson = JSON.stringify(editText.mock.calls[0]?.[1]);
     expect(kbJson).toContain('settings:mtog:enabled_currencies:GEL');
+  });
+
+  test('set bank_cards_enabled:off writes 0', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 1 }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'bank_cards_enabled', 'off']);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { bank_cards_enabled: 0 });
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('set custom_prompt:clear writes null', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ custom_prompt: 'old note' }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'custom_prompt', 'clear']);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { custom_prompt: null });
+  });
+
+  test('set active_topic_id:clear writes null', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ active_topic_id: 99 }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'active_topic_id', 'clear']);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { active_topic_id: null });
+  });
+
+  test('menu cannot set active_topic_id to a number (clear-only)', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup());
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'active_topic_id', '42']);
+
+    expect(groupsUpdateMock).not.toHaveBeenCalled();
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect((answer.mock.calls[0]?.[0] as { text: string }).text).toContain('/topic');
+  });
+
+  test('tedit opens the topic sub-view with a reset + back keyboard', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ active_topic_id: 5 }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['tedit', 'active_topic_id']);
+
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    expect(editText.mock.calls[0]?.[0] as string).toContain('/topic');
+    const kbJson = JSON.stringify(editText.mock.calls[0]?.[1]);
+    expect(kbJson).toContain('settings:set:active_topic_id:clear');
+    expect(kbJson).toContain('settings:back');
+  });
+
+  test('xedit opens the text sub-view with a clear + back keyboard', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ custom_prompt: 'note' }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['xedit', 'custom_prompt']);
+
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const kbJson = JSON.stringify(editText.mock.calls[0]?.[1]);
+    expect(kbJson).toContain('settings:set:custom_prompt:clear');
+    expect(kbJson).toContain('settings:back');
+  });
+
+  test('set with an unknown setting key answers "Неверные данные"', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup());
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'spreadsheet_id', 'x']);
+
+    expect(groupsUpdateMock).not.toHaveBeenCalled();
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect(answer.mock.calls[0]?.[0]).toMatchObject({ text: 'Неверные данные' });
+  });
+
+  test('unknown sub-action answers "Неизвестное действие"', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup());
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['garbage']);
+
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect(answer.mock.calls[0]?.[0]).toMatchObject({ text: 'Неизвестное действие' });
+  });
+
+  test('edit/medit with a wrong-kind key answer "Неверные данные"', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup());
+
+    const editCtx = fakeCallbackCtx();
+    await handleSettingsCallback(editCtx, ['edit', 'enabled_currencies']); // not a 'currency' kind
+    expect(
+      (editCtx.answerCallbackQuery as ReturnType<typeof mock>).mock.calls[0]?.[0],
+    ).toMatchObject({ text: 'Неверные данные' });
+
+    const meditCtx = fakeCallbackCtx();
+    await handleSettingsCallback(meditCtx, ['medit', 'default_currency']); // not 'currency_multi'
+    expect(
+      (meditCtx.answerCallbackQuery as ReturnType<typeof mock>).mock.calls[0]?.[0],
+    ).toMatchObject({ text: 'Неверные данные' });
+  });
+
+  test('reports failure when the update does not persist', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 0 }));
+    groupsUpdateMock.mockReturnValue(null); // write fails
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'bank_cards_enabled', 'on']);
+
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect((answer.mock.calls[0]?.[0] as { text: string }).text).toContain('Не удалось');
   });
 
   test('answers "Группа не настроена" when the group is missing', async () => {

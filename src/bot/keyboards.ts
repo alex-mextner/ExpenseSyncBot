@@ -52,15 +52,19 @@ export function createCurrencyKeyboard(selectedCurrencies: string[] = []): Inlin
 
 /**
  * Build the /settings default-currency picker: every supported currency as a button,
- * the current default marked, plus a Back button. Callback data uses latin codes only.
+ * the current default marked, plus a Back button. Callback data uses the registry key +
+ * latin currency codes only (never raw labels) to stay within the 64-byte limit.
  */
-export function createSettingsCurrencyPickKeyboard(currentDefault: string): InlineKeyboard {
+export function createSettingsCurrencyPickKeyboard(
+  settingKey: string,
+  currentDefault: string,
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   for (let i = 0; i < SUPPORTED_CURRENCIES.length; i += 3) {
     for (const code of SUPPORTED_CURRENCIES.slice(i, i + 3)) {
       const label = code === currentDefault ? `✅ ${code}` : code;
-      keyboard.text(label, `settings:set:default_currency:${code}`);
+      keyboard.text(label, `settings:set:${settingKey}:${code}`);
     }
     keyboard.row();
   }
@@ -75,6 +79,7 @@ export function createSettingsCurrencyPickKeyboard(currentDefault: string): Inli
  * returns to the main settings view.
  */
 export function createSettingsMultiCurrencyKeyboard(
+  settingKey: string,
   enabledCurrencies: string[],
   defaultCurrency: string,
 ): InlineKeyboard {
@@ -85,7 +90,7 @@ export function createSettingsMultiCurrencyKeyboard(
   const addButton = (code: string): void => {
     const checkbox = enabledSet.has(code) ? '✅' : '▫️';
     const lock = code === defaultCurrency ? '🔒' : '';
-    keyboard.text(`${checkbox}${lock} ${code}`, `settings:mtog:enabled_currencies:${code}`);
+    keyboard.text(`${checkbox}${lock} ${code}`, `settings:mtog:${settingKey}:${code}`);
   };
 
   for (let i = 0; i < SUPPORTED_CURRENCIES.length; i += 3) {
