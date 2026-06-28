@@ -1312,7 +1312,7 @@ describe('executeGetGroupSettings', () => {
     expect(result.error).toContain('Group not found');
   });
 
-  test('shows custom prompt when set', async () => {
+  test('shows a short custom prompt once (preview only, no duplicate full-text line)', async () => {
     mockGroups.findById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
@@ -1333,7 +1333,33 @@ describe('executeGetGroupSettings', () => {
 
     const result = await executeTool('get_group_settings', {}, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Custom prompt full text: Be brief and speak in Russian');
+    // The preview line carries the full short prompt; no separate "full text" line.
+    expect(result.output).toContain('custom_prompt): Be brief and speak in Russian');
+    expect(result.output).not.toContain('Custom prompt full text:');
+  });
+
+  test('appends the full text only when the prompt is long enough to be truncated', async () => {
+    const longPrompt = `Always reply in Russian. ${'x'.repeat(80)}`;
+    mockGroups.findById.mockReturnValue({
+      id: 1,
+      telegram_group_id: 456,
+      title: null,
+      invite_link: null,
+      google_refresh_token: null,
+      spreadsheet_id: null,
+      default_currency: 'EUR',
+      enabled_currencies: ['EUR'],
+      custom_prompt: longPrompt,
+      active_topic_id: null,
+      oauth_client: 'legacy' as const,
+      bank_panel_summary_message_id: null,
+      bank_cards_enabled: 1,
+      created_at: '',
+      updated_at: '',
+    });
+
+    const result = await executeTool('get_group_settings', {}, ctx);
+    expect(result.output).toContain(`Custom prompt full text: ${longPrompt}`);
   });
 });
 
@@ -1426,6 +1452,35 @@ describe('update_group_setting', () => {
       ctx,
     );
     expect(result.success).toBe(false);
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a missing setting key (Russian error)', async () => {
+    const result = await executeTool('update_group_setting', { value: 'usd' }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('настройку');
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a non-string value (Russian error)', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'default_currency', value: 123 },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('строкой');
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('active_topic_id is clear-only: a numeric value is rejected and nothing persists', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'active_topic_id', value: '42' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('/topic');
     expect(mockGroups.update).not.toHaveBeenCalled();
   });
 });

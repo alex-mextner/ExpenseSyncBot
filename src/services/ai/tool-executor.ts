@@ -491,10 +491,14 @@ function executeGetGroupSettings(ctx: AgentContext): ToolResult {
     `Spreadsheet (spreadsheet_id): ${group.spreadsheet_id ? 'connected' : 'not connected'}`,
   );
 
-  // The custom_prompt line above is a short preview; include the full text so the
-  // AI can actually follow the stored instructions.
+  // The custom_prompt line above is a preview. Only append the full text when the preview
+  // actually truncated it (>60 flattened chars) — otherwise it just duplicates the line and
+  // wastes tokens in every AI context.
   if (group.custom_prompt) {
-    lines.push(`Custom prompt full text: ${group.custom_prompt}`);
+    const flattened = group.custom_prompt.replace(/\s+/g, ' ').trim();
+    if (flattened.length > 60) {
+      lines.push(`Custom prompt full text: ${group.custom_prompt}`);
+    }
   }
 
   return { success: true, output: lines.join('\n') };
@@ -512,10 +516,10 @@ async function executeUpdateGroupSetting(
   const rawValue = input['value'];
 
   if (typeof settingKey !== 'string' || !settingKey) {
-    return { success: false, error: 'setting is required' };
+    return { success: false, error: 'Не указано, какую настройку менять.' };
   }
   if (typeof rawValue !== 'string') {
-    return { success: false, error: 'value must be a string' };
+    return { success: false, error: 'Значение настройки должно быть строкой.' };
   }
   if (!isEditableGroupSettingKey(settingKey)) {
     return {
@@ -526,7 +530,7 @@ async function executeUpdateGroupSetting(
 
   const group = database.groups.findById(ctx.groupId);
   if (!group) {
-    return { success: false, error: 'Group not found' };
+    return { success: false, error: 'Группа не найдена.' };
   }
 
   const def = GROUP_SETTINGS[settingKey];
