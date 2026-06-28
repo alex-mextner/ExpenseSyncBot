@@ -52,9 +52,29 @@ The five registered settings:
 |-----|------|-------|
 | `default_currency` | currency | restricted to `SUPPORTED_CURRENCIES` (they have reliable EUR rates); `apply` also keeps the new code in `enabled_currencies`. |
 | `enabled_currencies` | currency_multi | accepts any valid ISO-format code (onboarding parity with custom currencies); always keeps the default currency in the set; dedupes. |
-| `custom_prompt` | text | free text; `clear`/`сброс`/empty → `null`. |
-| `active_topic_id` | topic | integer, or `clear`/`сброс`/empty → `null`. |
+| `custom_prompt` | text | full-rewrite text, or `clear`/`сброс`/empty → `null`. **Adding/remembering a note uses `set_custom_prompt` (append), NOT this** — see the dual-writer contract below. |
+| `active_topic_id` | topic | **CLEAR-ONLY**: `clear`/`сброс`/empty → `null`; any numeric id is rejected with a Russian message telling the user to bind via `/topic`. |
 | `bank_cards_enabled` | toggle | `on/off`, `1/0`, `true/false`, `вкл/выкл`, … |
+
+`apply()` returns whether the write actually persisted (false if the group row vanished);
+`runSetting` turns a non-persisting write into a Russian "не удалось сохранить" error instead
+of a false "saved".
+
+#### `active_topic_id` is clear-only (anti-brick)
+
+If the AI or the menu could set `active_topic_id` to an arbitrary integer, the group could be
+pointed at a non-existent thread and silently stop responding. So the registry path only
+*clears* the binding; *binding* must go through the `/topic` command run INSIDE the target
+topic, where Telegram guarantees the thread exists. `/topic` writes the column directly and is
+unaffected.
+
+#### `custom_prompt` dual-writer contract
+
+Two tools write `custom_prompt`: `set_custom_prompt` (append — accumulates group notes) and
+`update_group_setting custom_prompt` (full overwrite/clear). To avoid the model wiping
+accumulated notes on "учти что …", the tool description, the `aiValueHint`, and the system
+prompt all state: **remembering/adding a note → `set_custom_prompt` (append); a full
+rewrite/clear on explicit request ("перепиши промпт"/"очисти промпт") → `update_group_setting`.**
 
 ### Enforcement — adding a column can't bypass the registry
 
@@ -89,20 +109,27 @@ setting and must never deflect to `/settings`.
 
 ### Editable `/settings` menu
 
-`buildSettingsView` renders one line per registry setting plus a read-only spreadsheet
-line. The keyboard exposes an action per setting; `handleSettingsCallback` routes
-`settings:*` callbacks (`edit`, `medit`, `set`, `mtog`, `back`, legacy `bankcards`) through
-**the same** `applyGroupSetting` path the AI uses. `callback_data` uses short latin registry
-keys + currency codes only (never raw Cyrillic labels), staying within Telegram's 64-byte
-limit.
+`buildSettingsView` renders one line per registry setting plus a read-only spreadsheet line.
+The keyboard is **generated from `GROUP_SETTINGS`, dispatched by `def.kind`** (toggle → in-place
+flip; currency → picker; currency_multi → multi-select; topic → topic sub-view; text → text
+sub-view) — so a newly-registered setting automatically gets a reachable button, with a `never`
+exhaustiveness guard forcing any new `kind` to be handled. A menu-side test asserts every
+`Object.keys(GROUP_SETTINGS)` produces a button — the menu analogue of the registry guard.
+
+`handleSettingsCallback` routes `settings:*` callbacks (`edit`, `medit`, `tedit`, `xedit`,
+`set`, `mtog`, `back`, legacy `bankcards`) through **the same** `applyGroupSetting` path the AI
+uses. `callback_data` uses short latin registry keys + currency codes only (never raw Cyrillic
+labels), staying within Telegram's 64-byte limit. User-controlled values (`custom_prompt`) are
+HTML-escaped before composing the menu text, since `/settings` sends `parse_mode: 'HTML'`.
 
 ## Decisions / limitations
 
 - `default_currency` is intentionally restricted to `SUPPORTED_CURRENCIES`; a default
   without a built-in EUR rate would break aggregate display (`convertCurrency`). EGP was
   added to `SUPPORTED_CURRENCIES` to satisfy the headline use case.
-- Free-text entry (`custom_prompt`) and topic selection (`active_topic_id`) are set by the
-  AI tool or existing flows (`/topic`); the menu offers only a "clear/reset" action for them.
+- Free-text entry (`custom_prompt`) is set in chat / by the AI; topic binding goes through
+  `/topic`. In the menu both expose a sub-view that shows the current value and a clear/reset
+  action only.
 - The multi-currency picker sources custom currencies from the enabled set, mirroring the
   onboarding picker (`createCurrencyKeyboard`): unchecking a custom code removes its button.
   Re-adding one is done via `update_group_setting` or `/connect`. A stateful in-menu
