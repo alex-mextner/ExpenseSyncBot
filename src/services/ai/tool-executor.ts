@@ -20,6 +20,11 @@ import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
+import {
+  applyGroupSetting,
+  GROUP_SETTINGS,
+  isEditableGroupSettingKey,
+} from '../settings/group-settings-registry';
 import { executeBatchItems, isBatchInput } from './batch';
 import {
   computeExpenseStats,
@@ -80,6 +85,8 @@ export async function executeTool(
         return await executeSyncBudgets(ctx);
       case 'set_custom_prompt':
         return executeSetCustomPrompt(input, ctx);
+      case 'update_group_setting':
+        return await executeUpdateGroupSetting(input, ctx);
       case 'manage_category':
         return await executeManageCategory(input, ctx);
       case 'calculate':
@@ -475,18 +482,64 @@ function executeGetGroupSettings(ctx: AgentContext): ToolResult {
     return { success: false, error: 'Group not found' };
   }
 
-  const lines = [
-    `Default currency: ${group.default_currency}`,
-    `Enabled currencies: ${group.enabled_currencies.join(', ')}`,
-    `Spreadsheet: ${group.spreadsheet_id ? 'connected' : 'not connected'}`,
-    `Custom prompt: ${group.custom_prompt ? 'set' : 'not set'}`,
-  ];
+  // Render every registry-backed setting so all of them stay visible to the AI,
+  // including bank_cards_enabled and active_topic_id.
+  const lines = Object.values(GROUP_SETTINGS).map(
+    (def) => `${def.labelRu} (${def.key}): ${def.formatValue(group)}`,
+  );
+  lines.push(
+    `Spreadsheet (spreadsheet_id): ${group.spreadsheet_id ? 'connected' : 'not connected'}`,
+  );
 
+  // The custom_prompt line above is a short preview; include the full text so the
+  // AI can actually follow the stored instructions.
   if (group.custom_prompt) {
-    lines.push(`Custom prompt text: ${group.custom_prompt}`);
+    lines.push(`Custom prompt full text: ${group.custom_prompt}`);
   }
 
   return { success: true, output: lines.join('\n') };
+}
+
+/**
+ * Generic group-setting writer. Looks up the registry entry, parses + applies the value
+ * through the shared registry path, and returns a Russian success/error summary.
+ */
+async function executeUpdateGroupSetting(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
+  const settingKey = input['setting'];
+  const rawValue = input['value'];
+
+  if (typeof settingKey !== 'string' || !settingKey) {
+    return { success: false, error: 'setting is required' };
+  }
+  if (typeof rawValue !== 'string') {
+    return { success: false, error: 'value must be a string' };
+  }
+  if (!isEditableGroupSettingKey(settingKey)) {
+    return {
+      success: false,
+      error: `Неизвестная настройка "${settingKey}". Доступны: ${Object.keys(GROUP_SETTINGS).join(', ')}.`,
+    };
+  }
+
+  const group = database.groups.findById(ctx.groupId);
+  if (!group) {
+    return { success: false, error: 'Group not found' };
+  }
+
+  const def = GROUP_SETTINGS[settingKey];
+  const result = await applyGroupSetting(def, group, rawValue);
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  const updated = database.groups.findById(ctx.groupId) ?? group;
+  return {
+    success: true,
+    output: `Готово, поменял для тебя. ${def.emoji} ${def.labelRu}: ${def.formatValue(updated)}`,
+  };
 }
 
 function executeGetExchangeRates(): ToolResult {

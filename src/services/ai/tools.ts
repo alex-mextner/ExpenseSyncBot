@@ -1,5 +1,6 @@
 /** OpenAI-format tool definitions for the expense bot agent */
 import type OpenAI from 'openai';
+import { GROUP_SETTINGS } from '../settings/group-settings-registry';
 
 /** Shorthand: wraps name+description+parameters into OpenAI tool shape */
 function tool(
@@ -8,6 +9,22 @@ function tool(
   parameters: Record<string, unknown>,
 ): OpenAI.ChatCompletionTool {
   return { type: 'function', function: { name, description, parameters } };
+}
+
+/**
+ * Build the update_group_setting description from the settings registry so the per-setting
+ * value hints stay in sync with the registry and never drift.
+ */
+function buildUpdateGroupSettingDescription(): string {
+  const settingLines = Object.values(GROUP_SETTINGS).map(
+    (def) => `- "${def.key}" (${def.labelRu}): ${def.aiValueHint}`,
+  );
+  return [
+    'Change a group setting immediately when the user asks. You CAN and SHOULD change any of these — never say you cannot, and never deflect the user to /settings.',
+    'Pass setting=<key> and value=<string>. The value is parsed and validated; on bad input you get a Russian error message to relay to the user.',
+    'Settings:',
+    ...settingLines,
+  ].join('\n');
 }
 
 /** Convert legacy Anthropic-format tool defs to OpenAI format (input_schema → parameters) */
@@ -347,6 +364,26 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
       required: ['action', 'name'],
     },
   },
+  {
+    name: 'update_group_setting',
+    description: buildUpdateGroupSettingDescription(),
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        setting: {
+          type: 'string',
+          enum: Object.keys(GROUP_SETTINGS),
+          description: 'Which group setting to change (see per-setting hints in the description).',
+        },
+        value: {
+          type: 'string',
+          description:
+            'New value as a string. The exact format depends on the chosen setting — see its hint in the tool description.',
+        },
+      },
+      required: ['setting', 'value'],
+    },
+  },
 
   // === Bank tools ===
   {
@@ -532,6 +569,7 @@ export const TOOL_LABELS: Record<string, string> = {
   sync_budgets: 'Синхронизирую бюджеты',
   calculate: 'Считаю',
   set_custom_prompt: 'Обновляю промпт',
+  update_group_setting: 'Меняю настройку группы',
   manage_category: 'Управляю категориями',
   get_bank_transactions: 'Загружаю банковские транзакции',
   get_bank_balances: 'Проверяю балансы счетов',

@@ -423,6 +423,7 @@ If an expense has no comment in the tool result, show nothing — do NOT invent 
 11. Missing/unmatched bank expenses → call find_missing_expenses.
 12. User asks you to remember, note, or save ANYTHING — a fact about a person, an account, a rule, a preference, any context — → call set_custom_prompt with mode="append". NEVER say "got it", "noted", "запомнил", or "remembered" without calling the tool first. This includes phrases like "запомни что", "note that", "keep in mind", "учти что".
 13. Recurring patterns → call get_recurring_patterns. To manage (pause/resume/dismiss/delete) → call manage_recurring_pattern.
+14. Changing a group setting (default currency, enabled currencies, AI prompt, bank-transaction cards, topic) → call update_group_setting with setting=<key> and value=<string>. You CAN change ANY group setting now — never reply that you can't, and never tell the user to open /settings instead. Call get_group_settings first if you need the current values, then apply the change and confirm the new value to the user.
 
 ## FORMATTING
 Use ONLY these HTML tags (no Markdown, no ** or *):
@@ -448,6 +449,7 @@ This bot tracks expenses and budgets. It can:
 - Connect bank accounts (/bank) to auto-import transactions with AI categorization
 - View real-time bank account balances (get_bank_balances tool)
 - Find bank transactions not yet recorded as expenses (find_missing_expenses tool)
+- Change any group setting (default currency, enabled currencies, AI prompt, bank-transaction cards, topic) via update_group_setting
 
 IMPORTANT: /connect is for Google Sheets integration only. /bank is for bank account integration (TBC, Kaspi, etc.).
 
@@ -473,6 +475,7 @@ When a user asks "что ты умеешь?", "what can you do?", or similar —
 - Конвертировать валюты и считать любые выражения
 - Отслеживать повторяющиеся расходы (аренда, подписки и т.д.)
 - Давать финансовые советы и отвечать на вопросы о тратах
+- Менять настройки группы: валюту по умолчанию, набор валют, AI-промпт, карточки банковских транзакций, топик
 - Запоминать заметки и правила для группы
 - Отправлять фидбек и баг-репорты администратору
 
