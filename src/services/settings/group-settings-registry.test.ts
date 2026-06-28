@@ -43,7 +43,8 @@ function fakeGroup(overrides: Partial<Group> = {}): Group {
 }
 
 beforeEach(() => {
-  updateMock.mockReset().mockReturnValue(null);
+  // Default: update succeeds (returns the row). Tests that need a failed write override this.
+  updateMock.mockReset().mockReturnValue(fakeGroup());
 });
 
 // ── Enforcement guard ─────────────────────────────────────────────────────────
@@ -208,14 +209,18 @@ describe('bank_cards_enabled setting', () => {
 describe('active_topic_id setting', () => {
   const def = GROUP_SETTINGS.active_topic_id;
 
-  test('parse accepts an integer', () => {
-    expect(def.parse('55', fakeGroup())).toEqual({ ok: true, value: 55 });
-  });
-
   test('parse treats clear words and empty as null', () => {
     expect(def.parse('clear', fakeGroup())).toEqual({ ok: true, value: null });
     expect(def.parse('сброс', fakeGroup())).toEqual({ ok: true, value: null });
     expect(def.parse('', fakeGroup())).toEqual({ ok: true, value: null });
+  });
+
+  test('parse is CLEAR-ONLY: any numeric id is rejected with a /topic instruction', () => {
+    for (const raw of ['7', '0', '-5', '99999999999999999999']) {
+      const result = def.parse(raw, fakeGroup());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('/topic');
+    }
   });
 
   test('parse rejects non-integer text', () => {
@@ -228,12 +233,15 @@ describe('active_topic_id setting', () => {
     expect(def.formatValue(fakeGroup({ active_topic_id: null }))).toBe('не задан');
   });
 
-  test('apply writes the id and clears to null', async () => {
-    await applyGroupSetting(def, fakeGroup(), '7');
-    expect(updateMock).toHaveBeenCalledWith(-100, { active_topic_id: 7 });
-    updateMock.mockReset();
-    await applyGroupSetting(def, fakeGroup(), 'clear');
+  test('apply clears to null; a numeric id never persists', async () => {
+    const cleared = await applyGroupSetting(def, fakeGroup({ active_topic_id: 7 }), 'сброс');
+    expect(cleared.ok).toBe(true);
     expect(updateMock).toHaveBeenCalledWith(-100, { active_topic_id: null });
+
+    updateMock.mockReset().mockReturnValue(fakeGroup());
+    const numeric = await applyGroupSetting(def, fakeGroup(), '7');
+    expect(numeric.ok).toBe(false);
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -259,11 +267,55 @@ describe('custom_prompt setting', () => {
     expect(def.formatValue(fakeGroup({ custom_prompt: 'Be brief' }))).toBe('Be brief');
   });
 
+  test('formatValue (previewPrompt) keeps an exactly-60-char prompt verbatim', () => {
+    const exactly60 = 'a'.repeat(60);
+    expect(def.formatValue(fakeGroup({ custom_prompt: exactly60 }))).toBe(exactly60);
+  });
+
+  test('formatValue (previewPrompt) truncates a >60-char prompt with an ellipsis', () => {
+    const preview = def.formatValue(fakeGroup({ custom_prompt: 'b'.repeat(61) }));
+    expect(preview.endsWith('…')).toBe(true);
+    expect(preview).toBe(`${'b'.repeat(57)}…`);
+  });
+
+  test('formatValue (previewPrompt) flattens multiline whitespace to single spaces', () => {
+    expect(def.formatValue(fakeGroup({ custom_prompt: 'line one\n\n  line two' }))).toBe(
+      'line one line two',
+    );
+  });
+
   test('apply writes the prompt and clears it', async () => {
     await applyGroupSetting(def, fakeGroup(), 'Be brief');
     expect(updateMock).toHaveBeenCalledWith(-100, { custom_prompt: 'Be brief' });
-    updateMock.mockReset();
+    updateMock.mockReset().mockReturnValue(fakeGroup());
     await applyGroupSetting(def, fakeGroup(), 'clear');
     expect(updateMock).toHaveBeenCalledWith(-100, { custom_prompt: null });
+  });
+
+  test('apply reports failure when the group update does not persist', async () => {
+    updateMock.mockReset().mockReturnValue(null);
+    const result = await applyGroupSetting(def, fakeGroup(), 'Be brief');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('Не удалось');
+  });
+});
+
+// ── aiValueHint contracts (fed verbatim into the AI tool description) ────────────
+
+describe('aiValueHint contracts', () => {
+  test('custom_prompt routes notes to set_custom_prompt and warns it overwrites', () => {
+    const hint = GROUP_SETTINGS.custom_prompt.aiValueHint;
+    expect(hint).toContain('set_custom_prompt');
+    expect(hint.toUpperCase()).toContain('REPLACE');
+  });
+
+  test('active_topic_id is clear-only and points the user to /topic', () => {
+    const hint = GROUP_SETTINGS.active_topic_id.aiValueHint;
+    expect(hint).toContain('/topic');
+    expect(hint.toLowerCase()).toContain('clear');
+  });
+
+  test('default_currency notes the restricted built-in set', () => {
+    expect(GROUP_SETTINGS.default_currency.aiValueHint).toContain('built-in');
   });
 });

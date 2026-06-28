@@ -69,39 +69,42 @@ interface BaseSettingDef {
   formatValue(group: Group): string;
 }
 
+/** apply() returns whether the write actually persisted (false if the group vanished). */
 interface CurrencySettingDef extends BaseSettingDef {
   readonly key: 'default_currency';
   readonly kind: 'currency';
   parse(raw: string, group: Group): SettingParseResult<CurrencyCode>;
-  apply(group: Group, value: CurrencyCode): Promise<void>;
+  apply(group: Group, value: CurrencyCode): Promise<boolean>;
 }
 
 interface CurrencyMultiSettingDef extends BaseSettingDef {
   readonly key: 'enabled_currencies';
   readonly kind: 'currency_multi';
   parse(raw: string, group: Group): SettingParseResult<CurrencyCode[]>;
-  apply(group: Group, value: CurrencyCode[]): Promise<void>;
+  apply(group: Group, value: CurrencyCode[]): Promise<boolean>;
 }
 
 interface ToggleSettingDef extends BaseSettingDef {
   readonly key: 'bank_cards_enabled';
   readonly kind: 'toggle';
   parse(raw: string, group: Group): SettingParseResult<number>;
-  apply(group: Group, value: number): Promise<void>;
+  apply(group: Group, value: number): Promise<boolean>;
+  /** Current on/off state (1/0) — used by the menu to label the in-place toggle button. */
+  current(group: Group): number;
 }
 
 interface TopicSettingDef extends BaseSettingDef {
   readonly key: 'active_topic_id';
   readonly kind: 'topic';
   parse(raw: string, group: Group): SettingParseResult<number | null>;
-  apply(group: Group, value: number | null): Promise<void>;
+  apply(group: Group, value: number | null): Promise<boolean>;
 }
 
 interface TextSettingDef extends BaseSettingDef {
   readonly key: 'custom_prompt';
   readonly kind: 'text';
   parse(raw: string, group: Group): SettingParseResult<string | null>;
-  apply(group: Group, value: string | null): Promise<void>;
+  apply(group: Group, value: string | null): Promise<boolean>;
 }
 
 export type GroupSettingDef =
@@ -214,15 +217,21 @@ function parseToggle(raw: string): SettingParseResult<number> {
   return { ok: false, error: `Не понял "${raw}". Напиши "вкл" или "выкл".` };
 }
 
+/**
+ * Topic binding is CLEAR-ONLY through the registry (AI tool + menu). Accepting a free-form
+ * id would let the AI/menu point the group at a non-existent thread and silently brick it
+ * (the bot would stop responding). Binding must go through /topic run INSIDE the target
+ * topic, where Telegram guarantees the thread exists.
+ */
+const TOPIC_BIND_HINT =
+  'Привязать топик отсюда нельзя — зайди в нужный топик и отправь там /topic, тогда Telegram гарантирует, что топик существует. Здесь можно только сбросить привязку (напиши "сброс").';
+
 function parseTopic(raw: string): SettingParseResult<number | null> {
   const value = raw.trim().toLowerCase();
   if (value === '' || CLEAR_WORDS.has(value)) {
     return { ok: true, value: null };
   }
-  if (!/^-?\d+$/.test(value)) {
-    return { ok: false, error: `Топик должен быть числом или "сброс". Получено: "${raw}".` };
-  }
-  return { ok: true, value: Number.parseInt(value, 10) };
+  return { ok: false, error: TOPIC_BIND_HINT };
 }
 
 function parseText(raw: string): SettingParseResult<string | null> {
@@ -241,22 +250,27 @@ function previewPrompt(prompt: string | null): string {
 
 // ── Setting definitions ──────────────────────────────────────────────────────
 
+/** Persist a partial group update; returns false if the group no longer exists. */
+function persist(telegramGroupId: number, data: UpdateGroupData): boolean {
+  return database.groups.update(telegramGroupId, data) !== null;
+}
+
 const defaultCurrencySetting: CurrencySettingDef = {
   key: 'default_currency',
   kind: 'currency',
   emoji: '💱',
   labelRu: 'Валюта по умолчанию',
-  aiValueHint: 'ISO currency code, e.g. "EGP", "USD", "RSD"',
+  aiValueHint:
+    'one of the built-in supported ISO codes (USD, EUR, RUB, RSD, GBP, BYN, CHF, JPY, CNY, INR, LKR, AED, EGP), e.g. "EGP"',
   formatValue: (group) => group.default_currency,
   parse: (raw) => parseCurrency(raw),
-  async apply(group, value) {
+  apply(group, value) {
     const enabled = group.enabled_currencies.includes(value)
       ? group.enabled_currencies
       : [...group.enabled_currencies, value];
-    database.groups.update(group.telegram_group_id, {
-      default_currency: value,
-      enabled_currencies: enabled,
-    });
+    return Promise.resolve(
+      persist(group.telegram_group_id, { default_currency: value, enabled_currencies: enabled }),
+    );
   },
 };
 
@@ -269,8 +283,8 @@ const enabledCurrenciesSetting: CurrencyMultiSettingDef = {
     'comma- or space-separated ISO codes, e.g. "USD, EUR, EGP"; the default currency is always kept',
   formatValue: (group) => group.enabled_currencies.join(', ') || '—',
   parse: (raw, group) => parseCurrencyMulti(raw, group),
-  async apply(group, value) {
-    database.groups.update(group.telegram_group_id, { enabled_currencies: value });
+  apply(group, value) {
+    return Promise.resolve(persist(group.telegram_group_id, { enabled_currencies: value }));
   },
 };
 
@@ -281,9 +295,10 @@ const bankCardsSetting: ToggleSettingDef = {
   labelRu: 'Карточки банковских транзакций',
   aiValueHint: 'on / off (also accepts 1/0, true/false, вкл/выкл)',
   formatValue: (group) => (group.bank_cards_enabled ? 'вкл' : 'выкл (только баланс)'),
+  current: (group) => (group.bank_cards_enabled ? 1 : 0),
   parse: (raw) => parseToggle(raw),
-  async apply(group, value) {
-    database.groups.update(group.telegram_group_id, { bank_cards_enabled: value });
+  apply(group, value) {
+    return Promise.resolve(persist(group.telegram_group_id, { bank_cards_enabled: value }));
   },
 };
 
@@ -292,12 +307,13 @@ const activeTopicSetting: TopicSettingDef = {
   kind: 'topic',
   emoji: '📍',
   labelRu: 'Топик',
-  aiValueHint: 'integer topic id, or "clear"/"сброс" to unset',
+  aiValueHint:
+    'only "clear"/"сброс" to unbind the topic. To BIND a topic the user must run /topic inside that topic — the AI/menu cannot set a topic id.',
   formatValue: (group) =>
     group.active_topic_id != null ? `#${group.active_topic_id}` : 'не задан',
   parse: (raw) => parseTopic(raw),
-  async apply(group, value) {
-    database.groups.update(group.telegram_group_id, { active_topic_id: value });
+  apply(group, value) {
+    return Promise.resolve(persist(group.telegram_group_id, { active_topic_id: value }));
   },
 };
 
@@ -306,11 +322,12 @@ const customPromptSetting: TextSettingDef = {
   kind: 'text',
   emoji: '📝',
   labelRu: 'AI-промпт',
-  aiValueHint: 'free text, or "clear"/"сброс" to remove',
+  aiValueHint:
+    'full prompt text to OVERWRITE, or "clear"/"сброс" to remove. To ADD/remember a note without wiping existing notes, use set_custom_prompt (append) instead — this REPLACES the whole prompt.',
   formatValue: (group) => previewPrompt(group.custom_prompt),
   parse: (raw) => parseText(raw),
-  async apply(group, value) {
-    database.groups.update(group.telegram_group_id, { custom_prompt: value });
+  apply(group, value) {
+    return Promise.resolve(persist(group.telegram_group_id, { custom_prompt: value }));
   },
 };
 
@@ -347,8 +364,9 @@ export async function applyGroupSetting(
   group: Group,
   raw: string,
 ): Promise<ApplyGroupSettingResult> {
-  // The switch narrows `def` to a concrete variant so `parse`/`apply` stay correlated
-  // on the same value type V — no casts needed.
+  // Each arm narrows `def` to a concrete variant so the generic runSetting can correlate
+  // parse/apply on one value type V — the arms are load-bearing, not duplication. A new
+  // `kind` makes the `never` guard below fail to compile.
   switch (def.kind) {
     case 'currency':
       return runSetting(def, group, raw);
@@ -360,13 +378,17 @@ export async function applyGroupSetting(
       return runSetting(def, group, raw);
     case 'text':
       return runSetting(def, group, raw);
+    default: {
+      const exhaustive: never = def;
+      return exhaustive;
+    }
   }
 }
 
 async function runSetting<V>(
   def: {
     parse(raw: string, group: Group): SettingParseResult<V>;
-    apply(group: Group, value: V): Promise<void>;
+    apply(group: Group, value: V): Promise<boolean>;
   },
   group: Group,
   raw: string,
@@ -375,6 +397,9 @@ async function runSetting<V>(
   if (!parsed.ok) {
     return { ok: false, error: parsed.error };
   }
-  await def.apply(group, parsed.value);
+  const persisted = await def.apply(group, parsed.value);
+  if (!persisted) {
+    return { ok: false, error: 'Не удалось сохранить настройку — попробуй ещё раз.' };
+  }
   return { ok: true };
 }
