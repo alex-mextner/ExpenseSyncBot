@@ -11,7 +11,11 @@
  * being keyed by `EditableGroupSettingKey` then forces an entry for every editable key.
  * `group-settings-registry.test.ts` re-checks the same invariant at runtime.
  */
-import { type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
+import {
+  type CurrencyCode,
+  isValidCurrencyCode,
+  SUPPORTED_CURRENCIES,
+} from '../../config/constants';
 import { database } from '../../database';
 import type { Group, UpdateGroupData } from '../../database/types';
 
@@ -148,8 +152,17 @@ const TOGGLE_OFF = new Set([
   'нет',
 ]);
 
+/** default_currency is restricted to built-in codes — they have reliable EUR rates. */
 function isSupportedCurrency(code: string): code is CurrencyCode {
   return SUPPORTED_CURRENCIES.some((c) => c === code);
+}
+
+/**
+ * enabled_currencies accepts any valid ISO-format code (matching onboarding's custom-currency
+ * support), so a group that added e.g. GEL/TRY during setup can still edit its set here.
+ */
+function isEnabledCurrencyCode(code: string): code is CurrencyCode {
+  return isValidCurrencyCode(code);
 }
 
 function supportedCurrencyList(): string {
@@ -180,15 +193,15 @@ function parseCurrencyMulti(raw: string, group: Group): SettingParseResult<Curre
     return { ok: false, error: 'Перечисли хотя бы одну валюту, например "USD, EUR".' };
   }
 
-  const invalid = tokens.filter((t) => !isSupportedCurrency(t));
+  const invalid = tokens.filter((t) => !isEnabledCurrencyCode(t));
   if (invalid.length > 0) {
     return {
       ok: false,
-      error: `Неизвестные валюты: ${invalid.join(', ')}. Поддерживаются: ${supportedCurrencyList()}.`,
+      error: `Неизвестные валюты: ${invalid.join(', ')}. Используй трёхбуквенные коды, например USD, EUR.`,
     };
   }
 
-  const valid = tokens.filter(isSupportedCurrency);
+  const valid = tokens.filter(isEnabledCurrencyCode);
   // The default currency must always stay enabled — a default outside the set is a bug.
   const withDefault = valid.includes(group.default_currency)
     ? valid

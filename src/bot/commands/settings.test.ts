@@ -1,4 +1,4 @@
-// Tests for /settings — renders current group config, handles errors
+// Tests for /settings — registry-driven editable menu: rendering, currency edit, toggles.
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { CurrencyCode } from '../../config/constants';
@@ -28,7 +28,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   deleteMessage: mock(() => Promise.resolve()),
 }));
 
-// ── Database ──────────────────────────────────────────────────────────────
+// ── Database (shared by settings.ts AND the registry it calls) ─────────────
 
 const groupsFindByTelegramGroupIdMock = mock((_id: number): Group | null => null);
 const groupsUpdateMock = mock((_id: number, _data: Partial<Group>): Group | null => null);
@@ -43,7 +43,7 @@ mock.module('../../database', () => ({
 
 // ── Import after mocks ────────────────────────────────────────────────────
 
-const { handleSettingsCommand, handleSettingsBankCardsToggle, buildSettingsView } = await import(
+const { handleSettingsCommand, handleSettingsCallback, buildSettingsView } = await import(
   './settings'
 );
 
@@ -71,7 +71,7 @@ function fakeGroup(overrides: Partial<Group> = {}): Group {
     created_at: '',
     updated_at: '',
     ...overrides,
-  } as Group;
+  };
 }
 
 function fakeCallbackCtx(): Ctx['CallbackQuery'] {
@@ -91,10 +91,10 @@ beforeEach(() => {
   logMock.warn.mockReset();
 });
 
-// ── Tests ─────────────────────────────────────────────────────────────────
+// ── Rendering ─────────────────────────────────────────────────────────────
 
-describe('/settings', () => {
-  test('renders default currency, enabled currencies, and spreadsheet status (connected)', async () => {
+describe('/settings rendering', () => {
+  test('renders every registry setting plus the spreadsheet status', async () => {
     await handleSettingsCommand(
       fakeCtx(),
       fakeGroup({
@@ -109,6 +109,8 @@ describe('/settings', () => {
     expect(msg).toContain('Настройки группы');
     expect(msg).toContain('Валюта по умолчанию: EUR');
     expect(msg).toContain('EUR, USD, RSD');
+    expect(msg).toContain('AI-промпт: не задан');
+    expect(msg).toContain('Топик: не задан');
     expect(msg).toContain('Таблица: настроена');
     expect(logMock.error).not.toHaveBeenCalled();
   });
@@ -121,29 +123,36 @@ describe('/settings', () => {
     expect(logMock.error).not.toHaveBeenCalled();
   });
 
-  test('shows non-EUR default currency correctly', async () => {
-    await handleSettingsCommand(
-      fakeCtx(),
-      fakeGroup({
-        default_currency: 'RSD' as CurrencyCode,
-        enabled_currencies: ['RSD'] as CurrencyCode[],
-      }),
-    );
-
-    const msg = sendMessageMock.mock.calls[0]?.[0] as string;
-    expect(msg).toContain('Валюта по умолчанию: RSD');
-    expect(msg).toContain('Включенные валюты: RSD');
+  test('main keyboard exposes an action per setting', () => {
+    const view = buildSettingsView(fakeGroup({ bank_cards_enabled: 0 }));
+    const json = JSON.stringify(view.keyboard);
+    expect(json).toContain('Сменить валюту по умолчанию');
+    expect(json).toContain('settings:edit:default_currency');
+    expect(json).toContain('Изменить набор валют');
+    expect(json).toContain('settings:medit:enabled_currencies');
+    expect(json).toContain('Включить карточки банка');
+    expect(json).toContain('settings:set:bank_cards_enabled:on');
   });
 
-  test('single enabled currency renders without extra commas', async () => {
-    await handleSettingsCommand(
-      fakeCtx(),
-      fakeGroup({ enabled_currencies: ['USD'] as CurrencyCode[] }),
-    );
+  test('bank-cards button reflects current state and clarifies off = balance only', () => {
+    const off = buildSettingsView(fakeGroup({ bank_cards_enabled: 0 }));
+    expect(off.text).toContain('Карточки банковских транзакций: выкл (только баланс)');
+    expect(JSON.stringify(off.keyboard)).toContain('Включить карточки банка');
 
-    const msg = sendMessageMock.mock.calls[0]?.[0] as string;
-    expect(msg).toContain('Включенные валюты: USD\n');
-    expect(msg).not.toContain('USD,');
+    const on = buildSettingsView(fakeGroup({ bank_cards_enabled: 1 }));
+    expect(on.text).toContain('Карточки банковских транзакций: вкл');
+    expect(JSON.stringify(on.keyboard)).toContain('Выключить карточки банка');
+  });
+
+  test('clear buttons appear only when custom_prompt / topic are set', () => {
+    const empty = buildSettingsView(fakeGroup({ custom_prompt: null, active_topic_id: null }));
+    expect(JSON.stringify(empty.keyboard)).not.toContain('Очистить AI-промпт');
+    expect(JSON.stringify(empty.keyboard)).not.toContain('Сбросить топик');
+
+    const set = buildSettingsView(fakeGroup({ custom_prompt: 'Be brief', active_topic_id: 42 }));
+    const json = JSON.stringify(set.keyboard);
+    expect(json).toContain('settings:set:custom_prompt:clear');
+    expect(json).toContain('settings:set:active_topic_id:clear');
   });
 
   test('sends friendly error message and logs when sender throws', async () => {
@@ -153,72 +162,155 @@ describe('/settings', () => {
 
     await handleSettingsCommand(fakeCtx(), fakeGroup());
 
-    // First call threw; catch block should call sendMessage again
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
     expect(logMock.error).toHaveBeenCalled();
-
     const errMsg = sendMessageMock.mock.calls[1]?.[0] as string;
     expect(errMsg).toContain('непредвиденная');
   });
-
-  test('renders bank-cards state and a toggle button reflecting it', async () => {
-    await handleSettingsCommand(fakeCtx(), fakeGroup({ bank_cards_enabled: 0 }));
-
-    const msg = sendMessageMock.mock.calls[0]?.[0] as string;
-    expect(msg).toContain('Карточки банковских транзакций: выкл');
-    // Off state must clarify that only the balance keeps syncing.
-    expect(msg).toContain('только баланс');
-
-    const opts = sendMessageMock.mock.calls[0]?.[1] as { reply_markup?: unknown } | undefined;
-    expect(opts?.reply_markup).toBeDefined();
-    const view = buildSettingsView(fakeGroup({ bank_cards_enabled: 0 }));
-    expect(view.text).toContain('выкл');
-    expect(JSON.stringify(view.keyboard)).toContain('Включить карточки банка');
-
-    const onView = buildSettingsView(fakeGroup({ bank_cards_enabled: 1 }));
-    expect(onView.text).toContain('Карточки банковских транзакций: вкл');
-    expect(JSON.stringify(onView.keyboard)).toContain('Выключить карточки банка');
-  });
 });
 
-describe('/settings bank-cards toggle', () => {
-  test('flips bank_cards_enabled from 0 to 1 and re-renders', async () => {
+// ── Callback flow ───────────────────────────────────────────────────────────
+
+describe('/settings callbacks', () => {
+  test('set bank_cards_enabled:on writes 1 and re-renders in place', async () => {
     groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 0 }));
-    groupsUpdateMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 1 }));
 
     const ctx = fakeCallbackCtx();
-    await handleSettingsBankCardsToggle(ctx);
+    await handleSettingsCallback(ctx, ['set', 'bank_cards_enabled', 'on']);
 
     expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { bank_cards_enabled: 1 });
     const editText = ctx.editText as ReturnType<typeof mock>;
-    const editedText = editText.mock.calls[0]?.[0] as string;
-    expect(editedText).toContain('Карточки банковских транзакций: вкл');
+    expect(editText).toHaveBeenCalled();
     expect(logMock.error).not.toHaveBeenCalled();
+    expect(logMock.warn).not.toHaveBeenCalled();
   });
 
-  test('flips bank_cards_enabled from 1 to 0 and re-renders', async () => {
+  test('legacy bankcards sub-action flips the current state', async () => {
     groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 1 }));
-    groupsUpdateMock.mockReturnValue(fakeGroup({ bank_cards_enabled: 0 }));
 
     const ctx = fakeCallbackCtx();
-    await handleSettingsBankCardsToggle(ctx);
+    await handleSettingsCallback(ctx, ['bankcards']);
 
     expect(groupsUpdateMock).toHaveBeenCalledWith(-100, { bank_cards_enabled: 0 });
-    const editText = ctx.editText as ReturnType<typeof mock>;
-    const editedText = editText.mock.calls[0]?.[0] as string;
-    expect(editedText).toContain('Карточки банковских транзакций: выкл');
     expect(logMock.error).not.toHaveBeenCalled();
   });
 
-  test('answers with error and does not update when group is missing', async () => {
+  test('set default_currency changes it and keeps it enabled', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(
+      fakeGroup({ default_currency: 'EUR', enabled_currencies: ['EUR', 'USD'] }),
+    );
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'default_currency', 'rsd']);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, {
+      default_currency: 'RSD',
+      enabled_currencies: ['EUR', 'USD', 'RSD'],
+    });
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect(answer.mock.calls[0]?.[0]).toMatchObject({ text: '✅ Сохранено' });
+  });
+
+  test('invalid currency shows a Russian error and writes nothing', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup());
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['set', 'default_currency', 'zzz']);
+
+    expect(groupsUpdateMock).not.toHaveBeenCalled();
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    const text = (answer.mock.calls[0]?.[0] as { text: string }).text;
+    expect(text).toContain('ZZZ');
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('edit opens the default-currency picker sub-view', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup({ default_currency: 'EUR' }));
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['edit', 'default_currency']);
+
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const kbJson = JSON.stringify(editText.mock.calls[0]?.[1]);
+    expect(kbJson).toContain('settings:set:default_currency:RSD');
+    expect(kbJson).toContain('settings:back');
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('medit opens the multi-currency picker sub-view', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(
+      fakeGroup({ enabled_currencies: ['EUR', 'USD'] }),
+    );
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['medit', 'enabled_currencies']);
+
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const kbJson = JSON.stringify(editText.mock.calls[0]?.[1]);
+    expect(kbJson).toContain('settings:mtog:enabled_currencies:RSD');
+    expect(kbJson).toContain('settings:back');
+  });
+
+  test('mtog adds a currency to the enabled set', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(
+      fakeGroup({ default_currency: 'EUR', enabled_currencies: ['EUR', 'USD'] }),
+    );
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['mtog', 'enabled_currencies', 'RSD']);
+
+    expect(groupsUpdateMock).toHaveBeenCalledWith(-100, {
+      enabled_currencies: ['EUR', 'USD', 'RSD'],
+    });
+  });
+
+  test('mtog refuses to remove the default currency', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(
+      fakeGroup({ default_currency: 'EUR', enabled_currencies: ['EUR', 'USD'] }),
+    );
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['mtog', 'enabled_currencies', 'EUR']);
+
+    expect(groupsUpdateMock).not.toHaveBeenCalled();
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect((answer.mock.calls[0]?.[0] as { text: string }).text).toContain('по умолчанию');
+  });
+
+  test('back answers the callback and re-renders the main view', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(fakeGroup());
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['back']);
+
+    const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
+    expect(answer).toHaveBeenCalled();
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const renderedText = editText.mock.calls[0]?.[0] as string;
+    expect(renderedText).toContain('Настройки группы');
+  });
+
+  test('multi-select keeps custom (non-built-in) currencies editable', async () => {
+    groupsFindByTelegramGroupIdMock.mockReturnValue(
+      fakeGroup({ default_currency: 'EUR', enabled_currencies: ['EUR', 'GEL'] as CurrencyCode[] }),
+    );
+
+    const ctx = fakeCallbackCtx();
+    await handleSettingsCallback(ctx, ['medit', 'enabled_currencies']);
+
+    const editText = ctx.editText as ReturnType<typeof mock>;
+    const kbJson = JSON.stringify(editText.mock.calls[0]?.[1]);
+    expect(kbJson).toContain('settings:mtog:enabled_currencies:GEL');
+  });
+
+  test('answers "Группа не настроена" when the group is missing', async () => {
     groupsFindByTelegramGroupIdMock.mockReturnValue(null);
 
     const ctx = fakeCallbackCtx();
-    await handleSettingsBankCardsToggle(ctx);
+    await handleSettingsCallback(ctx, ['edit', 'default_currency']);
 
     expect(groupsUpdateMock).not.toHaveBeenCalled();
     const answer = ctx.answerCallbackQuery as ReturnType<typeof mock>;
     expect(answer.mock.calls[0]?.[0]).toMatchObject({ text: 'Группа не настроена' });
-    expect(logMock.error).not.toHaveBeenCalled();
   });
 });

@@ -42,7 +42,7 @@ import {
 import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { cancelPendingFeedback } from '../commands/feedback';
-import { handleSettingsBankCardsToggle } from '../commands/settings';
+import { handleSettingsCallback } from '../commands/settings';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
 import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
@@ -108,14 +108,9 @@ export async function handleCallbackQuery(
         break;
       }
 
-      case 'settings': {
-        if (params[0] === 'bankcards') {
-          await handleSettingsBankCardsToggle(ctx);
-        } else {
-          await ctx.answerCallbackQuery({ text: 'Invalid parameters' });
-        }
+      case 'settings':
+        await handleSettingsCallback(ctx, params);
         break;
-      }
 
       case 'setup': {
         const setupAction = params.join(':');

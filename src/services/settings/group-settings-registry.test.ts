@@ -139,10 +139,16 @@ describe('enabled_currencies setting', () => {
     expect(result).toEqual({ ok: true, value: ['EUR', 'USD'] });
   });
 
-  test('parse rejects when any code is unsupported', () => {
-    const result = def.parse('usd, zzz', fakeGroup());
+  test('parse rejects malformed (non 3-letter) codes', () => {
+    const result = def.parse('usd, ab', fakeGroup());
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('ZZZ');
+    if (!result.ok) expect(result.error).toContain('AB');
+  });
+
+  test('parse accepts custom ISO codes for onboarding parity (e.g. GEL)', () => {
+    const result = def.parse('usd, gel', fakeGroup({ default_currency: 'USD' }));
+    // GEL is a valid ISO code but outside the built-in set — onboarding allows it, so does this.
+    expect(result).toEqual({ ok: true, value: ['USD', 'GEL'] as CurrencyCode[] });
   });
 
   test('parse rejects an empty list', () => {
