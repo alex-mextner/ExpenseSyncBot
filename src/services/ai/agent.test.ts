@@ -36,6 +36,11 @@ mock.module('./response-validator', () => ({
   validateResponse: mock(async () => ({ approved: true })),
 }));
 
+const mockReportAiFailureToAdmin = mock<(input: unknown) => Promise<void>>(() => Promise.resolve());
+mock.module('./error-reporter', () => ({
+  reportAiFailureToAdmin: mockReportAiFailureToAdmin,
+}));
+
 import { ExpenseBotAgent } from './agent';
 import type { AgentContext } from './types';
 
@@ -115,6 +120,7 @@ describe('ExpenseBotAgent', () => {
     mockIsRetryableError.mockClear();
     mockGetBackoffDelay.mockClear();
     mockClassifyAiError.mockClear();
+    mockReportAiFailureToAdmin.mockClear();
 
     // Default: errors are not retryable (unless overridden per test)
     mockIsRetryableError.mockReturnValue(false);
@@ -526,6 +532,31 @@ describe('ExpenseBotAgent', () => {
       expect(errorCall).toBeTruthy();
     });
 
+    it('reports the failure to the admin (fire-and-forget) on a terminal error', async () => {
+      const apiError = Object.assign(new Error('Server error'), { status: 500 });
+      mockIsRetryableError.mockReturnValue(true);
+      mockGetBackoffDelay.mockReturnValue(0);
+      mockAiStreamRound.mockRejectedValue(apiError);
+
+      try {
+        await agent.run('change currency', [], mockBot as unknown as import('gramio').Bot);
+      } catch {
+        // expected
+      }
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
+      const [input] = mockReportAiFailureToAdmin.mock.calls[0] as [
+        { userMessage: string; error: unknown; telegramGroupId: number },
+      ];
+      expect(input.userMessage).toContain('change currency');
+      expect(input.error).toBe(apiError);
+    });
+
+    it('does NOT report to the admin on a successful run', async () => {
+      mockStreamReturn(['All good.']);
+      await agent.run('hello', [], mockBot as unknown as import('gramio').Bot);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
     it('cleans up placeholder message on error', async () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
@@ -668,6 +699,8 @@ describe('ExpenseBotAgent', () => {
       await expect(
         agent.run('question', [], mockBot as unknown as import('gramio').Bot),
       ).rejects.toBeInstanceOf(TypeError);
+      // A non-AI error is not an "AI failure" — it must not be reported to the admin.
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
     });
   });
 });

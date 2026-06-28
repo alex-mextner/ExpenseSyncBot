@@ -14,6 +14,7 @@ import type { ChatMessage } from '../../database/types';
 import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
+import { reportAiFailureToAdmin } from './error-reporter';
 import { validateResponse } from './response-validator';
 import {
   aiStreamRound,
@@ -142,8 +143,20 @@ export class ExpenseBotAgent {
       if (!classification) {
         // Not a recognizable AI/network/timeout failure — propagate so the caller
         // (and logs) see the real, unrelated error instead of a masked generic one.
+        // (No admin AI-failure report here: it isn't an AI failure.)
         throw error;
       }
+
+      // Notify the admin with full diagnostics (throttled, fire-and-forget — never blocks
+      // the user path, never throws back into it).
+      reportAiFailureToAdmin({
+        groupId: this.ctx.groupId,
+        telegramGroupId: this.ctx.telegramGroupId,
+        userMessage,
+        error,
+      }).catch((reportErr) =>
+        logger.error({ err: reportErr }, '[AGENT] admin failure report errored'),
+      );
       // Keep the original error (stack, status) in the logs — the user only sees the
       // short classified message, so this is the one place it's recorded at the boundary.
       // Server-side / unknown failures are error-level; transient client-side ones are warn.
