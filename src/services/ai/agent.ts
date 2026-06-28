@@ -117,22 +117,30 @@ export class ExpenseBotAgent {
         throw error;
       }
 
-      // Notify the admin with full diagnostics (throttled, fire-and-forget — never blocks
-      // the user path, never throws back into it).
-      reportAiFailureToAdmin({
-        groupId: this.ctx.groupId,
-        telegramGroupId: this.ctx.telegramGroupId,
-        userMessage,
-        error,
-      }).catch((reportErr) =>
-        logger.error({ err: reportErr }, '[AGENT] admin failure report errored'),
-      );
+      // Only genuine failures page the admin: provider_down (chain unreachable / 5xx) and generic
+      // (a recognized-but-uncategorized API error, including an exhausted-chain empty-response). The
+      // transient / user-side classes — rate_limit (429), overloaded (529), timeout (our own 60s
+      // abort) — are self-resolving and would only spam the operator, so they are logged warn and
+      // skipped here. This is the SAME split as the warn-vs-error logging below.
+      const isGenuineFailure =
+        classification.kind === 'provider_down' || classification.kind === 'generic';
+      if (isGenuineFailure) {
+        // Throttled, fire-and-forget — never blocks the user path, never throws back into it.
+        reportAiFailureToAdmin({
+          groupId: this.ctx.groupId,
+          telegramGroupId: this.ctx.telegramGroupId,
+          userMessage,
+          error,
+        }).catch((reportErr) =>
+          logger.error({ err: reportErr }, '[AGENT] admin failure report errored'),
+        );
+      }
       // Keep the original error (stack, status) in the logs — the user only sees the
       // short classified message, so this is the one place it's recorded at the boundary.
       // Server-side / unknown failures are error-level; transient client-side ones are warn.
       const logFields = { err: error, kind: classification.kind };
       const logMsg = '[AGENT] AI run failed — surfacing classified error to user';
-      if (classification.kind === 'provider_down' || classification.kind === 'generic') {
+      if (isGenuineFailure) {
         logger.error(logFields, logMsg);
       } else {
         logger.warn(logFields, logMsg);

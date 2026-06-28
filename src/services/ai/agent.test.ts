@@ -837,4 +837,116 @@ describe('ExpenseBotAgent', () => {
       expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
     });
   });
+
+  // -- run() -- admin paging gate + user-facing string surfacing -------------
+  // Only genuine failures (provider_down / generic) page the admin; transient/user-side classes
+  // (rate_limit / overloaded / timeout) surface a user message but must NOT spam the operator.
+  // The real error→message mapping is pinned in streaming.test.ts; here we assert the agent SENDS
+  // the classified string to the user (via bot.api.sendMessage) and applies the paging gate.
+  describe('run() -- admin paging gate and user message surfacing', () => {
+    beforeEach(() => {
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
+      mockIsRetryableError.mockReturnValue(false); // go straight to the terminal catch
+    });
+
+    /** All text strings the agent sent to the user this run (placeholder + error message). */
+    function sentText(): string[] {
+      return mockBot.api.sendMessage.mock.calls
+        .map((c: unknown[]) =>
+          typeof c[0] === 'object' ? (c[0] as { text?: string }).text : undefined,
+        )
+        .filter((t): t is string => typeof t === 'string');
+    }
+
+    it('rate_limit (429): surfaces the rate-limit message and does NOT page the admin', async () => {
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '⏳ Слишком много запросов к AI. Подожди минуту.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('429'), { status: 429 }));
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('Слишком много запросов к AI'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('overloaded (529): surfaces the overloaded message and does NOT page the admin', async () => {
+      mockClassifyAiError.mockReturnValue({
+        kind: 'overloaded',
+        userMessage: '⚡ AI сервер перегружен. Попробуй позже.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('529'), { status: 529 }));
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('перегружен'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('timeout (60s abort): surfaces the timeout message and does NOT page the admin', async () => {
+      const abortErr = new Error('The operation was aborted');
+      abortErr.name = 'AbortError';
+      mockClassifyAiError.mockReturnValue({
+        kind: 'timeout',
+        userMessage: '⏳ Время ожидания истекло. Попробуй ещё раз.',
+      });
+      mockAiStreamRound.mockRejectedValue(abortErr);
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('Время ожидания истекло'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
+    });
+
+    it('provider_down (connection/5xx): surfaces the outage message AND pages the admin', async () => {
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('down'), { code: 'ECONNRESET' }));
+
+      await agent
+        .run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot)
+        .catch(() => {});
+
+      expect(sentText().some((t) => t.includes('временно недоступен'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
+    });
+
+    it('exhausted-chain empty-response (generic): user gets the generic message AND the admin is paged (no silent rethrow)', async () => {
+      // Regression for the empty-response bypass: classifyAiError now returns generic (not null) for
+      // the "All N providers … chain failed" empty-response aggregate (pinned in streaming.test.ts),
+      // so the agent surfaces a user message and pages the admin via the generic path instead of
+      // rethrowing the raw aggregate after deleting the in-progress message.
+      const emptyAggregate = new Error(
+        'All 3 providers in smart chain failed: z.ai (glm): Provider z.ai (glm) returned empty ' +
+          'response (no text, no tool calls) — treating as failure; Gemini (g): returned empty ' +
+          'response; HF (h): returned empty response',
+      );
+      mockClassifyAiError.mockReturnValue({
+        kind: 'generic',
+        userMessage: '❌ Ошибка AI. Попробуй позже.',
+      });
+      mockAiStreamRound.mockRejectedValue(emptyAggregate);
+
+      const { AgentError } = await import('../../errors');
+      await expect(
+        agent.run('сколько я потратил', [], mockBot as unknown as import('gramio').Bot),
+      ).rejects.toBeInstanceOf(AgentError); // AgentError, NOT the raw aggregate rethrown
+
+      expect(sentText().some((t) => t.includes('Ошибка AI'))).toBe(true);
+      expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
+    });
+  });
 });

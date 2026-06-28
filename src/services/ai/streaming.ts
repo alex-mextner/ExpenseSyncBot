@@ -571,6 +571,16 @@ function isConnectionLike(error: unknown): boolean {
 }
 
 /**
+ * The "All N providers in <chain> chain failed: …" aggregate thrown by aiStreamRound once every
+ * provider in the chain has failed. That exact prefix is produced ONLY there, so matching it can't
+ * swallow an unrelated non-AI error (a bug elsewhere never carries this message). Used as a final
+ * floor in classifyAiError: an exhausted chain is, by construction, always an AI failure.
+ */
+function isExhaustedChainError(error: unknown): boolean {
+  return /^All \d+ providers? in \w+ chain failed/.test(errorText(error));
+}
+
+/**
  * Classify an error from the AI pipeline into a user-facing message.
  *
  * Returns `null` when the error is not recognizably an AI/network/timeout failure, so the
@@ -583,7 +593,10 @@ function isConnectionLike(error: unknown): boolean {
  * "timeout" rather than "provider down". Aggregated "All N providers failed" errors are
  * thus classified by their real status/code/message (e.g. all-400 stays generic, not masked
  * as an outage), since the aggregate carries the last provider's status/code and the joined
- * messages.
+ * messages. As a final floor, an exhausted-chain aggregate with NO classifiable signal — every
+ * provider returned an empty body (a plain Error: no status, no abort, no connection match) — is
+ * still `generic` rather than `null`, so the user gets a safe message and the admin a report
+ * instead of the in-progress message silently vanishing on a rethrow.
  */
 export function classifyAiError(error: unknown): AiErrorClassification | null {
   const status = errorStatus(error);
@@ -597,5 +610,8 @@ export function classifyAiError(error: unknown): AiErrorClassification | null {
     return { kind: 'provider_down', userMessage: AI_ERROR_MESSAGES.providerDown };
   }
   if (status !== undefined) return { kind: 'generic', userMessage: AI_ERROR_MESSAGES.generic };
+  if (isExhaustedChainError(error)) {
+    return { kind: 'generic', userMessage: AI_ERROR_MESSAGES.generic };
+  }
   return null;
 }

@@ -1439,13 +1439,26 @@ describe('classifyAiError', () => {
     expect(mod.classifyAiError(err)?.kind).toBe('generic');
   });
 
-  it('returns null for an aggregated empty-response failure (no status/connection signal)', () => {
+  it('classifies an aggregated empty-response failure (no status/connection signal) as generic', () => {
+    // Every provider returned an empty body → a plain Error with no status, no abort, no connection
+    // match. An exhausted chain is still an AI failure, so it must surface the safe generic message
+    // (and let the agent page the admin) — NOT fall through to null and silently rethrow.
     const err = new Error(
       'All 3 providers in smart chain failed: z.ai (glm-5.1): Provider z.ai (glm-5.1) ' +
         'returned empty response (no text, no tool calls) — treating as failure; ' +
         'Gemini (g): returned empty response; HF (h): returned empty response',
     );
-    expect(mod.classifyAiError(err)).toBeNull();
+    const c = mod.classifyAiError(err);
+    expect(c?.kind).toBe('generic');
+    expect(c?.userMessage).toContain('Ошибка AI');
+  });
+
+  it('does NOT treat a non-aggregate plain Error as an exhausted-chain failure (stays null)', () => {
+    // The exhausted-chain floor is scoped to the aggregate prefix only — a bare message that merely
+    // mentions providers must still return null so the agent rethrows an unrelated bug.
+    expect(
+      mod.classifyAiError(new Error('the provider list in smart chain failed to load')),
+    ).toBeNull();
   });
 
   it('classifies ECONNRESET as provider_down', () => {

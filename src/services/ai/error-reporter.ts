@@ -144,6 +144,9 @@ function buildReport(input: AiFailureContext, now: number): string {
   return [
     '🚨 <b>AI failure</b>',
     `Группа: ${groupLabel(input.groupId, input.telegramGroupId)}`,
+    // Forwarding the triggering user message to the admin chat is a deliberate decision: this is a
+    // single-operator personal bot, the admin is the owner, and the request text is the key clue for
+    // diagnosing why the AI run failed. It is neutralized/clipped above, never sent raw.
     `Запрос: ${clip(input.userMessage, USER_MESSAGE_MAX)}`,
     `Провайдеры: ${clip(errorMessage(error), PROVIDER_SUMMARY_MAX)}`,
     `Ошибка: <code>${clip(errorName(error), NAME_MAX)}${statusSuffix}</code>`,
