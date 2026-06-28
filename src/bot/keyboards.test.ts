@@ -58,7 +58,7 @@ describe('createCurrencyKeyboard', () => {
     }
   });
 
-  it('shows all 12 supported currencies as buttons', () => {
+  it('shows all supported currencies as buttons', () => {
     const kb = createCurrencyKeyboard([]);
     const texts = allButtons(kb).map((b) => b.text);
     // All currencies appear as buttons (not selected, so just the code)

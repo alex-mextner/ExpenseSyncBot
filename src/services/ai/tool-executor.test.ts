@@ -1293,12 +1293,15 @@ describe('executeGetExchangeRates', () => {
 describe('executeGetGroupSettings', () => {
   beforeEach(resetAllMocks);
 
-  test('returns group config', async () => {
+  test('returns group config rendered from the settings registry', async () => {
     const result = await executeTool('get_group_settings', {}, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Default currency: EUR');
+    expect(result.output).toContain('default_currency): EUR');
     expect(result.output).toContain('EUR, USD');
     expect(result.output).toContain('not connected');
+    // Every registry setting must be visible, including the bank-cards toggle and topic.
+    expect(result.output).toContain('bank_cards_enabled)');
+    expect(result.output).toContain('active_topic_id)');
   });
 
   test('returns error when group not found', async () => {
@@ -1309,7 +1312,7 @@ describe('executeGetGroupSettings', () => {
     expect(result.error).toContain('Group not found');
   });
 
-  test('shows custom prompt when set', async () => {
+  test('shows a short custom prompt once (preview only, no duplicate full-text line)', async () => {
     mockGroups.findById.mockReturnValue({
       id: 1,
       telegram_group_id: 456,
@@ -1330,7 +1333,155 @@ describe('executeGetGroupSettings', () => {
 
     const result = await executeTool('get_group_settings', {}, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Custom prompt text: Be brief and speak in Russian');
+    // The preview line carries the full short prompt; no separate "full text" line.
+    expect(result.output).toContain('custom_prompt): Be brief and speak in Russian');
+    expect(result.output).not.toContain('Custom prompt full text:');
+  });
+
+  test('appends the full text only when the prompt is long enough to be truncated', async () => {
+    const longPrompt = `Always reply in Russian. ${'x'.repeat(80)}`;
+    mockGroups.findById.mockReturnValue({
+      id: 1,
+      telegram_group_id: 456,
+      title: null,
+      invite_link: null,
+      google_refresh_token: null,
+      spreadsheet_id: null,
+      default_currency: 'EUR',
+      enabled_currencies: ['EUR'],
+      custom_prompt: longPrompt,
+      active_topic_id: null,
+      oauth_client: 'legacy' as const,
+      bank_panel_summary_message_id: null,
+      bank_cards_enabled: 1,
+      created_at: '',
+      updated_at: '',
+    });
+
+    const result = await executeTool('get_group_settings', {}, ctx);
+    expect(result.output).toContain(`Custom prompt full text: ${longPrompt}`);
+  });
+});
+
+describe('update_group_setting', () => {
+  beforeEach(resetAllMocks);
+
+  test('changes default currency and persists, keeping it in enabled set', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'default_currency', value: 'egp' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockGroups.update).toHaveBeenCalledWith(456, {
+      default_currency: 'EGP',
+      enabled_currencies: ['EUR', 'USD', 'EGP'],
+    });
+  });
+
+  test('toggles bank cards off', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'bank_cards_enabled', value: 'off' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockGroups.update).toHaveBeenCalledWith(456, { bank_cards_enabled: 0 });
+  });
+
+  test('sets a custom prompt', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'custom_prompt', value: 'Speak English' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockGroups.update).toHaveBeenCalledWith(456, { custom_prompt: 'Speak English' });
+  });
+
+  test('clears the active topic', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'active_topic_id', value: 'clear' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(mockGroups.update).toHaveBeenCalledWith(456, { active_topic_id: null });
+  });
+
+  test('replaces the enabled currency set', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'enabled_currencies', value: 'usd, rsd' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    // Default currency (EUR) is always kept in the set.
+    expect(mockGroups.update).toHaveBeenCalledWith(456, {
+      enabled_currencies: ['USD', 'RSD', 'EUR'],
+    });
+  });
+
+  test('returns a Russian error on an invalid currency and writes nothing', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'default_currency', value: 'zzz' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('ZZZ');
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a system field as an unknown setting', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'spreadsheet_id', value: 'x' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('spreadsheet_id');
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('returns an error when the group is missing', async () => {
+    mockGroups.findById.mockReturnValue(null);
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'default_currency', value: 'usd' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a missing setting key (Russian error)', async () => {
+    const result = await executeTool('update_group_setting', { value: 'usd' }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('настройку');
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a non-string value (Russian error)', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'default_currency', value: 123 },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('строкой');
+    expect(mockGroups.update).not.toHaveBeenCalled();
+  });
+
+  test('active_topic_id is clear-only: a numeric value is rejected and nothing persists', async () => {
+    const result = await executeTool(
+      'update_group_setting',
+      { setting: 'active_topic_id', value: '42' },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('/topic');
+    expect(mockGroups.update).not.toHaveBeenCalled();
   });
 });
 

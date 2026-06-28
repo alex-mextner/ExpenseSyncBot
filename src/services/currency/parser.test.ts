@@ -56,6 +56,20 @@ describe('parseExpenseMessage', () => {
       expect(result?.category).toBe('Транспорт');
     });
 
+    test('should parse amount with currency code (EGP)', () => {
+      const result = parseExpenseMessage('250 EGP сувениры', 'USD');
+      expect(result).not.toBeNull();
+      expect(result?.amount).toBe(250);
+      expect(result?.currency).toBe('EGP');
+      expect(result?.category).toBe('Сувениры');
+    });
+
+    test('should parse amount with lowercase egp alias', () => {
+      const result = parseExpenseMessage('250 egp сувениры', 'USD');
+      expect(result).not.toBeNull();
+      expect(result?.currency).toBe('EGP');
+    });
+
     test('should parse amount with spaces in number (1 900)', () => {
       const result = parseExpenseMessage('1 900 RSD транспорт', 'USD');
       expect(result).not.toBeNull();

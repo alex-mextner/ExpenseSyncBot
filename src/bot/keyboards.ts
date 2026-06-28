@@ -51,6 +51,68 @@ export function createCurrencyKeyboard(selectedCurrencies: string[] = []): Inlin
 }
 
 /**
+ * Build the /settings default-currency picker: every supported currency as a button,
+ * the current default marked, plus a Back button. Callback data uses the registry key +
+ * latin currency codes only (never raw labels) to stay within the 64-byte limit.
+ */
+export function createSettingsCurrencyPickKeyboard(
+  settingKey: string,
+  currentDefault: string,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  for (let i = 0; i < SUPPORTED_CURRENCIES.length; i += 3) {
+    for (const code of SUPPORTED_CURRENCIES.slice(i, i + 3)) {
+      const label = code === currentDefault ? `✅ ${code}` : code;
+      keyboard.text(label, `settings:set:${settingKey}:${code}`);
+    }
+    keyboard.row();
+  }
+
+  keyboard.text('⬅️ Назад', 'settings:back');
+  return keyboard;
+}
+
+/**
+ * Build the /settings enabled-currencies multi-select: every supported currency with a
+ * checkbox; the default currency is locked (it can never be removed). A Done button
+ * returns to the main settings view.
+ */
+export function createSettingsMultiCurrencyKeyboard(
+  settingKey: string,
+  enabledCurrencies: string[],
+  defaultCurrency: string,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  const enabledSet = new Set(enabledCurrencies);
+  const supportedSet = new Set<string>(SUPPORTED_CURRENCIES);
+
+  const addButton = (code: string): void => {
+    const checkbox = enabledSet.has(code) ? '✅' : '▫️';
+    const lock = code === defaultCurrency ? '🔒' : '';
+    keyboard.text(`${checkbox}${lock} ${code}`, `settings:mtog:${settingKey}:${code}`);
+  };
+
+  for (let i = 0; i < SUPPORTED_CURRENCIES.length; i += 3) {
+    for (const code of SUPPORTED_CURRENCIES.slice(i, i + 3)) addButton(code);
+    keyboard.row();
+  }
+
+  // Custom (non-built-in) currencies the group enabled during onboarding stay editable here.
+  // Like the onboarding picker (createCurrencyKeyboard), the list is sourced from the enabled
+  // set: unchecking a custom code removes its button. Re-adding one is done via the AI tool
+  // (update_group_setting enabled_currencies) or /connect, which both accept arbitrary codes.
+  const custom = enabledCurrencies.filter((c) => !supportedSet.has(c));
+  for (let i = 0; i < custom.length; i += 3) {
+    for (const code of custom.slice(i, i + 3)) addButton(code);
+    keyboard.row();
+  }
+
+  keyboard.text(KEYBOARD_TEXTS.done, 'settings:back');
+  return keyboard;
+}
+
+/**
  * Create default currency selection keyboard (Step 2)
  */
 export function createDefaultCurrencyKeyboard(enabledCurrencies: string[]): InlineKeyboard {

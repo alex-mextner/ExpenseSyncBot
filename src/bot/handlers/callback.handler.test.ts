@@ -135,7 +135,7 @@ mock.module('../commands/feedback', () => ({
 }));
 
 const settingsMocks = {
-  handleSettingsBankCardsToggle: mock(() => Promise.resolve()),
+  handleSettingsCallback: mock(() => Promise.resolve()),
 };
 mock.module('../commands/settings', () => settingsMocks);
 
@@ -322,19 +322,20 @@ describe('handleCallbackQuery — routing table', () => {
   });
 
   describe('settings routing', () => {
-    test('routes "settings:bankcards" → handleSettingsBankCardsToggle', async () => {
-      const ctx = fakeCallbackCtx('settings:bankcards');
+    test('routes "settings:edit:default_currency" → handleSettingsCallback with params', async () => {
+      const ctx = fakeCallbackCtx('settings:edit:default_currency');
       await handleCallbackQuery(ctx as never, fakeBot() as never);
-      expect(settingsMocks.handleSettingsBankCardsToggle).toHaveBeenCalledTimes(1);
+      expect(settingsMocks.handleSettingsCallback).toHaveBeenCalledTimes(1);
+      expect(settingsMocks.handleSettingsCallback).toHaveBeenCalledWith(ctx, [
+        'edit',
+        'default_currency',
+      ]);
     });
 
-    test('routes unknown "settings:garbage" → Invalid parameters answer', async () => {
-      const ctx = fakeCallbackCtx('settings:garbage');
+    test('routes legacy "settings:bankcards" → handleSettingsCallback', async () => {
+      const ctx = fakeCallbackCtx('settings:bankcards');
       await handleCallbackQuery(ctx as never, fakeBot() as never);
-      expect(settingsMocks.handleSettingsBankCardsToggle).not.toHaveBeenCalled();
-      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
-        expect.objectContaining({ text: 'Invalid parameters' }),
-      );
+      expect(settingsMocks.handleSettingsCallback).toHaveBeenCalledWith(ctx, ['bankcards']);
     });
   });
 

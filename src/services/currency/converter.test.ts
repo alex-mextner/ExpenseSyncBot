@@ -84,6 +84,11 @@ describe('convertToEUR', () => {
     expect(convertToEUR(100, 'AED')).toBe(25);
   });
 
+  it('converts EGP to EUR (small rate)', () => {
+    // 1 EGP = 0.018 EUR → 1000 EGP = 18 EUR
+    expect(convertToEUR(1000, 'EGP')).toBe(18);
+  });
+
   it('converts RUB to EUR', () => {
     // 1 RUB = 0.0093 EUR
     expect(convertToEUR(1000, 'RUB')).toBe(9.3);
@@ -102,6 +107,7 @@ describe('convertToEUR', () => {
     'INR',
     'LKR',
     'AED',
+    'EGP',
   ] as const;
   for (const currency of currencies) {
     it(`converts ${currency} to EUR (result is positive for positive input)`, () => {
@@ -352,9 +358,9 @@ describe('formatAmount (aiContext=true)', () => {
 });
 
 describe('getAllExchangeRates', () => {
-  it('returns object with all 12 currencies', () => {
+  it('returns object with all 13 currencies', () => {
     const rates = getAllExchangeRates();
-    expect(Object.keys(rates)).toHaveLength(12);
+    expect(Object.keys(rates)).toHaveLength(13);
   });
 
   it('EUR rate is 1.0', () => {
@@ -393,6 +399,7 @@ describe('getAllExchangeRates', () => {
     expect(keys).toContain('INR');
     expect(keys).toContain('LKR');
     expect(keys).toContain('AED');
+    expect(keys).toContain('EGP');
   });
 });
 

@@ -366,6 +366,17 @@ describe('ExpenseBotAgent', () => {
       expect(systemContent).toContain('set_custom_prompt');
       expect(systemContent).toContain('NEVER say "got it"');
     });
+
+    it('system prompt tells the AI it can change any group setting', async () => {
+      mockStreamReturn();
+
+      await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
+
+      const opts = getLastCallOpts();
+      const systemContent = opts.messages[0]?.content as string;
+      expect(systemContent).toContain('update_group_setting');
+      expect(systemContent).toContain('never tell the user to open /settings');
+    });
   });
 
   // -- run() -- error handling (throws AgentError after retries) -------------
