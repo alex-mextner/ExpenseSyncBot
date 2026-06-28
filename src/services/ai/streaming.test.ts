@@ -666,36 +666,6 @@ describe('aiStreamRound fallback chain', () => {
   });
 });
 
-describe('formatApiError', () => {
-  let mod: typeof import('./streaming');
-  beforeEach(async () => {
-    mod = await import('./streaming');
-  });
-
-  it('returns rate-limit message for 429', () => {
-    const err = new OpenAI.APIError(429, { message: 'rl' }, 'rl', new Headers());
-    const msg = mod.formatApiError(err);
-    expect(msg).toContain('Слишком много');
-  });
-
-  it('returns overloaded message for 529', () => {
-    const err = new OpenAI.APIError(529, { message: 'over' }, 'over', new Headers());
-    const msg = mod.formatApiError(err);
-    expect(msg).toContain('перегружен');
-  });
-
-  it('returns generic error for other statuses', () => {
-    const err = new OpenAI.APIError(500, { message: 'srv' }, 'srv', new Headers());
-    const msg = mod.formatApiError(err);
-    expect(msg).toContain('Ошибка AI');
-  });
-
-  it('returns generic error for non-APIError', () => {
-    const msg = mod.formatApiError(new Error('anything'));
-    expect(msg).toContain('Ошибка AI');
-  });
-});
-
 describe('stripThinkingTags', () => {
   let mod: typeof import('./streaming');
   beforeEach(async () => {
@@ -724,5 +694,134 @@ describe('stripThinkingTags', () => {
 
   it('handles empty string', () => {
     expect(mod.stripThinkingTags('')).toBe('');
+  });
+});
+
+describe('classifyAiError', () => {
+  let mod: typeof import('./streaming');
+  beforeEach(async () => {
+    mod = await import('./streaming');
+  });
+
+  it('classifies an aggregated all-providers connection failure as provider_down', () => {
+    const err = new Error(
+      'All 3 providers in smart chain failed: z.ai (glm-5.1): Connection error.; ' +
+        'Gemini (g): Connection error.; HF (h): Connection error.',
+    );
+    const c = mod.classifyAiError(err);
+    expect(c?.kind).toBe('provider_down');
+    expect(c?.userMessage).toContain('временно недоступен');
+  });
+
+  it('classifies an OpenAI APIConnectionError as provider_down', () => {
+    const err = new OpenAI.APIConnectionError({ message: 'Connection error.' });
+    expect(mod.classifyAiError(err)?.kind).toBe('provider_down');
+  });
+
+  it('classifies ECONNREFUSED as provider_down', () => {
+    const err = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    expect(mod.classifyAiError(err)?.kind).toBe('provider_down');
+  });
+
+  it('classifies a non-429/529 5xx as provider_down', () => {
+    const err = Object.assign(new Error('Server error'), { status: 503 });
+    expect(mod.classifyAiError(err)?.kind).toBe('provider_down');
+  });
+
+  it('classifies 429 as rate_limit', () => {
+    const err = Object.assign(new Error('rate limited'), { status: 429 });
+    const c = mod.classifyAiError(err);
+    expect(c?.kind).toBe('rate_limit');
+    expect(c?.userMessage).toContain('Слишком много');
+  });
+
+  it('reads status off a real OpenAI.APIError instance (429 → rate_limit)', () => {
+    const err = new OpenAI.APIError(429, { message: 'rl' }, 'rl', new Headers());
+    expect(mod.classifyAiError(err)?.kind).toBe('rate_limit');
+  });
+
+  it('classifies an aggregate carrying code=ECONNREFUSED as provider_down', () => {
+    // aiStreamRound copies the last error's status+code onto the aggregate, so a
+    // connection-down chain stays classifiable even if the joined message is terse.
+    const err = Object.assign(new Error('All 3 providers in smart chain failed: …'), {
+      code: 'ECONNREFUSED',
+    });
+    expect(mod.classifyAiError(err)?.kind).toBe('provider_down');
+  });
+
+  it('classifies 529 as overloaded', () => {
+    const err = Object.assign(new Error('overloaded'), { status: 529 });
+    const c = mod.classifyAiError(err);
+    expect(c?.kind).toBe('overloaded');
+    expect(c?.userMessage).toContain('перегружен');
+  });
+
+  it('classifies an AbortError as timeout', () => {
+    const err = new Error('The operation was aborted');
+    err.name = 'AbortError';
+    const c = mod.classifyAiError(err);
+    expect(c?.kind).toBe('timeout');
+    expect(c?.userMessage).toContain('ожидания');
+  });
+
+  it('classifies an aggregated abort (60s agent timeout) as timeout, not provider_down', () => {
+    const err = new Error(
+      'All 3 providers in smart chain failed: z.ai (glm-5.1): Request was aborted.; ' +
+        'Gemini (g): Request was aborted.; HF (h): Request was aborted.',
+    );
+    expect(mod.classifyAiError(err)?.kind).toBe('timeout');
+  });
+
+  it('classifies a 4xx (other than 429) as a generic recognized AI error', () => {
+    const err = Object.assign(new Error('bad request'), { status: 400 });
+    const c = mod.classifyAiError(err);
+    expect(c?.kind).toBe('generic');
+    expect(c?.userMessage).toContain('Ошибка AI');
+  });
+
+  it('does NOT mask an aggregated all-400 failure as provider_down (stays generic)', () => {
+    const err = Object.assign(
+      new Error(
+        'All 3 providers in smart chain failed: z.ai (glm-5.1): 400 Bad Request; ' +
+          'Gemini (g): 400 Bad Request; HF (h): 400 Bad Request',
+      ),
+      { status: 400 },
+    );
+    expect(mod.classifyAiError(err)?.kind).toBe('generic');
+  });
+
+  it('does NOT mask a mixed 4xx aggregate (last=400, earlier connection blip) as an outage', () => {
+    // A concrete 4xx is a request bug — the earlier "Connection error." in the summary
+    // must not flip it to provider_down.
+    const err = Object.assign(
+      new Error(
+        'All 3 providers in smart chain failed: z.ai (glm-5.1): Connection error.; ' +
+          'Gemini (g): 400 Bad Request; HF (h): 400 Bad Request',
+      ),
+      { status: 400 },
+    );
+    expect(mod.classifyAiError(err)?.kind).toBe('generic');
+  });
+
+  it('returns null for an aggregated empty-response failure (no status/connection signal)', () => {
+    const err = new Error(
+      'All 3 providers in smart chain failed: z.ai (glm-5.1): Provider z.ai (glm-5.1) ' +
+        'returned empty response (no text, no tool calls) — treating as failure; ' +
+        'Gemini (g): returned empty response; HF (h): returned empty response',
+    );
+    expect(mod.classifyAiError(err)).toBeNull();
+  });
+
+  it('classifies ECONNRESET as provider_down', () => {
+    const err = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    expect(mod.classifyAiError(err)?.kind).toBe('provider_down');
+  });
+
+  it('classifies a "fetch failed" message as provider_down', () => {
+    expect(mod.classifyAiError(new Error('fetch failed'))?.kind).toBe('provider_down');
+  });
+
+  it('returns null for an unrecognized error so the caller can rethrow', () => {
+    expect(mod.classifyAiError(new TypeError('boom'))).toBeNull();
   });
 });

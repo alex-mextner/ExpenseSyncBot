@@ -22,13 +22,14 @@ const mockAiStreamRound =
 
 const mockIsRetryableError = mock<(error: unknown) => boolean>();
 const mockGetBackoffDelay = mock<(attempt: number, error: unknown) => number>();
-const mockFormatApiError = mock<(error: unknown) => string>();
+const mockClassifyAiError =
+  mock<(error: unknown) => import('./streaming').AiErrorClassification | null>();
 
 mock.module('./streaming', () => ({
   aiStreamRound: mockAiStreamRound,
   isRetryableError: mockIsRetryableError,
   getBackoffDelay: mockGetBackoffDelay,
-  formatApiError: mockFormatApiError,
+  classifyAiError: mockClassifyAiError,
 }));
 
 mock.module('./response-validator', () => ({
@@ -113,12 +114,16 @@ describe('ExpenseBotAgent', () => {
     mockAiStreamRound.mockClear();
     mockIsRetryableError.mockClear();
     mockGetBackoffDelay.mockClear();
-    mockFormatApiError.mockClear();
+    mockClassifyAiError.mockClear();
 
     // Default: errors are not retryable (unless overridden per test)
     mockIsRetryableError.mockReturnValue(false);
     mockGetBackoffDelay.mockReturnValue(0);
-    mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
+    // Default: classify as a generic recognized AI error (wrapped + sent to user).
+    mockClassifyAiError.mockReturnValue({
+      kind: 'generic',
+      userMessage: '\u274c Ошибка AI. Попробуйте позже.',
+    });
   });
 
   afterEach(() => {
@@ -383,7 +388,10 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Rate limit exceeded'), { status: 429 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u23f3 Слишком много запросов к AI. Подождите минуту.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '\u23f3 Слишком много запросов к AI. Подождите минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(apiError);
 
       const { AgentError } = await import('../../errors');
@@ -402,7 +410,10 @@ describe('ExpenseBotAgent', () => {
       const overloadedError = Object.assign(new Error('Overloaded'), { status: 529 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u26a1 AI сервер перегружен. Попробуйте позже.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'overloaded',
+        userMessage: '\u26a1 AI сервер перегружен. Попробуйте позже.',
+      });
       mockAiStreamRound.mockRejectedValue(overloadedError);
 
       const { AgentError } = await import('../../errors');
@@ -415,11 +426,15 @@ describe('ExpenseBotAgent', () => {
       }
     });
 
-    it('throws AgentError on other API error after retries', async () => {
+    it('throws AgentError on provider 5xx (provider_down) after retries', async () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(apiError);
 
       const { AgentError } = await import('../../errors');
@@ -428,7 +443,9 @@ describe('ExpenseBotAgent', () => {
         expect.unreachable('should have thrown');
       } catch (err) {
         expect(err).toBeInstanceOf(AgentError);
-        expect((err as InstanceType<typeof AgentError>).userMessage).toContain('Ошибка AI');
+        expect((err as InstanceType<typeof AgentError>).userMessage).toContain(
+          'временно недоступен',
+        );
       }
     });
 
@@ -437,6 +454,10 @@ describe('ExpenseBotAgent', () => {
       abortError.name = 'AbortError';
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'timeout',
+        userMessage: '\u23f3 Время ожидания истекло. Попробуйте ещё раз.',
+      });
       mockAiStreamRound.mockRejectedValue(abortError);
 
       const { AgentError } = await import('../../errors');
@@ -453,7 +474,6 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
       mockAiStreamRound.mockRejectedValue(apiError);
 
       try {
@@ -490,7 +510,6 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
       mockAiStreamRound.mockRejectedValue(apiError);
 
       try {
@@ -511,7 +530,6 @@ describe('ExpenseBotAgent', () => {
       const apiError = Object.assign(new Error('Server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
       mockAiStreamRound.mockRejectedValue(apiError);
 
       try {
@@ -538,7 +556,10 @@ describe('ExpenseBotAgent', () => {
     it('wraps error with status:429 (non-API class) as AgentError', async () => {
       const rawErr = Object.assign(new Error('Rate limit exceeded'), { status: 429 });
       mockIsRetryableError.mockReturnValue(false);
-      mockFormatApiError.mockReturnValue('\u23f3 Слишком много запросов к AI. Подождите минуту.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '\u23f3 Слишком много запросов к AI. Подождите минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(rawErr);
 
       const { AgentError } = await import('../../errors');
@@ -550,7 +571,11 @@ describe('ExpenseBotAgent', () => {
     it('wraps error with status:500 (non-API class) as AgentError', async () => {
       const serverErr = Object.assign(new Error('Internal server error'), { status: 500 });
       mockIsRetryableError.mockReturnValue(false);
-      mockFormatApiError.mockReturnValue('\u274c Ошибка AI. Попробуйте позже.');
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(serverErr);
 
       const { AgentError } = await import('../../errors');
@@ -563,6 +588,11 @@ describe('ExpenseBotAgent', () => {
       const timeoutErr = Object.assign(new Error('Request timed out'), { code: 'ETIMEDOUT' });
       mockIsRetryableError.mockReturnValue(true);
       mockGetBackoffDelay.mockReturnValue(0);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(timeoutErr);
 
       const { AgentError } = await import('../../errors');
@@ -576,6 +606,11 @@ describe('ExpenseBotAgent', () => {
     it('wraps ECONNREFUSED error as AgentError', async () => {
       const connErr = Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' });
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(connErr);
 
       const { AgentError } = await import('../../errors');
@@ -587,6 +622,11 @@ describe('ExpenseBotAgent', () => {
     it('wraps ENOTFOUND error as AgentError', async () => {
       const dnsErr = Object.assign(new Error('DNS lookup failed'), { code: 'ENOTFOUND' });
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(dnsErr);
 
       const { AgentError } = await import('../../errors');
@@ -598,6 +638,11 @@ describe('ExpenseBotAgent', () => {
     it('sends network error message to user', async () => {
       const connErr = Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' });
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'provider_down',
+        userMessage:
+          '\u26a0\ufe0f AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+      });
       mockAiStreamRound.mockRejectedValue(connErr);
 
       try {
@@ -608,7 +653,8 @@ describe('ExpenseBotAgent', () => {
       const sendCalls = mockBot.api.sendMessage.mock.calls;
       const errorCall = sendCalls.find(
         (c: unknown[]) =>
-          typeof c[0] === 'object' && (c[0] as { text?: string }).text?.includes('Ошибка сети'),
+          typeof c[0] === 'object' &&
+          (c[0] as { text?: string }).text?.includes('временно недоступен'),
       );
       expect(errorCall).toBeTruthy();
     });
@@ -616,6 +662,7 @@ describe('ExpenseBotAgent', () => {
     it('rethrows unknown error without wrapping', async () => {
       const unknownErr = new TypeError('Unexpected type error');
       mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue(null);
       mockAiStreamRound.mockRejectedValue(unknownErr);
 
       await expect(

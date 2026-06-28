@@ -78,7 +78,7 @@ mock.module('../../services/ai/streaming', () => ({
   stripThinkingTags: (text: string) => text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(),
   isRetryableError: mock(() => false),
   getBackoffDelay: mock(() => 0),
-  formatApiError: mock(() => 'mock-error'),
+  classifyAiError: mock(() => null),
 }));
 
 // ── StatusWriter ────────────────────────────────────────────────────────

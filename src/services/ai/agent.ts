@@ -17,7 +17,7 @@ import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { validateResponse } from './response-validator';
 import {
   aiStreamRound,
-  formatApiError,
+  classifyAiError,
   getBackoffDelay,
   isRetryableError,
   type StreamCallbacks,
@@ -138,32 +138,24 @@ export class ExpenseBotAgent {
     } catch (error) {
       await writer.deleteSentMessage();
 
-      if (error instanceof Error && error.name === 'AbortError') {
-        const timeoutMsg = '\u23f3 Время ожидания истекло. Попробуйте ещё раз.';
-        await this.sendErrorToUser(bot, timeoutMsg);
-        throw new AgentError(timeoutMsg);
+      const classification = classifyAiError(error);
+      if (!classification) {
+        // Not a recognizable AI/network/timeout failure — propagate so the caller
+        // (and logs) see the real, unrelated error instead of a masked generic one.
+        throw error;
       }
-
-      if (error instanceof Error && 'status' in error) {
-        const errorMsg = formatApiError(error);
-        await this.sendErrorToUser(bot, errorMsg);
-        throw new AgentError(errorMsg);
+      // Keep the original error (stack, status) in the logs — the user only sees the
+      // short classified message, so this is the one place it's recorded at the boundary.
+      // Server-side / unknown failures are error-level; transient client-side ones are warn.
+      const logFields = { err: error, kind: classification.kind };
+      const logMsg = '[AGENT] AI run failed — surfacing classified error to user';
+      if (classification.kind === 'provider_down' || classification.kind === 'generic') {
+        logger.error(logFields, logMsg);
+      } else {
+        logger.warn(logFields, logMsg);
       }
-
-      const networkCodes = ['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH'];
-      const errCode = (error as NodeJS.ErrnoException).code;
-      if (errCode && networkCodes.includes(errCode)) {
-        const msg = '\u274c Ошибка сети. Попробуйте позже.';
-        await this.sendErrorToUser(bot, msg);
-        throw new AgentError(msg);
-      }
-      const errStatus = (error as { status?: number }).status;
-      if (typeof errStatus === 'number') {
-        const msg = '\u274c Ошибка AI. Попробуйте позже.';
-        await this.sendErrorToUser(bot, msg);
-        throw new AgentError(msg);
-      }
-      throw error;
+      await this.sendErrorToUser(bot, classification.userMessage);
+      throw new AgentError(classification.userMessage);
     }
   }
 

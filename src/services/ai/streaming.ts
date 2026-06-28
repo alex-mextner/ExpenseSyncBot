@@ -338,33 +338,119 @@ export async function aiStreamRound(
   const aggregated = new Error(
     `All ${providerErrors.length} providers in ${chainName} chain failed: ${summary}`,
   );
-  // Preserve the last error's properties (status, code, etc.) for upstream
-  // error classification (formatApiError checks error.status).
+  // Preserve the last error's properties (status, code) for upstream error
+  // classification (classifyAiError reads error.status and error.code) — keeps an
+  // all-connection-failure chain classifiable even when the joined message text
+  // doesn't obviously read as a network error.
   if (lastError) {
-    Object.assign(aggregated, { status: (lastError as { status?: number }).status });
+    Object.assign(aggregated, {
+      status: (lastError as { status?: number }).status,
+      code: (lastError as { code?: string }).code,
+    });
   }
   throw aggregated;
-}
-
-// ── User-facing error formatting ────────────────────────────────────────────
-
-/** Format an API error into a user-facing Telegram message. */
-export function formatApiError(error: unknown): string {
-  if (error instanceof OpenAI.APIError) {
-    if (error.status === 429) {
-      logger.warn('[AI_STREAM] Rate limited (429)');
-      return '\u23f3 Слишком много запросов к AI. Подождите минуту.';
-    }
-    if (error.status === 529) {
-      logger.warn('[AI_STREAM] Overloaded (529)');
-      return '\u26a1 AI сервер перегружен. Попробуйте позже.';
-    }
-    logger.error({ err: error }, `[AI_STREAM] API error: ${error.status}`);
-  }
-  return '\u274c Ошибка AI. Попробуйте позже.';
 }
 
 /** Strip `<think>…</think>` blocks emitted by reasoning models (DeepSeek-R1, Qwen3). */
 export function stripThinkingTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+// ── Error classification (informative, user-safe) ────────────────────────────
+
+/** User-facing Telegram messages per error class. Short, no internals, address user as "ты". */
+const AI_ERROR_MESSAGES = {
+  rateLimit: '⏳ Слишком много запросов к AI. Подожди минуту.',
+  overloaded: '⚡ AI сервер перегружен. Попробуй позже.',
+  timeout: '⏳ Время ожидания истекло. Попробуй ещё раз.',
+  providerDown:
+    '⚠️ AI временно недоступен (сбой на стороне провайдера). Уже разбираемся — попробуй через минуту.',
+  generic: '❌ Ошибка AI. Попробуй позже.',
+} as const;
+
+/**
+ * Error classes the agent surfaces to the user. `provider_down` covers connection/network
+ * failures and 5xx from the providers (the whole chain is unreachable); `generic` is a
+ * recognized-but-uncategorized API error; a null classification (see `classifyAiError`)
+ * means "not an AI error" and the caller should rethrow.
+ */
+export type AiErrorKind = 'rate_limit' | 'overloaded' | 'timeout' | 'provider_down' | 'generic';
+
+export interface AiErrorClassification {
+  kind: AiErrorKind;
+  /** Short, user-safe Telegram message (no stack, no IDs, no provider internals). */
+  userMessage: string;
+}
+
+const NETWORK_ERROR_CODES = ['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'ENOTFOUND'];
+
+function errorStatus(error: unknown): number | undefined {
+  if (error && typeof error === 'object' && 'status' in error) {
+    const value = (error as { status?: unknown }).status;
+    return typeof value === 'number' ? value : undefined;
+  }
+  return undefined;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const value = (error as { code?: unknown }).code;
+    return typeof value === 'string' ? value : undefined;
+  }
+  return undefined;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** The agent's abort timer fired (or a user/SDK abort) — distinct from a provider being down. */
+function isAbortLike(error: unknown): boolean {
+  if (
+    error instanceof Error &&
+    (error.name === 'AbortError' || error.name === 'APIUserAbortError')
+  ) {
+    return true;
+  }
+  return /\baborted\b|was aborted|operation was aborted/i.test(errorText(error));
+}
+
+/** Connection/network failure to a provider (includes the z.ai "Connection error." case). */
+function isConnectionLike(error: unknown): boolean {
+  if (error instanceof OpenAI.APIConnectionError) return true;
+  const code = errorCode(error);
+  if (code && NETWORK_ERROR_CODES.includes(code)) return true;
+  return /connection error|connection refused|network error|fetch failed|socket hang up|timed out|econnreset|econnrefused|enotfound|enetunreach|etimedout/i.test(
+    errorText(error),
+  );
+}
+
+/**
+ * Classify an error from the AI pipeline into a user-facing message.
+ *
+ * Returns `null` when the error is not recognizably an AI/network/timeout failure, so the
+ * caller can rethrow it instead of masking an unrelated bug behind a generic AI message.
+ *
+ * Order matters: rate-limit/overloaded are checked by status first; a concrete non-429 4xx
+ * is authoritative next (a request/client error — don't let an aggregate's text about an
+ * earlier provider's connection blip mask it as an outage); then the agent-level abort
+ * (60s timeout) is detected before connection failures so a timed-out chain reads as
+ * "timeout" rather than "provider down". Aggregated "All N providers failed" errors are
+ * thus classified by their real status/code/message (e.g. all-400 stays generic, not masked
+ * as an outage), since the aggregate carries the last provider's status/code and the joined
+ * messages.
+ */
+export function classifyAiError(error: unknown): AiErrorClassification | null {
+  const status = errorStatus(error);
+  if (status === 429) return { kind: 'rate_limit', userMessage: AI_ERROR_MESSAGES.rateLimit };
+  if (status === 529) return { kind: 'overloaded', userMessage: AI_ERROR_MESSAGES.overloaded };
+  if (status !== undefined && status >= 400 && status < 500) {
+    return { kind: 'generic', userMessage: AI_ERROR_MESSAGES.generic };
+  }
+  if (isAbortLike(error)) return { kind: 'timeout', userMessage: AI_ERROR_MESSAGES.timeout };
+  if (isConnectionLike(error) || (status !== undefined && status >= 500)) {
+    return { kind: 'provider_down', userMessage: AI_ERROR_MESSAGES.providerDown };
+  }
+  if (status !== undefined) return { kind: 'generic', userMessage: AI_ERROR_MESSAGES.generic };
+  return null;
 }
