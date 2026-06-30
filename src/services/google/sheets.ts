@@ -186,6 +186,50 @@ function colLetter(index: number): string {
 const RATE_COLUMN_HEADER = 'Rate (→EUR)';
 
 /**
+ * Build the self-positioning EUR(calc) formula: amount × rate.
+ *
+ * `INDIRECT("<col>"&ROW())` resolves the cell from the formula's OWN row, so
+ * the formula text is identical for every data row and needs no absolute row
+ * number — which lets `append()` bake it inline instead of a second write
+ * round-trip (see appendExpenseRowsImpl for the quota rationale). The flip side
+ * is that the column letters live inside a string Google can't see into, so a
+ * column insert/move does NOT auto-adjust them: any caller that shifts columns
+ * must recompute these formulas itself (see rewriteEurFormulasForLayout).
+ */
+function buildEurCalcFormula(amountColIdx: number, rateColIdx: number): string {
+  return `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`;
+}
+
+/**
+ * Indices of non-EUR currency amount columns (e.g. "USD ($)") in header order.
+ * Excludes the computed "EUR (calc)" column, the Rate column, and the EUR
+ * currency column — EUR rows keep a static EUR(calc), never a formula.
+ */
+function nonEurCurrencyColumnIndices(headers: string[]): number[] {
+  const indices: number[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    const match = headers[i]?.match(/^([A-Z]{3})\s*\(/);
+    if (match?.[1] && match[1] !== 'EUR') indices.push(i);
+  }
+  return indices;
+}
+
+/** A cell value Sheets treats as empty (no value / cleared). */
+function isEmptyCell(value: unknown): boolean {
+  return value === '' || value === undefined || value === null;
+}
+
+/**
+ * True when a cell's COMPUTED value is a Google Sheets formula error
+ * (#VALUE!, #REF!, #N/A, #NAME?, …). Read with a value render option, not
+ * FORMULA — under FORMULA render an erroring cell returns its formula text, not
+ * the error. Only meaningful for cells that actually hold a formula.
+ */
+function isFormulaError(computedValue: unknown): boolean {
+  return typeof computedValue === 'string' && computedValue.startsWith('#');
+}
+
+/**
  * Google Sheets API hard limits (write side — this bot's hot path).
  * Source: https://developers.google.com/workspace/sheets/api/limits
  *
@@ -406,9 +450,7 @@ async function appendExpenseRowsImpl(
 
     const needsFormula =
       expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
-    const eurFormula = needsFormula
-      ? `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`
-      : null;
+    const eurFormula = needsFormula ? buildEurCalcFormula(amountColIdx, rateColIdx) : null;
 
     const row: (string | number)[] = [];
     for (let colIdx = 0; colIdx < headers.length; colIdx++) {
@@ -510,9 +552,7 @@ async function appendExpenseRowImpl(
 
   // Self-positioning EUR formula — see appendExpenseRowsImpl for rationale.
   // One append call, no second round-trip to attach the formula afterwards.
-  const eurFormula = needsFormula
-    ? `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`
-    : null;
+  const eurFormula = needsFormula ? buildEurCalcFormula(amountColIdx, rateColIdx) : null;
 
   // Build row values based on header order
   const row: (string | number)[] = [];
@@ -642,10 +682,86 @@ async function insertCurrencyColumn(
 
   logger.info(`[SHEETS] Inserted currency column "${newHeader}" at index ${insertIdx}`);
 
-  // Return updated headers
+  // Compute the post-insert header layout.
   const updated = [...currentHeaders];
   updated.splice(insertIdx, 0, newHeader);
+
+  // Inserting before "EUR (calc)" shifts the Rate column (and everything right
+  // of the insert point) one position over. Existing rows' EUR(calc) formulas
+  // hard-code the OLD column letters inside INDIRECT() strings, which Google
+  // cannot auto-adjust — so the rate reference would now point at a text column
+  // and evaluate to #VALUE!. Recompute them for the new layout to keep
+  // historical EUR totals correct.
+  await rewriteEurFormulasForLayout(sheets, spreadsheetId, updated);
+
   return updated;
+}
+
+/**
+ * Recompute every data row's EUR(calc) formula against the given (current)
+ * header layout. Used after a column insert/move shifts the columns the
+ * formulas reference: the INDIRECT() column letters baked in at append time do
+ * not follow the shift, so the rate/amount references silently break (#VALUE!).
+ *
+ * Only rows whose EUR(calc) is already a formula are rewritten — EUR-native and
+ * empty rows hold static values that a column shift can't corrupt. Self-heals
+ * on every insert, preserving the single-write append optimisation.
+ */
+async function rewriteEurFormulasForLayout(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  headers: string[],
+): Promise<void> {
+  const eurCalcIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  if (eurCalcIdx === -1 || rateColIdx === -1) return;
+
+  const amountColIndices = nonEurCurrencyColumnIndices(headers);
+  if (amountColIndices.length === 0) return;
+
+  const lastCol = colLetter(headers.length - 1);
+  const dataResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!A2:${lastCol}`,
+        valueRenderOption: 'FORMULA',
+      }),
+    'rewriteEurFormulasForLayout.read',
+  );
+  const rows = dataResponse.data.values ?? [];
+
+  const updates: { range: string; values: string[][] }[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] as (string | number | null | undefined)[];
+    if (!row || row.length === 0) continue;
+
+    // Only formula cells carry a broken reference; static numbers are fine.
+    const eurVal = row[eurCalcIdx];
+    if (typeof eurVal !== 'string' || !eurVal.startsWith('=')) continue;
+
+    // The amount column is the non-EUR currency column holding a positive value.
+    const amountColIdx = amountColIndices.find((idx) => Number(row[idx]) > 0);
+    if (amountColIdx === undefined) continue;
+
+    updates.push({
+      range: `${SPREADSHEET_CONFIG.sheetName}!${colLetter(eurCalcIdx)}${i + 2}`, // +2: 1-based + header
+      values: [[buildEurCalcFormula(amountColIdx, rateColIdx)]],
+    });
+  }
+
+  if (updates.length === 0) return;
+
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId,
+        requestBody: { valueInputOption: 'USER_ENTERED', data: updates },
+      }),
+    'rewriteEurFormulasForLayout.write',
+  );
+
+  logger.info(`[SHEETS] Rewrote ${updates.length} EUR(calc) formulas after column shift`);
 }
 
 /**
@@ -1259,10 +1375,81 @@ export async function repairDateSerials(conn: GoogleConn, spreadsheetId: string)
   return updates.length;
 }
 
+/** Column positions repairEurFormulas needs to plan a single row's repair. */
+interface EurRepairColumns {
+  eurColIdx: number;
+  rateColIdx: number;
+  amountColIndices: number[];
+}
+
+/** One planned repair: a rebuilt EUR(calc) formula, plus a derived rate when one was missing. */
+interface EurRowRepair {
+  rate?: number;
+  formula: string;
+}
+
 /**
- * Scan the Expenses tab for EUR (calc) cells that are static numbers (migration artifact)
- * and rewrite them as =AMOUNT*RATE formulas. Skips EUR-denominated rows and rows without a rate.
- * Returns the number of cells fixed.
+ * Decide what (if anything) to fix for one Expenses data row, given its FORMULA
+ * render and its computed (value) render:
+ *   - a stale self-positioning EUR(calc) formula whose baked-in INDIRECT letters
+ *     no longer match the live layout → rebuild; the rate was stored at append
+ *     time. A shift makes such a formula either ERROR (#VALUE!) or — when the
+ *     shifted letter lands on an empty/numeric cell — silently compute a WRONG
+ *     number, so a text comparison against the expected formula catches both;
+ *   - a static EUR(calc) number (migration artifact) → derive the rate if absent,
+ *     then attach a formula;
+ *   - a correct formula, an auto-adjusting relative-ref formula, or an empty cell
+ *     → leave untouched.
+ */
+function planEurRowRepair(
+  formulaRow: (string | number | null | undefined)[],
+  computedRow: (string | number | null | undefined)[],
+  cols: EurRepairColumns,
+): EurRowRepair | null {
+  const amountColIdx = cols.amountColIndices.find((idx) => Number(formulaRow[idx]) > 0);
+  if (amountColIdx === undefined) return null;
+
+  const formula = buildEurCalcFormula(amountColIdx, cols.rateColIdx);
+  const eurCell = formulaRow[cols.eurColIdx];
+  const hasFormula = typeof eurCell === 'string' && eurCell.startsWith('=');
+
+  if (hasFormula) {
+    // Already the correct formula for the live layout — nothing to do.
+    if (eurCell === formula) return null;
+    // Rebuild when the formula ERRORS, or when it is a self-positioning
+    // (INDIRECT) formula whose letters drifted from the layout — the latter can
+    // compute a wrong number without ever raising #VALUE!. Plain relative refs
+    // auto-adjust on a column shift, so a non-INDIRECT formula that computes a
+    // number is left alone.
+    const stale = isFormulaError(computedRow[cols.eurColIdx]) || eurCell.includes('INDIRECT');
+    if (!stale) return null;
+    // Without a rate we can't produce a correct value (the rebuilt formula would
+    // just multiply by an empty cell) → skip.
+    if (isEmptyCell(formulaRow[cols.rateColIdx])) return null;
+    return { formula };
+  }
+
+  // Static EUR(calc) number (migration artifact) — needs a formula.
+  if (isEmptyCell(eurCell)) return null;
+  if (!isEmptyCell(formulaRow[cols.rateColIdx])) return { formula };
+
+  // Rate missing: derive it from EUR / amount (preserves that day's rate).
+  const eurNum = Number(eurCell);
+  const amountNum = Number(formulaRow[amountColIdx]);
+  if (amountNum > 0 && eurNum > 0) {
+    return { rate: Math.round((eurNum / amountNum) * 1_000_000) / 1_000_000, formula };
+  }
+  return null; // Can't derive rate — skip
+}
+
+/**
+ * Scan the Expenses tab and repair broken EUR (calc) cells, rewriting each as a
+ * self-positioning amount × rate formula (see buildEurCalcFormula). Heals:
+ *   - static numbers left by a sheet migration;
+ *   - formulas that ERROR (#VALUE!/#REF!) because a column insert shifted the
+ *     columns their baked-in INDIRECT letters reference.
+ * Correct formulas and EUR-denominated rows are left untouched. Returns the
+ * number of EUR(calc) cells rewritten.
  */
 export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string): Promise<number> {
   const auth = authClient(conn);
@@ -1283,73 +1470,52 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
   const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
   if (eurColIdx === -1 || rateColIdx === -1) return 0;
 
-  // Non-EUR currency columns
-  const currencyCols: { idx: number }[] = [];
-  for (let i = 0; i < headers.length; i++) {
-    const match = headers[i]?.match(/^([A-Z]{3})\s*\(/);
-    if (match?.[1] && match[1] !== 'EUR') {
-      currencyCols.push({ idx: i });
-    }
-  }
-  if (currencyCols.length === 0) return 0;
+  const amountColIndices = nonEurCurrencyColumnIndices(headers);
+  if (amountColIndices.length === 0) return 0;
 
   const lastCol = colLetter(headers.length - 1);
-  // FORMULA render option: formulas come back as "=C5*G5", static values as the number
-  const dataResponse = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!A2:${lastCol}`,
-        valueRenderOption: 'FORMULA',
-      }),
-    'repairEurFormulas.readData',
-  );
-  const rows = dataResponse.data.values ?? [];
+  // Read formulas AND computed values. Under FORMULA render a broken cell
+  // returns its (stale) formula text; under a value render it returns the
+  // #VALUE!/#REF! error — both are needed to tell a correct formula from a
+  // stale one without clobbering working formulas.
+  const [formulaResp, valueResp] = await Promise.all([
+    withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${EXPENSES_TAB}!A2:${lastCol}`,
+          valueRenderOption: 'FORMULA',
+        }),
+      'repairEurFormulas.readFormulas',
+    ),
+    withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${EXPENSES_TAB}!A2:${lastCol}`,
+          valueRenderOption: 'FORMATTED_VALUE',
+        }),
+      'repairEurFormulas.readValues',
+    ),
+  ]);
+  const formulaRows = formulaResp.data.values ?? [];
+  const valueRows = valueResp.data.values ?? [];
 
+  const cols: EurRepairColumns = { eurColIdx, rateColIdx, amountColIndices };
   const eurFormulaUpdates: { row: number; formula: string }[] = [];
   const rateUpdates: { row: number; rate: number }[] = [];
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i] as (string | number | null | undefined)[];
-    if (!row || row.length === 0) continue;
+  for (let i = 0; i < formulaRows.length; i++) {
+    const formulaRow = formulaRows[i] as (string | number | null | undefined)[];
+    if (!formulaRow || formulaRow.length === 0) continue;
+    const computedRow = (valueRows[i] ?? []) as (string | number | null | undefined)[];
 
-    const eurVal = row[eurColIdx];
-    // Already a formula — nothing to do
-    if (typeof eurVal === 'string' && eurVal.startsWith('=')) continue;
-    // Empty EUR cell — skip
-    if (eurVal === '' || eurVal === undefined || eurVal === null) continue;
-
-    // Find the non-EUR currency column with a positive amount
-    let amountColIdx = -1;
-    for (const { idx } of currencyCols) {
-      const val = row[idx];
-      if (val !== '' && val !== undefined && val !== null && Number(val) > 0) {
-        amountColIdx = idx;
-        break;
-      }
-    }
-    if (amountColIdx === -1) continue;
+    const plan = planEurRowRepair(formulaRow, computedRow, cols);
+    if (!plan) continue;
 
     const sheetRow = i + 2; // 1-based row + skip header
-
-    // If Rate is missing, derive it from EUR_value / amount (preserves the rate from that day)
-    const rateVal = row[rateColIdx];
-    const rateEmpty = rateVal === '' || rateVal === undefined || rateVal === null;
-    if (rateEmpty) {
-      const eurNum = Number(eurVal);
-      const amountNum = Number(row[amountColIdx]);
-      if (amountNum > 0 && eurNum > 0) {
-        const derivedRate = Math.round((eurNum / amountNum) * 1_000_000) / 1_000_000;
-        rateUpdates.push({ row: sheetRow, rate: derivedRate });
-      } else {
-        continue; // Can't derive rate — skip
-      }
-    }
-
-    eurFormulaUpdates.push({
-      row: sheetRow,
-      formula: `=${colLetter(amountColIdx)}${sheetRow}*${colLetter(rateColIdx)}${sheetRow}`,
-    });
+    if (plan.rate !== undefined) rateUpdates.push({ row: sheetRow, rate: plan.rate });
+    eurFormulaUpdates.push({ row: sheetRow, formula: plan.formula });
   }
 
   if (eurFormulaUpdates.length === 0 && rateUpdates.length === 0) return 0;
@@ -1366,19 +1532,17 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
     })),
   ];
 
-  if (batchData.length > 0) {
-    await withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId,
-          requestBody: {
-            valueInputOption: 'USER_ENTERED',
-            data: batchData,
-          },
-        }),
-      'repairEurFormulas.write',
-    );
-  }
+  await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: batchData,
+        },
+      }),
+    'repairEurFormulas.write',
+  );
 
   logger.info(
     `[SHEETS] repairEurFormulas: ${eurFormulaUpdates.length} formulas, ${rateUpdates.length} rates derived`,

@@ -129,6 +129,7 @@ const {
   readMonthBudget,
   renameSpreadsheet,
   repairDateSerials,
+  repairEurFormulas,
   sortExpensesTab,
   verifySpreadsheetAccess,
   withSheetsRetry,
@@ -1152,6 +1153,153 @@ describe('appendExpenseRows — column-insertion paths', () => {
   });
 });
 
+// ── insertCurrencyColumn — EUR(calc) formula integrity (regression: #VALUE!) ──
+
+describe('insertCurrencyColumn — rewrites EUR(calc) formulas after column shift', () => {
+  // Real sheet layout: Дата | <currencies> | EUR (calc) | Категория | Комментарий | Rate
+  // A=0     B=1(USD)   C=2(EUR calc)   D=3(Кат)   E=4(Комм)   F=5(Rate)
+  const PRE_INSERT_HEADERS = [
+    'Дата',
+    'USD ($)',
+    'EUR (calc)',
+    'Категория',
+    'Комментарий',
+    'Rate (→EUR)',
+  ];
+
+  interface BatchUpdateArgs {
+    requestBody: { data: { range: string; values: string[][] }[] };
+  }
+
+  // Wire the header read to return the PRE-insert layout, and any data read
+  // (FORMULA render) to return rows in the POST-insert layout — exactly what
+  // Google returns after the column insert: cells move with the inserted
+  // column, but the column letters baked into INDIRECT() strings do not.
+  function wireSheet(dataRows: unknown[][]): void {
+    mockValuesGet.mockReset().mockImplementation((args: unknown) => {
+      const range = (args as { range: string }).range;
+      if (range.includes('!1:1')) {
+        return Promise.resolve({ data: { values: [PRE_INSERT_HEADERS] } });
+      }
+      return Promise.resolve({ data: { values: dataRows } });
+    });
+  }
+
+  test('reproduces #VALUE! break: rewrites the rate-column reference to the shifted column', async () => {
+    // Existing USD row. After EGP is inserted before EUR(calc), Rate shifts
+    // F→G and EUR(calc) C→D, but the stored formula still says "F" (now the
+    // Комментарий text column) → #VALUE!.
+    wireSheet([
+      [
+        '2026-04-10',
+        20, // USD amount (B, unchanged by the insert)
+        '', // EGP (C, newly inserted, empty for old rows)
+        '=INDIRECT("B"&ROW())*INDIRECT("F"&ROW())', // EUR(calc) at D, still points at old F
+        'Travel', // Категория (E)
+        'taxi', // Комментарий (F) — the text column the broken formula now hits
+        0.905, // Rate (G, shifted from F)
+      ],
+    ]);
+
+    await appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
+      {
+        date: '2026-04-11',
+        category: 'Food',
+        comment: '',
+        amounts: { EGP: 50 },
+        eurAmount: 0.95,
+        rate: 0.019,
+      },
+    ]);
+
+    expect(mockValuesBatchUpdate).toHaveBeenCalled();
+    const batchArgs = mockValuesBatchUpdate.mock.calls[0]?.[0] as BatchUpdateArgs;
+    const eurUpdate = batchArgs.requestBody.data.find((d) => d.range.endsWith('!D2'));
+    expect(eurUpdate).toBeDefined();
+    const formula = eurUpdate?.values[0]?.[0];
+    // Amount column (USD = B) unchanged; rate reference now points at the
+    // SHIFTED Rate column (G), no longer at the text column (F).
+    expect(formula).toBe('=INDIRECT("B"&ROW())*INDIRECT("G"&ROW())');
+    expect(formula).not.toContain('"F"');
+  });
+
+  test('leaves rows with a static EUR(calc) value untouched', async () => {
+    // A row whose EUR(calc) is a literal number (not a formula) cannot break on
+    // a column shift — it must NOT be rewritten.
+    wireSheet([['2026-04-10', 20, '', 18.1, 'Travel', 'taxi', 0.905]]);
+
+    await appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
+      {
+        date: '2026-04-11',
+        category: 'Food',
+        comment: '',
+        amounts: { EGP: 50 },
+        eurAmount: 0.95,
+        rate: 0.019,
+      },
+    ]);
+
+    expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  test('rewrites each row against its own currency column in a multi-currency sheet', async () => {
+    // Pre-insert: Дата | USD | RSD | EUR (calc) | Категория | Комментарий | Rate
+    //              A=0   B=1   C=2   D=3          E=4         F=5           G=6
+    const MULTI_HEADERS = [
+      'Дата',
+      'USD ($)',
+      'RSD (дин.)',
+      'EUR (calc)',
+      'Категория',
+      'Комментарий',
+      'Rate (→EUR)',
+    ];
+    mockValuesGet.mockReset().mockImplementation((args: unknown) => {
+      const range = (args as { range: string }).range;
+      if (range.includes('!1:1')) {
+        return Promise.resolve({ data: { values: [MULTI_HEADERS] } });
+      }
+      // Post-insert (EGP inserted at D): Rate shifts G→H, EUR(calc) D→E.
+      // Row 1 is a USD expense (amount in B), row 2 is RSD (amount in C).
+      return Promise.resolve({
+        data: {
+          values: [
+            ['2026-04-10', 20, '', '', '=INDIRECT("B"&ROW())*INDIRECT("G"&ROW())', 'A', 'a', 0.905],
+            [
+              '2026-04-10',
+              '',
+              500,
+              '',
+              '=INDIRECT("C"&ROW())*INDIRECT("G"&ROW())',
+              'B',
+              'b',
+              0.0086,
+            ],
+          ],
+        },
+      });
+    });
+
+    await appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
+      {
+        date: '2026-04-11',
+        category: 'Food',
+        comment: '',
+        amounts: { EGP: 50 },
+        eurAmount: 0.95,
+        rate: 0.019,
+      },
+    ]);
+
+    const batchArgs = mockValuesBatchUpdate.mock.calls[0]?.[0] as BatchUpdateArgs;
+    // EUR(calc) moved to column E (post-insert), Rate to H.
+    const usdRow = batchArgs.requestBody.data.find((d) => d.range.endsWith('!E2'));
+    const rsdRow = batchArgs.requestBody.data.find((d) => d.range.endsWith('!E3'));
+    expect(usdRow?.values[0]?.[0]).toBe('=INDIRECT("B"&ROW())*INDIRECT("H"&ROW())');
+    expect(rsdRow?.values[0]?.[0]).toBe('=INDIRECT("C"&ROW())*INDIRECT("H"&ROW())');
+  });
+});
+
 // ── ensureSheetColumns ──────────────────────────────────────────────────────
 
 describe('ensureSheetColumns', () => {
@@ -1688,6 +1836,132 @@ describe('repairDateSerials', () => {
       data: { values: [[12345]] },
     });
     const count = await repairDateSerials(TEST_CONN, TEST_SPREADSHEET);
+    expect(count).toBe(0);
+    expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ── repairEurFormulas ───────────────────────────────────────────────────────
+
+describe('repairEurFormulas — heals broken/stale EUR(calc) formulas', () => {
+  // Post-insert layout where a previously-correct INDIRECT formula now errors:
+  // Дата | USD | EGP | EUR (calc) | Категория | Комментарий | Rate
+  //  A=0   B=1   C=2   D=3          E=4         F=5           G=6
+  const HEADERS = [
+    'Дата',
+    'USD ($)',
+    'EGP (E£)',
+    'EUR (calc)',
+    'Категория',
+    'Комментарий',
+    'Rate (→EUR)',
+  ];
+
+  interface RepairBatchArgs {
+    requestBody: { data: { range: string; values: (string | number)[][] }[] };
+  }
+
+  // formulaRows: what FORMULA render returns; valueRows: what FORMATTED_VALUE
+  // render returns (computed value / error). Header read is FORMATTED_VALUE on
+  // range !1:1.
+  function wireRepair(formulaRows: unknown[][], valueRows: unknown[][]): void {
+    mockValuesGet.mockReset().mockImplementation((args: unknown) => {
+      const a = args as { range: string; valueRenderOption?: string };
+      if (a.range.includes('!1:1')) {
+        return Promise.resolve({ data: { values: [HEADERS] } });
+      }
+      if (a.valueRenderOption === 'FORMULA') {
+        return Promise.resolve({ data: { values: formulaRows } });
+      }
+      return Promise.resolve({ data: { values: valueRows } });
+    });
+  }
+
+  test('rebuilds a #VALUE!-producing INDIRECT formula to the correct current-layout columns', async () => {
+    // Stale formula: rate ref "F" is now the Комментарий text column → #VALUE!.
+    wireRepair(
+      [['2026-04-10', 20, '', '=INDIRECT("B"&ROW())*INDIRECT("F"&ROW())', 'Travel', 'taxi', 0.905]],
+      [['2026-04-10', '20', '', '#VALUE!', 'Travel', 'taxi', '0.905']],
+    );
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(count).toBe(1);
+    const args = mockValuesBatchUpdate.mock.calls[0]?.[0] as RepairBatchArgs;
+    const eurUpdate = args.requestBody.data.find((d) => d.range.endsWith('!D2'));
+    // Amount col B (USD) kept; rate ref repaired from F → G (the real Rate column).
+    expect(eurUpdate?.values[0]?.[0]).toBe('=INDIRECT("B"&ROW())*INDIRECT("G"&ROW())');
+  });
+
+  test('rebuilds a stale INDIRECT formula that silently computes a WRONG number (no #VALUE!)', async () => {
+    // After the shift, rate ref "F" lands on an empty Комментарий cell, so the
+    // formula computes 0 (a wrong number) instead of erroring — still stale.
+    wireRepair(
+      [['2026-04-10', 20, '', '=INDIRECT("B"&ROW())*INDIRECT("F"&ROW())', 'Travel', '', 0.905]],
+      [['2026-04-10', '20', '', '0', 'Travel', '', '0.905']],
+    );
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(count).toBe(1);
+    const args = mockValuesBatchUpdate.mock.calls[0]?.[0] as RepairBatchArgs;
+    const eurUpdate = args.requestBody.data.find((d) => d.range.endsWith('!D2'));
+    expect(eurUpdate?.values[0]?.[0]).toBe('=INDIRECT("B"&ROW())*INDIRECT("G"&ROW())');
+  });
+
+  test('leaves a correct formula (computes to a number) untouched', async () => {
+    wireRepair(
+      [['2026-04-10', 20, '', '=INDIRECT("B"&ROW())*INDIRECT("G"&ROW())', 'Travel', 'taxi', 0.905]],
+      [['2026-04-10', '20', '', '18.1', 'Travel', 'taxi', '0.905']],
+    );
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(count).toBe(0);
+    expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  test('leaves an auto-adjusting relative-ref formula (computes to a number) untouched', async () => {
+    // Plain relative refs auto-adjust on a column shift, so a non-INDIRECT
+    // formula that computes a number must NOT be rewritten.
+    wireRepair(
+      [['2026-04-10', 20, '', '=B2*G2', 'Travel', 'taxi', 0.905]],
+      [['2026-04-10', '20', '', '18.1', 'Travel', 'taxi', '0.905']],
+    );
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(count).toBe(0);
+    expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  test('converts a static EUR(calc) number into a formula and derives the missing rate', async () => {
+    // Legacy migration artifact: EUR(calc) is a static number, Rate is empty.
+    wireRepair(
+      [['2026-04-10', 20, '', 18.1, 'Travel', 'taxi', '']],
+      [['2026-04-10', '20', '', '18.1', 'Travel', 'taxi', '']],
+    );
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(count).toBe(1);
+    const args = mockValuesBatchUpdate.mock.calls[0]?.[0] as RepairBatchArgs;
+    // Derived rate written to the Rate column (G), row 2: 18.1 / 20 = 0.905.
+    const rateUpdate = args.requestBody.data.find((d) => d.range.endsWith('!G2'));
+    expect(rateUpdate?.values[0]?.[0]).toBe(0.905);
+    // EUR(calc) becomes a formula referencing amount (B) × rate (G).
+    const eurUpdate = args.requestBody.data.find((d) => d.range.endsWith('!D2'));
+    expect(eurUpdate?.values[0]?.[0]).toBe('=INDIRECT("B"&ROW())*INDIRECT("G"&ROW())');
+  });
+
+  test('skips a broken formula whose rate cell is empty (cannot derive from an error)', async () => {
+    wireRepair(
+      [['2026-04-10', 20, '', '=INDIRECT("B"&ROW())*INDIRECT("F"&ROW())', 'Travel', 'taxi', '']],
+      [['2026-04-10', '20', '', '#VALUE!', 'Travel', 'taxi', '']],
+    );
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
     expect(count).toBe(0);
     expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
   });
