@@ -25,23 +25,43 @@ const GROUP_ID = Number(getArg('--group-id', '1'));
 if (DRY_RUN) console.log('*** DRY RUN — no changes will be made ***\n');
 
 const db = new Database('./data/expenses.db', { readonly: true });
-const group = db
-  .query('SELECT id, google_refresh_token, oauth_client FROM groups WHERE id = ?')
-  .get(GROUP_ID) as {
+
+interface GroupRow {
   id: number;
   google_refresh_token: string;
   oauth_client: string | null;
-} | null;
+}
+
+// `oauth_client` (migration 042) selects which OAuth credentials to use. The
+// old code read a non-existent `oauth_client_type` column, swallowed the error,
+// and always fell back to 'legacy' — so it 401'd for groups on the 'current'
+// client and could never authenticate to repair their sheets. Read the real
+// column, but if it is genuinely absent (a DB from before migration 042),
+// degrade to 'legacy' with a VISIBLE warning rather than crashing the repair.
+function loadGroup(groupId: number): GroupRow | null {
+  try {
+    return db
+      .query('SELECT id, google_refresh_token, oauth_client FROM groups WHERE id = ?')
+      .get(groupId) as GroupRow | null;
+  } catch (err) {
+    console.warn(
+      '⚠️  Could not read oauth_client (migration 042 not applied?); falling back to legacy OAuth client.',
+      err,
+    );
+    const base = db
+      .query('SELECT id, google_refresh_token FROM groups WHERE id = ?')
+      .get(groupId) as { id: number; google_refresh_token: string } | null;
+    return base ? { ...base, oauth_client: null } : null;
+  }
+}
+
+const group = loadGroup(GROUP_ID);
 
 if (!group?.google_refresh_token) {
   console.error(`Group ${GROUP_ID} not found or has no Google refresh token.`);
   process.exit(1);
 }
 
-// `oauth_client` (migration 042) selects which OAuth credentials to use. The
-// old code read a non-existent `oauth_client_type` column, swallowed the error,
-// and always fell back to 'legacy' — so it 401'd for groups on the 'current'
-// client and could never authenticate to repair their sheets.
 const oauthClientType: 'current' | 'legacy' = group.oauth_client === 'current' ? 'current' : 'legacy';
 
 const auth = getAuthenticatedClient(group.google_refresh_token, oauthClientType);
