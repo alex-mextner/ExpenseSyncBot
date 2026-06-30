@@ -399,8 +399,8 @@ for (const { name, id: spreadsheetId } of toProcess) {
     // rows here first (preserves this script's prior behaviour for those rows).
     await fillEurNativeRates(spreadsheetId, currCols, rateIdx);
 
-    const fixed = await repairEurFormulas(conn, spreadsheetId);
-    if (fixed > 0) console.log(`  ✅ Repaired ${fixed} EUR(calc) formulas`);
+    // repairEurFormulas reports its own repaired-formula/derived-rate counts via logger.
+    await repairEurFormulas(conn, spreadsheetId);
   }
 }
 
@@ -442,7 +442,6 @@ async function fillEurNativeRates(
     spreadsheetId,
     requestBody: { valueInputOption: 'USER_ENTERED', data: rateFills },
   });
-  console.log(`  ✅ Set Rate=1 for ${rateFills.length} EUR rows`);
 }
 
 // ── Step 4: Check for DB expenses missing from sheet ──
