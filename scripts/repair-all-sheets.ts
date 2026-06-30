@@ -11,6 +11,7 @@
 
 import { google } from 'googleapis';
 import { getAuthenticatedClient } from '../src/services/google/oauth';
+import { type GoogleConn, repairEurFormulas } from '../src/services/google/sheets';
 import { Database } from 'bun:sqlite';
 
 const args = process.argv.slice(2);
@@ -24,25 +25,48 @@ const GROUP_ID = Number(getArg('--group-id', '1'));
 if (DRY_RUN) console.log('*** DRY RUN — no changes will be made ***\n');
 
 const db = new Database('./data/expenses.db', { readonly: true });
-const group = db.query('SELECT id, google_refresh_token FROM groups WHERE id = ?').get(GROUP_ID) as {
+
+interface GroupRow {
   id: number;
   google_refresh_token: string;
-} | null;
+  oauth_client: string | null;
+}
+
+// `oauth_client` (migration 042) selects which OAuth credentials to use. The
+// old code read a non-existent `oauth_client_type` column, swallowed the error,
+// and always fell back to 'legacy' — so it 401'd for groups on the 'current'
+// client and could never authenticate to repair their sheets. Read the real
+// column, but if it is genuinely absent (a DB from before migration 042),
+// degrade to 'legacy' with a VISIBLE warning rather than crashing the repair.
+function loadGroup(groupId: number): GroupRow | null {
+  try {
+    return db
+      .query('SELECT id, google_refresh_token, oauth_client FROM groups WHERE id = ?')
+      .get(groupId) as GroupRow | null;
+  } catch (err) {
+    console.warn(
+      '⚠️  Could not read oauth_client (migration 042 not applied?); falling back to legacy OAuth client.',
+      err,
+    );
+    const base = db
+      .query('SELECT id, google_refresh_token FROM groups WHERE id = ?')
+      .get(groupId) as { id: number; google_refresh_token: string } | null;
+    return base ? { ...base, oauth_client: null } : null;
+  }
+}
+
+const group = loadGroup(GROUP_ID);
 
 if (!group?.google_refresh_token) {
   console.error(`Group ${GROUP_ID} not found or has no Google refresh token.`);
   process.exit(1);
 }
 
-// Try to read oauth_client_type if column exists
-let oauthClientType = 'legacy';
-try {
-  const row = db.query('SELECT oauth_client_type FROM groups WHERE id = ?').get(group.id) as { oauth_client_type: string | null } | null;
-  if (row?.oauth_client_type) oauthClientType = row.oauth_client_type;
-} catch { /* column doesn't exist yet */ }
+const oauthClientType: 'current' | 'legacy' = group.oauth_client === 'current' ? 'current' : 'legacy';
 
-const auth = getAuthenticatedClient(group.google_refresh_token, oauthClientType as 'current' | 'legacy');
+const auth = getAuthenticatedClient(group.google_refresh_token, oauthClientType);
 const sheetsApi = google.sheets({ version: 'v4', auth });
+const conn: GoogleConn = { refreshToken: group.google_refresh_token, oauthClient: oauthClientType };
 
 // Get all spreadsheets for this group
 const spreadsheetRows = db
@@ -381,91 +405,63 @@ for (const { name, id: spreadsheetId } of toProcess) {
     }
   }
 
-  // ── Step 3: Fix remaining static EUR(calc) and missing Rate (via same logic as migrate script) ──
+  // ── Step 3: Repair static / broken EUR(calc) formulas ──
+  //
+  // The formula repair delegates to the shared repairEurFormulas so this path
+  // can't drift from the bot's own repair logic. It rewrites both static-number
+  // cells (migration artifacts) AND formula cells that ERROR because a column
+  // insert shifted the columns their baked-in INDIRECT letters reference
+  // (#VALUE!) — the inline copy that used to live here skipped any cell already
+  // holding a formula, so it healed zero of the #VALUE! rows.
 
   if (rateIdx >= 0 && eurCalcIdx >= 0 && !DRY_RUN) {
-    // Re-read with FORMULA to check for static EUR values
-    const formulaResp2 = await sheetsApi.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Expenses!A:Z',
-      valueRenderOption: 'FORMULA',
-    });
-    const fRows = formulaResp2.data.values || [];
+    // repairEurFormulas only scans non-EUR rows, so fill Rate=1 for EUR-native
+    // rows here first (preserves this script's prior behaviour for those rows).
+    await fillEurNativeRates(spreadsheetId, currCols, rateIdx);
 
-    const rateFixes: { range: string; values: (string | number)[][] }[] = [];
-    const eurFixes: { range: string; values: (string | number)[][] }[] = [];
+    // repairEurFormulas reports its own repaired-formula/derived-rate counts via logger.
+    await repairEurFormulas(conn, spreadsheetId);
+  }
+}
 
-    for (let i = 1; i < fRows.length; i++) {
-      const row = fRows[i] as (string | number | null | undefined)[];
-      if (!row || !row[0]) continue;
+/**
+ * Set Rate=1 on EUR-native rows (an EUR amount with an empty Rate cell).
+ * repairEurFormulas intentionally skips EUR rows, so this keeps the marker the
+ * inline Step 3 used to write.
+ */
+async function fillEurNativeRates(
+  spreadsheetId: string,
+  currCols: { idx: number; code: string }[],
+  rateIdx: number,
+): Promise<void> {
+  const eurCol = currCols.find((c) => c.code === 'EUR');
+  if (!eurCol) return;
 
-      const eurVal = row[eurCalcIdx];
-      // Already a formula — skip
-      if (typeof eurVal === 'string' && eurVal.startsWith('=')) continue;
-      if (eurVal === '' || eurVal === undefined || eurVal === null) continue;
+  // FORMULA render returns numeric cells as raw numbers, avoiding locale-
+  // formatted display strings (e.g. "1,234.56") that would make Number() NaN.
+  const resp = await sheetsApi.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Expenses!A:Z',
+    valueRenderOption: 'FORMULA',
+  });
+  const rows = resp.data.values || [];
 
-      // Find amount column
-      let amountColIdx = -1;
-      let amountCode = '';
-      for (const { idx, code } of currCols) {
-        const val = row[idx];
-        if (val !== '' && val !== undefined && val !== null && Number(val) > 0) {
-          amountColIdx = idx;
-          amountCode = code;
-          break;
-        }
-      }
-      if (amountColIdx === -1) continue;
-
-      // EUR expenses: keep static EUR(calc) but ensure Rate=1
-      if (amountCode === 'EUR') {
-        const rateVal = row[rateIdx];
-        if (rateVal === '' || rateVal === undefined || rateVal === null) {
-          rateFixes.push({
-            range: `Expenses!${colLetter(rateIdx)}${i + 1}`,
-            values: [[1]],
-          });
-        }
-        continue;
-      }
-
-      // Non-EUR: derive rate and set formula
-      const rateVal = row[rateIdx];
-      const rateEmpty = rateVal === '' || rateVal === undefined || rateVal === null;
-
-      if (rateEmpty) {
-        const eurNum = Number(eurVal);
-        const amountNum = Number(row[amountColIdx]);
-        if (amountNum > 0 && eurNum > 0) {
-          const derivedRate = Math.round((eurNum / amountNum) * 1_000_000) / 1_000_000;
-          rateFixes.push({
-            range: `Expenses!${colLetter(rateIdx)}${i + 1}`,
-            values: [[derivedRate]],
-          });
-        }
-      }
-
-      const sheetRow = i + 1;
-      eurFixes.push({
-        range: `Expenses!${colLetter(eurCalcIdx)}${sheetRow}`,
-        values: [[`=${colLetter(amountColIdx)}${sheetRow}*${colLetter(rateIdx)}${sheetRow}`]],
-      });
-    }
-
-    if (rateFixes.length > 0 || eurFixes.length > 0) {
-      const allFixes = [...rateFixes, ...eurFixes];
-      for (let batch = 0; batch < allFixes.length; batch += 300) {
-        await sheetsApi.spreadsheets.values.batchUpdate({
-          spreadsheetId,
-          requestBody: {
-            valueInputOption: 'USER_ENTERED',
-            data: allFixes.slice(batch, batch + 300),
-          },
-        });
-      }
-      console.log(`  ✅ Fixed ${rateFixes.length} rates, ${eurFixes.length} EUR formulas`);
+  const rateFills: { range: string; values: (string | number)[][] }[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] as (string | number | null | undefined)[];
+    if (!row || !row[0]) continue;
+    const eurAmount = Number(row[eurCol.idx]);
+    const rateVal = row[rateIdx];
+    if (eurAmount > 0 && (rateVal === undefined || rateVal === null || rateVal === '')) {
+      rateFills.push({ range: `Expenses!${colLetter(rateIdx)}${i + 1}`, values: [[1]] });
     }
   }
+
+  if (rateFills.length === 0) return;
+  await sheetsApi.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data: rateFills },
+  });
 }
 
 // ── Step 4: Check for DB expenses missing from sheet ──
