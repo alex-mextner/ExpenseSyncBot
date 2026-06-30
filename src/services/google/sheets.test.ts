@@ -110,6 +110,7 @@ const {
   appendExpenseRow,
   appendExpenseRows,
   appendExpenseRowsRaw,
+  chunkArray,
   cloneMonthTab,
   createEmptyMonthTab,
   createExpenseSpreadsheet,
@@ -123,6 +124,7 @@ const {
   isRateLimitError,
   listMonthTabs,
   monthTabExists,
+  nonEurCurrencyColumnIndices,
   readExpenseHeaders,
   readExpenseRowsRaw,
   readExpensesFromSheet,
@@ -1298,6 +1300,43 @@ describe('insertCurrencyColumn — rewrites EUR(calc) formulas after column shif
     expect(usdRow?.values[0]?.[0]).toBe('=INDIRECT("B"&ROW())*INDIRECT("H"&ROW())');
     expect(rsdRow?.values[0]?.[0]).toBe('=INDIRECT("C"&ROW())*INDIRECT("H"&ROW())');
   });
+
+  test('chunks the rewrite across >300 existing rows (regression: unbounded batchUpdate)', async () => {
+    // A currency insert on a large history must not pile every row's rewrite
+    // into one batchUpdate that can blow the payload limit.
+    const ROW_COUNT = 301;
+    wireSheet(
+      Array.from({ length: ROW_COUNT }, () => [
+        '2026-04-10',
+        20, // USD amount (B)
+        '', // EGP (C, inserted, empty for old rows)
+        '=INDIRECT("B"&ROW())*INDIRECT("F"&ROW())', // stale rate ref → must be rewritten
+        'Travel',
+        'taxi',
+        0.905,
+      ]),
+    );
+
+    await appendExpenseRows(TEST_CONN, TEST_SPREADSHEET, [
+      {
+        date: '2026-04-11',
+        category: 'Food',
+        comment: '',
+        amounts: { EGP: 50 },
+        eurAmount: 0.95,
+        rate: 0.019,
+      },
+    ]);
+
+    // 301 rewrites chunked at 300 → two batchUpdate requests covering D2..D302.
+    expect(mockValuesBatchUpdate).toHaveBeenCalledTimes(2);
+    const writtenRanges = mockValuesBatchUpdate.mock.calls
+      .flatMap((c) => (c[0] as BatchUpdateArgs).requestBody.data)
+      .map((d) => d.range);
+    expect(writtenRanges).toHaveLength(ROW_COUNT);
+    const expectedRanges = Array.from({ length: ROW_COUNT }, (_, i) => `Expenses!D${i + 2}`);
+    expect(new Set(writtenRanges)).toEqual(new Set(expectedRanges));
+  });
 });
 
 // ── ensureSheetColumns ──────────────────────────────────────────────────────
@@ -1841,6 +1880,56 @@ describe('repairDateSerials', () => {
   });
 });
 
+// ── chunkArray ──────────────────────────────────────────────────────────────
+
+describe('chunkArray', () => {
+  test('splits into fixed-size chunks with a smaller trailing chunk', () => {
+    expect(chunkArray([1, 2, 3, 4, 5, 6, 7], 3)).toEqual([[1, 2, 3], [4, 5, 6], [7]]);
+  });
+
+  test('returns a single chunk when the array fits', () => {
+    expect(chunkArray([1, 2], 300)).toEqual([[1, 2]]);
+  });
+
+  test('splits exactly at the boundary with no empty trailing chunk', () => {
+    const chunks = chunkArray(
+      Array.from({ length: 600 }, (_, i) => i),
+      300,
+    );
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toHaveLength(300);
+    expect(chunks[1]).toHaveLength(300);
+  });
+
+  test('returns no chunks for an empty array', () => {
+    expect(chunkArray([], 300)).toEqual([]);
+  });
+});
+
+// ── nonEurCurrencyColumnIndices ──────────────────────────────────────────────
+
+describe('nonEurCurrencyColumnIndices', () => {
+  test('excludes EUR (calc), the Rate column, and the EUR currency column', () => {
+    // The "EUR (calc)" computed column matches the bare ^[A-Z]{3}\s*\( shape, so
+    // it MUST be excluded explicitly — otherwise a static EUR(calc) number would
+    // be mistaken for a currency amount and corrupt the repair/rewrite. This is
+    // the same exclusion the repair script's isCurrencyHeader relies on to avoid
+    // setting Rate=1 on a non-EUR row (#112 robustness review).
+    const headers = [
+      'Дата',
+      'USD ($)',
+      'EUR (€)',
+      'RSD (дин.)',
+      'EUR (calc)',
+      'Категория',
+      'Комментарий',
+      'Rate (→EUR)',
+    ];
+    // Only USD (idx 1) and RSD (idx 3) are non-EUR currency amount columns.
+    expect(nonEurCurrencyColumnIndices(headers)).toEqual([1, 3]);
+  });
+});
+
 // ── repairEurFormulas ───────────────────────────────────────────────────────
 
 describe('repairEurFormulas — heals broken/stale EUR(calc) formulas', () => {
@@ -1964,6 +2053,46 @@ describe('repairEurFormulas — heals broken/stale EUR(calc) formulas', () => {
 
     expect(count).toBe(0);
     expect(mockValuesBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  test('chunks the batch write across >300 rows (regression: unbounded batchUpdate payload)', async () => {
+    // A single unbounded batchUpdate on a multi-thousand-row sheet can exceed
+    // the API payload limit and fail the whole repair atomically. The write
+    // must be split into bounded chunks, each covering a distinct row slice.
+    const ROW_COUNT = 301;
+    const formulaRows = Array.from({ length: ROW_COUNT }, () => [
+      '2026-04-10',
+      20,
+      '',
+      '=INDIRECT("B"&ROW())*INDIRECT("F"&ROW())', // stale: rate ref F now the text column
+      'Travel',
+      'taxi',
+      0.905,
+    ]);
+    const valueRows = Array.from({ length: ROW_COUNT }, () => [
+      '2026-04-10',
+      '20',
+      '',
+      '#VALUE!',
+      'Travel',
+      'taxi',
+      '0.905',
+    ]);
+    wireRepair(formulaRows, valueRows);
+
+    const count = await repairEurFormulas(TEST_CONN, TEST_SPREADSHEET);
+
+    expect(count).toBe(ROW_COUNT);
+    // 301 updates chunked at 300 → two batchUpdate requests.
+    expect(mockValuesBatchUpdate).toHaveBeenCalledTimes(2);
+
+    // Every data row (D2..D302) must be covered exactly once across all chunks.
+    const writtenRanges = mockValuesBatchUpdate.mock.calls
+      .flatMap((c) => (c[0] as RepairBatchArgs).requestBody.data)
+      .map((d) => d.range);
+    expect(writtenRanges).toHaveLength(ROW_COUNT);
+    const expectedRanges = Array.from({ length: ROW_COUNT }, (_, i) => `Expenses!D${i + 2}`);
+    expect(new Set(writtenRanges)).toEqual(new Set(expectedRanges));
   });
 });
 

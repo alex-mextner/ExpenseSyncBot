@@ -205,7 +205,7 @@ function buildEurCalcFormula(amountColIdx: number, rateColIdx: number): string {
  * Excludes the computed "EUR (calc)" column, the Rate column, and the EUR
  * currency column — EUR rows keep a static EUR(calc), never a formula.
  */
-function nonEurCurrencyColumnIndices(headers: string[]): number[] {
+export function nonEurCurrencyColumnIndices(headers: string[]): number[] {
   const indices: number[] = [];
   for (let i = 0; i < headers.length; i++) {
     const match = headers[i]?.match(/^([A-Z]{3})\s*\(/);
@@ -227,6 +227,47 @@ function isEmptyCell(value: unknown): boolean {
  */
 function isFormulaError(computedValue: unknown): boolean {
   return typeof computedValue === 'string' && computedValue.startsWith('#');
+}
+
+/**
+ * Max ValueRange entries per spreadsheets.values.batchUpdate request. A single
+ * unbounded batchUpdate on a multi-thousand-row sheet can exceed the API's
+ * request payload limit and fail the whole repair atomically; chunking keeps
+ * each request bounded and re-runnable (a failed chunk leaves earlier chunks
+ * written). Matches the 300-row chunk used by scripts/repair-all-sheets.ts.
+ */
+const SHEETS_VALUE_BATCH_CHUNK = 300;
+
+/** Split an array into fixed-size chunks (the final chunk may be smaller). */
+export function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Write value-range updates via spreadsheets.values.batchUpdate, split into
+ * bounded chunks so a large repair can't exceed the API payload limit. One
+ * shared path for every chunked value write (rewrite-on-insert + repair).
+ */
+async function writeValueUpdatesInChunks(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  data: { range: string; values: (string | number)[][] }[],
+  retryLabel: string,
+): Promise<void> {
+  for (const chunk of chunkArray(data, SHEETS_VALUE_BATCH_CHUNK)) {
+    await withSheetsRetry(
+      () =>
+        sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId,
+          requestBody: { valueInputOption: 'USER_ENTERED', data: chunk },
+        }),
+      retryLabel,
+    );
+  }
 }
 
 /**
@@ -752,12 +793,10 @@ async function rewriteEurFormulasForLayout(
 
   if (updates.length === 0) return;
 
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId,
-        requestBody: { valueInputOption: 'USER_ENTERED', data: updates },
-      }),
+  await writeValueUpdatesInChunks(
+    sheets,
+    spreadsheetId,
+    updates,
     'rewriteEurFormulasForLayout.write',
   );
 
@@ -1532,17 +1571,7 @@ export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string)
     })),
   ];
 
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          valueInputOption: 'USER_ENTERED',
-          data: batchData,
-        },
-      }),
-    'repairEurFormulas.write',
-  );
+  await writeValueUpdatesInChunks(sheets, spreadsheetId, batchData, 'repairEurFormulas.write');
 
   logger.info(
     `[SHEETS] repairEurFormulas: ${eurFormulaUpdates.length} formulas, ${rateUpdates.length} rates derived`,
