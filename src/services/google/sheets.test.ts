@@ -121,6 +121,7 @@ const {
   GOOGLE_SHEETS_LIMITS,
   getSpreadsheetUrl,
   googleConn,
+  isCurrencyColumnHeader,
   isRateLimitError,
   listMonthTabs,
   monthTabExists,
@@ -1906,15 +1907,46 @@ describe('chunkArray', () => {
   });
 });
 
+// ── isCurrencyColumnHeader ───────────────────────────────────────────────────
+
+describe('isCurrencyColumnHeader — shared currency-column detector (#112)', () => {
+  test('EUR (calc) is never treated as a currency column', () => {
+    // This is the single detector shared by sheets.ts and
+    // scripts/repair-all-sheets.ts. If EUR (calc) leaked through, the repair
+    // script's fillEurNativeRates would read the computed EUR(calc) value as an
+    // "EUR-native" amount and set Rate=1 on non-EUR rows — the exact corruption
+    // #113's review flagged as untested. The script is not importable
+    // (module-top DB/network), so asserting the exclusion on the shared code is
+    // what covers it.
+    expect(isCurrencyColumnHeader('EUR (calc)')).toBe(false);
+  });
+
+  test('excludes the Rate column and non-currency headers', () => {
+    expect(isCurrencyColumnHeader('Rate (→EUR)')).toBe(false);
+    expect(isCurrencyColumnHeader('Дата')).toBe(false);
+    expect(isCurrencyColumnHeader('Категория')).toBe(false);
+    expect(isCurrencyColumnHeader('Комментарий')).toBe(false);
+  });
+
+  test('includes currency amount columns, the EUR currency column included', () => {
+    expect(isCurrencyColumnHeader('USD ($)')).toBe(true);
+    expect(isCurrencyColumnHeader('RSD (дин.)')).toBe(true);
+    // The EUR *currency* column is a real amount column (distinct from EUR calc);
+    // the repair script needs it in currCols to match EUR expenses and fill
+    // EUR-native rates. nonEurCurrencyColumnIndices layers the EUR exclusion.
+    expect(isCurrencyColumnHeader('EUR (€)')).toBe(true);
+  });
+});
+
 // ── nonEurCurrencyColumnIndices ──────────────────────────────────────────────
 
 describe('nonEurCurrencyColumnIndices', () => {
   test('excludes EUR (calc), the Rate column, and the EUR currency column', () => {
     // The "EUR (calc)" computed column matches the bare ^[A-Z]{3}\s*\( shape, so
     // it MUST be excluded explicitly — otherwise a static EUR(calc) number would
-    // be mistaken for a currency amount and corrupt the repair/rewrite. This is
-    // the same exclusion the repair script's isCurrencyHeader relies on to avoid
-    // setting Rate=1 on a non-EUR row (#112 robustness review).
+    // be mistaken for a currency amount and corrupt the repair/rewrite. This
+    // builds on the shared isCurrencyColumnHeader the repair script also uses to
+    // avoid setting Rate=1 on a non-EUR row (#112 robustness review).
     const headers = [
       'Дата',
       'USD ($)',

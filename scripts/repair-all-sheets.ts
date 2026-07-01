@@ -11,7 +11,7 @@
 
 import { google } from 'googleapis';
 import { getAuthenticatedClient } from '../src/services/google/oauth';
-import { type GoogleConn, repairEurFormulas } from '../src/services/google/sheets';
+import { type GoogleConn, isCurrencyColumnHeader, repairEurFormulas } from '../src/services/google/sheets';
 import { Database } from 'bun:sqlite';
 
 const args = process.argv.slice(2);
@@ -131,10 +131,6 @@ function colLetter(index: number): string {
   return letter;
 }
 
-function isCurrencyHeader(h: string): boolean {
-  return /^[A-Z]{3}\s*\(/.test(h) && h !== 'EUR (calc)' && h !== 'Rate (→EUR)';
-}
-
 // ── Process each spreadsheet ──
 
 for (const { name, id: spreadsheetId } of toProcess) {
@@ -170,7 +166,7 @@ for (const { name, id: spreadsheetId } of toProcess) {
   // ── Step 1: Check and fix column order ──
 
   // Determine canonical order for this sheet's currencies
-  const currHeaders = headers.filter(isCurrencyHeader);
+  const currHeaders = headers.filter(isCurrencyColumnHeader);
   const canonicalHeaders = [...CANONICAL_PREFIX, ...currHeaders, ...CANONICAL_SUFFIX];
 
   // Check if current order matches canonical
@@ -276,7 +272,7 @@ for (const { name, id: spreadsheetId } of toProcess) {
   const currentHeaders = fmtRows[0] as string[];
   const currCols: { idx: number; code: string }[] = [];
   for (let i = 0; i < currentHeaders.length; i++) {
-    if (isCurrencyHeader(currentHeaders[i]!)) {
+    if (isCurrencyColumnHeader(currentHeaders[i]!)) {
       const m = currentHeaders[i]!.match(/^([A-Z]{3})/);
       if (m?.[1]) currCols.push({ idx: i, code: m[1] });
     }
