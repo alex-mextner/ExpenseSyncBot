@@ -1,0 +1,65 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  // Entry points knip cannot infer on its own. index.ts is auto-detected from
+  // package.json "module".
+  //  - bank-sync.ts       second PM2 process (see ecosystem.config.cjs)
+  //  - ecosystem.config.cjs  PM2 process definitions (read by pm2, never imported)
+  //  - scripts/**         standalone tooling run via `bun scripts/<name>.ts`
+  //  - src/**/*.test.ts   test files (roots; make their imports count as usage)
+  //  - the two *module barrels* below are the intended public import surface for
+  //    their modules; consumers currently import the submodules directly, so the
+  //    barrels are never imported, but they are a deliberate API boundary, not
+  //    dead code — declaring them entries stops knip flagging the boundary.
+  "entry": [
+    "bank-sync.ts",
+    "ecosystem.config.cjs",
+    "scripts/**/*.ts",
+    "src/**/*.test.ts",
+    "src/services/dev-pipeline/index.ts",
+    "src/services/analytics/ta/index.ts"
+  ],
+  // ZenPlugins is a third-party git submodule — excluded here exactly like in
+  // biome.jsonc ("!src/services/bank/ZenPlugins"). Not checked out in CI, and
+  // the types the bot needs are mirrored locally in zenmoney-types.ts.
+  "project": [
+    "src/**/*.ts",
+    "!src/services/bank/ZenPlugins/**",
+    "libs/**/*.ts",
+    "*.ts"
+  ],
+  "ignore": [
+    // Deliberately-complete local mirror of ZenMoney submodule types (see the
+    // file header + CLAUDE.md "types maintained locally"). Some members are not
+    // consumed yet; kept for parity with the full ZenMoney data model.
+    "src/services/bank/zenmoney-types.ts",
+    // Shared test helpers (e.g. fetch mocking, mandated by the no-real-network
+    // test rule). Imported ad-hoc by tests, never by product code.
+    "src/test-utils/**"
+  ],
+  "ignoreDependencies": [
+    // Used at runtime as a pino transport target — a string reference in
+    // logger.ts ("target: 'pino-pretty'"), not a static import, so knip cannot
+    // see it. Removing it breaks pretty dev logs.
+    "pino-pretty"
+  ],
+  // An export used only inside its own file is a redundant `export` modifier or
+  // an intentional test seam / API surface — not dead code. Don't flag these;
+  // stripping the keyword would churn stable shared modules for no benefit.
+  "ignoreExportsUsedInFile": true,
+  // Bun.$ shell templates (`$`git rev-parse …``) in dev-pipeline/git-ops.ts and
+  // pipeline.ts make knip mistake git subcommands for standalone binaries.
+  "ignoreBinaries": [
+    "rev-parse",
+    "add",
+    "status",
+    "commit",
+    "push",
+    "remote",
+    "diff",
+    "ls-files",
+    "cat-file",
+    "checkout",
+    "log",
+    "main"
+  ]
+}

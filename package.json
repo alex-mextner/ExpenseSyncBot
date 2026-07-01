@@ -39,7 +39,6 @@
     "date-fns": "^4.1.0",
     "googleapis": "^166.0.0",
     "gramio": "^0.4.11",
-    "jsqr": "^1.4.0",
     "marked": "^17.0.5",
     "node-cron": "^4.2.1",
     "openai": "^6.34.0",
