@@ -275,7 +275,12 @@ export interface UpdateReceiptItemData {
 }
 
 /**
- * Per-year spreadsheet mapping for a group
+ * Per-year spreadsheet mapping for a group.
+ *
+ * @public Row-shape type for the group_spreadsheets table, kept for parity with
+ * the other table row types here. GroupSpreadsheetRepository currently reads
+ * narrower inline shapes, so this interface has no importer yet; the @public tag
+ * exempts it from the knip unused-exports gate. See ticket #110.
  */
 export interface GroupSpreadsheet {
   id: number;
