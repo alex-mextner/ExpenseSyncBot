@@ -201,6 +201,25 @@ function buildEurCalcFormula(amountColIdx: number, rateColIdx: number): string {
 }
 
 /**
+ * True when a sheet header names a currency AMOUNT column: a 3-letter currency
+ * code followed by a parenthesised symbol, e.g. "USD ($)", "RSD (дин.)",
+ * "EUR (€)". Excludes the computed "EUR (calc)" column and the "Rate (→EUR)"
+ * column — both share the CODE-then-paren shape but hold a derived value, not a
+ * user-entered amount. The EUR *currency* column IS a currency column here;
+ * callers that must also skip EUR (formula repair, rate derivation) use
+ * nonEurCurrencyColumnIndices, which layers the EUR exclusion on top. This is
+ * the single detector shared with scripts/repair-all-sheets.ts (#112) so the
+ * script's untestable copy can't drift from the tested one.
+ */
+export function isCurrencyColumnHeader(header: string): boolean {
+  return (
+    /^[A-Z]{3}\s*\(/.test(header) &&
+    header !== SPREADSHEET_CONFIG.eurColumnHeader &&
+    header !== RATE_COLUMN_HEADER
+  );
+}
+
+/**
  * Indices of non-EUR currency amount columns (e.g. "USD ($)") in header order.
  * Excludes the computed "EUR (calc)" column, the Rate column, and the EUR
  * currency column — EUR rows keep a static EUR(calc), never a formula.
@@ -208,8 +227,10 @@ function buildEurCalcFormula(amountColIdx: number, rateColIdx: number): string {
 export function nonEurCurrencyColumnIndices(headers: string[]): number[] {
   const indices: number[] = [];
   for (let i = 0; i < headers.length; i++) {
-    const match = headers[i]?.match(/^([A-Z]{3})\s*\(/);
-    if (match?.[1] && match[1] !== 'EUR') indices.push(i);
+    const header = headers[i];
+    if (header && isCurrencyColumnHeader(header) && !header.startsWith('EUR')) {
+      indices.push(i);
+    }
   }
   return indices;
 }
