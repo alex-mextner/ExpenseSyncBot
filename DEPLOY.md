@@ -500,4 +500,4 @@ du -sh /var/www/ExpenseSyncBot/data/
 
 For issues or questions:
 
-- GitHub Issues: <https://github.com/alex-mextner/ExpenseSyncBot/issues>
+- GitHub Issues: <https://git.hyperide.ai/ultrabricks/ExpenseSyncBot/issues>
