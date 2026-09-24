@@ -1384,6 +1384,24 @@ export function runMigrations(db: Database): void {
         }
       },
     },
+    {
+      name: '051_scope_chat_history_by_topic',
+      up: () => {
+        const hasColumn = db
+          .query<{ count: number }, []>(
+            `SELECT COUNT(*) as count FROM pragma_table_info('chat_messages') WHERE name = 'message_thread_id'`,
+          )
+          .get();
+        if (hasColumn?.count === 0) {
+          db.exec(`ALTER TABLE chat_messages ADD COLUMN message_thread_id INTEGER`);
+        }
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_group_thread_id
+          ON chat_messages(group_id, message_thread_id, id)
+        `);
+        logger.info('✓ Scoped chat history by Telegram topic');
+      },
+    },
   ];
 
   // Check and run migrations

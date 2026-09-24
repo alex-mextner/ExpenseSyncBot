@@ -289,6 +289,16 @@ export async function handleExpenseMessage(
 
   logger.info(`[MSG] Processing ${lines.length} line(s)`);
 
+  // Direct expense entry is intentionally strict and atomic: EVERY non-empty
+  // line must match the expense-entry grammar. If even one line is prose
+  // (for example a budget-planning instruction followed by amount/category
+  // lines), do not persist the parseable tail. Route the whole message to AI.
+  const parsedLines = lines.map((line) => parseExpenseMessage(line, group.default_currency));
+  if (parsedLines.length === 0 || parsedLines.some((parsed) => !validateParsedExpense(parsed))) {
+    logger.info('[MSG] Mixed/non-canonical message — routing the whole message to AI');
+    return false;
+  }
+
   const newCategories: string[] = [];
   const categoryNames = database.categories.getCategoryNames(group.id);
 
@@ -309,11 +319,10 @@ export async function handleExpenseMessage(
   for (const [index, line] of lines.entries()) {
     logger.info(`[MSG] Processing line ${index + 1}/${lines.length}: "${line}"`);
 
-    const parsed = parseExpenseMessage(line, group.default_currency);
-
+    const parsed = parsedLines[index];
     if (!parsed) {
-      logger.info(`[MSG] ❌ Line ${index + 1}: failed to parse`);
-      continue;
+      // Indexed-access guard; all-lines validation above makes this unreachable.
+      return false;
     }
 
     logger.info(
@@ -327,11 +336,6 @@ export async function handleExpenseMessage(
       },
       `[MSG] Line ${index + 1} parsed`,
     );
-
-    if (!validateParsedExpense(parsed)) {
-      logger.info(`[MSG] ❌ Line ${index + 1}: validation failed`);
-      continue;
-    }
 
     // Check if category exists: exact match first, then fuzzy
     let categoryExists = parsed.category

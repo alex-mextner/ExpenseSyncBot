@@ -187,7 +187,8 @@ export function createBot(): Bot {
       }
     }
 
-    // Try to handle as expense; if nothing was parsed and direct AI is allowed, answer as question
+    // Deterministic expense input is handled locally; everything else may fall through
+    // to AI, which stores its own exact current-turn history row before reading context.
     const expenseHandled = await handleExpenseMessage(ctx, bot);
     if (!expenseHandled && allowDirectAI) {
       await handleAskQuestion(ctx, text, bot);

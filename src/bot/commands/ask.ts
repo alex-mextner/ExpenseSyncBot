@@ -40,6 +40,29 @@ const ADVICE_TIMEOUT_MS: Record<AdviceTier, number> = {
   deep: 120_000,
 };
 
+// Serialize AI turns per group/topic so assistant replies are persisted in the same
+// order as their originating user turns. Without this, a faster second request can
+// finish before a slower first request and corrupt the conversation transcript.
+const conversationQueues = new Map<string, Promise<void>>();
+
+async function withConversationQueue<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = conversationQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const currentDone = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => currentDone);
+  conversationQueues.set(key, tail);
+
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (conversationQueues.get(key) === tail) conversationQueues.delete(key);
+  }
+}
+
 /**
  * Handle questions to the bot via @botname question
  */
@@ -97,20 +120,46 @@ export async function handleAskQuestion(
   const userLastName = ctx.from.lastName || '';
   const userFullName = [userFirstName, userLastName].filter(Boolean).join(' ');
 
-  // Save user question to chat history
-  database.chatMessages.create({
-    group_id: group.id,
-    user_id: user.id,
-    role: 'user',
-    content: `${userName}: ${question}`,
+  const queueKey = `${group.id}:${messageThreadId ?? 'general'}`;
+  const shouldRunAdvice = await withConversationQueue(queueKey, async () => {
+    // In a forum without /topic binding, keep mentions stateless: the bot is explicitly
+    // allowed to answer them from any topic, so retaining multi-turn state would be surprising.
+    // Once /topic is configured, stored history is additionally scoped by message_thread_id.
+    const persistHistory = ctx.chat?.isForum !== true || group.active_topic_id != null;
+    const currentHistoryMessageId = persistHistory
+      ? database.chatMessages.create({
+          group_id: group.id,
+          user_id: user.id,
+          role: 'user',
+          content: `${userName}: ${question}`,
+          message_thread_id: messageThreadId ?? null,
+        }).id
+      : undefined;
+    if (currentHistoryMessageId !== undefined) {
+      database.chatMessages.pruneOldMessagesIfNeeded(group.id, messageThreadId ?? null, 50, 10);
+    }
+
+    if (!env.ANTHROPIC_API_KEY) {
+      await sendMessage('❌ AI не настроен. Нужен ANTHROPIC_API_KEY.');
+      return false;
+    }
+
+    return handleAskWithAnthropic(
+      ctx,
+      question,
+      bot,
+      group,
+      user,
+      userName,
+      userFullName,
+      currentHistoryMessageId,
+      isMention,
+    );
   });
 
-  if (!env.ANTHROPIC_API_KEY) {
-    await sendMessage('❌ AI не настроен. Нужен ANTHROPIC_API_KEY.');
-    return;
-  }
-
-  await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName, isMention);
+  // Advice can involve another long AI stream. It must never hold the ordered
+  // conversation-turn queue after the primary assistant reply is already persisted.
+  if (shouldRunAdvice) await maybeSmartAdvice(group.id);
 }
 
 /**
@@ -124,8 +173,9 @@ async function handleAskWithAnthropic(
   user: User,
   userName: string,
   userFullName: string,
+  currentHistoryMessageId: number | undefined,
   isMention = false,
-): Promise<void> {
+): Promise<boolean> {
   const chatId = ctx.chat?.id;
 
   const agentCtx: AgentContext = {
@@ -150,10 +200,17 @@ async function handleAskWithAnthropic(
     isForumWithoutTopic: ctx.chat?.isForum === true && group.active_topic_id == null,
   };
 
-  // Get recent chat history (last 10 messages / 5 pairs)
-  const recentMessages = database.chatMessages.getRecentMessages(group.id, 10);
-  // Exclude the current question (just saved above)
-  const historyMessages = recentMessages.slice(0, -1);
+  // Read only causal history that existed before this exact stored turn. An unscoped
+  // forum deliberately has no retained history, preventing cross-topic context disclosure.
+  const historyMessages =
+    currentHistoryMessageId === undefined
+      ? []
+      : database.chatMessages.getRecentMessagesBefore(
+          group.id,
+          currentHistoryMessageId,
+          20,
+          ctx.update?.message?.message_thread_id ?? null,
+        );
 
   try {
     // Show "typing" status and placeholder message
@@ -167,30 +224,37 @@ async function handleAskWithAnthropic(
     const finalResponse = await agent.run(`${userName}: ${question}`, historyMessages, bot);
 
     // Empty response means the agent chose to stay silent ([SKIP] signal)
-    if (!finalResponse) return;
+    if (!finalResponse) return false;
 
-    // Save only the final text response to chat history (not tool_use rounds)
-    database.chatMessages.create({
-      group_id: group.id,
-      user_id: user.id,
-      role: 'assistant',
-      content: finalResponse,
-    });
+    // Persist the reply only when this chat has a safe history scope. Unconfigured
+    // forums stay stateless so a later mention in another topic cannot inherit it.
+    if (currentHistoryMessageId !== undefined) {
+      database.chatMessages.create({
+        group_id: group.id,
+        user_id: user.id,
+        role: 'assistant',
+        content: finalResponse,
+        message_thread_id: ctx.update?.message?.message_thread_id ?? null,
+      });
+      database.chatMessages.pruneOldMessagesIfNeeded(
+        group.id,
+        ctx.update?.message?.message_thread_id ?? null,
+        50,
+        10,
+      );
+    }
 
-    // Prune old messages (keep last 50)
-    database.chatMessages.pruneOldMessages(group.id, 50);
-
-    // Maybe send smart advice after successful response
-    await maybeSmartAdvice(group.id);
+    return true;
   } catch (error) {
     if (error instanceof AgentError) {
       // Agent already sent the error message to the user and cleaned up.
       // Don't save error to chat history, don't trigger advice.
       logger.info(`[ASK] Agent error (already reported to user): ${error.userMessage}`);
-      return;
+      return false;
     }
     logger.error({ err: error }, '[ASK] Anthropic agent error');
     await sendMessage('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
+    return false;
   }
 }
 

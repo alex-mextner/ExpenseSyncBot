@@ -184,6 +184,7 @@ export interface ChatMessage {
   user_id: number;
   role: 'user' | 'assistant';
   content: string;
+  message_thread_id: number | null;
   created_at: string;
 }
 
@@ -192,6 +193,7 @@ export interface CreateChatMessageData {
   user_id: number;
   role: 'user' | 'assistant';
   content: string;
+  message_thread_id?: number | null;
 }
 
 /**

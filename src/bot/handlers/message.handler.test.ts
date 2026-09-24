@@ -78,7 +78,7 @@ describe('buildBudgetAlertStatus — budget currency conversion', () => {
 // All module mocks must be declared before importing handleExpenseMessage.
 
 const logMock = createMockLogger();
-mock.module('../../utils/logger', () => ({
+mock.module('../../utils/logger.ts', () => ({
   createLogger: () => logMock,
   logger: logMock,
 }));
@@ -215,6 +215,13 @@ const mockGroupMembers = {
 const mockDevTasks = {
   findById: mock(() => null),
 };
+const mockChatMessages = {
+  create: mock((_data: Record<string, unknown>) => ({ id: 1 })),
+  pruneOldMessagesIfNeeded: mock(
+    (_groupId: number, _messageThreadId: number | null, _keepCount: number, _everyWrites: number) =>
+      0,
+  ),
+};
 
 mock.module('../../database', () => ({
   database: {
@@ -226,6 +233,7 @@ mock.module('../../database', () => ({
     receiptItems: mockReceiptItems,
     groupMembers: mockGroupMembers,
     devTasks: mockDevTasks,
+    chatMessages: mockChatMessages,
   },
 }));
 
@@ -277,6 +285,7 @@ function fakeMessageCtx(
     messageId?: number;
     username?: string;
     threadId?: number | null;
+    isForum?: boolean;
     replyToMessageId?: number;
   } = {},
 ): Ctx['Message'] {
@@ -288,7 +297,12 @@ function fakeMessageCtx(
     id: messageId,
     text,
     from: { id: fromId, username: overrides.username ?? 'alex', firstName: 'Alex' },
-    chat: { id: chatId, type: chatType, title: overrides.chatTitle ?? 'Test Group' },
+    chat: {
+      id: chatId,
+      type: chatType,
+      title: overrides.chatTitle ?? 'Test Group',
+      isForum: overrides.isForum ?? false,
+    },
     update: {
       message: {
         message_thread_id: overrides.threadId,
@@ -345,6 +359,8 @@ function resetAllMocks(): void {
   mockPhotoQueue.findWaitingForBulkCorrection.mockReset().mockReturnValue(null);
   mockReceiptItems.findWaitingForCategoryInput.mockReset().mockReturnValue(null);
   mockGroupMembers.upsert.mockReset();
+  mockChatMessages.create.mockReset().mockImplementation(() => ({ id: 1 }));
+  mockChatMessages.pruneOldMessagesIfNeeded.mockReset().mockReturnValue(0);
 
   logMock.error.mockClear();
   logMock.warn.mockClear();
@@ -529,6 +545,99 @@ describe('handleExpenseMessage — edge cases', () => {
 
     expect(mockPendingExpenses.create).not.toHaveBeenCalled();
     expect(handled).toBe(false);
+  });
+
+  test('budget planning prose + expense-looking lines routes whole message to AI without writes', async () => {
+    const text = [
+      'Запланируй траты на октябрь. Добавь новые категории.',
+      '700 квартира',
+      '900 еда',
+      '300 коммуналка',
+      '200 животные',
+      '200 машина',
+      '700 Лена',
+      '700 Алекс',
+      '200 Развлечения',
+      '450 Подписки',
+      '100 дом',
+      '1000 путешествия',
+      '1000 копилка',
+    ].join('\n');
+    const ctx = fakeMessageCtx(text, { username: 'lari4kina_babich' });
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(false);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+    expect(findBestCategoryMatchAsyncMock).not.toHaveBeenCalled();
+    // Free-form input is stored by the AI handler after routing, not by the expense path.
+    expect(mockChatMessages.create).not.toHaveBeenCalled();
+  });
+
+  test('current October budget request with euro-prefixed dash lines routes whole message to AI', async () => {
+    const text = [
+      'Сформируй бюджет на грядущий октябрь',
+      '€450 — квартира',
+      '€600 — еда',
+      '€300 — коммуналка',
+      '€200 — животные',
+      '€200 — машина',
+      '€700 — Лена',
+      '€700 — Алекс',
+      '€100 — развлечения',
+      '€620 — подписки',
+      '€100 — дом',
+      'Другие категории убери (перечили), сумма должна быть 6000€',
+    ].join('\n');
+    const ctx = fakeMessageCtx(text, { username: 'mxtnr' });
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(false);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+    expect(mockChatMessages.create).not.toHaveBeenCalled();
+  });
+
+  test('does not store ordinary traffic in an unconfigured forum where topics would mix', async () => {
+    mockGroups.findByTelegramGroupId.mockReturnValue(makeGroup({ active_topic_id: null }));
+    const ctx = fakeMessageCtx('просто обсуждение', {
+      chatType: 'supergroup',
+      isForum: true,
+      threadId: 77,
+    });
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(false);
+    expect(mockChatMessages.create).not.toHaveBeenCalled();
+    expect(mockChatMessages.pruneOldMessagesIfNeeded).not.toHaveBeenCalled();
+  });
+
+  test('canonical expense input relies on the ledger and is not copied into AI chat history', async () => {
+    mockCategories.exists.mockReturnValue(true);
+    mockCategories.getCategoryNames.mockReturnValue(['groceries']);
+    const ctx = fakeMessageCtx('100 EUR groceries');
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(true);
+    expect(mockChatMessages.create).not.toHaveBeenCalled();
+    expect(mockChatMessages.pruneOldMessagesIfNeeded).not.toHaveBeenCalled();
+  });
+
+  test('all-canonical multiline expense message still saves every line', async () => {
+    mockCategories.getCategoryNames.mockReturnValue(['Еда', 'Дом']);
+    mockCategories.exists.mockReturnValue(true);
+    const ctx = fakeMessageCtx('900 EUR Еда\n100 EUR Дом');
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(true);
+    expect(mockPendingExpenses.create).toHaveBeenCalledTimes(2);
+    expect(saveExpenseBatchMock).toHaveBeenCalledTimes(1);
+    expect(saveExpenseBatchMock.mock.calls[0]?.[2]).toHaveLength(2);
   });
 });
 

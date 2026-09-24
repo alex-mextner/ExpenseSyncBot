@@ -388,6 +388,7 @@ describe('ExpenseBotAgent', () => {
           user_id: 10,
           role: 'user' as const,
           content: 'Hi',
+          message_thread_id: null,
           created_at: '2026-01-01',
         },
         {
@@ -396,6 +397,7 @@ describe('ExpenseBotAgent', () => {
           user_id: 10,
           role: 'assistant' as const,
           content: 'Hello!',
+          message_thread_id: null,
           created_at: '2026-01-01',
         },
       ];
@@ -416,6 +418,7 @@ describe('ExpenseBotAgent', () => {
           user_id: 10,
           role: 'user' as const,
           content: 'Hi',
+          message_thread_id: null,
           created_at: '2026-01-01',
         },
       ];
@@ -436,6 +439,7 @@ describe('ExpenseBotAgent', () => {
           user_id: 10,
           role: 'assistant' as const,
           content: 'Reply',
+          message_thread_id: null,
           created_at: '2026-01-01',
         },
       ];
@@ -455,6 +459,7 @@ describe('ExpenseBotAgent', () => {
           user_id: 10,
           role: 'user' as const,
           content: 'plain text',
+          message_thread_id: null,
           created_at: '',
         },
       ];

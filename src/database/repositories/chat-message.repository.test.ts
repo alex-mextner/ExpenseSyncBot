@@ -165,6 +165,73 @@ describe('ChatMessageRepository', () => {
     });
   });
 
+  describe('getRecentMessagesBefore', () => {
+    it('returns only causal history before the exact current row, even when a later row exists', () => {
+      const before = repo.create({
+        group_id: groupId,
+        user_id: userId,
+        role: 'user',
+        content: 'before',
+      });
+      const current = repo.create({
+        group_id: groupId,
+        user_id: userId,
+        role: 'user',
+        content: 'current',
+      });
+      repo.create({
+        group_id: groupId,
+        user_id: userId,
+        role: 'user',
+        content: 'concurrent-later',
+      });
+
+      const msgs = repo.getRecentMessagesBefore(groupId, current.id, 10);
+
+      expect(msgs.map((m) => m.id)).toEqual([before.id]);
+      expect(msgs.map((m) => m.content)).toEqual(['before']);
+    });
+
+    it('isolates causal history by Telegram topic', () => {
+      const topic1 = repo.create({
+        group_id: groupId,
+        user_id: userId,
+        role: 'user',
+        content: 'topic one',
+        message_thread_id: 101,
+      });
+      const topic2 = repo.create({
+        group_id: groupId,
+        user_id: userId,
+        role: 'user',
+        content: 'topic two',
+        message_thread_id: 202,
+      });
+      const current = repo.create({
+        group_id: groupId,
+        user_id: userId,
+        role: 'user',
+        content: 'current topic two',
+        message_thread_id: 202,
+      });
+
+      const msgs = repo.getRecentMessagesBefore(groupId, current.id, 10, 202);
+
+      expect(msgs.map((m) => m.id)).toEqual([topic2.id]);
+      expect(msgs.map((m) => m.id)).not.toContain(topic1.id);
+    });
+
+    it('uses monotonic ids for deterministic same-second ordering', () => {
+      const ids = ['first', 'second', 'third'].map(
+        (content) => repo.create({ group_id: groupId, user_id: userId, role: 'user', content }).id,
+      );
+
+      const msgs = repo.getRecentMessages(groupId, 10);
+      expect(msgs.map((m) => m.id)).toEqual(ids);
+      expect(msgs.map((m) => m.content)).toEqual(['first', 'second', 'third']);
+    });
+  });
+
   describe('pruneOldMessages', () => {
     it('keeps only the last N messages', () => {
       for (let i = 0; i < 10; i++) {
@@ -213,6 +280,70 @@ describe('ChatMessageRepository', () => {
       const g2msgs = repo.getRecentMessages(groupId2, 20);
       expect(g1msgs).toHaveLength(2);
       expect(g2msgs).toHaveLength(5); // untouched
+    });
+  });
+
+  describe('pruneOldMessagesIfNeeded', () => {
+    it('amortizes cleanup instead of pruning on every write', () => {
+      for (let i = 0; i < 59; i++) {
+        repo.create({ group_id: groupId, user_id: userId, role: 'user', content: `seed ${i}` });
+      }
+
+      for (let i = 0; i < 9; i++) {
+        repo.create({ group_id: groupId, user_id: userId, role: 'user', content: `new ${i}` });
+        expect(repo.pruneOldMessagesIfNeeded(groupId, null, 50, 10)).toBe(0);
+      }
+      expect(repo.getRecentMessages(groupId, 100)).toHaveLength(68);
+
+      repo.create({ group_id: groupId, user_id: userId, role: 'user', content: 'new 9' });
+      expect(repo.pruneOldMessagesIfNeeded(groupId, null, 50, 10)).toBe(19);
+      expect(repo.getRecentMessages(groupId, 100)).toHaveLength(50);
+    });
+
+    it('bounds retention counters across many short-lived topic scopes', () => {
+      for (let threadId = 1; threadId <= 700; threadId++) {
+        repo.pruneOldMessagesIfNeeded(groupId, threadId, 50, 10);
+      }
+
+      const counters = (repo as unknown as { writesSincePrune: Map<string, number> })
+        .writesSincePrune;
+      expect(counters.size).toBeLessThanOrEqual(512);
+    });
+
+    it('prunes each Telegram topic independently', () => {
+      for (let i = 0; i < 20; i++) {
+        repo.create({
+          group_id: groupId,
+          user_id: userId,
+          role: 'user',
+          content: `topic-101 ${i}`,
+          message_thread_id: 101,
+        });
+      }
+      for (let i = 0; i < 59; i++) {
+        repo.create({
+          group_id: groupId,
+          user_id: userId,
+          role: 'user',
+          content: `topic-202 seed ${i}`,
+          message_thread_id: 202,
+        });
+      }
+      for (let i = 0; i < 10; i++) {
+        repo.create({
+          group_id: groupId,
+          user_id: userId,
+          role: 'user',
+          content: `topic-202 new ${i}`,
+          message_thread_id: 202,
+        });
+        repo.pruneOldMessagesIfNeeded(groupId, 202, 50, 10);
+      }
+
+      const topic101 = repo.getRecentMessagesBefore(groupId, Number.MAX_SAFE_INTEGER, 100, 101);
+      const topic202 = repo.getRecentMessagesBefore(groupId, Number.MAX_SAFE_INTEGER, 100, 202);
+      expect(topic101).toHaveLength(20);
+      expect(topic202).toHaveLength(50);
     });
   });
 
