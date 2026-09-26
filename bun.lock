@@ -34,6 +34,9 @@
       },
     },
   },
+  "trustedDependencies": [
+    "sharp",
+  ],
   "overrides": {
     "brace-expansion": "^2.1.4",
     "glob": "^10.5.0",
