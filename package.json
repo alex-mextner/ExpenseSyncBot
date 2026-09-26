@@ -12,7 +12,8 @@
     "format": "biome format --write src/",
     "test": "bun scripts/test-runner.ts",
     "test:single": "bun test",
-    "test:coverage": "bun test --coverage"
+    "test:coverage": "bun test --coverage",
+    "postinstall": "sh scripts/install-git-hooks.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
@@ -27,6 +28,7 @@
   "peerDependencies": {
     "typescript": "^5"
   },
+  "trustedDependencies": ["playwright", "sharp"],
   "overrides": {
     "minimatch": "^9.0.6",
     "glob": "^10.5.0",
