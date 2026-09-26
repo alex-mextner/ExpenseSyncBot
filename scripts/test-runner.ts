@@ -58,9 +58,10 @@ async function runFile(file: string): Promise<FileResult> {
   // Strip ANSI escape codes before parsing — FORCE_COLOR produces them
   const clean = rawOutput.replace(/\x1b\[[0-9;]*m/g, '');
 
-  // Parse bun test output: " N pass" and " N fail"
-  const passMatch = clean.match(/(\d+)\s+pass/);
-  const failMatch = clean.match(/(\d+)\s+fail/);
+  // Parse bun test's own summary lines (" N pass" / " N fail" alone on a line). An unanchored
+  // match also caught test names and log lines such as "3 failed attempts" and inflated the count.
+  const passMatch = clean.match(/^\s*(\d+) pass\s*$/m);
+  const failMatch = clean.match(/^\s*(\d+) fail\s*$/m);
 
   return {
     file,
