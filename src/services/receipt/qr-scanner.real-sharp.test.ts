@@ -1,11 +1,13 @@
 // scanQRFromImage end to end with the REAL sharp build (qr-scanner.test.ts mocks it out).
 // Guards sharp upgrades: the variant pipelines must still hand qr/decode.js an RGBA raw buffer
 // it can read, and a clean QR code must decode locally without the external API fallback.
+// The other sharp call site (miniapp receipt compression, src/web/miniapp-api.ts) is still only
+// covered through a mocked sharp.
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { encodeQR } from 'qr';
 import sharp from 'sharp';
-import { mockFetchError } from '../../test-utils/mocks/fetch';
+import { mockFetchError, restoreFetch } from '../../test-utils/mocks/fetch';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -40,16 +42,13 @@ async function qrJpeg(text: string): Promise<Buffer> {
 }
 
 describe('scanQRFromImage with real sharp', () => {
-  const originalFetch = globalThis.fetch;
   let fetchMock: ReturnType<typeof mockFetchError>;
 
   beforeEach(() => {
     fetchMock = mockFetchError('external QR API must not be called');
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
+  afterEach(restoreFetch);
 
   it('decodes a receipt QR payload locally', async () => {
     const payload = 'https://suf.purs.gov.rs/v/?vl=A1B2C3D4E5F6G7H8I9J0';
