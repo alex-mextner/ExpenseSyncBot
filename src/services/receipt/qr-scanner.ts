@@ -1,7 +1,7 @@
 /** QR code scanner — decodes QR codes from image buffers to extract payment URLs from receipts */
 import type { Image } from 'qr';
 import decodeQR, { type DecodeOpts, type FinderPoints } from 'qr/decode.js';
-import sharp from 'sharp';
+import sharp, { type Sharp } from 'sharp';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 
@@ -20,7 +20,7 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
     // 1. Small with high contrast and sharpening
     {
       name: '500px+sharp+contrast',
-      process: (img: sharp.Sharp) =>
+      process: (img: Sharp) =>
         img
           .resize(500, 500, { fit: 'inside', withoutEnlargement: true })
           .sharpen()
@@ -30,30 +30,28 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
     // 2. Medium with sharpening
     {
       name: '800px+sharp',
-      process: (img: sharp.Sharp) =>
+      process: (img: Sharp) =>
         img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }).sharpen().normalize(),
     },
     // 3. Original with sharpening
     {
       name: 'original+sharp',
-      process: (img: sharp.Sharp) => img.sharpen().normalize(),
+      process: (img: Sharp) => img.sharpen().normalize(),
     },
     // 4. Medium size basic
     {
       name: '800px',
-      process: (img: sharp.Sharp) =>
-        img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }),
+      process: (img: Sharp) => img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }),
     },
     // 5. Small size basic
     {
       name: '500px',
-      process: (img: sharp.Sharp) =>
-        img.resize(500, 500, { fit: 'inside', withoutEnlargement: true }),
+      process: (img: Sharp) => img.resize(500, 500, { fit: 'inside', withoutEnlargement: true }),
     },
     // 6. Extreme contrast
     {
       name: 'extreme-contrast',
-      process: (img: sharp.Sharp) =>
+      process: (img: Sharp) =>
         img
           .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
           .grayscale()
@@ -63,7 +61,7 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
     // 7. Original size
     {
       name: 'original',
-      process: (img: sharp.Sharp) => img,
+      process: (img: Sharp) => img,
     },
   ];
 
