@@ -12,9 +12,16 @@ const repoRoot = resolve(import.meta.dir, '../..');
 /** Parse this repo's tsconfig.json as if it lived in `project` (relative paths resolve there). */
 function compilerOptionsFor(project: string): ts.CompilerOptions {
   const config = ts.readConfigFile(join(repoRoot, 'tsconfig.json'), ts.sys.readFile);
-  expect(config.error).toBeUndefined();
+  if (config.error) {
+    throw new Error(
+      `tsconfig.json: ${ts.flattenDiagnosticMessageText(config.error.messageText, '\n')}`,
+    );
+  }
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, project);
-  expect(parsed.errors).toEqual([]);
+  if (parsed.errors.length > 0) {
+    const messages = parsed.errors.map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'));
+    throw new Error(`tsconfig.json: ${messages.join('; ')}`);
+  }
   return parsed.options;
 }
 
@@ -32,7 +39,7 @@ function createProgram(project: string, entry: string, options: ts.CompilerOptio
   return ts.createProgram([entry], options, host);
 }
 
-describe('tsconfig type resolution with the Bun global store', () => {
+describe('tsconfig type resolution across install layouts', () => {
   test('an undeclared undici-types import from a stored package resolves through the hoist directory', () => {
     const dir = mkdtempSync(join(tmpdir(), 'esb-global-store-'));
     try {
@@ -87,13 +94,18 @@ describe('tsconfig type resolution with the Bun global store', () => {
         'declare var staleGlobal: string;\n',
       );
       const project = join(dir, '.worktrees/feature');
-      mkdirSync(join(project, 'node_modules/@types'), { recursive: true });
+      writePackage(
+        join(project, 'node_modules/@types/own'),
+        '@types/own',
+        'declare var ownGlobal: string;\n',
+      );
       const entry = join(project, 'entry.ts');
       writeFileSync(entry, 'export const answer = 42;\n');
 
       const program = createProgram(project, entry, compilerOptionsFor(project));
       const loaded = program.getSourceFiles().map((file) => file.fileName);
       expect(loaded.some((name) => name.includes('@types/stale'))).toBe(false);
+      expect(loaded.some((name) => name.includes('@types/own'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -102,7 +114,12 @@ describe('tsconfig type resolution with the Bun global store', () => {
   test('this install provides undici-types where tsconfig resolves it', () => {
     // Store layout: the isolated linker's hoist directory. Hoisted layout: plain node_modules.
     // If neither exists, bun-types' fetch globals silently degrade to `any` (skipLibCheck).
-    const candidates = ['node_modules/.bun/node_modules/undici-types', 'node_modules/undici-types'];
-    expect(candidates.some((path) => existsSync(join(repoRoot, path, 'index.d.ts')))).toBe(true);
+    const mapped = compilerOptionsFor(repoRoot).paths?.['undici-types'] ?? [];
+    const candidates = [
+      ...mapped.map((path) => join(repoRoot, path)),
+      join(repoRoot, 'node_modules/undici-types'),
+    ];
+    const found = candidates.filter((path) => existsSync(join(path, 'index.d.ts')));
+    expect({ candidates, found: found.length > 0 }).toEqual({ candidates, found: true });
   });
 });
