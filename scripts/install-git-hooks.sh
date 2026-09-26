@@ -19,16 +19,22 @@ fi
 common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
 hooks=$(git rev-parse --git-path hooks)
 case "$hooks" in /*) ;; *) hooks="$(pwd -P)/$hooks" ;; esac
-if [ -d "$hooks" ]; then hooks=$(cd "$hooks" && pwd -P); fi
+# Resolve symlinks, so a hooks directory that links out of the repository is judged by its target.
+if [ -d "$hooks" ]; then
+  hooks=$(cd "$hooks" && pwd -P)
+elif [ -d "$(dirname "$hooks")" ]; then
+  hooks="$(cd "$(dirname "$hooks")" && pwd -P)/$(basename "$hooks")"
+fi
 
 case "$hooks/" in
   "$common"/*)
     # The target belongs to this repository. --force only lifts lefthook's refusal to install
-    # while core.hooksPath is set anywhere; the path it writes to was checked above.
-    exec lefthook install --force
+    # while core.hooksPath is set anywhere; the path it writes to was checked above. A failure
+    # here leaves hooks as they were, so it must not fail the whole install.
+    lefthook install --force || echo 'install-git-hooks: lefthook install failed; hooks left unchanged' >&2
     ;;
   *)
     echo "install-git-hooks: hooks path $hooks is outside this repository ($common); not installing lefthook hooks there" >&2
-    exit 0
     ;;
 esac
+exit 0
