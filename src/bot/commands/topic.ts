@@ -48,7 +48,8 @@ export async function handleTopicCommand(ctx: Ctx['Command'], group: Group): Pro
       return;
     }
 
-    // Set topic restriction
+    // Set topic restriction. AI history is scoped by Telegram message_thread_id,
+    // so switching topics does not expose or destroy another topic's context.
     database.groups.update(chatId, { active_topic_id: threadId });
     await sendMessage(
       `✅ Бот теперь слушает только этот топик (#${threadId})\n\n` +

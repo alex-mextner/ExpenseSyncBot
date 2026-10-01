@@ -16,6 +16,7 @@ mock.module('../utils/logger.ts', () => ({
 
 import { BudgetRepository } from '../database/repositories/budget.repository';
 import { CategoryRepository } from '../database/repositories/category.repository';
+import { ChatMessageRepository } from '../database/repositories/chat-message.repository';
 import { ExpenseRepository } from '../database/repositories/expense.repository';
 import { GroupRepository } from '../database/repositories/group.repository';
 import { PendingExpenseRepository } from '../database/repositories/pending-expense.repository';
@@ -115,6 +116,7 @@ let users: UserRepository;
 let expenses: ExpenseRepository;
 let budgets: BudgetRepository;
 let categories: CategoryRepository;
+let chatMessages: ChatMessageRepository;
 let pendingExpenses: PendingExpenseRepository;
 
 mock.module('../database', () => ({
@@ -133,6 +135,9 @@ mock.module('../database', () => ({
     },
     get categories() {
       return categories;
+    },
+    get chatMessages() {
+      return chatMessages;
     },
     get pendingExpenses() {
       return pendingExpenses;
@@ -168,6 +173,7 @@ beforeAll(() => {
   expenses = new ExpenseRepository(db);
   budgets = new BudgetRepository(db);
   categories = new CategoryRepository(db);
+  chatMessages = new ChatMessageRepository(db);
   pendingExpenses = new PendingExpenseRepository(db);
 });
 

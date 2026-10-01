@@ -85,6 +85,12 @@ beforeEach(() => {
 });
 
 describe('/topic — setting restriction', () => {
+  test('re-running /topic in the already active thread keeps its history', async () => {
+    await handleTopicCommand(fakeCtx('/topic', 42), fakeGroup({ active_topic_id: 42 }));
+
+    expect(mockGroups.update).toHaveBeenCalledWith(-100, { active_topic_id: 42 });
+  });
+
   test('called inside a topic — sets active_topic_id to that thread', async () => {
     await handleTopicCommand(fakeCtx('/topic', 42), fakeGroup());
 
