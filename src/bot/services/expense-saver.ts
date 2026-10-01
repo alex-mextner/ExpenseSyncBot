@@ -151,81 +151,103 @@ export async function saveExpenseBatch(
   commitExpensesToDb(groupId, userId, writes);
   logger.info(`[SAVE] ✅ Committed ${writes.length} expenses to DB`);
 
-  // Check budgets for affected categories (deduplicated)
-  const checkedCategories = new Set<string>();
-  for (const e of writes) {
-    if (!checkedCategories.has(e.category)) {
-      checkedCategories.add(e.category);
-      await checkBudgetLimit(groupId, e.category, e.date);
-    }
-  }
+  // Check all affected budgets once and emit at most one alert message for this batch.
+  await checkBudgetLimits(
+    groupId,
+    writes.map((expense) => expense.category),
+    currentDate,
+  );
 }
 
-/**
- * Check if budget limit is exceeded or approaching for a category
- */
-async function checkBudgetLimit(
+interface BudgetAlertLine {
+  severity: 'exceeded' | 'warning';
+  category: string;
+  line: string;
+  percentage: number;
+}
+
+async function collectBudgetAlert(
   groupId: number,
   category: string,
   currentDate: string,
-): Promise<void> {
+): Promise<BudgetAlertLine | null> {
   const now = new Date(currentDate);
   const currentMonth = format(now, 'yyyy-MM');
   const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
   const monthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-
   const budget = database.budgets.getBudgetForMonth(groupId, category, currentMonth);
+  if (!budget) return null;
 
-  if (!budget) {
-    return;
-  }
-
-  // sumByCategory returns EUR amounts — convert to budget currency for comparison and display
   const spentEur = database.expenses.sumByCategory(groupId, category, monthStart, monthEnd);
   const budgetCurrency = budget.currency as CurrencyCode;
   const spentInCurrency = convertCurrency(spentEur, 'EUR', budgetCurrency);
-
   const progress = computeBudgetProgress(budget, spentInCurrency);
+  if (!progress.is_exceeded && !progress.is_warning) return null;
 
-  if (progress.is_exceeded || progress.is_warning) {
-    const emoji = getCategoryEmoji(category);
-    const progressText = `${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(budget.limit_amount, budgetCurrency)} (${progress.percentage}%)`;
-    let message = '';
+  const emoji = getCategoryEmoji(category);
+  const progressText = `${formatAmount(spentInCurrency, budgetCurrency)} / ${formatAmount(
+    budget.limit_amount,
+    budgetCurrency,
+  )} (${progress.percentage}%)`;
+  const line = `${emoji} ${category}: ${progressText}`;
 
-    if (progress.is_exceeded) {
-      // Dedup: send once per month per category so repeated expenses don't spam.
-      const topic = `budget_threshold:${category}:exceeded`;
-      const monthStartISO = `${monthStart}T00:00:00`;
-      if (database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStartISO)) return;
+  if (progress.is_exceeded) {
+    const topic = `budget_threshold:${category}:exceeded`;
+    const monthStartISO = `${monthStart}T00:00:00`;
+    if (database.adviceLogs.hasTopicThisMonth(groupId, topic, monthStartISO)) return null;
 
-      message = `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n`;
-      message += `${emoji} ${category}: ${progressText}`;
+    database.adviceLogs.create({
+      group_id: groupId,
+      tier: 'alert',
+      trigger_type: 'budget_threshold',
+      trigger_data: JSON.stringify({
+        category,
+        spent: spentInCurrency,
+        limit: budget.limit_amount,
+        currency: budgetCurrency,
+      }),
+      topic,
+      advice_text: `🔴 ПРЕВЫШЕН БЮДЖЕТ!\n${line}`,
+    });
+    return { severity: 'exceeded', category, line, percentage: progress.percentage };
+  }
 
-      // Write before send to prevent race condition with concurrent expense additions.
-      database.adviceLogs.create({
-        group_id: groupId,
-        tier: 'alert',
-        trigger_type: 'budget_threshold',
-        trigger_data: JSON.stringify({
-          category,
-          spent: spentInCurrency,
-          limit: budget.limit_amount,
-          currency: budgetCurrency,
-        }),
-        topic,
-        advice_text: message,
-      });
-    } else if (progress.is_warning) {
-      message = `⚠️ Внимание! Приближение к лимиту бюджета:\n`;
-      message += `${emoji} ${category}: ${progressText}`;
-    }
+  return { severity: 'warning', category, line, percentage: progress.percentage };
+}
 
-    try {
-      await sendMessage(message);
-      logger.info(`[BUDGET] Sent warning for category "${category}": ${progress.percentage}%`);
-    } catch (error) {
-      logger.error({ err: error }, '[BUDGET] Failed to send warning');
-    }
+/** Check several categories and send one compact Telegram alert for the whole save batch. */
+async function checkBudgetLimits(
+  groupId: number,
+  categories: string[],
+  currentDate: string,
+): Promise<void> {
+  const alerts: BudgetAlertLine[] = [];
+  for (const category of [...new Set(categories)]) {
+    const alert = await collectBudgetAlert(groupId, category, currentDate);
+    if (alert) alerts.push(alert);
+  }
+  if (alerts.length === 0) return;
+
+  const exceeded = alerts.filter((alert) => alert.severity === 'exceeded');
+  const warnings = alerts.filter((alert) => alert.severity === 'warning');
+  const sections: string[] = [];
+  if (exceeded.length > 0) {
+    sections.push(`🔴 <b>ПРЕВЫШЕН БЮДЖЕТ!</b>\n${exceeded.map((alert) => alert.line).join('\n')}`);
+  }
+  if (warnings.length > 0) {
+    sections.push(
+      `⚠️ <b>Приближение к лимиту бюджета</b>\n${warnings.map((alert) => alert.line).join('\n')}`,
+    );
+  }
+
+  try {
+    await sendMessage(sections.join('\n\n'));
+    logger.info(
+      { categories: alerts.map((alert) => alert.category) },
+      `[BUDGET] Sent one aggregated alert for ${alerts.length} categor${alerts.length === 1 ? 'y' : 'ies'}`,
+    );
+  } catch (error) {
+    logger.error({ err: error }, '[BUDGET] Failed to send aggregated warning');
   }
 }
 
@@ -289,10 +311,8 @@ export async function saveReceiptExpenses(
   // Delete all processed receipt items (confirmed + skipped)
   database.receiptItems.deleteProcessedByPhotoQueueId(photoQueueId);
 
-  // Check budgets for affected categories
-  for (const category of result.categoriesAffected) {
-    await checkBudgetLimit(groupId, category, date);
-  }
+  // Check all affected budgets together so one receipt cannot produce an alert burst.
+  await checkBudgetLimits(groupId, result.categoriesAffected, date);
 
   // Notify user
   const totalItems = itemsWithCategory.length;

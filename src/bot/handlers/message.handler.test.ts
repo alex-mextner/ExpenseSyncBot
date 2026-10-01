@@ -237,6 +237,11 @@ mock.module('../../database', () => ({
   },
 }));
 
+const showNextPendingCategoryStepMock = mock(() => Promise.resolve(true));
+mock.module('../services/category-wizard', () => ({
+  showNextPendingCategoryStep: showNextPendingCategoryStepMock,
+}));
+
 // Dynamic-import target — must come AFTER all mock.module calls.
 const { handleExpenseMessage, buildBudgetAlertStatus } = await import('./message.handler');
 
@@ -360,6 +365,7 @@ function resetAllMocks(): void {
   mockReceiptItems.findWaitingForCategoryInput.mockReset().mockReturnValue(null);
   mockGroupMembers.upsert.mockReset();
   mockChatMessages.create.mockReset().mockImplementation(() => ({ id: 1 }));
+  showNextPendingCategoryStepMock.mockReset().mockResolvedValue(true);
   mockChatMessages.pruneOldMessagesIfNeeded.mockReset().mockReturnValue(0);
 
   logMock.error.mockClear();
@@ -660,15 +666,23 @@ describe('handleExpenseMessage — new category confirmation', () => {
     const [data] = mockPendingExpenses.create.mock.calls[0] ?? [];
     expect(data).toMatchObject({ status: 'pending_category' });
 
-    // A confirmation message with inline keyboard is sent
-    expect(sendMessageMock).toHaveBeenCalled();
-    const [text, opts] = sendMessageMock.mock.calls[0] ?? [];
-    expect(String(text)).toContain('экзотика');
-    const kb = (opts as { reply_markup?: unknown })?.reply_markup;
-    expect(kb).toBeDefined();
+    // Exactly one sequential wizard step is started for this Telegram message.
+    expect(showNextPendingCategoryStepMock).toHaveBeenCalledTimes(1);
+    expect(showNextPendingCategoryStepMock).toHaveBeenCalledWith(1, 500);
 
-    // No sheet save because category is unresolved
+    // No sheet save because category is unresolved.
     expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+  });
+
+  test('multiple unknown categories start one wizard prompt, not one prompt per category', async () => {
+    const ctx = fakeMessageCtx('100 EUR альфа\n200 EUR бета\n300 EUR гамма');
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(true);
+    expect(mockPendingExpenses.create).toHaveBeenCalledTimes(3);
+    expect(showNextPendingCategoryStepMock).toHaveBeenCalledTimes(1);
+    expect(showNextPendingCategoryStepMock).toHaveBeenCalledWith(1, 500);
   });
 
   test('fuzzy match resolves unknown → existing category, saves directly', async () => {
