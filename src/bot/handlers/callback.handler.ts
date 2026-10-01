@@ -44,7 +44,14 @@ import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/dis
 import { cancelPendingFeedback } from '../commands/feedback';
 import { handleSettingsCallback } from '../commands/settings';
 import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
-import { saveExpenseToSheet, saveReceiptExpenses } from '../services/expense-saver';
+import {
+  getPendingCategoryExpense,
+  getPendingCategorySiblings,
+  queueCategoryBudgetPrompt,
+  showNextPendingCategoryStep,
+  takeQueuedCategoryBudgetPrompts,
+} from '../services/category-wizard';
+import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
 import { trackMembership } from './message.handler';
@@ -509,6 +516,23 @@ export async function handleCallbackQuery(
   }
 }
 
+async function advanceCategoryWizard(
+  userId: number,
+  group: Group,
+  sourceMessageId: number,
+): Promise<void> {
+  if (await showNextPendingCategoryStep(userId, sourceMessageId)) return;
+
+  // Category confirmation is complete. Only now surface deferred budget actions,
+  // so the user never has several different actionable wizard messages at once.
+  for (const category of takeQueuedCategoryBudgetPrompts(userId, sourceMessageId)) {
+    const keyboard = createBudgetPromptKeyboard(category, group.default_currency);
+    await sendMessage(`💰 Хочешь установить бюджет для категории "${category}"?`, {
+      reply_markup: keyboard,
+    });
+  }
+}
+
 /**
  * Handle category-related callbacks
  */
@@ -531,139 +555,168 @@ async function handleCategoryAction(
 
   switch (subAction) {
     case 'add': {
-      // Add new category
-      const categoryName = rest.join(':');
-      database.categories.create({ group_id: group.id, name: categoryName });
+      // New protocol: category:add:<pendingExpenseId>. Old name-based callbacks are
+      // intentionally rejected: guessing a current pending row from stale UI can save
+      // the wrong financial record.
+      const requestedId = Number.parseInt(rest[0] ?? '', 10);
+      if (Number.isNaN(requestedId)) {
+        await ctx.answerCallbackQuery({ text: 'Кнопка устарела — отправь расход снова' });
+        return;
+      }
+      const pending = getPendingCategoryExpense(user.id, requestedId);
 
+      if (!pending?.detected_category) {
+        await ctx.answerCallbackQuery({ text: 'Расход уже обработан' });
+        return;
+      }
+
+      const categoryName = pending.detected_category;
+      const categoryAlreadyExists = database.categories.exists(group.id, categoryName);
+      if (!categoryAlreadyExists) {
+        database.categories.create({ group_id: group.id, name: categoryName });
+      }
       await ctx.answerCallbackQuery({
-        text: MESSAGES.categoryAdded.replace('{category}', categoryName),
+        text: categoryAlreadyExists
+          ? `Категория уже существует: ${categoryName}`
+          : MESSAGES.categoryAdded.replace('{category}', categoryName),
       });
 
-      // Delete the button message
       const messageId = ctx.message?.id;
-      const chatId = ctx.message?.chat?.id;
-      if (messageId && chatId) {
+      const callbackChatId = ctx.message?.chat?.id;
+      if (messageId && callbackChatId) {
         try {
-          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+          await bot.api.deleteMessage({ chat_id: callbackChatId, message_id: messageId });
         } catch (err) {
           logger.error({ err }, '[CALLBACK] Failed to delete category add message');
         }
       }
 
-      // Find and save pending expense
-      const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
-      const pending = pendingExpenses.find(
-        (p) => p.detected_category === categoryName && p.status === 'pending_category',
-      );
+      const siblings = getPendingCategorySiblings(user.id, pending);
+      for (const expense of siblings) {
+        database.pendingExpenses.update(expense.id, { status: 'confirmed' });
+      }
 
       let expenseSaved = false;
-      if (pending) {
-        database.pendingExpenses.update(pending.id, { status: 'confirmed' });
+      if (siblings.length > 0) {
         try {
-          await saveExpenseToSheet(user.id, group.id, pending.id);
+          await saveExpenseBatch(
+            user.id,
+            group.id,
+            siblings.map((expense) => expense.id),
+          );
           expenseSaved = true;
         } catch (error) {
-          logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
-          database.pendingExpenses.delete(pending.id);
-          if (chatId) {
-            await sendMessage(getSheetErrorMessage(error));
-          }
+          logger.error({ err: error }, '[CALLBACK] Failed to save category-wizard batch');
+          for (const expense of siblings) database.pendingExpenses.delete(expense.id);
+          if (callbackChatId) await sendMessage(getSheetErrorMessage(error));
         }
       }
 
-      // Prompt for budget setup only if expense was saved
-      if (expenseSaved && chatId) {
-        const keyboard = createBudgetPromptKeyboard(categoryName, group.default_currency);
-        await sendMessage(`💰 Хочешь установить бюджет для категории "${categoryName}"?`, {
-          reply_markup: keyboard,
-        });
+      if (expenseSaved && !categoryAlreadyExists) {
+        queueCategoryBudgetPrompt(user.id, pending.message_id, categoryName);
       }
-
+      await advanceCategoryWizard(user.id, group, pending.message_id);
       break;
     }
 
     case 'select': {
-      // Show existing categories
-      const categories = database.categories.findByGroupId(group.id);
+      const pendingId = Number.parseInt(rest[0] ?? '', 10);
+      if (Number.isNaN(pendingId)) {
+        await ctx.answerCallbackQuery({ text: 'Кнопка устарела — отправь расход снова' });
+        return;
+      }
+      const pending = getPendingCategoryExpense(user.id, pendingId);
+      if (!pending) {
+        await ctx.answerCallbackQuery({ text: 'Расход уже обработан' });
+        return;
+      }
 
+      const categories = database.categories.findByGroupId(group.id);
       if (categories.length === 0) {
         await ctx.answerCallbackQuery({ text: 'Нет сохраненных категорий' });
         return;
       }
 
-      const keyboard = createCategoriesListKeyboard(categories);
+      const keyboard = createCategoriesListKeyboard(categories, pending.id);
       await ctx.editReplyMarkup(keyboard);
       await ctx.answerCallbackQuery({ text: 'Выбери категорию' });
       break;
     }
 
     case 'choose': {
-      // Choose existing category by ID
-      const categoryId = Number.parseInt(rest[0] ?? '', 10);
-
-      if (Number.isNaN(categoryId)) {
+      // New protocol: category:choose:<pendingExpenseId>:<categoryId>.
+      if (rest.length < 2) {
+        await ctx.answerCallbackQuery({ text: 'Кнопка устарела — отправь расход снова' });
+        return;
+      }
+      const pendingId = Number.parseInt(rest[0] ?? '', 10);
+      const categoryId = Number.parseInt(rest[1] ?? '', 10);
+      if (Number.isNaN(pendingId) || Number.isNaN(categoryId)) {
         await ctx.answerCallbackQuery({ text: 'Некорректные данные' });
         return;
       }
 
+      const pending = getPendingCategoryExpense(user.id, pendingId);
       const categoryRecord = database.categories.findById(categoryId);
-
-      if (!categoryRecord) {
-        await ctx.answerCallbackQuery({ text: 'Категория не найдена' });
+      if (!pending || !categoryRecord) {
+        await ctx.answerCallbackQuery({
+          text: pending ? 'Категория не найдена' : 'Расход уже обработан',
+        });
         return;
       }
 
-      const categoryName = categoryRecord.name;
-
-      // Find pending expense for this user
-      const pendingExpenses = database.pendingExpenses.findByUserId(user.id);
-      const pending = pendingExpenses.find((p) => p.status === 'pending_category');
-
-      if (!pending) {
-        await ctx.answerCallbackQuery({ text: 'Расход не найден' });
-        return;
+      const siblings = getPendingCategorySiblings(user.id, pending);
+      for (const expense of siblings) {
+        database.pendingExpenses.update(expense.id, {
+          detected_category: categoryRecord.name,
+          status: 'confirmed',
+        });
       }
+      await ctx.answerCallbackQuery({ text: `Категория: ${categoryRecord.name}` });
 
-      // Update category
-      database.pendingExpenses.update(pending.id, {
-        detected_category: categoryName,
-        status: 'confirmed',
-      });
-
-      await ctx.answerCallbackQuery({ text: `Категория: ${categoryName}` });
-
-      // Delete the button message
       const messageId = ctx.message?.id;
-      const chatId = ctx.message?.chat?.id;
-      if (messageId && chatId) {
+      const callbackChatId = ctx.message?.chat?.id;
+      if (messageId && callbackChatId) {
         try {
-          await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+          await bot.api.deleteMessage({ chat_id: callbackChatId, message_id: messageId });
         } catch (err) {
           logger.error({ err }, '[CALLBACK] Failed to delete category message');
         }
       }
 
-      // Save expense
       try {
-        await saveExpenseToSheet(user.id, group.id, pending.id);
+        await saveExpenseBatch(
+          user.id,
+          group.id,
+          siblings.map((expense) => expense.id),
+        );
       } catch (error) {
-        logger.error({ err: error }, `[CALLBACK] Failed to save expense to sheet`);
-        database.pendingExpenses.delete(pending.id);
-        if (chatId) {
-          await sendMessage(getSheetErrorMessage(error));
-        }
+        logger.error({ err: error }, '[CALLBACK] Failed to save category-wizard batch');
+        for (const expense of siblings) database.pendingExpenses.delete(expense.id);
+        if (callbackChatId) await sendMessage(getSheetErrorMessage(error));
       }
+      await advanceCategoryWizard(user.id, group, pending.message_id);
       break;
     }
 
     case 'cancel': {
       await ctx.answerCallbackQuery({ text: 'Отменено' });
+      const pendingId = Number.parseInt(rest[0] ?? '', 10);
+      const pending = Number.isNaN(pendingId)
+        ? null
+        : getPendingCategoryExpense(user.id, pendingId);
 
-      // Delete the button message
       const messageId = ctx.message?.id;
-      const chatId = ctx.message?.chat?.id;
-      if (messageId && chatId) {
-        await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+      const callbackChatId = ctx.message?.chat?.id;
+      if (messageId && callbackChatId) {
+        await bot.api.deleteMessage({ chat_id: callbackChatId, message_id: messageId });
+      }
+
+      if (pending) {
+        for (const expense of getPendingCategorySiblings(user.id, pending)) {
+          database.pendingExpenses.delete(expense.id);
+        }
+        await advanceCategoryWizard(user.id, group, pending.message_id);
       }
       break;
     }

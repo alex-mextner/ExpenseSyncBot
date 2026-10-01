@@ -51,6 +51,7 @@ const mockCategories = {
   findById: mock(() => null),
 };
 const mockPendingExpenses = {
+  findById: mock(() => null),
   findByUserId: mock(() => []),
   update: mock(() => undefined),
   delete: mock(() => undefined),
@@ -148,8 +149,9 @@ mock.module('../../services/bank/sync-service', () => ({
 }));
 
 // ─── expense saver / budget manager / sheet errors / keyboards ─────────────────
+const saveExpenseBatchMock = mock(() => Promise.resolve());
 mock.module('../services/expense-saver', () => ({
-  saveExpenseToSheet: mock(() => Promise.resolve()),
+  saveExpenseBatch: saveExpenseBatchMock,
   saveReceiptExpenses: mock(() => Promise.resolve()),
 }));
 
@@ -165,6 +167,27 @@ mock.module('../services/sheet-errors', () => ({
 mock.module('../keyboards', () => ({
   createBudgetPromptKeyboard: mock(() => ({ inline_keyboard: [] })),
   createCategoriesListKeyboard: mock(() => ({ inline_keyboard: [] })),
+  createCategoryConfirmKeyboard: mock(() => ({ inline_keyboard: [] })),
+}));
+
+const getPendingCategoryExpenseMock = mock<
+  (userId: number, pendingExpenseId: number) => import('../../database/types').PendingExpense | null
+>(() => null);
+const getPendingCategorySiblingsMock = mock<
+  (
+    userId: number,
+    current: import('../../database/types').PendingExpense,
+  ) => import('../../database/types').PendingExpense[]
+>(() => []);
+const queueCategoryBudgetPromptMock = mock(() => undefined);
+const showNextPendingCategoryStepMock = mock(() => Promise.resolve(true));
+const takeQueuedCategoryBudgetPromptsMock = mock(() => [] as string[]);
+mock.module('../services/category-wizard', () => ({
+  getPendingCategoryExpense: getPendingCategoryExpenseMock,
+  getPendingCategorySiblings: getPendingCategorySiblingsMock,
+  queueCategoryBudgetPrompt: queueCategoryBudgetPromptMock,
+  showNextPendingCategoryStep: showNextPendingCategoryStepMock,
+  takeQueuedCategoryBudgetPrompts: takeQueuedCategoryBudgetPromptsMock,
 }));
 
 // trackMembership lives in the sibling message.handler — mock it to avoid pulling in the whole handler.
@@ -233,6 +256,12 @@ const resetables: ReturnType<typeof mock>[] = [
   sendOldMock,
   skipOldMock,
   setBudgetMock,
+  saveExpenseBatchMock,
+  getPendingCategoryExpenseMock,
+  getPendingCategorySiblingsMock,
+  queueCategoryBudgetPromptMock,
+  showNextPendingCategoryStepMock,
+  takeQueuedCategoryBudgetPromptsMock,
   devMock,
   mockMerchantRules.updateStatus,
   mockGroups.findByTelegramGroupId,
@@ -261,6 +290,15 @@ afterEach(() => {
     telegram_id: 42,
     group_id: 1,
   }));
+  mockCategories.exists.mockImplementation(() => true);
+  mockCategories.create.mockImplementation(() => undefined);
+  mockCategories.findByGroupId.mockImplementation(() => []);
+  mockCategories.findById.mockImplementation(() => null);
+  getPendingCategoryExpenseMock.mockReturnValue(null);
+  getPendingCategorySiblingsMock.mockReturnValue([]);
+  showNextPendingCategoryStepMock.mockResolvedValue(true);
+  takeQueuedCategoryBudgetPromptsMock.mockReturnValue([]);
+  saveExpenseBatchMock.mockResolvedValue(undefined);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -529,6 +567,42 @@ describe('handleCallbackQuery — routing table', () => {
   });
 
   describe('category / budget actions (require group lookup)', () => {
+    test('legacy name-based category add is rejected instead of guessing a pending expense', async () => {
+      const ctx = fakeCallbackCtx('category:add:Животные');
+      await handleCallbackQuery(ctx as never, fakeBot() as never);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('устарела') }),
+      );
+      expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+    });
+
+    test('category add is bound to pending id, batches duplicate rows, then advances one wizard step', async () => {
+      const pending = {
+        id: 77,
+        user_id: 10,
+        message_id: 500,
+        parsed_amount: 100,
+        parsed_currency: 'EUR' as const,
+        detected_category: 'Животные',
+        comment: '',
+        status: 'pending_category' as const,
+        created_at: '2026-10-01 00:00:00',
+      };
+      getPendingCategoryExpenseMock.mockReturnValue(pending);
+      getPendingCategorySiblingsMock.mockReturnValue([pending]);
+      mockCategories.exists.mockReturnValue(false);
+
+      const ctx = fakeCallbackCtx('category:add:77');
+      await handleCallbackQuery(ctx as never, fakeBot() as never);
+
+      expect(mockCategories.create).toHaveBeenCalledWith({ group_id: 1, name: 'Животные' });
+      expect(mockPendingExpenses.update).toHaveBeenCalledWith(77, { status: 'confirmed' });
+      expect(saveExpenseBatchMock).toHaveBeenCalledWith(10, 1, [77]);
+      expect(queueCategoryBudgetPromptMock).toHaveBeenCalledWith(10, 500, 'Животные');
+      expect(showNextPendingCategoryStepMock).toHaveBeenCalledWith(10, 500);
+    });
+
     test('routes "category:cancel" → answer + deleteMessage', async () => {
       const ctx = fakeCallbackCtx('category:cancel');
       const bot = fakeBot();

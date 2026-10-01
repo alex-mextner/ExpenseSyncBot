@@ -133,49 +133,35 @@ export function createDefaultCurrencyKeyboard(enabledCurrencies: string[]): Inli
 }
 
 /**
- * Truncate callback_data to fit Telegram's 64-byte limit.
- * Avoids splitting multi-byte (Cyrillic) characters.
+ * Create a category-confirmation step bound to one pending expense.
+ * Callback data uses only numeric IDs: names can be long/Cyrillic and must never
+ * be truncated into ambiguous identifiers.
  */
-function fitCallbackData(prefix: string, value: string): string {
-  const full = `${prefix}${value}`;
-  const encoder = new TextEncoder();
-  const encoded = encoder.encode(full);
-  if (encoded.length <= 64) return full;
-  const decoder = new TextDecoder();
-  // Slice at 64 bytes and decode — TextDecoder handles partial multi-byte gracefully
-  return decoder.decode(encoded.slice(0, 64)).replace(/\uFFFD$/, '');
-}
-
-/**
- * Create category confirmation keyboard
- */
-export function createCategoryConfirmKeyboard(category: string): InlineKeyboard {
+export function createCategoryConfirmKeyboard(pendingExpenseId: number): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   keyboard
-    .text(KEYBOARD_TEXTS.addNewCategory, fitCallbackData('category:add:', category))
+    .text(KEYBOARD_TEXTS.addNewCategory, `category:add:${pendingExpenseId}`)
     .row()
-    .text(KEYBOARD_TEXTS.selectExistingCategory, 'category:select')
+    .text(KEYBOARD_TEXTS.selectExistingCategory, `category:select:${pendingExpenseId}`)
     .row()
-    .text(KEYBOARD_TEXTS.skip, 'category:cancel');
+    .text(KEYBOARD_TEXTS.skip, `category:cancel:${pendingExpenseId}`);
 
   return keyboard;
 }
 
-/**
- * Create existing categories keyboard.
- * Uses category IDs in callback_data to avoid 64-byte limit overflow for long names.
- */
+/** Create an existing-category picker for one exact pending expense. */
 export function createCategoriesListKeyboard(
   categories: Array<{ id: number; name: string }>,
+  pendingExpenseId: number,
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   for (const category of categories) {
-    keyboard.text(category.name, `category:choose:${category.id}`).row();
+    keyboard.text(category.name, `category:choose:${pendingExpenseId}:${category.id}`).row();
   }
 
-  keyboard.text(KEYBOARD_TEXTS.cancel, 'category:cancel');
+  keyboard.text(KEYBOARD_TEXTS.cancel, `category:cancel:${pendingExpenseId}`);
 
   return keyboard;
 }

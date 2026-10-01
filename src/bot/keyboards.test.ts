@@ -126,64 +126,21 @@ describe('createDefaultCurrencyKeyboard', () => {
 });
 
 describe('createCategoryConfirmKeyboard', () => {
-  const category = 'Groceries';
-  const kb = createCategoryConfirmKeyboard(category);
+  const pendingExpenseId = 987654;
+  const kb = createCategoryConfirmKeyboard(pendingExpenseId);
 
-  it('returns an InlineKeyboard with buttons', () => {
-    expect(allButtons(kb).length).toBeGreaterThan(0);
+  it('binds every action to the exact pending expense id', () => {
+    const data = allButtons(kb).map((button) => button.callback_data);
+    expect(data).toContain('category:add:987654');
+    expect(data).toContain('category:select:987654');
+    expect(data).toContain('category:cancel:987654');
   });
 
-  it('add button callback includes category name', () => {
-    const buttons = allButtons(kb);
-    const addBtn = buttons.find((b) => b.callback_data?.startsWith('category:add:'));
-    expect(addBtn).toBeTruthy();
-    expect(addBtn?.callback_data).toContain(category);
-  });
-
-  it('select button callback is category:select', () => {
-    const buttons = allButtons(kb);
-    const selectBtn = buttons.find((b) => b.callback_data === 'category:select');
-    expect(selectBtn).toBeTruthy();
-  });
-
-  it('cancel button callback is category:cancel', () => {
-    const buttons = allButtons(kb);
-    const cancelBtn = buttons.find((b) => b.callback_data === 'category:cancel');
-    expect(cancelBtn).toBeTruthy();
-  });
-
-  it('all buttons have non-empty text', () => {
-    for (const btn of allButtons(kb)) {
-      expect(btn.text.length).toBeGreaterThan(0);
+  it('all callbacks stay safely below Telegram 64-byte limit', () => {
+    const encoder = new TextEncoder();
+    for (const button of allButtons(kb)) {
+      expect(encoder.encode(button.callback_data ?? '').length).toBeLessThanOrEqual(64);
     }
-  });
-
-  it('truncates callback_data for long category names to fit 64-byte limit', () => {
-    const longCategory = 'Абвгдежзиклмнопрстуфхцчшщэюя';
-    const kb = createCategoryConfirmKeyboard(longCategory);
-    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
-    const encoder = new TextEncoder();
-    expect(encoder.encode(addBtn?.callback_data ?? '').length).toBeLessThanOrEqual(64);
-  });
-
-  it('regression: Cyrillic category with 20+ chars stays within 64-byte limit', () => {
-    // Bug: "Продукты питания и напитки" (50 Cyrillic bytes + 13 prefix bytes = 63+)
-    // caused BUTTON_DATA_INVALID from Telegram API
-    const cyrillicCategory = 'Продукты питания и напитки домашние';
-    const kb = createCategoryConfirmKeyboard(cyrillicCategory);
-    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
-    const encoder = new TextEncoder();
-    const byteLength = encoder.encode(addBtn?.callback_data ?? '').length;
-    expect(byteLength).toBeLessThanOrEqual(64);
-    // Truncated but still a valid string (no broken UTF-8)
-    expect(addBtn?.callback_data).toStartWith('category:add:');
-    expect(addBtn?.callback_data?.length).toBeGreaterThan('category:add:'.length);
-  });
-
-  it('regression: short ASCII category is not truncated', () => {
-    const kb = createCategoryConfirmKeyboard('Food');
-    const addBtn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:add:'));
-    expect(addBtn?.callback_data).toBe('category:add:Food');
   });
 });
 
@@ -195,55 +152,28 @@ describe('createCategoriesListKeyboard', () => {
   ];
 
   it('shows a button for each category', () => {
-    const kb = createCategoriesListKeyboard(cats);
+    const kb = createCategoriesListKeyboard(cats, 77);
     const texts = allButtons(kb).map((b) => b.text);
     expect(texts).toContain('Food');
     expect(texts).toContain('Transport');
     expect(texts).toContain('Health');
   });
 
-  it('category buttons have callback_data category:choose:<id>', () => {
-    const kb = createCategoriesListKeyboard([{ id: 42, name: 'Food' }]);
-    const btn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:choose:'));
-    expect(btn?.callback_data).toBe('category:choose:42');
+  it('binds category choice and cancel to the pending expense', () => {
+    const kb = createCategoriesListKeyboard([{ id: 42, name: 'Food' }], 77);
+    const data = allButtons(kb).map((b) => b.callback_data);
+    expect(data).toContain('category:choose:77:42');
+    expect(data).toContain('category:cancel:77');
   });
 
-  it('cancel button always present', () => {
-    const kb = createCategoriesListKeyboard([{ id: 1, name: 'Food' }]);
-    const cancelBtn = allButtons(kb).find((b) => b.callback_data === 'category:cancel');
-    expect(cancelBtn).toBeTruthy();
-  });
-
-  it('empty categories list still has cancel button', () => {
-    const kb = createCategoriesListKeyboard([]);
-    const cancelBtn = allButtons(kb).find((b) => b.callback_data === 'category:cancel');
-    expect(cancelBtn).toBeTruthy();
-  });
-
-  it('regression: uses numeric ID, not category name, in callback_data', () => {
-    // Bug: long Cyrillic names in callback_data exceeded Telegram's 64-byte limit
-    // causing BUTTON_DATA_INVALID (400 error) → "Internal error!" for users
-    const longCyrillicName = 'Продукты питания и напитки домашние';
-    const kb = createCategoriesListKeyboard([{ id: 7, name: longCyrillicName }]);
-    const btn = allButtons(kb).find((b) => b.callback_data?.startsWith('category:choose:'));
-    // callback_data must contain the numeric ID, not the name
-    expect(btn?.callback_data).toBe('category:choose:7');
-    // button text still shows the human-readable name
-    expect(btn?.text).toBe(longCyrillicName);
-  });
-
-  it('regression: callback_data always within 64-byte limit regardless of name length', () => {
-    const categories = [
-      { id: 1, name: 'Абвгдежзиклмнопрстуфхцчшщэюяабвгдежзиклмнопрстуфхцчшщэюя' },
-      { id: 999999, name: 'Ресторан' },
-    ];
-    const kb = createCategoriesListKeyboard(categories);
+  it('uses numeric IDs, so long names never inflate callback_data', () => {
+    const longName = 'Продукты питания и напитки домашние'.repeat(4);
+    const kb = createCategoriesListKeyboard([{ id: 999999, name: longName }], 123456);
     const encoder = new TextEncoder();
-    for (const btn of allButtons(kb)) {
-      if (btn.callback_data) {
-        expect(encoder.encode(btn.callback_data).length).toBeLessThanOrEqual(64);
-      }
+    for (const button of allButtons(kb)) {
+      expect(encoder.encode(button.callback_data ?? '').length).toBeLessThanOrEqual(64);
     }
+    expect(allButtons(kb)[0]?.text).toBe(longName);
   });
 });
 

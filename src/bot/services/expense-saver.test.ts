@@ -506,6 +506,37 @@ describe('saveExpenseBatch', () => {
     );
   });
 
+  it('aggregates multiple over-budget categories into one Telegram alert', async () => {
+    const pe1 = makePendingExpense(10, { detected_category: 'Продукты' });
+    const pe2 = makePendingExpense(11, { detected_category: 'Транспорт' });
+    mockPendingExpenseFindById.mockImplementation((id: number) => {
+      if (id === 10) return pe1;
+      if (id === 11) return pe2;
+      return null;
+    });
+    mockBudgetsGetForMonth.mockImplementation((...args: unknown[]) => {
+      const category = args[1] as string;
+      return {
+        id: category === 'Продукты' ? 1 : 2,
+        category,
+        limit_amount: 100,
+        currency: 'EUR',
+        month: '2024-01',
+      };
+    });
+    mockExpenseSumByCategory.mockReturnValue(150);
+    convertCurrency.mockReturnValue(150);
+
+    await saveExpenseBatch(TEST_USER_ID, TEST_GROUP_ID, [10, 11]);
+
+    const budgetMessages = sentMessages.filter((message) =>
+      message.text.includes('ПРЕВЫШЕН БЮДЖЕТ'),
+    );
+    expect(budgetMessages).toHaveLength(1);
+    expect(budgetMessages[0]?.text).toContain('Продукты');
+    expect(budgetMessages[0]?.text).toContain('Транспорт');
+  });
+
   it('checks budget limits after commit (deduplicated by category)', async () => {
     const pe1 = makePendingExpense(10, { detected_category: 'Продукты' });
     const pe2 = makePendingExpense(11, { detected_category: 'Продукты' });

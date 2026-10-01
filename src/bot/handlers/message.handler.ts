@@ -1,5 +1,5 @@
 /** Text message handler — parses expense messages, handles receipt links, and routes AI mentions */
-import { BASE_CURRENCY, type CurrencyCode, MESSAGES } from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { computeBudgetProgress } from '../../database/repositories/budget.repository';
@@ -18,7 +18,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
-import { createCategoryConfirmKeyboard } from '../keyboards';
+import { showNextPendingCategoryStep } from '../services/category-wizard';
 import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
@@ -456,15 +456,13 @@ export async function handleExpenseMessage(
     await sendMessage(summaryLines.join('\n'));
   }
 
-  // If there are new categories, ask for confirmation
+  // If there are new categories, show exactly one active wizard step. The callback
+  // advances to the next pending category after add/choose/cancel.
   if (newCategories.length > 0) {
-    logger.info(`[MSG] Asking for confirmation of ${newCategories.length} new categories`);
-    for (const category of newCategories) {
-      const keyboard = createCategoryConfirmKeyboard(category);
-      await sendMessage(MESSAGES.newCategoryDetected.replace('{category}', category), {
-        reply_markup: keyboard,
-      });
-    }
+    logger.info(
+      `[MSG] Starting sequential confirmation for ${newCategories.length} new categories`,
+    );
+    await showNextPendingCategoryStep(user.id, messageId);
     return true;
   }
 
