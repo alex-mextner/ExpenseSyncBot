@@ -2,8 +2,8 @@
  * Unified AI streaming round with automatic provider fallback.
  *
  * Three chains, selected via options.chain:
- *   SMART: z.ai ${AI_MODEL}      → Gemini ${GEMINI_MODEL}      → HF ${HF_MODEL}
- *   FAST:  z.ai ${AI_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
+ *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Gemini ${GEMINI_MODEL} → HF ${HF_MODEL}
+ *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
  *   OCR:   Gemini ${GEMINI_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
  *
  * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
@@ -22,10 +22,11 @@
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
-import { geminiClient, hfClient, zaiClient } from './clients';
+import { geminiClient, groqClient, hfClient, zaiClient } from './clients';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
+  recordProviderRateLimit,
   recordProviderReachable,
   recordProviderResponded,
 } from './provider-breaker';
@@ -35,6 +36,14 @@ const logger = createLogger('ai-streaming');
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const DEFAULT_TEMPERATURE = 0.3;
+
+/**
+ * Per-provider wall-clock budget. Each provider in the fallback chain gets its
+ * own fresh timeout — a slow/hung provider aborts after this and the loop tries
+ * the next one with a clean signal. NOT shared across providers, so one stuck
+ * provider does not poison the fallback chain.
+ */
+const PER_PROVIDER_TIMEOUT_MS = 45_000;
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -63,7 +72,10 @@ export interface StreamRoundOptions {
   temperature?: number;
   /** Which chain to run. Default: 'smart'. */
   chain?: ChainName;
+  /** Overall caller deadline. When aborted, the fallback chain stops immediately. */
   signal?: AbortSignal;
+  /** Per-provider timeout override (defaults to PER_PROVIDER_TIMEOUT_MS). For tests. */
+  perProviderTimeoutMs?: number;
 }
 
 export interface StreamCallbacks {
@@ -72,6 +84,17 @@ export interface StreamCallbacks {
 }
 
 // ── Error helpers (exported for tests) ──────────────────────────────────────
+
+/**
+ * Build an Error classified as an abort. A plain Error with name='AbortError'
+ * (not a DOMException) so upstream `error.name === 'AbortError'` checks match
+ * the existing convention and the timeout user message fires.
+ */
+function makeAbortError(message: string): Error {
+  const err = new Error(message);
+  err.name = 'AbortError';
+  return err;
+}
 
 // Internal tag: marks a thrown stream error as "the provider had already emitted output (text or a
 // tool-call chunk) before failing" — i.e. it was reachable. A Symbol keeps it off any real error
@@ -121,23 +144,57 @@ export function isRetryableError(error: unknown): boolean {
   return false;
 }
 
+function readErrorHeader(error: unknown, name: string): string | undefined {
+  const headers = (error as { headers?: unknown } | null | undefined)?.headers;
+  if (!headers || typeof headers !== 'object') return undefined;
+  const maybeGet = (headers as { get?: (key: string) => string | null }).get;
+  if (typeof maybeGet === 'function') {
+    return maybeGet.call(headers, name) ?? undefined;
+  }
+  const record = headers as Record<string, unknown>;
+  const value = record[name] ?? record[name.toLowerCase()];
+  return typeof value === 'string' ? value : undefined;
+}
+
 /** Exponential backoff: 2s → 6s → 18s capped at 30s. 429 uses Retry-After if present. */
 export function getBackoffDelay(attempt: number, error: unknown): number {
-  // Read 429 structurally so the aggregate chain error (a plain Error with a copied status) also
-  // gets the rate-limit backoff, not the generic exponential one. Retry-After is read only off a
-  // real APIError — a chain-wide 429 aggregate loses the provider's Retry-After and uses the flat
-  // 5000ms floor; a 529 aggregate falls to the exponential path (acceptable, low frequency).
   if (numericStatus(error) === 429) {
-    if (error instanceof OpenAI.APIError) {
-      const retryAfter = error.headers?.['retry-after'];
-      if (retryAfter) {
-        const seconds = Number.parseInt(retryAfter, 10);
-        if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
-      }
+    const retryAfter = readErrorHeader(error, 'retry-after');
+    if (retryAfter) {
+      const seconds = Number.parseFloat(retryAfter);
+      if (!Number.isNaN(seconds) && seconds > 0) return Math.min(seconds * 1000, 30_000);
     }
     return 5000;
   }
   return Math.min(2000 * 3 ** attempt, 30_000);
+}
+
+/**
+ * Cooldown used to move a rate-limited provider to the back of subsequent chains.
+ * Prefer Retry-After. For quota messages that include an ISO reset timestamp, honor that reset.
+ * Otherwise use five minutes so a quota-limited head provider does not penalize every request.
+ */
+export function getRateLimitCooldownMs(error: unknown, now = Date.now()): number {
+  const retryAfter = readErrorHeader(error, 'retry-after');
+  if (retryAfter) {
+    const seconds = Number.parseFloat(retryAfter);
+    if (!Number.isNaN(seconds) && seconds > 0) return Math.max(1_000, seconds * 1000);
+  }
+
+  const text = errorText(error);
+  if (/reset|quota|limit/i.test(text)) {
+    const iso = text.match(
+      /20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/i,
+    )?.[0];
+    if (iso) {
+      const resetAt = Date.parse(iso);
+      if (Number.isFinite(resetAt) && resetAt > now) {
+        return Math.max(1_000, resetAt - now + 1_000);
+      }
+    }
+  }
+
+  return 5 * 60_000;
 }
 
 // ── Provider slots ──────────────────────────────────────────────────────────
@@ -285,15 +342,26 @@ function streamingSlot(
 // Lazy — read env on each build so tests can mock env per-test.
 
 function buildSmartChain(): ProviderSlot[] {
-  return [
+  const chain: ProviderSlot[] = [];
+  if (env.GROQ_API_KEY) {
+    chain.push(streamingSlot(`Groq (${env.GROQ_MODEL})`, 'groq', groqClient, env.GROQ_MODEL));
+  }
+  chain.push(
     streamingSlot(`z.ai (${env.AI_MODEL})`, 'zai', zaiClient, env.AI_MODEL),
     streamingSlot(`Gemini (${env.GEMINI_MODEL})`, 'gemini', geminiClient, env.GEMINI_MODEL),
     streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL),
-  ];
+  );
+  return chain;
 }
 
 function buildFastChain(): ProviderSlot[] {
-  return [
+  const chain: ProviderSlot[] = [];
+  if (env.GROQ_API_KEY) {
+    chain.push(
+      streamingSlot(`Groq (${env.GROQ_FAST_MODEL})`, 'groq', groqClient, env.GROQ_FAST_MODEL),
+    );
+  }
+  chain.push(
     streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, 'zai', zaiClient, env.AI_FAST_MODEL),
     streamingSlot(
       `Gemini (${env.GEMINI_FAST_MODEL})`,
@@ -302,7 +370,8 @@ function buildFastChain(): ProviderSlot[] {
       env.GEMINI_FAST_MODEL,
     ),
     streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL),
-  ];
+  );
+  return chain;
 }
 
 function buildOcrChain(): ProviderSlot[] {
@@ -414,11 +483,29 @@ export async function aiStreamRound(
   }
 
   const providerErrors: Array<{ name: string; error: Error }> = [];
+  const perProviderTimeoutMs = options.perProviderTimeoutMs ?? PER_PROVIDER_TIMEOUT_MS;
 
   for (const slot of chain) {
+    // Overall caller deadline already passed — trying more providers is pointless.
+    if (options.signal?.aborted) {
+      logger.warn('[AI_STREAM] Overall deadline exceeded, stopping fallback chain');
+      throw makeAbortError('AI overall deadline exceeded');
+    }
+
+    // Each provider gets its own fresh timeout combined with the overall signal.
+    // A slow provider aborts after perProviderTimeoutMs without poisoning the next one.
+    const perProviderController = new AbortController();
+    const perProviderTimeout = setTimeout(
+      () => perProviderController.abort(),
+      perProviderTimeoutMs,
+    );
+    const combinedSignal = options.signal
+      ? AbortSignal.any([options.signal, perProviderController.signal])
+      : perProviderController.signal;
+
     try {
       logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
-      const result = await slot.stream(options, wrappedCallbacks);
+      const result = await slot.stream({ ...options, signal: combinedSignal }, wrappedCallbacks);
       recordProviderReachable(slot.key); // a clean round rehabilitates a previously-demoted slot
       return result;
     } catch (error) {
@@ -450,17 +537,29 @@ export async function aiStreamRound(
       // Read the responded tag off the ORIGINAL thrown value — it's set on `error`, while `lastError`
       // may be a fresh wrapper Error (for a non-Error throw) that never carried the tag.
       if (!isAbortLike(lastError)) {
-        if (isUnreachableFailure(lastError) && !providerResponded(error)) {
+        if (numericStatus(lastError) === 429) {
+          recordProviderResponded(slot.key, failedAt);
+          recordProviderRateLimit(slot.key, failedAt, getRateLimitCooldownMs(lastError, failedAt));
+        } else if (isUnreachableFailure(lastError) && !providerResponded(error)) {
           recordProviderConnectionFailure(slot.key, failedAt);
         } else {
           recordProviderResponded(slot.key, failedAt);
         }
       }
 
+      // Overall deadline fired (not just this provider's timeout) — stop the chain
+      // and signal a timeout so the caller surfaces the "time exceeded" message.
+      if (options.signal?.aborted) {
+        logger.warn('[AI_STREAM] Overall deadline exceeded mid-provider, stopping fallback chain');
+        throw makeAbortError('AI overall deadline exceeded');
+      }
+
       // Always try the next provider in the chain.
       // isRetryableError is for same-provider retry (backoff), not for fallback decisions.
       // Different providers have different quirks — one may fail where another succeeds.
       logger.warn(`[AI_STREAM] ${slot.name} failed, trying next provider`);
+    } finally {
+      clearTimeout(perProviderTimeout);
     }
   }
 

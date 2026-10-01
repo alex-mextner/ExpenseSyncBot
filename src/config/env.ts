@@ -20,6 +20,12 @@ interface EnvConfig {
   AI_MODEL: string;
   AI_FAST_MODEL: string;
 
+  // Groq (preferred low-latency text provider; optional key, safe fallbacks remain)
+  GROQ_API_KEY: string;
+  GROQ_BASE_URL: string;
+  GROQ_MODEL: string;
+  GROQ_FAST_MODEL: string;
+
   // HuggingFace Router (fallback + vision)
   HF_TOKEN: string;
   HF_BASE_URL: string;
@@ -71,6 +77,11 @@ function validateEnv(): EnvConfig {
     AI_BASE_URL: getEnvVariable('AI_BASE_URL'),
     AI_MODEL: getEnvVariable('AI_MODEL'),
     AI_FAST_MODEL: getEnvVariable('AI_FAST_MODEL'),
+
+    GROQ_API_KEY: getEnvVariable('GROQ_API_KEY', false),
+    GROQ_BASE_URL: getEnvVariable('GROQ_BASE_URL', false) || 'https://api.groq.com/openai/v1',
+    GROQ_MODEL: getEnvVariable('GROQ_MODEL', false) || 'openai/gpt-oss-120b',
+    GROQ_FAST_MODEL: getEnvVariable('GROQ_FAST_MODEL', false) || 'openai/gpt-oss-20b',
 
     HF_TOKEN: getEnvVariable('HF_TOKEN'),
     HF_BASE_URL: getEnvVariable('HF_BASE_URL'),
