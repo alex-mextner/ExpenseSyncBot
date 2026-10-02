@@ -40,7 +40,7 @@ repo/
 │   │   ├── datasources/
 │   │   │   ├── types.ts          # DataSource interface
 │   │   │   ├── builtin.ts        # expenses, income, balance, categories
-│   │   │   └── formula.ts        # expr-eval formula evaluator
+│   │   │   └── formula.ts        # expr-eval-fork formula evaluator
 │   │   ├── api/
 │   │   │   ├── client.ts         # fetch wrapper with initData auth
 │   │   │   ├── receipt.ts        # scan + confirm endpoints
@@ -186,7 +186,7 @@ Germany, France, Spain, UK, Netherlands, USA, Canada, Sweden, Norway, and most o
 Data Sources
 ├── Built-in variables: income, expenses, savings, balance,
 │   expenses.<category>, income.<source>, per-period aggregates
-└── Formula: user-defined expression evaluated by expr-eval
+└── Formula: user-defined expression evaluated by expr-eval-fork
     e.g. "expenses.food / income * 100"
               ↓
          Any data source connects to any widget input
@@ -356,7 +356,7 @@ Formula inputs in the dashboard editor show live autocomplete for built-in varia
 - Trigger: user types `expenses.` → dropdown shows matching category keys
 - Trigger: user types any letter → fuzzy-match against all known keys
 - Selecting a variable inserts it at cursor position
-- Formula validated in real time via `expr-eval`; invalid formula shows red border + error message
+- Formula validated in real time via `expr-eval-fork`; invalid formula shows red border + error message
 
 **No new API endpoint needed** — variable list is derived client-side from the `BuiltinKey` type + category list already returned by `GET /api/analytics`.
 
@@ -461,3 +461,19 @@ Client re-fetches `/api/dashboard` and `/api/analytics` on any event. Server sen
 ## Out of scope (first version)
 
 - Widget sharing between groups
+
+## Formula security and release checks (2026-10-02)
+
+Dashboard formulas use the maintained `expr-eval-fork` 3.x interpreter. Only finite
+numeric analytics values are substituted through its public expression API before
+evaluation; context objects/functions are never exposed. Numeric category identifiers
+such as `expenses_constructor` and `expenses_prototype` remain usable without weakening
+the parser's prototype protection. Property access, assignments, and function
+definitions are rejected; arithmetic, math functions, comparisons, conditionals,
+Cyrillic category identifiers, and syntax-only validation remain supported.
+The app never calls `toJSFunction` or evaluates generated JavaScript.
+
+The Mini App has its own Vite client declaration so standalone builds do not depend
+on root ambient types. Its regression suite is `cd miniapp && bun run test`, and the
+deploy check runs that suite before the production build. Root test discovery only
+covers `src/**/*.test.ts`, so it does not substitute for this suite.

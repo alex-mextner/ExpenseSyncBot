@@ -8,7 +8,6 @@ import { Sparkline } from '../widgets/Sparkline';
 import { StatCard } from '../widgets/StatCard';
 import { Ticker } from '../widgets/Ticker';
 import { WIDGET_REGISTRY, type WidgetConfig, type WidgetType } from '../widgets/registry';
-import { resolveBuiltin } from '../datasources/builtin';
 import { evaluateFormula, validateFormula } from '../datasources/formula';
 
 interface Props { groupId: number; }
@@ -205,11 +204,6 @@ function WidgetRenderer({ widget, analytics }: { widget: WidgetConfig; analytics
 
   const resolveValue = (expr: string): number => {
     try {
-      // Try as builtin key first
-      if (/^[\w.]+$/.test(expr)) {
-        const resolved = resolveBuiltin(expr as Parameters<typeof resolveBuiltin>[0], analytics);
-        return resolved.value;
-      }
       return evaluateFormula(expr, analytics);
     } catch { return 0; }
   };
@@ -274,13 +268,7 @@ function WidgetEditor({ widget, analytics, onSave, onDelete, onClose }: EditorPr
 
   const handleValueChange = (v: string) => {
     setValue(v);
-    // Validate if it looks like a formula (has operators)
-    if (/[+\-*/(]/.test(v)) {
-      const err = validateFormula(v);
-      setFormulaError(err ?? '');
-    } else {
-      setFormulaError('');
-    }
+    setFormulaError(validateFormula(v, analytics ?? undefined) ?? '');
   };
 
   const handleSave = () => {
