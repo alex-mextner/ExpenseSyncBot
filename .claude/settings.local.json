@@ -27,7 +27,9 @@
       "Bash(./node_modules/.bin/biome lint:*)",
       "Bash(gh secret:*)",
       "Bash(./node_modules/.bin/jest)",
-      "Bash(/usr/bin/git diff:*)"
+      "Bash(/usr/bin/git diff:*)",
+      "Read(//private/tmp/merge-test/**)",
+      "Bash(sed -n '280,290p' src/bot/services/expense-saver.ts)"
     ],
     "deny": [],
     "ask": []
