@@ -83,7 +83,11 @@ mock.module('../utils/fuzzy-search', () => ({
   normalizeCategoryName: (s: string) => s,
 }));
 
-mock.module('../bot/commands/ask', () => ({ maybeSmartAdvice: async () => {} }));
+const handleAskQuestionMock = mock(async (..._args: unknown[]) => {});
+mock.module('../bot/commands/ask', () => ({
+  maybeSmartAdvice: async () => {},
+  handleAskQuestion: handleAskQuestionMock,
+}));
 mock.module('../bot/commands/dev', () => ({
   consumePendingDesignEdit: () => null,
   getPipelineInstance: () => null,
@@ -162,7 +166,7 @@ mock.module('../database', () => ({
 
 // ── Dynamic imports AFTER all mocks ──────────────────────────────────────
 
-const { handleExpenseMessage } = await import('../bot/handlers/message.handler');
+const { handleExpenseMessage, routeTextMessage } = await import('../bot/handlers/message.handler');
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -183,6 +187,7 @@ afterAll(() => {
 
 beforeEach(() => {
   clearTestDb(db);
+  handleAskQuestionMock.mockClear();
   sentMessages.length = 0;
   sendMessageMock.mockClear();
   appendExpenseRowsMock.mockReset();
@@ -335,4 +340,34 @@ describe('expense-flow integration', () => {
     await handleExpenseMessage(fakeCtx('100 EUR food'), fakeBot());
     expect(appendExpenseRowsMock).not.toHaveBeenCalled();
   });
+});
+
+test('exact October budget replay reaches AI with zero real expense or pending rows', async () => {
+  seedGroupAndUser();
+  const text = `Сформируй бюджет на грядущий октябрь
+
+€450 — квартира
+€600 — еда
+€300 — коммуналка
+€200 — животные
+€200 — машина
+€700 — Лена
+€700 — Алекс
+€100 — развлечения
+€620 — подписки
+€100 — дом
+
+Другие категории убери (перечили), сумма должна быть 6000€`;
+  const ctx = fakeCtx(text);
+  const bot = fakeBot();
+  await routeTextMessage(ctx, bot, true);
+  expect(handleAskQuestionMock).toHaveBeenCalledTimes(1);
+  expect(handleAskQuestionMock).toHaveBeenCalledWith(ctx, text, bot);
+  expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM expenses').get()?.n).toBe(0);
+  expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM pending_expenses').get()?.n).toBe(
+    0,
+  );
+  expect(appendExpenseRowsMock).not.toHaveBeenCalled();
+  expect(sentMessages).toEqual([]);
+  expect(logMock.error).not.toHaveBeenCalled();
 });
