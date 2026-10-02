@@ -18,6 +18,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
+import { handleBudgetPromptText } from '../services/budget-prompt';
 import { showNextPendingCategoryStep } from '../services/category-wizard';
 import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
@@ -259,8 +260,21 @@ export async function handleExpenseMessage(
     return true;
   }
 
-  // Bank transaction edit flow — route replies to pending edit transactions
   const replyToMessageId = ctx.update?.message?.reply_to_message?.message_id;
+
+  // Budget prompt answer — only a strict plain amount, or a reply to a prompt message
+  if (text && !text.startsWith('/')) {
+    const consumed = await handleBudgetPromptText({
+      group,
+      user,
+      text,
+      replyToMessageId: replyToMessageId ?? null,
+      messageThreadId: messageThreadId ?? null,
+    });
+    if (consumed) return true;
+  }
+
+  // Bank transaction edit flow — route replies to pending edit transactions
   if (replyToMessageId && text) {
     const { handleBankEditReply } = await import('../commands/bank');
     const handled = await handleBankEditReply(ctx, telegramGroupId, text, replyToMessageId);

@@ -43,7 +43,8 @@ import { handleDevCallback } from '../commands/dev';
 import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/disconnect';
 import { cancelPendingFeedback } from '../commands/feedback';
 import { handleSettingsCallback } from '../commands/settings';
-import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../keyboards';
+import { createCategoriesListKeyboard } from '../keyboards';
+import { sendBudgetPrompt } from '../services/budget-prompt';
 import {
   getPendingCategoryExpense,
   getPendingCategorySiblings,
@@ -54,6 +55,7 @@ import {
 import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
 import type { BotInstance, Ctx } from '../types';
+import { handleBudgetPromptCallback } from './budget-callbacks';
 import { trackMembership } from './message.handler';
 
 const logger = createLogger('callback.handler');
@@ -526,10 +528,7 @@ async function advanceCategoryWizard(
   // Category confirmation is complete. Only now surface deferred budget actions,
   // so the user never has several different actionable wizard messages at once.
   for (const category of takeQueuedCategoryBudgetPrompts(userId, sourceMessageId)) {
-    const keyboard = createBudgetPromptKeyboard(category, group.default_currency);
-    await sendMessage(`💰 Хочешь установить бюджет для категории "${category}"?`, {
-      reply_markup: keyboard,
-    });
+    await sendBudgetPrompt({ group, userId, category });
   }
 }
 
@@ -777,9 +776,15 @@ async function handleBudgetAction(
     return;
   }
 
-  const { group } = result;
+  const { group, user } = result;
 
   switch (subAction) {
+    case 'psuggest':
+    case 'pskip':
+    case 'view':
+      await handleBudgetPromptCallback(ctx, bot, subAction, params.slice(1), group, user);
+      break;
+
     case 'set': {
       // Set budget for category
       const amountStr = rest[0];

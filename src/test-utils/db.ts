@@ -34,6 +34,7 @@ export function clearTestDb(db: Database): void {
     DELETE FROM dev_tasks;
     DELETE FROM expenses;
     DELETE FROM receipts;
+    DELETE FROM budget_prompts;
     DELETE FROM budgets;
     DELETE FROM categories;
     DELETE FROM pending_expenses;

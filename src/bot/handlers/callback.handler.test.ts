@@ -117,8 +117,45 @@ const connectMocks = {
 };
 mock.module('../commands/connect', () => connectMocks);
 
+const sendBudgetViewMock = mock((_group: unknown) => Promise.resolve());
 mock.module('../commands/budget', () => ({
   normalizeCurrency: (s: string) => s.toUpperCase(),
+  sendBudgetView: sendBudgetViewMock,
+}));
+
+// ─── Smart budget prompt service ──────────────────────────────────────────────
+interface PromptStub {
+  id: number;
+  group_id: number;
+  user_id: number;
+  category: string;
+  currency: 'EUR';
+}
+const promptStub: PromptStub = {
+  id: 5,
+  group_id: 1,
+  user_id: 10,
+  category: 'Food',
+  currency: 'EUR',
+};
+type LookupResult = { ok: true; prompt: PromptStub } | { ok: false; reason: 'stale' | 'foreign' };
+const lookupPromptMock = mock(
+  (_id: number, _groupId: number, _userId: number): LookupResult => ({
+    ok: true,
+    prompt: promptStub,
+  }),
+);
+const applyPromptMock = mock(
+  (_prompt: PromptStub, _amount: number, _currency: string): Promise<string> =>
+    Promise.resolve('applied'),
+);
+const skipPromptMock = mock((_prompt: PromptStub) => true);
+const sendBudgetPromptMock = mock((_params: unknown) => Promise.resolve());
+mock.module('../services/budget-prompt', () => ({
+  sendBudgetPrompt: sendBudgetPromptMock,
+  lookupPromptForCallback: lookupPromptMock,
+  applyBudgetPrompt: applyPromptMock,
+  skipBudgetPrompt: skipPromptMock,
 }));
 
 const devMock = mock(() => Promise.resolve());
@@ -165,7 +202,6 @@ mock.module('../services/sheet-errors', () => ({
 }));
 
 mock.module('../keyboards', () => ({
-  createBudgetPromptKeyboard: mock(() => ({ inline_keyboard: [] })),
   createCategoriesListKeyboard: mock(() => ({ inline_keyboard: [] })),
   createCategoryConfirmKeyboard: mock(() => ({ inline_keyboard: [] })),
 }));
@@ -262,6 +298,11 @@ const resetables: ReturnType<typeof mock>[] = [
   queueCategoryBudgetPromptMock,
   showNextPendingCategoryStepMock,
   takeQueuedCategoryBudgetPromptsMock,
+  sendBudgetViewMock,
+  lookupPromptMock,
+  applyPromptMock,
+  skipPromptMock,
+  sendBudgetPromptMock,
   devMock,
   mockMerchantRules.updateStatus,
   mockGroups.findByTelegramGroupId,
@@ -299,6 +340,9 @@ afterEach(() => {
   showNextPendingCategoryStepMock.mockResolvedValue(true);
   takeQueuedCategoryBudgetPromptsMock.mockReturnValue([]);
   saveExpenseBatchMock.mockResolvedValue(undefined);
+  lookupPromptMock.mockImplementation(() => ({ ok: true, prompt: promptStub }));
+  applyPromptMock.mockImplementation(() => Promise.resolve('applied'));
+  skipPromptMock.mockImplementation(() => true);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -651,6 +695,139 @@ describe('handleCallbackQuery — routing table', () => {
           currency: 'EUR',
         }),
       );
+    });
+
+    describe('smart budget prompt buttons', () => {
+      test('budget:psuggest applies the amount to the prompt found by numeric id', async () => {
+        const ctx = fakeCallbackCtx('budget:psuggest:5:150');
+        const bot = fakeBot();
+        await handleCallbackQuery(ctx as never, bot as never);
+
+        expect(lookupPromptMock).toHaveBeenCalledWith(5, 1, 10);
+        expect(applyPromptMock).toHaveBeenCalledWith(promptStub, 150, 'EUR');
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining('Бюджет установлен') }),
+        );
+        expect(bot.api.deleteMessage).toHaveBeenCalledTimes(1);
+      });
+
+      test('a stale prompt id does not mutate anything', async () => {
+        lookupPromptMock.mockReturnValueOnce({ ok: false, reason: 'stale' });
+        const ctx = fakeCallbackCtx('budget:psuggest:5:150');
+        const bot = fakeBot();
+        await handleCallbackQuery(ctx as never, bot as never);
+
+        expect(applyPromptMock).not.toHaveBeenCalled();
+        expect(setBudgetMock).not.toHaveBeenCalled();
+        expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining('устарел') }),
+        );
+      });
+
+      test('a prompt owned by another member is rejected', async () => {
+        lookupPromptMock.mockReturnValueOnce({ ok: false, reason: 'foreign' });
+        const ctx = fakeCallbackCtx('budget:psuggest:5:150');
+        await handleCallbackQuery(ctx as never, fakeBot() as never);
+
+        expect(applyPromptMock).not.toHaveBeenCalled();
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining('другим участником') }),
+        );
+      });
+
+      test('an already handled prompt (double tap) keeps the message and reports stale', async () => {
+        applyPromptMock.mockResolvedValueOnce('already_handled');
+        const ctx = fakeCallbackCtx('budget:psuggest:5:150');
+        const bot = fakeBot();
+        await handleCallbackQuery(ctx as never, bot as never);
+
+        expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining('уже обработан') }),
+        );
+      });
+
+      test('a failed budget write is reported and the message stays', async () => {
+        applyPromptMock.mockResolvedValueOnce('failed');
+        const ctx = fakeCallbackCtx('budget:psuggest:5:150');
+        const bot = fakeBot();
+        await handleCallbackQuery(ctx as never, bot as never);
+
+        expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining('Не удалось') }),
+        );
+      });
+
+      test.each([
+        'budget:psuggest:abc:150',
+        'budget:psuggest:5:0',
+        'budget:psuggest:5',
+      ])('malformed "%s" is treated as stale', async (data) => {
+        const ctx = fakeCallbackCtx(data);
+        await handleCallbackQuery(ctx as never, fakeBot() as never);
+        expect(applyPromptMock).not.toHaveBeenCalled();
+        expect(lookupPromptMock).not.toHaveBeenCalled();
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledTimes(1);
+      });
+
+      test('budget:pskip retires the prompt and removes the message', async () => {
+        const ctx = fakeCallbackCtx('budget:pskip:5');
+        const bot = fakeBot();
+        await handleCallbackQuery(ctx as never, bot as never);
+
+        expect(skipPromptMock).toHaveBeenCalledWith(promptStub);
+        expect(setBudgetMock).not.toHaveBeenCalled();
+        expect(bot.api.deleteMessage).toHaveBeenCalledTimes(1);
+      });
+
+      test('budget:pskip on a stale prompt does nothing', async () => {
+        lookupPromptMock.mockReturnValueOnce({ ok: false, reason: 'stale' });
+        const ctx = fakeCallbackCtx('budget:pskip:5');
+        const bot = fakeBot();
+        await handleCallbackQuery(ctx as never, bot as never);
+
+        expect(skipPromptMock).not.toHaveBeenCalled();
+        expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+      });
+
+      test('budget:view answers the button and sends the shared budget view', async () => {
+        const ctx = fakeCallbackCtx('budget:view');
+        await handleCallbackQuery(ctx as never, fakeBot() as never);
+
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledTimes(1);
+        expect(sendBudgetViewMock).toHaveBeenCalledTimes(1);
+        expect(sendBudgetViewMock.mock.calls[0]?.[0]).toMatchObject({ id: 1 });
+      });
+
+      test('finishing the category wizard sends one persistent prompt per queued category', async () => {
+        const pending = {
+          id: 77,
+          user_id: 10,
+          message_id: 500,
+          parsed_amount: 100,
+          parsed_currency: 'EUR' as const,
+          detected_category: 'Животные',
+          comment: '',
+          status: 'pending_category' as const,
+          created_at: '2026-10-01 00:00:00',
+        };
+        getPendingCategoryExpenseMock.mockReturnValue(pending);
+        getPendingCategorySiblingsMock.mockReturnValue([pending]);
+        mockCategories.exists.mockReturnValue(false);
+        showNextPendingCategoryStepMock.mockResolvedValue(false);
+        takeQueuedCategoryBudgetPromptsMock.mockReturnValue(['Животные', 'Еда']);
+
+        await handleCallbackQuery(fakeCallbackCtx('category:add:77') as never, fakeBot() as never);
+
+        expect(sendBudgetPromptMock).toHaveBeenCalledTimes(2);
+        expect(sendBudgetPromptMock.mock.calls[0]?.[0]).toMatchObject({
+          userId: 10,
+          category: 'Животные',
+        });
+        expect(sendBudgetPromptMock.mock.calls[1]?.[0]).toMatchObject({ category: 'Еда' });
+      });
     });
   });
 

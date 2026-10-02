@@ -15,9 +15,9 @@ import {
   monthTabExists,
   sortExpensesTab,
 } from '../services/google/sheets';
-import { closeUnmatchedTags } from '../utils/html';
+import { packHtmlBlocks } from '../utils/html';
 import { createLogger } from '../utils/logger.ts';
-import { formatBudgetProgressText } from './commands/budget';
+import { formatBudgetProgress } from './commands/budget-view';
 import { importExpensesFromSheet } from './commands/sync';
 import { silentSyncBudgets } from './services/budget-sync';
 
@@ -130,43 +130,28 @@ export function registerMonthlyCron(): void {
         await silentSyncBudgets(conn, group.id);
 
         const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
-        const { text: budgetText, hasBudgets } = formatBudgetProgressText(group.id);
+        const { messages: budgetMessages, hasBudgets } = formatBudgetProgress(group.id);
+        const yearSuffix = newYearUrl ? ` (${year})` : '';
+        const sheetLink = `🔗 <a href="${sheetUrl}">Гугл таблица</a>${yearSuffix}`;
 
-        let notifyText: string;
+        const blocks = hasBudgets
+          ? [
+              `Новый бюджет сформирован\n\n${sheetLink}`,
+              ...budgetMessages,
+              'Редактировать бюджет можно через ИИ или командами:\n' +
+                '<code>/budget set Категория Сумма</code>\n' +
+                '<code>/budget sync</code>',
+            ]
+          : [
+              `Пора сформировать бюджет\n\n${sheetLink}\n\n` +
+                'Заполни вкладку в таблице или используй команды:\n' +
+                '<code>/budget set Категория Сумма</code>\n' +
+                '<code>/budget sync</code>',
+            ];
 
-        if (hasBudgets) {
-          notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
-          if (newYearUrl) {
-            notifyText += ` (${year})`;
-          }
-          notifyText += `\n\n${budgetText}`;
-          notifyText +=
-            '\n\nРедактировать бюджет можно через ИИ или командами:\n' +
-            '<code>/budget set Категория Сумма</code>\n' +
-            '<code>/budget sync</code>';
-        } else {
-          notifyText = `Пора сформировать бюджет\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
-          if (newYearUrl) {
-            notifyText += ` (${year})`;
-          }
-          notifyText +=
-            '\n\nЗаполни вкладку в таблице или используй команды:\n' +
-            '<code>/budget set Категория Сумма</code>\n' +
-            '<code>/budget sync</code>';
-        }
-
-        // Telegram message limit is 4096 chars — truncate at last newline boundary, close tags
-        if (notifyText.length > 4000) {
-          const cut = notifyText.lastIndexOf('\n', 3900);
-          const truncated = cut > 0 ? notifyText.slice(0, cut) : notifyText.slice(0, 3900);
-          notifyText = closeUnmatchedTags(
-            `${truncated}\n...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`,
-          );
-        }
-
-        await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
-          sendMessage(notifyText),
-        ).catch((err: unknown) =>
+        await withChatContext(group.telegram_group_id, group.active_topic_id, async () => {
+          for (const message of packHtmlBlocks(blocks)) await sendMessage(message);
+        }).catch((err: unknown) =>
           logger.error({ err }, `[CRON] Failed to notify group ${group.id}`),
         );
       } catch (err) {

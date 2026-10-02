@@ -3,7 +3,8 @@ import { describe, expect, it } from 'bun:test';
 import type { InlineKeyboard } from 'gramio';
 import {
   createAddCategoryWithBudgetKeyboard,
-  createBudgetPromptKeyboard,
+  createBudgetSuggestionKeyboard,
+  createBudgetViewKeyboard,
   createBulkEditKeyboard,
   createCategoriesListKeyboard,
   createCategoryConfirmKeyboard,
@@ -199,48 +200,48 @@ describe('createConfirmKeyboard', () => {
   });
 });
 
-describe('createBudgetPromptKeyboard', () => {
-  it('has set budget and skip buttons', () => {
-    const kb = createBudgetPromptKeyboard('Food');
+describe('createBudgetSuggestionKeyboard', () => {
+  it('has one button per suggested amount carrying the numeric prompt id', () => {
+    const kb = createBudgetSuggestionKeyboard(42, [100, 250], 'EUR');
     const data = allButtons(kb).map((b) => b.callback_data);
-    expect(data.some((d) => d?.startsWith('budget:set:'))).toBe(true);
-    expect(data.some((d) => d?.startsWith('budget:skip:'))).toBe(true);
+    expect(data).toContain('budget:psuggest:42:100');
+    expect(data).toContain('budget:psuggest:42:250');
   });
 
-  it('callback_data includes category name', () => {
-    const kb = createBudgetPromptKeyboard('Transport');
+  it('always has a skip button bound to the prompt id', () => {
+    const kb = createBudgetSuggestionKeyboard(42, [], 'EUR');
     const data = allButtons(kb).map((b) => b.callback_data);
-    expect(data.some((d) => d?.includes('Transport'))).toBe(true);
+    expect(data).toEqual(['budget:pskip:42']);
   });
 
-  it('EUR currency shows € symbol in button text', () => {
-    const kb = createBudgetPromptKeyboard('Food', 'EUR');
-    const texts = allButtons(kb).map((b) => b.text);
-    expect(texts.some((t) => t.includes('€'))).toBe(true);
+  it('never puts the category name into callback data', () => {
+    const kb = createBudgetSuggestionKeyboard(7, [300], 'EUR');
+    for (const button of allButtons(kb)) {
+      expect(button.callback_data).toMatch(/^budget:p(suggest|skip):\d+(:\d+)?$/);
+    }
   });
 
-  it('USD currency shows $ symbol in button text', () => {
-    const kb = createBudgetPromptKeyboard('Food', 'USD');
-    const texts = allButtons(kb).map((b) => b.text);
+  it('shows amounts with the currency symbol', () => {
+    const texts = allButtons(createBudgetSuggestionKeyboard(1, [100], 'USD')).map((b) => b.text);
     expect(texts.some((t) => t.includes('$'))).toBe(true);
+    const rsd = allButtons(createBudgetSuggestionKeyboard(1, [100], 'RSD')).map((b) => b.text);
+    expect(rsd.some((t) => t.includes('RSD'))).toBe(true);
   });
 
-  it('RUB currency shows ₽ symbol in button text', () => {
-    const kb = createBudgetPromptKeyboard('Food', 'RUB');
-    const texts = allButtons(kb).map((b) => b.text);
-    expect(texts.some((t) => t.includes('₽'))).toBe(true);
+  it('keeps every callback_data within Telegram 64-byte limit', () => {
+    const kb = createBudgetSuggestionKeyboard(2147483647, [999999999999], 'EUR');
+    for (const button of allButtons(kb)) {
+      expect(Buffer.byteLength(button.callback_data ?? '')).toBeLessThanOrEqual(64);
+    }
   });
+});
 
-  it('unknown currency falls back to currency code in button text', () => {
-    const kb = createBudgetPromptKeyboard('Food', 'RSD');
-    const texts = allButtons(kb).map((b) => b.text);
-    expect(texts.some((t) => t.includes('RSD'))).toBe(true);
-  });
-
-  it('default currency is EUR when not specified', () => {
-    const kb = createBudgetPromptKeyboard('Food');
-    const texts = allButtons(kb).map((b) => b.text);
-    expect(texts.some((t) => t.includes('€'))).toBe(true);
+describe('createBudgetViewKeyboard', () => {
+  it('has a single show-budget button', () => {
+    const buttons = allButtons(createBudgetViewKeyboard());
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.text).toBe('📊 Показать бюджет');
+    expect(buttons[0]?.callback_data).toBe('budget:view');
   });
 });
 

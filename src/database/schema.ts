@@ -1402,6 +1402,37 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Scoped chat history by Telegram topic');
       },
     },
+    {
+      name: '052_create_budget_prompts',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS budget_prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            telegram_message_id INTEGER,
+            message_thread_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'active'
+              CHECK(status IN ('active', 'used', 'skipped')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budget_prompts_active_user
+          ON budget_prompts(group_id, user_id, status, created_at)
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_budget_prompts_message
+          ON budget_prompts(telegram_message_id)
+        `);
+        logger.info('✓ Added persistent budget setup prompts');
+      },
+    },
   ];
 
   // Check and run migrations

@@ -29,6 +29,7 @@ export function mockDatabase(
     'categories',
     'pendingExpenses',
     'budgets',
+    'budgetPrompts',
     'chatMessages',
     'adviceLog',
     'bankConnections',

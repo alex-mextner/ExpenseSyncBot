@@ -1,19 +1,10 @@
 /** /budget command handler — create, view, and edit spending budgets per category */
-import { endOfMonth, format, startOfMonth } from 'date-fns';
+import { format } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
-import { getCategoryEmoji } from '../../config/category-emojis';
-import {
-  BASE_CURRENCY,
-  CURRENCY_ALIASES,
-  type CurrencyCode,
-  getCurrencySymbol,
-} from '../../config/constants';
+import { CURRENCY_ALIASES, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
 import { database } from '../../database';
-import { computeBudgetProgress } from '../../database/repositories/budget.repository';
-import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
-import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   createEmptyMonthTab,
@@ -22,16 +13,19 @@ import {
   readMonthBudget,
 } from '../../services/google/sheets';
 import { normalizeCategoryName } from '../../utils/fuzzy-search';
-import { truncateForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import type { GoogleConnectedGroup } from '../guards';
-import { createAddCategoryWithBudgetKeyboard } from '../keyboards';
+import { createAddCategoryWithBudgetKeyboard, createBudgetViewKeyboard } from '../keyboards';
 import { silentSyncBudgets } from '../services/budget-sync';
 import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
+import { formatBudgetProgress, formatBudgetSetMessage } from './budget-view';
 
 const logger = createLogger('budget');
+
+const NO_BUDGET_HINT =
+  'Используй:\n• /budget set &lt;Категория&gt; &lt;Сумма&gt;\n• /budget sync — синхронизировать с Google Sheets';
 
 /**
  * Parse budget amount with optional currency
@@ -138,7 +132,7 @@ export async function handleBudgetCommand(
 
   if (args.length === 0) {
     // Show current budgets and progress
-    await showBudgetProgress(ctx, group);
+    await sendBudgetView(group);
     return;
   }
 
@@ -178,131 +172,21 @@ export async function handleBudgetCommand(
   );
 }
 
-/**
- * Format budget progress text for a group (reusable by cron and /budget command)
- */
-export function formatBudgetProgressText(groupId: number): { text: string; hasBudgets: boolean } {
-  const now = new Date();
-  const currentMonth = format(now, 'yyyy-MM');
-  const currentMonthName = format(now, 'LLLL yyyy');
-
-  const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-  const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-  const expenses = database.expenses.findByDateRange(groupId, currentMonthStart, currentMonthEnd);
-
-  const categorySpending: Record<string, number> = {};
-  for (const expense of expenses) {
-    categorySpending[expense.category] =
-      (categorySpending[expense.category] || 0) + expense.eur_amount;
-  }
-
-  const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
-
-  if (budgets.length === 0) {
-    return { text: `Бюджет на ${currentMonthName}\n\nБюджеты не установлены.`, hasBudgets: false };
-  }
-
-  const budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }> =
-    {} as Record<CurrencyCode, { totalBudget: number; totalSpent: number }>;
-
-  for (const budget of budgets) {
-    const currency = budget.currency;
-    if (!budgetsByCurrency[currency]) {
-      budgetsByCurrency[currency] = { totalBudget: 0, totalSpent: 0 };
-    }
-    const spentEur = categorySpending[budget.category] || 0;
-    const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, currency);
-    budgetsByCurrency[currency].totalBudget += budget.limit_amount;
-    budgetsByCurrency[currency].totalSpent += spentInCurrency;
-  }
-
-  let message = `Бюджет на ${currentMonthName}\n\n`;
-
-  for (const [currency, { totalBudget, totalSpent }] of Object.entries(budgetsByCurrency)) {
-    const percentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
-    message += `Всего (${currency}): ${formatAmount(totalSpent, currency as CurrencyCode)} / ${formatAmount(totalBudget, currency as CurrencyCode)} (${percentage}%)\n`;
-  }
-  message += '\n';
-
-  const budgetProgress = budgets.map((budget) => {
-    const spentEur = categorySpending[budget.category] || 0;
-    const spent = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
-    const progress = computeBudgetProgress(budget, spent);
-    return { budget, spent, ...progress };
-  });
-
-  budgetProgress.sort((a, b) => b.percentage - a.percentage);
-
-  for (const { budget, spent, percentage, is_exceeded, is_warning } of budgetProgress) {
-    const emoji = getCategoryEmoji(budget.category);
-    const status = is_exceeded ? '(!)' : is_warning ? '(~)' : '';
-    message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
-  }
-
-  // Add TA forecast insights for budgeted categories — cap at 10 lines so the
-  // full budget message stays under Telegram's 4096-char limit. N+2 rule for
-  // the "и ещё N" tail.
-  const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
-  if (snapshot.technicalAnalysis) {
-    const taInsights: string[] = [];
-    for (const cat of snapshot.technicalAnalysis.categories) {
-      const bp = budgetProgress.find((b) => b.budget.category === cat.category);
-      if (!bp) continue;
-
-      const forecast = Math.round(
-        convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency),
-      );
-      const trendLabel =
-        cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
-      const forecastPct =
-        bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
-
-      // Only show insights for categories approaching or exceeding budget
-      if (
-        forecastPct >= 80 ||
-        cat.anomaly.isAnomaly ||
-        (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6)
-      ) {
-        let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency)} ${trendLabel}`;
-        if (cat.anomaly.isAnomaly) insight += ' ⚠️';
-        taInsights.push(insight);
-      }
-    }
-    if (taInsights.length > 0) {
-      const MAX_TA_INSIGHTS = 10;
-      const hidden = taInsights.length - MAX_TA_INSIGHTS;
-      const visibleInsights = hidden >= 3 ? taInsights.slice(0, MAX_TA_INSIGHTS) : taInsights;
-      message += `\nПрогноз на месяц:\n${visibleInsights.join('\n')}\n`;
-      if (hidden >= 3) {
-        message += `… и ещё ${hidden}\n`;
-      }
-    }
-  }
-
-  return { text: truncateForTelegram(message.trim()), hasBudgets: true };
-}
-
-async function showBudgetProgress(ctx: Ctx['Command'], group: GoogleConnectedGroup): Promise<void> {
-  void ctx;
-
+/** Send the rich budget overview — shared by /budget and the "show budget" button. */
+export async function sendBudgetView(group: {
+  id: number;
+  telegram_group_id: number;
+}): Promise<void> {
+  const { messages, hasBudgets } = formatBudgetProgress(group.id);
   const miniAppUrl = buildMiniAppUrl('dashboard', group.telegram_group_id);
   const keyboard = miniAppUrl ? new InlineKeyboard().url('📊 Дашборд', miniAppUrl) : undefined;
 
-  const { text, hasBudgets } = formatBudgetProgressText(group.id);
-
-  if (!hasBudgets) {
-    await sendMessage(
-      `${text}\n\n` +
-        `Используй:\n` +
-        `• /budget set <Категория> <Сумма>\n` +
-        `• /budget sync — синхронизировать с Google Sheets`,
-      keyboard ? { reply_markup: keyboard } : {},
-    );
-    await maybeSmartAdvice(group.id);
-    return;
+  const lastIndex = messages.length - 1;
+  for (const [index, message] of messages.entries()) {
+    const isLast = index === lastIndex;
+    const text = isLast && !hasBudgets ? `${message}\n\n${NO_BUDGET_HINT}` : message;
+    await sendMessage(text, isLast && keyboard ? { reply_markup: keyboard } : {});
   }
-
-  await sendMessage(text, keyboard ? { reply_markup: keyboard } : {});
   await maybeSmartAdvice(group.id);
 }
 
@@ -346,22 +230,16 @@ async function setBudget(
     currency,
   });
 
-  const emoji = getCategoryEmoji(normalizedCategory);
-  if (!result.sheetsSynced && group.google_refresh_token) {
-    await sendMessage(
-      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
-        'Не удалось записать в Google Sheets. Используй /budget sync позже.',
-    );
-  } else if (!result.sheetsSynced) {
-    await sendMessage(
-      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}\n\n` +
-        'Подключи Google Sheets (/connect) чтобы синхронизировать бюджеты.',
-    );
-  } else {
-    await sendMessage(
-      `Бюджет установлен: ${emoji} ${normalizedCategory} = ${formatAmount(amount, currency)}`,
-    );
-  }
+  await sendMessage(
+    formatBudgetSetMessage({
+      category: normalizedCategory,
+      amount,
+      currency,
+      sheetsSynced: result.sheetsSynced,
+      sheetsConnected: Boolean(group.google_refresh_token),
+    }),
+    { reply_markup: createBudgetViewKeyboard() },
+  );
 
   await maybeSmartAdvice(group.id);
 }

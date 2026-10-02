@@ -17,13 +17,17 @@ mock.module('../../utils/logger.ts', () => ({
 // ── Database ──────────────────────────────────────────────────────────────
 
 const mockExpenses = {
-  findByDateRange: mock(
+  getCategoryTotals: mock(
     (
       _groupId: number,
       _from: string,
       _to: string,
-    ): Array<{ category: string; eur_amount: number }> => [],
+    ): Array<{ category: string; total: number }> => [],
   ),
+};
+
+const mockGroups = {
+  findById: mock((_id: number) => ({ id: 1, default_currency: 'EUR' as CurrencyCode })),
 };
 
 const mockBudgets = {
@@ -50,6 +54,7 @@ mock.module('../../database', () => ({
     expenses: mockExpenses,
     budgets: mockBudgets,
     categories: mockCategories,
+    groups: mockGroups,
   },
 }));
 
@@ -119,7 +124,7 @@ mock.module('../services/budget-sync', () => ({
   silentSyncBudgets: silentSyncBudgetsMock,
 }));
 
-// ── Analytics (used by formatBudgetProgressText — we stub to avoid noise) ─
+// ── Analytics (used by the budget view formatter — we stub to avoid noise) ─
 
 mock.module('../../services/analytics/spending-analytics', () => ({
   spendingAnalytics: {
@@ -184,7 +189,7 @@ beforeEach(() => {
   budgetManagerMock.delete.mockReset().mockResolvedValue({ deleted: true, sheetsSynced: true });
   budgetManagerMock.importFromSheet.mockReset().mockReturnValue({});
 
-  mockExpenses.findByDateRange.mockReset().mockReturnValue([]);
+  mockExpenses.getCategoryTotals.mockReset().mockReturnValue([]);
   mockBudgets.getAllBudgetsForMonth.mockReset().mockReturnValue([]);
   mockCategories.exists.mockReset().mockReturnValue(true);
   mockCategories.create.mockReset();
@@ -216,13 +221,14 @@ describe('/budget list view', () => {
     mockBudgets.getAllBudgetsForMonth.mockReturnValue([
       { category: 'Food', limit_amount: 500, currency: 'EUR' as CurrencyCode },
     ]);
-    mockExpenses.findByDateRange.mockReturnValue([{ category: 'Food', eur_amount: 250 }]);
+    mockExpenses.getCategoryTotals.mockReturnValue([{ category: 'Food', total: 250 }]);
 
     await handleBudgetCommand(fakeCtx('/budget'), fakeGroup());
 
     const msg = sendMessageMock.mock.calls.at(-1)?.[0] as string;
     expect(msg).toContain('Food');
-    expect(msg).toContain('(50%)');
+    expect(msg).toContain('50%');
+    expect(msg).toContain('<pre>');
     expect(logMock.error).not.toHaveBeenCalled();
   });
 
@@ -253,6 +259,27 @@ describe('/budget set', () => {
     const msg = sendMessageMock.mock.calls.at(-1)?.[0] as string;
     expect(msg).toContain('Бюджет установлен');
     expect(msg).toContain('Food');
+  });
+
+  test('success confirmation carries the "show budget" action', async () => {
+    await handleBudgetCommand(fakeCtx('/budget set Food 500'), fakeGroup());
+
+    const options = sendMessageMock.mock.calls.at(-1)?.[1] as {
+      reply_markup: { toJSON: () => { inline_keyboard: Array<Array<{ callback_data?: string }>> } };
+    };
+    const data = options.reply_markup
+      .toJSON()
+      .inline_keyboard.flat()
+      .map((b) => b.callback_data);
+    expect(data).toContain('budget:view');
+  });
+
+  test('escapes the category name in the confirmation', async () => {
+    await handleBudgetCommand(fakeCtx('/budget set R&D 500'), fakeGroup());
+
+    const msg = sendMessageMock.mock.calls.at(-1)?.[0] as string;
+    expect(msg).toContain('R&amp;');
+    expect(msg).not.toContain('R&d');
   });
 
   test('parses RSD via suffix ("500 RSD") when group default is EUR', async () => {

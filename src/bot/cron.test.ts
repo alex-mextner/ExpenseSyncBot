@@ -125,14 +125,14 @@ mock.module('./commands/sync', () => ({
   importExpensesFromSheet: importExpensesFromSheetMock,
 }));
 
-const formatBudgetProgressTextMock = mock(
-  (_groupId: number): { text: string; hasBudgets: boolean } => ({
-    text: 'Бюджет на April 2026\n\nБюджеты не установлены.',
+const formatBudgetProgressMock = mock(
+  (_groupId: number): { messages: string[]; hasBudgets: boolean } => ({
+    messages: ['Бюджет на апрель 2026\n\nБюджеты не установлены.'],
     hasBudgets: false,
   }),
 );
-mock.module('./commands/budget', () => ({
-  formatBudgetProgressText: formatBudgetProgressTextMock,
+mock.module('./commands/budget-view', () => ({
+  formatBudgetProgress: formatBudgetProgressMock,
 }));
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
@@ -284,9 +284,9 @@ describe('registerMonthlyCron', () => {
     createExpenseSpreadsheetMock.mockReset().mockResolvedValue({ spreadsheetId: 'new-sheet-id' });
     silentSyncBudgetsMock.mockReset().mockResolvedValue(0);
     sendMessageMock.mockReset().mockResolvedValue(null);
-    formatBudgetProgressTextMock
+    formatBudgetProgressMock
       .mockReset()
-      .mockReturnValue({ text: 'Бюджет на April 2026', hasBudgets: false });
+      .mockReturnValue({ messages: ['Бюджет на апрель 2026'], hasBudgets: false });
     logMock.error.mockReset();
     logMock.warn.mockReset();
   });
@@ -487,8 +487,8 @@ describe('registerMonthlyCron', () => {
     ]);
     mockGroupSpreadsheets.getByYear.mockReturnValue('sid-current');
     monthTabExistsMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    formatBudgetProgressTextMock.mockReturnValue({
-      text: 'Food: 50/100',
+    formatBudgetProgressMock.mockReturnValue({
+      messages: ['Food: 50/100'],
       hasBudgets: true,
     });
 
@@ -499,6 +499,42 @@ describe('registerMonthlyCron', () => {
     const text = sendMessageMock.mock.calls[0]?.[0] as string;
     expect(text).toContain('Новый бюджет сформирован');
     expect(text).toContain('Food: 50/100');
+  });
+
+  it('sends a long budget overview as several valid messages under the Telegram limit', async () => {
+    mockGroupsRepo.findAll.mockReturnValue([
+      {
+        id: 1,
+        telegram_group_id: -100,
+        google_refresh_token: 'tok',
+        default_currency: 'EUR',
+        enabled_currencies: ['EUR'],
+        active_topic_id: null,
+      },
+    ]);
+    mockGroupSpreadsheets.listAll.mockReturnValue([
+      { year: new Date().getFullYear(), spreadsheetId: 'sid-current' },
+    ]);
+    mockGroupSpreadsheets.getByYear.mockReturnValue('sid-current');
+    monthTabExistsMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const bigBlock = `<pre>${'row\n'.repeat(900)}</pre>`;
+    formatBudgetProgressMock.mockReturnValue({
+      messages: [bigBlock, bigBlock],
+      hasBudgets: true,
+    });
+
+    registerMonthlyCron();
+    const cb = cronSpy.mock.calls[0]?.[1] as () => Promise<void>;
+    await cb();
+
+    const texts = sendMessageMock.mock.calls.map((call) => call[0] as string);
+    expect(texts.length).toBeGreaterThanOrEqual(2);
+    for (const text of texts) {
+      expect(text.length).toBeLessThanOrEqual(4096);
+      expect(text.match(/<pre>/g)?.length ?? 0).toBe(text.match(/<\/pre>/g)?.length ?? 0);
+    }
+    expect(texts[0]).toContain('Новый бюджет сформирован');
+    expect(texts.at(-1)).toContain('/budget sync');
   });
 
   it('uses "Пора сформировать бюджет" wording when group has no budgets', async () => {
@@ -517,7 +553,7 @@ describe('registerMonthlyCron', () => {
     ]);
     mockGroupSpreadsheets.getByYear.mockReturnValue('sid-current');
     monthTabExistsMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    formatBudgetProgressTextMock.mockReturnValue({ text: '', hasBudgets: false });
+    formatBudgetProgressMock.mockReturnValue({ messages: [], hasBudgets: false });
 
     registerMonthlyCron();
     const cb = cronSpy.mock.calls[0]?.[1] as () => Promise<void>;

@@ -6,6 +6,7 @@ import { BankConnectionsRepository } from './repositories/bank-connections.repos
 import { BankCredentialsRepository } from './repositories/bank-credentials.repository';
 import { BankTransactionsRepository } from './repositories/bank-transactions.repository';
 import { type BudgetReadRepository, BudgetRepository } from './repositories/budget.repository';
+import { BudgetPromptRepository } from './repositories/budget-prompt.repository';
 import { CategoryRepository } from './repositories/category.repository';
 import { ChatMessageRepository } from './repositories/chat-message.repository';
 import { DevTaskRepository } from './repositories/dev-task.repository';
@@ -37,6 +38,7 @@ export class DatabaseService {
   public pendingExpenses: PendingExpenseRepository;
   public expenses: ExpenseRepository;
   public budgets: BudgetReadRepository;
+  public budgetPrompts: BudgetPromptRepository;
   private _budgetWriter: BudgetRepository;
   public chatMessages: ChatMessageRepository;
   public photoQueue: PhotoQueueRepository;
@@ -64,6 +66,7 @@ export class DatabaseService {
     this.expenses = new ExpenseRepository(this.db);
     this._budgetWriter = new BudgetRepository(this.db);
     this.budgets = this._budgetWriter;
+    this.budgetPrompts = new BudgetPromptRepository(this.db);
     _budgetWriterRef = this._budgetWriter;
     this.chatMessages = new ChatMessageRepository(this.db);
     this.photoQueue = new PhotoQueueRepository(this.db);

@@ -162,6 +162,30 @@ export interface CreateBudgetData {
   currency?: CurrencyCode;
 }
 
+export type BudgetPromptStatus = 'active' | 'used' | 'skipped';
+
+/** Persistent Telegram prompt used while setting a budget. */
+export interface BudgetPrompt {
+  id: number;
+  group_id: number;
+  user_id: number;
+  category: string;
+  currency: CurrencyCode;
+  telegram_message_id: number | null;
+  message_thread_id: number | null;
+  status: BudgetPromptStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBudgetPromptData {
+  group_id: number;
+  user_id: number;
+  category: string;
+  currency: CurrencyCode;
+  message_thread_id?: number | null;
+}
+
 /**
  * Budget progress (for analytics and display)
  */

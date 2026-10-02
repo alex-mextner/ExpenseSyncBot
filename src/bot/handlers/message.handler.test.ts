@@ -237,6 +237,19 @@ mock.module('../../database', () => ({
   },
 }));
 
+const handleBudgetPromptTextMock = mock(
+  (_input: {
+    group: Group;
+    user: User;
+    text: string;
+    replyToMessageId: number | null;
+    messageThreadId: number | null;
+  }) => Promise.resolve(false),
+);
+mock.module('../services/budget-prompt', () => ({
+  handleBudgetPromptText: handleBudgetPromptTextMock,
+}));
+
 const showNextPendingCategoryStepMock = mock(() => Promise.resolve(true));
 mock.module('../services/category-wizard', () => ({
   showNextPendingCategoryStep: showNextPendingCategoryStepMock,
@@ -366,6 +379,7 @@ function resetAllMocks(): void {
   mockGroupMembers.upsert.mockReset();
   mockChatMessages.create.mockReset().mockImplementation(() => ({ id: 1 }));
   showNextPendingCategoryStepMock.mockReset().mockResolvedValue(true);
+  handleBudgetPromptTextMock.mockReset().mockResolvedValue(false);
   mockChatMessages.pruneOldMessagesIfNeeded.mockReset().mockReturnValue(0);
 
   logMock.error.mockClear();
@@ -763,6 +777,66 @@ describe('handleExpenseMessage — routing to other flows', () => {
     expect(handled).toBe(true);
     expect(handleCustomCurrencyInputMock).toHaveBeenCalled();
     expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleExpenseMessage — budget prompt answers', () => {
+  beforeEach(() => {
+    resetAllMocks();
+    mockGroups.findByTelegramGroupId.mockReturnValue(makeGroup());
+    mockCategories.exists.mockReturnValue(true);
+  });
+
+  test('a consumed budget answer short-circuits expense parsing and bank edit replies', async () => {
+    handleBudgetPromptTextMock.mockResolvedValue(true);
+    const ctx = fakeMessageCtx('150', { replyToMessageId: 777, threadId: 12 });
+
+    const handled = await handleExpenseMessage(ctx, fakeBot());
+
+    expect(handled).toBe(true);
+    expect(handleBudgetPromptTextMock).toHaveBeenCalledTimes(1);
+    expect(handleBudgetPromptTextMock.mock.calls[0]?.[0]).toMatchObject({
+      text: '150',
+      replyToMessageId: 777,
+      messageThreadId: 12,
+      group: { id: 1 },
+      user: { id: 1 },
+    });
+    expect(handleBankEditReplyMock).not.toHaveBeenCalled();
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+  });
+
+  test('plain messages pass null reply and topic ids', async () => {
+    await handleExpenseMessage(fakeMessageCtx('150'), fakeBot());
+    expect(handleBudgetPromptTextMock.mock.calls[0]?.[0]).toMatchObject({
+      replyToMessageId: null,
+      messageThreadId: null,
+    });
+  });
+
+  test('an unconsumed message continues to the normal expense flow', async () => {
+    handleBudgetPromptTextMock.mockResolvedValue(false);
+    const handled = await handleExpenseMessage(fakeMessageCtx('100 EUR groceries'), fakeBot());
+
+    expect(handled).toBe(true);
+    expect(saveExpenseBatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('slash commands never reach the budget prompt handler', async () => {
+    await handleExpenseMessage(fakeMessageCtx('/budget'), fakeBot());
+    expect(handleBudgetPromptTextMock).not.toHaveBeenCalled();
+  });
+
+  test('the budget prompt is consulted before the bank edit reply flow', async () => {
+    handleBankEditReplyMock.mockResolvedValue(true);
+    handleBudgetPromptTextMock.mockResolvedValue(false);
+    await handleExpenseMessage(
+      fakeMessageCtx('Кафе — latte', { replyToMessageId: 555 }),
+      fakeBot(),
+    );
+    expect(handleBudgetPromptTextMock).toHaveBeenCalledTimes(1);
+    expect(handleBankEditReplyMock).toHaveBeenCalledTimes(1);
   });
 });
 

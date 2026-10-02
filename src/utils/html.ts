@@ -167,6 +167,30 @@ export function truncateForTelegram(
 }
 
 /**
+ * Greedily pack self-contained HTML blocks into messages of at most `maxLength` characters,
+ * separated by a blank line. Blocks are never split, so tags stay balanced; a single block
+ * longer than the limit is truncated with its open tags closed.
+ */
+export function packHtmlBlocks(
+  blocks: string[],
+  maxLength: number = TELEGRAM_MAX_MESSAGE_LENGTH,
+): string[] {
+  const messages: string[] = [];
+  let current = '';
+  for (const block of blocks) {
+    const joined = current ? `${current}\n\n${block}` : block;
+    if (current && joined.length > maxLength) {
+      messages.push(current);
+      current = block;
+    } else {
+      current = joined;
+    }
+  }
+  if (current) messages.push(current);
+  return messages.map((message) => truncateForTelegram(message, maxLength));
+}
+
+/**
  * Strip ALL HTML tags and decode entities back to plain text.
  */
 export function stripAllHtml(text: string): string {

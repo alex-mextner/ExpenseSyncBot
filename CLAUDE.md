@@ -166,6 +166,12 @@ Bot uses callback queries (inline keyboards) and message handlers to manage mult
 - **OAuth setup:** currency selection → additional currencies → spreadsheet creation
 - **New category confirmation:** detect new category → ask user to confirm/skip → save
 - **Budget management:** create/view/edit budgets via inline keyboards
+- **Budget setup prompt:** persistent `budget_prompts` rows (scoped by group/user/topic) with data-driven
+  suggestions; answered by a button (`budget:psuggest:<promptId>:<amount>`, `budget:pskip:<promptId>`),
+  a strict plain amount when exactly one prompt is active, or a reply to the prompt message when several are.
+  Logic: [src/bot/services/budget-prompt.ts](src/bot/services/budget-prompt.ts), suggestions:
+  [src/services/budget-suggestions.ts](src/services/budget-suggestions.ts), `/budget` rich view:
+  [src/bot/commands/budget-view.ts](src/bot/commands/budget-view.ts)
 
 **Key files:**
 

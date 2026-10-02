@@ -5,6 +5,7 @@ import {
   escapeHtml,
   escapeMarkdown,
   escapeMarkdownV2,
+  packHtmlBlocks,
   processThinkTags,
   sanitizeHtmlForTelegram,
   stripAllHtml,
@@ -402,5 +403,29 @@ describe('truncateForTelegram', () => {
 
   test('does not touch text shorter than custom maxLength', () => {
     expect(truncateForTelegram('short', 100)).toBe('short');
+  });
+});
+
+// ── packHtmlBlocks ──────────────────────────────────────────────────
+
+describe('packHtmlBlocks', () => {
+  test('joins small blocks into one message with a blank line', () => {
+    expect(packHtmlBlocks(['<b>a</b>', 'b'])).toEqual(['<b>a</b>\n\nb']);
+  });
+
+  test('starts a new message instead of splitting a block', () => {
+    const blocks = ['<pre>aaaa</pre>', '<pre>bbbb</pre>', '<pre>cccc</pre>'];
+    const result = packHtmlBlocks(blocks, 35);
+    expect(result).toEqual(['<pre>aaaa</pre>\n\n<pre>bbbb</pre>', '<pre>cccc</pre>']);
+  });
+
+  test('truncates a single oversized block and closes its tags', () => {
+    const [only] = packHtmlBlocks([`<b>${'x'.repeat(200)}</b>`], 100);
+    expect(only?.length).toBeLessThan(120);
+    expect(only).toContain('</b>');
+  });
+
+  test('returns no messages for no blocks', () => {
+    expect(packHtmlBlocks([])).toEqual([]);
   });
 });

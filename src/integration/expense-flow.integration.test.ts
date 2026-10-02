@@ -61,6 +61,8 @@ mock.module('../services/google/sheets', () => ({
   }),
   isRateLimitError: () => false,
   withSheetsRetry: async <T>(fn: () => Promise<T>) => fn(),
+  // imported (never called) by budget-manager, which message.handler now reaches via budget-prompt
+  writeMonthBudgetRow: async () => true,
 }));
 
 mock.module('../services/google/oauth', () => ({
