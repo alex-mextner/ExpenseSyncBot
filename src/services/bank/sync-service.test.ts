@@ -37,7 +37,10 @@ mock.module('../../utils/crypto', () => ({
 
 // ── Currency converter ─────────────────────────────────────────────────────
 
+const refreshRatesMock = mock(async () => {});
 mock.module('../currency/converter', () => ({
+  updateExchangeRates: refreshRatesMock,
+  formatMissingExchangeRate: () => 'Нет курса валюты',
   convertAnyToEUR: (amount: number, currency: string) => (currency === 'XYZ' ? null : amount),
   formatAmount: (amount: number, currency: string) => `${amount.toFixed(2)} ${currency}`,
 }));
@@ -954,4 +957,11 @@ it('keeps unknown FX transaction pending and marks classification unavailable', 
   const card = sendMessageMock.mock.calls.find((call) => call[0].includes('FX Store'))?.[0];
   expect(card).toContain('Нет курса валюты');
   expect(card).not.toContain('Крупная транзакция');
+});
+
+it('manual retry refreshes exchange rates before bank processing', async () => {
+  const callsBefore = refreshRatesMock.mock.calls.length;
+  const conn = seedConnection();
+  await triggerManualSync(conn.id);
+  expect(refreshRatesMock.mock.calls.length).toBe(callsBefore + 1);
 });

@@ -12,7 +12,11 @@ import type { CredentialField } from '../../services/bank/registry';
 import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
 import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
 import { editMessageText, sendMessage } from '../../services/bank/telegram-sender';
-import { convertAnyToEUR, formatAmount } from '../../services/currency/converter';
+import {
+  convertAnyToEUR,
+  formatAmount,
+  formatMissingExchangeRate,
+} from '../../services/currency/converter';
 import { decryptData, encryptData } from '../../utils/crypto';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
@@ -760,7 +764,9 @@ export async function handleBankEditReply(
   }
 
   if (!saveConfirmedTransaction(editTx, group.id, user.id, category, comment)) {
-    await sendMessage('Нет курса валюты. Расход не записан; повтори после обновления курса.');
+    await sendMessage(
+      `${formatMissingExchangeRate()}. Расход не записан; повтори после обновления курса.`,
+    );
     return true;
   }
   database.bankTransactions.setEditInProgress(editTx.id, false);
@@ -818,7 +824,7 @@ export async function handleBankNoCommentCallback(
 
   if (!saveConfirmedTransaction(tx, group.id, user.id, category, '')) {
     await ctx.answerCallbackQuery({
-      text: 'Нет курса валюты. Расход не записан; повтори после обновления курса.',
+      text: `${formatMissingExchangeRate()}. Расход не записан; повтори после обновления курса.`,
     });
     return;
   }

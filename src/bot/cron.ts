@@ -48,7 +48,7 @@ async function fetchRatesWithRetry(): Promise<void> {
   if (env.BOT_ADMIN_CHAT_ID) {
     await sendDirect(
       env.BOT_ADMIN_CHAT_ID,
-      `⚠️ Курсы валют не обновились после ${RATE_FETCH_MAX_RETRIES} попыток. Бот использует fallback-курсы.`,
+      `⚠️ Курсы валют не обновились после ${RATE_FETCH_MAX_RETRIES} попыток. Бот использует последние доступные курсы; операции без курса остаются ожидающими.`,
     ).catch((sendErr) =>
       logger.error({ err: sendErr }, '[CRON] Failed to notify admin about rate failure'),
     );

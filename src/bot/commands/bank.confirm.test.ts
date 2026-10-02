@@ -957,6 +957,30 @@ describe('missing bank currency rate', () => {
     mockBankConnections.findActiveByGroupId.mockImplementation(() => [{ id: 3 }]);
   });
 
+  test('the original pending transaction can be confirmed after an FX refresh', async () => {
+    const tx = makeTx({ currency: 'QAC', amount: 100, awaiting_comment: 1, edit_in_progress: 1 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    const ctx = makeCallbackCtx();
+    await handleBankNoCommentCallback(ctx as never, tx.id, 100);
+    expect(mockExpenses.create).not.toHaveBeenCalled();
+    expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ result: 'success', rates: { EUR: 1, QAC: 4 } })),
+    );
+    try {
+      const { updateExchangeRates } = await import('../../services/currency/converter');
+      await updateExchangeRates();
+      await handleBankNoCommentCallback(ctx as never, tx.id, 100);
+      expect(mockExpenses.create).toHaveBeenCalledTimes(1);
+      expect(mockExpenses.create).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 100, currency: 'QAC', eur_amount: 25 }),
+      );
+      expect(mockBankTransactions.updateStatus).toHaveBeenCalledWith(tx.id, group.id, 'confirmed');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   test('no-comment confirmation does not create or confirm an expense', async () => {
     const tx = makeTx({ currency: 'XYZ', awaiting_comment: 1, edit_in_progress: 1 });
     mockBankTransactions.findById.mockImplementation(() => tx);

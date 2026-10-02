@@ -9,7 +9,12 @@ import type { BankConnection, BankTransaction, Group } from '../../database/type
 import { decryptData } from '../../utils/crypto';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { convertAnyToEUR, formatAmount } from '../currency/converter';
+import {
+  convertAnyToEUR,
+  formatAmount,
+  formatMissingExchangeRate,
+  updateExchangeRates,
+} from '../currency/converter';
 import { getOtpHint } from './otp-hints';
 import { cancelOtpRequest, registerOtpRequest } from './otp-manager';
 import { buildBankManageKeyboard, buildBankStatusText } from './panel-builder';
@@ -61,7 +66,7 @@ export function startSyncService(): void {
 }
 
 export function triggerManualSync(connectionId: number): Promise<void> {
-  return runSyncCycle(connectionId, true);
+  return runSyncCycle(connectionId, true, true);
 }
 
 /**
@@ -79,7 +84,11 @@ export function activateNewConnection(connectionId: number): Promise<void> {
   );
 }
 
-async function runSyncCycle(connectionId: number, allowOtp = false): Promise<void> {
+async function runSyncCycle(
+  connectionId: number,
+  allowOtp = false,
+  refreshRates = false,
+): Promise<void> {
   if (syncingConnections.has(connectionId)) {
     logger.info({ connectionId }, 'Sync already in progress — skipping');
     return;
@@ -98,6 +107,14 @@ async function runSyncCycle(connectionId: number, allowOtp = false): Promise<voi
   logger.info({ connectionId, bank: conn.bank_name }, 'Starting sync cycle');
 
   try {
+    if (refreshRates) {
+      await updateExchangeRates().catch((err) =>
+        logger.warn(
+          { err, connectionId },
+          'FX provider unavailable during manual retry; retaining pending transactions',
+        ),
+      );
+    }
     // Load and decrypt credentials
     const credentials = database.bankCredentials.findByConnectionId(connectionId);
     if (!credentials) {
@@ -717,7 +734,8 @@ function formatConfirmationCard(
   bankName: string,
   isLarge: boolean | null,
 ): string {
-  const prefix = isLarge === null ? '⚠️ Нет курса валюты' : isLarge ? '⚠️ Крупная транзакция' : '💳';
+  const prefix =
+    isLarge === null ? `⚠️ ${formatMissingExchangeRate()}` : isLarge ? '⚠️ Крупная транзакция' : '💳';
   const merchant = escapeHtml(tx.merchant_normalized ?? tx.merchant ?? 'Неизвестно');
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
   const dateTime = tx.time ? `${tx.date} ${tx.time}` : tx.date;

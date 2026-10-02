@@ -74,6 +74,8 @@ let cachedAllRates: Record<string, number> | null = null;
 // String-precision rates derived from API response via Big.js division (used by convertCurrencyBig)
 let cachedRatesStr: Record<CurrencyCode, string> | null = null;
 let cacheTimestamp: number = 0;
+let providerUnavailable = false;
+let refreshInFlight: Promise<void> | null = null;
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
 /**
@@ -95,6 +97,7 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
 
     const response = await fetch('https://open.er-api.com/v6/latest/EUR', {
       headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!response.ok) {
@@ -110,27 +113,37 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
     }
 
     // Convert from "1 EUR = X OTHER" to "1 OTHER = X EUR"
+    const rateFor = (currency: CurrencyCode): number => {
+      const value = data.rates[currency];
+      return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? 1 / value
+        : (cachedRates?.[currency] ?? FALLBACK_RATES[currency]);
+    };
     const rates: Record<CurrencyCode, number> = {
       EUR: 1.0,
-      USD: 1 / (data.rates['USD'] || 1),
-      RUB: 1 / (data.rates['RUB'] || 1),
-      RSD: 1 / (data.rates['RSD'] || 1),
-      GBP: 1 / (data.rates['GBP'] || 1),
-      BYN: 1 / (data.rates['BYN'] || 1),
-      CHF: 1 / (data.rates['CHF'] || 1),
-      JPY: 1 / (data.rates['JPY'] || 1),
-      CNY: 1 / (data.rates['CNY'] || 1),
-      INR: 1 / (data.rates['INR'] || 1),
-      LKR: 1 / (data.rates['LKR'] || 1),
-      AED: 1 / (data.rates['AED'] || 1),
-      EGP: 1 / (data.rates['EGP'] || 1),
+      USD: rateFor('USD'),
+      RUB: rateFor('RUB'),
+      RSD: rateFor('RSD'),
+      GBP: rateFor('GBP'),
+      BYN: rateFor('BYN'),
+      CHF: rateFor('CHF'),
+      JPY: rateFor('JPY'),
+      CNY: rateFor('CNY'),
+      INR: rateFor('INR'),
+      LKR: rateFor('LKR'),
+      AED: rateFor('AED'),
+      EGP: rateFor('EGP'),
     };
 
     // Build string-precision rates for Big.js arithmetic.
     // API gives "1 EUR = X currency" → we compute "1 currency = 1/X EUR" via Big.js division
     // to avoid float imprecision in convertCurrencyBig.
-    const toRateStr = (apiKey: string): string =>
-      new Big(1).div(new Big(String(data.rates[apiKey] || 1))).toFixed(15);
+    const toRateStr = (apiKey: CurrencyCode): string => {
+      const value = data.rates[apiKey];
+      return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? new Big(1).div(new Big(String(value))).toFixed(15)
+        : (cachedRatesStr?.[apiKey] ?? FALLBACK_RATES_STR[apiKey]);
+    };
     cachedRatesStr = {
       EUR: '1',
       USD: toRateStr('USD'),
@@ -151,7 +164,7 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
     const allRates: Record<string, number> = { EUR: 1.0 };
     for (const currency of knownCurrencies) {
       const apiRate = data.rates[currency];
-      if (typeof apiRate === 'number' && apiRate > 0) {
+      if (typeof apiRate === 'number' && Number.isFinite(apiRate) && apiRate > 0) {
         allRates[currency] = 1 / apiRate;
       }
     }
@@ -182,11 +195,11 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
 /**
  * Get current exchange rates (from cache or API)
  */
-async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
+async function getExchangeRates(force = false): Promise<Record<CurrencyCode, number>> {
   const now = Date.now();
 
   // Check if cache is still valid
-  if (cachedRates && now - cacheTimestamp < CACHE_DURATION) {
+  if (!force && cachedRates && now - cacheTimestamp < CACHE_DURATION) {
     logger.info('[CURRENCY] Using cached exchange rates');
     return cachedRates;
   }
@@ -195,18 +208,15 @@ async function getExchangeRates(): Promise<Record<CurrencyCode, number>> {
   const apiRates = await fetchExchangeRates();
 
   if (apiRates) {
+    providerUnavailable = false;
     cachedRates = apiRates;
     cacheTimestamp = now;
     return apiRates;
   }
 
-  // API failed — reset caches so all callers fall back to hardcoded rates
-  cachedRatesStr = null;
-  cachedAllRates = null;
-
-  // Fallback to hardcoded rates
-  logger.info('[CURRENCY] Using fallback exchange rates');
-  return FALLBACK_RATES;
+  // A failed refresh must reach the cron retry loop without discarding usable cached rates.
+  providerUnavailable = true;
+  throw new Error('Exchange-rate provider unavailable');
 }
 
 /**
@@ -277,6 +287,16 @@ export function convertAnyToEUR(amount: number, currency: string): number | null
   return Math.round(amount * rate * 100) / 100;
 }
 
+/** Why a bank conversion has no rate; provider failure is distinct from an absent currency. */
+export function getExchangeRateFailure(): 'provider_unavailable' | 'missing_rate' {
+  return providerUnavailable ? 'provider_unavailable' : 'missing_rate';
+}
+
+/** User-facing failure label shared by confirmation and pending transaction cards. */
+export function formatMissingExchangeRate(): string {
+  return providerUnavailable ? 'Сервис курсов недоступен' : 'Нет курса валюты';
+}
+
 /**
  * Get exchange rate for currency
  */
@@ -319,15 +339,18 @@ export function formatAmount(amount: number, currency: string, aiContext = false
 }
 
 /**
- * Force-fetch exchange rates from API, resetting all caches.
+ * Force-fetch exchange rates; preserve usable caches and reject on provider failure.
  * Called from cron and on bot startup.
  */
-export async function updateExchangeRates(): Promise<void> {
-  cachedRates = null;
-  cachedRatesStr = null;
-  cachedAllRates = null;
-  cacheTimestamp = 0;
-  await getExchangeRates();
+export function updateExchangeRates(): Promise<void> {
+  if (!refreshInFlight) {
+    refreshInFlight = getExchangeRates(true)
+      .then(() => {})
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
 }
 
 /**
