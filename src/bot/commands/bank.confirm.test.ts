@@ -946,3 +946,40 @@ describe('handleBankReceiptCallback', () => {
     );
   });
 });
+
+// Missing FX must leave the original pending transaction available for retry.
+describe('missing bank currency rate', () => {
+  beforeEach(() => {
+    mockExpenses.create.mockImplementation(() => ({ id: 99 }));
+    mockGroups.findByTelegramGroupId.mockImplementation(() => group);
+    mockUsers.findByTelegramId.mockImplementation(() => user);
+    mockTransaction.mockImplementation((fn: () => unknown) => fn());
+    mockBankConnections.findActiveByGroupId.mockImplementation(() => [{ id: 3 }]);
+  });
+
+  test('no-comment confirmation does not create or confirm an expense', async () => {
+    const tx = makeTx({ currency: 'XYZ', awaiting_comment: 1, edit_in_progress: 1 });
+    mockBankTransactions.findById.mockImplementation(() => tx);
+    const ctx = makeCallbackCtx();
+    await handleBankNoCommentCallback(ctx as never, tx.id, 100);
+    expect(mockExpenses.create).not.toHaveBeenCalled();
+    expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
+    expect(mockBankTransactions.setMatchedExpense).not.toHaveBeenCalled();
+    expect(mockBankTransactions.setEditInProgress).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
+      text: 'Нет курса валюты. Расход не записан; повтори после обновления курса.',
+    });
+  });
+
+  test('comment reply keeps pending transaction and does not claim success', async () => {
+    const tx = makeTx({ currency: 'XYZ', awaiting_comment: 1, edit_in_progress: 1 });
+    mockBankTransactions.findPendingByConnectionId.mockImplementation(() => [tx]);
+    expect(await handleBankEditReply(makeMsgCtx() as never, 100, 'coffee', 555)).toBe(true);
+    expect(mockExpenses.create).not.toHaveBeenCalled();
+    expect(mockBankTransactions.updateStatus).not.toHaveBeenCalled();
+    expect(mockBankTransactions.setAwaitingComment).not.toHaveBeenCalled();
+    expect(mockBankSendMessage).toHaveBeenCalledWith(
+      'Нет курса валюты. Расход не записан; повтори после обновления курса.',
+    );
+  });
+});

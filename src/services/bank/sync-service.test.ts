@@ -38,7 +38,7 @@ mock.module('../../utils/crypto', () => ({
 // ── Currency converter ─────────────────────────────────────────────────────
 
 mock.module('../currency/converter', () => ({
-  convertAnyToEUR: (amount: number) => amount,
+  convertAnyToEUR: (amount: number, currency: string) => (currency === 'XYZ' ? null : amount),
   formatAmount: (amount: number, currency: string) => `${amount.toFixed(2)} ${currency}`,
 }));
 
@@ -932,4 +932,26 @@ describe('runSyncCycle — bank_cards_enabled toggle', () => {
     expect(findOldTxSummaryCard()).toBeTruthy();
     expect(logMock.error).not.toHaveBeenCalled();
   });
+});
+
+it('keeps unknown FX transaction pending and marks classification unavailable', async () => {
+  const conn = seedConnection();
+  scrapeImpl.fn = async () => ({
+    accounts: [],
+    transactions: [
+      {
+        id: 'fx-unknown',
+        date: `${todayStr()}T12:00:00Z`,
+        sum: -1000,
+        currency: 'XYZ',
+        merchant: 'FX Store',
+      },
+    ],
+  });
+  await triggerManualSync(conn.id);
+  expect(store.transactions[0]?.status).toBe('pending');
+  expect(store.transactions[0]?.currency).toBe('XYZ');
+  const card = sendMessageMock.mock.calls.find((call) => call[0].includes('FX Store'))?.[0];
+  expect(card).toContain('Нет курса валюты');
+  expect(card).not.toContain('Крупная транзакция');
 });

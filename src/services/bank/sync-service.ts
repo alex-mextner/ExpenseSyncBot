@@ -669,7 +669,7 @@ async function pushAutomaticCards(
 
     // Large transaction: compare EUR equivalent to threshold
     const amountInEur = convertAnyToEUR(inserted.amount, inserted.currency);
-    const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
+    const isLarge = amountInEur === null ? null : amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
 
     const cardText = formatConfirmationCard(
       inserted,
@@ -715,9 +715,9 @@ function formatConfirmationCard(
   tx: BankTransaction,
   category: string,
   bankName: string,
-  isLarge: boolean,
+  isLarge: boolean | null,
 ): string {
-  const prefix = isLarge ? '⚠️ Крупная транзакция' : '💳';
+  const prefix = isLarge === null ? '⚠️ Нет курса валюты' : isLarge ? '⚠️ Крупная транзакция' : '💳';
   const merchant = escapeHtml(tx.merchant_normalized ?? tx.merchant ?? 'Неизвестно');
   const mccLine = tx.mcc ? `\n🏷 MCC: ${tx.mcc}` : '';
   const dateTime = tx.time ? `${tx.date} ${tx.time}` : tx.date;
@@ -739,7 +739,7 @@ async function sendConfirmationCard(
   conn: BankConnection,
 ): Promise<void> {
   const amountInEur = convertAnyToEUR(tx.amount, tx.currency);
-  const isLarge = amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
+  const isLarge = amountInEur === null ? null : amountInEur >= env.LARGE_TX_THRESHOLD_EUR;
 
   const cardText = formatConfirmationCard(tx, category, conn.display_name, isLarge);
 

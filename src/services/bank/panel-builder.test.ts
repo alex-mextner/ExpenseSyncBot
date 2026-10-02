@@ -583,3 +583,9 @@ describe('buildCombinedBankKeyboard', () => {
     }
   });
 });
+
+test('combined balance is unavailable when one currency has no rate', () => {
+  const text = buildCombinedBankStatusText([baseConn], null);
+  expect(text).toContain('Итого: недоступно — нет курса валюты');
+  expect(text).not.toContain('Итого: ~');
+});

@@ -1065,3 +1065,17 @@ describe('handleBankWizardCancelCallback', () => {
     );
   });
 });
+
+test('combined panel receives unknown total when any balance has no FX rate', async () => {
+  const connections = [
+    makeConnection({ id: 101, status: 'active' }),
+    makeConnection({ id: 102, status: 'active' }),
+  ];
+  mockBankConnections.findAllByGroupId.mockImplementation(() => connections);
+  mockBankAccounts.findByGroupId.mockImplementation(() => [
+    makeAccount({ balance: 100, currency: 'EUR' }),
+    makeAccount({ balance: 200, currency: 'XYZ' }),
+  ]);
+  await handleBankCommand(makeCommandCtx() as never, group, makeBot() as never);
+  expect(panelBuilderModule.buildCombinedBankStatusText).toHaveBeenCalledWith(connections, null);
+});

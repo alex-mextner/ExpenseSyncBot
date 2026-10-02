@@ -258,10 +258,10 @@ export function convertCurrency(
 /**
  * Convert amount to EUR for any ISO 4217 currency code, including those outside SUPPORTED_CURRENCIES.
  * Uses live API rates (all currencies), then SUPPORTED_CURRENCIES fallback, then BANK_FALLBACK_RATES.
- * If the currency is completely unknown, logs a warning and returns the amount unchanged.
+ * If the rate is unavailable or invalid, returns null so callers cannot fabricate EUR.
  * Intended for bank transaction processing where the currency comes from the bank plugin.
  */
-export function convertAnyToEUR(amount: number, currency: string): number {
+export function convertAnyToEUR(amount: number, currency: string): number | null {
   if (currency === 'EUR') return amount;
   // Register so the next scheduled API fetch caches this currency's live rate.
   knownCurrencies.add(currency);
@@ -270,9 +270,9 @@ export function convertAnyToEUR(amount: number, currency: string): number {
     cachedRates?.[currency as CurrencyCode] ??
     FALLBACK_RATES[currency as CurrencyCode] ??
     BANK_FALLBACK_RATES[currency];
-  if (rate === undefined) {
-    logger.warn({ currency }, 'convertAnyToEUR: no rate found, treating as EUR');
-    return Math.round(amount * 100) / 100;
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
+    logger.warn({ currency }, 'convertAnyToEUR: exchange rate unavailable');
+    return null;
   }
   return Math.round(amount * rate * 100) / 100;
 }

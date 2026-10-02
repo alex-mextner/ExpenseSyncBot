@@ -296,7 +296,10 @@ async function showBanksPanel(
 
   // Send one combined message for all banks
   const accounts = database.bankAccounts.findByGroupId(group.id);
-  const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
+  const totalEur = accounts.reduce<number | null>((sum, account) => {
+    const amount = convertAnyToEUR(account.balance, account.currency);
+    return sum === null || amount === null ? null : sum + amount;
+  }, 0);
   const text = buildCombinedBankStatusText(connections, totalEur);
   const keyboard = buildCombinedBankKeyboard(connections);
 
@@ -756,7 +759,10 @@ export async function handleBankEditReply(
     comment = parts[1] ?? editTx.merchant_normalized ?? editTx.merchant ?? '';
   }
 
-  await saveConfirmedTransaction(editTx, group.id, user.id, category, comment);
+  if (!saveConfirmedTransaction(editTx, group.id, user.id, category, comment)) {
+    await sendMessage('Нет курса валюты. Расход не записан; повтори после обновления курса.');
+    return true;
+  }
   database.bankTransactions.setEditInProgress(editTx.id, false);
   database.bankTransactions.setAwaitingComment(editTx.id, false);
 
@@ -810,7 +816,12 @@ export async function handleBankNoCommentCallback(
   const tx = confirmed;
   const category = tx.prefill_category ?? tx.merchant_normalized ?? tx.merchant ?? 'прочее';
 
-  saveConfirmedTransaction(tx, group.id, user.id, category, '');
+  if (!saveConfirmedTransaction(tx, group.id, user.id, category, '')) {
+    await ctx.answerCallbackQuery({
+      text: 'Нет курса валюты. Расход не записан; повтори после обновления курса.',
+    });
+    return;
+  }
   database.bankTransactions.setEditInProgress(tx.id, false);
   database.bankTransactions.setAwaitingComment(tx.id, false);
 
@@ -926,7 +937,9 @@ function saveConfirmedTransaction(
   userId: number,
   category: string,
   comment: string,
-): void {
+): boolean {
+  const eurAmount = convertAnyToEUR(tx.amount, tx.currency);
+  if (eurAmount === null) return false;
   const txCurrency = tx.currency as import('../../config/constants').CurrencyCode;
   const expense = database.expenses.create({
     group_id: groupId,
@@ -936,7 +949,7 @@ function saveConfirmedTransaction(
     comment,
     amount: tx.amount,
     currency: txCurrency,
-    eur_amount: convertAnyToEUR(tx.amount, tx.currency),
+    eur_amount: eurAmount,
   });
 
   database.bankTransactions.updateStatus(tx.id, groupId, 'confirmed');
@@ -951,6 +964,7 @@ function saveConfirmedTransaction(
       user_comment: comment,
     });
   }
+  return true;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

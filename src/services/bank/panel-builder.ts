@@ -121,7 +121,7 @@ export function timeSince(isoDate: string): string {
  */
 export function buildCombinedBankStatusText(
   connections: BankConnection[],
-  totalEur: number,
+  totalEur: number | null,
 ): string {
   // All connections in a panel belong to the same group, so the first one decides
   // the cards state. Sections render without the hint (appended once below the total)
@@ -129,7 +129,8 @@ export function buildCombinedBankStatusText(
   const first = connections[0];
   const cardsEnabled = first ? cardsEnabledForConnection(first) : true;
   const sections = connections.map((conn) => renderBankSection(conn, cardsEnabled)).join('\n\n');
-  return `${sections}\n\nИтого: ~${totalEur.toFixed(0)} EUR${bankCardsOffHint(cardsEnabled)}`;
+  const total = totalEur === null ? 'недоступно — нет курса валюты' : `~${totalEur.toFixed(0)} EUR`;
+  return `${sections}\n\nИтого: ${total}${bankCardsOffHint(cardsEnabled)}`;
 }
 
 /**
