@@ -2,7 +2,7 @@
  * Tool execution routing and implementation
  * Maps tool calls to database operations and services
  */
-import type Big from 'big.js';
+import Big from 'big.js';
 import { endOfMonth, format, getDaysInMonth } from 'date-fns';
 import { marked } from 'marked';
 import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
@@ -16,8 +16,8 @@ import { pluralize } from '../../utils/pluralize';
 import { formatReceiptCommentForTelegram } from '../../utils/receipt-display';
 import { spendingAnalytics } from '../analytics/spending-analytics';
 import { getBudgetManager } from '../budget-manager';
-import { evaluateCurrencyExpression } from '../currency/calculator';
 import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
+import { evaluateFreshCurrencyExpression } from '../currency/live-calculator';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
 import {
@@ -90,7 +90,7 @@ export async function executeTool(
       case 'manage_category':
         return await executeManageCategory(input, ctx);
       case 'calculate':
-        return executeCalculate(input, ctx);
+        return await executeCalculate(input, ctx);
       case 'get_bank_transactions':
         return executeGetBankTransactions(input, ctx);
       case 'get_bank_balances':
@@ -941,47 +941,35 @@ function formatCalculatorResult(n: Big): string {
   return n.toFixed(2).replace(/\.?0+$/, '');
 }
 
-function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
+async function executeCalculate(
+  input: Record<string, unknown>,
+  ctx: AgentContext,
+): Promise<ToolResult> {
   const expression = input['expression'] as string;
-  if (!expression) {
-    return { success: false, error: 'expression is required' };
-  }
-
+  if (!expression) return { success: false, error: 'expression is required' };
   const group = database.groups.findById(ctx.groupId);
-  if (!group) {
-    return { success: false, error: 'Group not found' };
-  }
+  if (!group) return { success: false, error: 'Group not found' };
   const rawCurrency =
     (input['target_currency'] as string | undefined) || group.default_currency || BASE_CURRENCY;
-  if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode)) {
+  if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode))
     return { success: false, error: `Unknown currency: "${rawCurrency}"` };
+  try {
+    const result = await evaluateFreshCurrencyExpression(expression, rawCurrency as CurrencyCode);
+    const formatted = formatCalculatorResult(new Big(result.value));
+    const output = result.hasCurrency ? `${formatted} ${rawCurrency}` : formatted;
+    return result.rateAsOf
+      ? {
+          success: true,
+          output: `${output}\nRate source: ${result.rateSource}; as of ${result.rateAsOf}; daily indicative, not a bank quote.`,
+        }
+      : { success: true, output };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    return {
+      success: false,
+      error: `Cannot evaluate: "${expression}" — ${message}. No stale or 1:1 FX fallback was used.`,
+    };
   }
-  const targetCurrency = rawCurrency as CurrencyCode;
-
-  const result = evaluateCurrencyExpression(expression, targetCurrency);
-  if (result === null) {
-    const cleaned = expression.replace(/\s+/g, '');
-    let hint: string;
-    if (cleaned.length > 500) {
-      hint = 'expression too long (max 500 chars)';
-    } else if (!/\d/.test(expression)) {
-      hint = 'no numbers found in expression';
-    } else if (!/[+\-*/×]/.test(expression) && !/\d\s+\d/.test(expression)) {
-      // Single number with optional currency — might just need no operator
-      hint =
-        'single value with no operator; if this is a currency conversion (e.g. "90000 RSD"), it should work — check currency spelling';
-    } else if (/[^0-9+\-*/×÷.,% A-Za-zА-Яа-яёЁ$€£¥₽₸₴₼฿]/.test(expression)) {
-      hint = 'expression contains unsupported characters';
-    } else {
-      hint =
-        'check that operators (+−×÷) are between numbers, no parentheses, currency codes are correct';
-    }
-    return { success: false, error: `Cannot evaluate: "${expression}" — ${hint}` };
-  }
-
-  const formatted = formatCalculatorResult(result.value);
-  const output = result.hasCurrency ? `${formatted} ${targetCurrency}` : formatted;
-  return { success: true, output };
 }
 
 // === Bank tools ===
