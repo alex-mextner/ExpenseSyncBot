@@ -16,7 +16,7 @@ const userRepo = new UserRepository(db);
 const groupsStub = { findById: mock((_id: number) => ({ id: 1, google_refresh_token: 'tok' })) };
 const budgetsStub = {
   getBudgetForMonth: mock(() => null),
-  getAllBudgetsForMonth: mock((): unknown[] => []),
+  getBudgetCandidatesForMonth: mock((): unknown[] => []),
 };
 const expensesStub = {
   getMonthlyHistoryByCategory: mock((): unknown[] => []),
@@ -54,7 +54,7 @@ mock.module('../../services/budget-manager', () => ({
   getBudgetManager: () => ({ set: setBudgetMock }),
 }));
 
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Group, User } from '../../database/types';
 
 const {
@@ -62,6 +62,7 @@ const {
   handleBudgetPromptText,
   lookupPromptForCallback,
   sendBudgetPrompt,
+  sendBudgetPrompts,
   skipBudgetPrompt,
 } = await import('./budget-prompt');
 
@@ -109,7 +110,7 @@ beforeEach(() => {
   setBudgetMock.mockClear();
   setBudgetMock.mockImplementation(() => Promise.resolve({ sheetsSynced: true }));
   budgetsStub.getBudgetForMonth.mockReturnValue(null);
-  budgetsStub.getAllBudgetsForMonth.mockReturnValue([]);
+  budgetsStub.getBudgetCandidatesForMonth.mockReturnValue([]);
   expensesStub.getMonthlyHistoryByCategory.mockReturnValue([]);
   logMock.error.mockClear();
   logMock.warn.mockClear();
@@ -126,7 +127,7 @@ describe('sendBudgetPrompt', () => {
     expect(created?.telegram_message_id).toBe(1000);
     const [text, options] = sendMessageMock.mock.calls[0] ?? [];
     expect(text).toContain('Food');
-    expect(text).toContain('траты в прошлом месяце');
+    expect(text).toContain('последний месяц с расходами');
     expect(keyboardData(options)).toContain(`budget:psuggest:${created?.id}:200`);
     expect(keyboardData(options)).toContain(`budget:pskip:${created?.id}`);
   });
@@ -299,4 +300,76 @@ describe('prompt lookup, apply and skip', () => {
     expect(setBudgetMock).not.toHaveBeenCalled();
     expect(prompts.findById(id)?.status).toBe('skipped');
   });
+});
+
+afterEach(() => setSystemTime());
+
+test('a September prompt answered in October still writes September', async () => {
+  setSystemTime(new Date(2026, 8, 30, 23, 59));
+  const id = await openPrompt('Food');
+  expect(sendMessageMock.mock.calls[0]?.[0]).toContain('сентябрь 2026');
+  setSystemTime(new Date(2026, 9, 1, 0, 1));
+  const prompt = prompts.findById(id);
+  if (!prompt) throw new Error('missing synthetic prompt');
+  await applyBudgetPrompt(prompt, 150, 'EUR');
+  expect(setBudgetMock.mock.calls[0]?.[0].month).toBe('2026-09');
+});
+
+test('a failed suggestion read does not leave an invisible prompt', async () => {
+  expensesStub.getMonthlyHistoryByCategory.mockImplementationOnce(() => {
+    throw new Error('synthetic read failure');
+  });
+  await expect(sendBudgetPrompt({ group, userId: user.id, category: 'Food' })).rejects.toThrow(
+    'synthetic read failure',
+  );
+  expect(prompts.findActiveForUser(group.id, user.id, null)).toEqual([]);
+  expect(await handleBudgetPromptText(input('150'))).toBe(false);
+  expect(setBudgetMock).not.toHaveBeenCalled();
+});
+
+test('a category batch reads shared history and both budget months only once', async () => {
+  expensesStub.getMonthlyHistoryByCategory.mockClear();
+  budgetsStub.getBudgetCandidatesForMonth.mockClear();
+  expensesStub.getMonthlyHistoryByCategory.mockReturnValue([
+    { category: 'Food', month: '2026-09', monthly_total: 200, tx_count: 4 },
+    { category: 'Gym', month: '2026-09', monthly_total: 70, tx_count: 1 },
+  ]);
+  await sendBudgetPrompts({ group, userId: user.id, categories: ['Food', 'Gym'] });
+  expect(expensesStub.getMonthlyHistoryByCategory).toHaveBeenCalledTimes(1);
+  expect(budgetsStub.getBudgetCandidatesForMonth).toHaveBeenCalledTimes(2);
+  expect(sendMessageMock).toHaveBeenCalledTimes(2);
+  expect(sendMessageMock.mock.calls[0]?.[0]).toContain('200.00');
+  expect(sendMessageMock.mock.calls[1]?.[0]).toContain('70.00');
+});
+
+test('a rejected send leaves no invisible active prompt', async () => {
+  sendMessageMock.mockRejectedValueOnce(new Error('synthetic send failure'));
+  await expect(sendBudgetPrompt({ group, userId: user.id, category: 'Food' })).rejects.toThrow(
+    'synthetic send failure',
+  );
+  expect(prompts.findActiveForUser(group.id, user.id, null)).toEqual([]);
+});
+
+test('legacy prompts without a recorded month never guess a financial target', async () => {
+  const id = await openPrompt('Food');
+  db.query('UPDATE budget_prompts SET target_month = NULL WHERE id = ?').run(id);
+  const prompt = prompts.findById(id);
+  if (!prompt) throw new Error('missing synthetic prompt');
+  expect(await applyBudgetPrompt(prompt, 150, 'EUR')).toBe('failed');
+  expect(setBudgetMock).not.toHaveBeenCalled();
+  expect(prompts.findById(id)?.status).toBe('skipped');
+});
+
+test('batch suggestions retain previous and current category budget sources', async () => {
+  budgetsStub.getBudgetCandidatesForMonth
+    .mockReturnValueOnce([
+      { category: 'FOOD', limit_amount: 180, currency: 'EUR' },
+      { category: 'Gym', limit_amount: 70, currency: 'EUR' },
+    ])
+    .mockReturnValueOnce([{ category: 'Food', limit_amount: 120, currency: 'EUR' }]);
+  await sendBudgetPrompts({ group, userId: user.id, categories: ['Food', 'Gym'] });
+  const text = sendMessageMock.mock.calls[0]?.[0];
+  expect(text).toContain('120.00');
+  expect(text).toContain('180.00');
+  expect(sendMessageMock.mock.calls[1]?.[0]).toContain('70.00');
 });

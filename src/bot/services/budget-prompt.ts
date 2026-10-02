@@ -6,7 +6,11 @@ import { database } from '../../database';
 import type { BudgetPrompt, Group, User } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
-import { type BudgetSuggestions, suggestBudgetAmounts } from '../../services/budget-suggestions';
+import {
+  type BudgetSuggestions,
+  suggestBudgetAmounts,
+  suggestBudgetAmountsBatch,
+} from '../../services/budget-suggestions';
 import { parseBudgetInputAmount } from '../../services/currency/budget-amount-parser';
 import { formatAmount } from '../../services/currency/converter';
 import { chatStorage } from '../../utils/chat-context';
@@ -60,11 +64,14 @@ export async function sendBudgetPrompt(params: {
   group: Group;
   userId: number;
   category: string;
+  suggestions?: BudgetSuggestions;
+  now?: Date;
 }): Promise<void> {
   const { group, userId, category } = params;
   const currency = group.default_currency;
   const threadId = chatStorage.getStore()?.threadId ?? null;
-  const now = new Date();
+  const now = params.now ?? new Date();
+  const suggestions = params.suggestions ?? suggestBudgetAmounts(group.id, category, currency, now);
 
   database.budgetPrompts.supersedeActive(group.id, userId, category, threadId);
   const prompt = database.budgetPrompts.create({
@@ -72,25 +79,53 @@ export async function sendBudgetPrompt(params: {
     user_id: userId,
     category,
     currency,
+    target_month: format(now, 'yyyy-MM'),
     message_thread_id: threadId,
   });
 
-  const suggestions = suggestBudgetAmounts(group.id, category, currency, now);
-  const keyboard = createBudgetSuggestionKeyboard(
-    prompt.id,
-    suggestions.options.map((option) => option.amount),
-    currency,
-  );
-  const sent = await sendMessage(formatPromptText(category, suggestions, currency, now), {
-    reply_markup: keyboard,
-  });
-
-  if (sent) {
-    database.budgetPrompts.bindMessage(prompt.id, sent.message_id);
-    return;
+  try {
+    const keyboard = createBudgetSuggestionKeyboard(
+      prompt.id,
+      suggestions.options.map((option) => option.amount),
+      currency,
+    );
+    const sent = await sendMessage(formatPromptText(category, suggestions, currency, now), {
+      reply_markup: keyboard,
+    });
+    if (sent) {
+      database.budgetPrompts.bindMessage(prompt.id, sent.message_id);
+      return;
+    }
+  } catch (error) {
+    database.budgetPrompts.finish(prompt.id, 'skipped');
+    throw error;
   }
   // The user never saw it, so it must not capture their next plain amount.
   database.budgetPrompts.finish(prompt.id, 'skipped');
+}
+
+/** Share one history/budget snapshot across the categories completed by a wizard. */
+export async function sendBudgetPrompts(params: {
+  group: Group;
+  userId: number;
+  categories: string[];
+}): Promise<void> {
+  const now = new Date();
+  const suggestions = suggestBudgetAmountsBatch(
+    params.group.id,
+    params.categories,
+    params.group.default_currency,
+    now,
+  );
+  for (const category of params.categories) {
+    await sendBudgetPrompt({
+      group: params.group,
+      userId: params.userId,
+      category,
+      now,
+      suggestions: suggestions.get(category) ?? { options: [] },
+    });
+  }
 }
 
 /** Resolve a button's prompt id for the pressing user; stale/foreign prompts are rejected. */
@@ -111,13 +146,18 @@ export async function applyBudgetPrompt(
   amount: number,
   currency: CurrencyCode,
 ): Promise<ApplyResult> {
+  if (!prompt.target_month) {
+    // Legacy prompts did not record the displayed month; never guess the budget's target.
+    database.budgetPrompts.finish(prompt.id, 'skipped');
+    return 'failed';
+  }
   if (!database.budgetPrompts.finish(prompt.id, 'used')) return 'already_handled';
 
   try {
     const result = await getBudgetManager().set({
       groupId: prompt.group_id,
       category: prompt.category,
-      month: format(new Date(), 'yyyy-MM'),
+      month: prompt.target_month,
       amount,
       currency,
     });

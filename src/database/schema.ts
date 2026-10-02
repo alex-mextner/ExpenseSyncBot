@@ -1433,6 +1433,12 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Added persistent budget setup prompts');
       },
     },
+    {
+      name: '053_budget_prompt_target_month',
+      up: () => {
+        db.exec('ALTER TABLE budget_prompts ADD COLUMN target_month TEXT');
+      },
+    },
   ];
 
   // Check and run migrations

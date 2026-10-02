@@ -153,6 +153,10 @@ const skipPromptMock = mock((_prompt: PromptStub) => true);
 const sendBudgetPromptMock = mock((_params: unknown) => Promise.resolve());
 mock.module('../services/budget-prompt', () => ({
   sendBudgetPrompt: sendBudgetPromptMock,
+  sendBudgetPrompts: async (params: { group: unknown; userId: number; categories: string[] }) => {
+    for (const category of params.categories)
+      await sendBudgetPromptMock({ group: params.group, userId: params.userId, category });
+  },
   lookupPromptForCallback: lookupPromptMock,
   applyBudgetPrompt: applyPromptMock,
   skipBudgetPrompt: skipPromptMock,

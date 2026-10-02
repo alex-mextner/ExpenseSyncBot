@@ -3,6 +3,8 @@
 import { addMonths, format, startOfMonth } from 'date-fns';
 import { BASE_CURRENCY, type CurrencyCode } from '../config/constants';
 import { database } from '../database';
+import type { Budget } from '../database/types';
+import { findBestCategoryMatch } from '../utils/fuzzy-search';
 import { convertCurrency } from './currency/converter';
 
 export type BudgetSuggestionKind =
@@ -144,43 +146,71 @@ function monthKey(date: Date): string {
   return format(date, 'yyyy-MM');
 }
 
-function collectMonthlySpendEur(groupId: number, category: string, now: Date): number[] {
+/** Gather shared history/current and previous budgets once for a wizard's category batch. */
+export function suggestBudgetAmountsBatch(
+  groupId: number,
+  categories: string[],
+  currency: CurrencyCode,
+  now: Date = new Date(),
+): Map<string, BudgetSuggestions> {
+  const result = new Map<string, BudgetSuggestions>();
+  if (categories.length === 0) return result;
   const currentStart = startOfMonth(now);
-  const from = format(addMonths(currentStart, -HISTORY_MONTHS), 'yyyy-MM-dd');
-  const to = format(currentStart, 'yyyy-MM-dd');
-  const wanted = category.toLowerCase();
-  return database.expenses
-    .getMonthlyHistoryByCategory(groupId, from, to)
-    .filter((row) => row.category.toLowerCase() === wanted && row.monthly_total > 0)
-    .sort((a, b) => a.month.localeCompare(b.month))
-    .map((row) => row.monthly_total);
+  const current = database.budgets.getBudgetCandidatesForMonth(groupId, monthKey(now));
+  const previous = database.budgets.getBudgetCandidatesForMonth(
+    groupId,
+    monthKey(addMonths(currentStart, -1)),
+  );
+  const history = database.expenses.getMonthlyHistoryByCategory(
+    groupId,
+    format(addMonths(currentStart, -HISTORY_MONTHS), 'yyyy-MM-dd'),
+    format(currentStart, 'yyyy-MM-dd'),
+  );
+  const wanted = new Set(categories.map((category) => category.toLowerCase()));
+  const spend = new Map<string, { month: string; amount: number }[]>();
+  for (const row of history) {
+    if (row.monthly_total <= 0) continue;
+    const key = row.category.toLowerCase();
+    if (!wanted.has(key)) continue;
+    const amounts = spend.get(key) ?? [];
+    amounts.push({ month: row.month, amount: row.monthly_total });
+    spend.set(key, amounts);
+  }
+  const matchingBudget = (budgets: Budget[], category: string): MoneyAmount | null => {
+    const match = findBestCategoryMatch(
+      category,
+      budgets.map((budget) => budget.category),
+    );
+    const budget = budgets.find((row) => row.category === match);
+    return budget ? { amount: budget.limit_amount, currency: budget.currency } : null;
+  };
+  for (const category of categories) {
+    result.set(
+      category,
+      buildBudgetSuggestions({
+        currency,
+        previousBudget: matchingBudget(previous, category),
+        currentBudget: matchingBudget(current, category),
+        monthlySpendEur: (spend.get(category.toLowerCase()) ?? [])
+          .sort((a, b) => a.month.localeCompare(b.month))
+          .map((row) => row.amount),
+        otherBudgets: current
+          .filter((row) => row.category.toLowerCase() !== category.toLowerCase())
+          .map((row) => ({ amount: row.limit_amount, currency: row.currency })),
+      }),
+    );
+  }
+  return result;
 }
 
-/** Gather the real data for a category and build suggestions from it. */
+/** Gather the real data for one category, using the same snapshot path as wizard batches. */
 export function suggestBudgetAmounts(
   groupId: number,
   category: string,
   currency: CurrencyCode,
   now: Date = new Date(),
 ): BudgetSuggestions {
-  const thisMonth = monthKey(now);
-  const previous = database.budgets.getBudgetForMonth(
-    groupId,
-    category,
-    monthKey(addMonths(startOfMonth(now), -1)),
+  return (
+    suggestBudgetAmountsBatch(groupId, [category], currency, now).get(category) ?? { options: [] }
   );
-  const current = database.budgets.getBudgetForMonth(groupId, category, thisMonth);
-  const others = database.budgets
-    .getAllBudgetsForMonth(groupId, thisMonth)
-    .filter((budget) => budget.category.toLowerCase() !== category.toLowerCase());
-
-  return buildBudgetSuggestions({
-    currency,
-    previousBudget: previous
-      ? { amount: previous.limit_amount, currency: previous.currency }
-      : null,
-    currentBudget: current ? { amount: current.limit_amount, currency: current.currency } : null,
-    monthlySpendEur: collectMonthlySpendEur(groupId, category, now),
-    otherBudgets: others.map((b) => ({ amount: b.limit_amount, currency: b.currency })),
-  });
 }

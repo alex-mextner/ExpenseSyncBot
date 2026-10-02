@@ -171,6 +171,7 @@ export interface BudgetPrompt {
   user_id: number;
   category: string;
   currency: CurrencyCode;
+  target_month: string | null;
   telegram_message_id: number | null;
   message_thread_id: number | null;
   status: BudgetPromptStatus;
@@ -183,6 +184,7 @@ export interface CreateBudgetPromptData {
   user_id: number;
   category: string;
   currency: CurrencyCode;
+  target_month: string;
   message_thread_id?: number | null;
 }
 

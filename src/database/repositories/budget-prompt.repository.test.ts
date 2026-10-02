@@ -38,6 +38,7 @@ function createPrompt(overrides: { category?: string; thread?: number | null } =
     group_id: groupId,
     user_id: userId,
     category: overrides.category ?? 'Food',
+    target_month: '2026-10',
     currency: 'EUR',
     message_thread_id: overrides.thread ?? null,
   });
@@ -61,8 +62,20 @@ describe('BudgetPromptRepository', () => {
   test('findActiveForUser is scoped by group, user and topic', () => {
     const general = createPrompt({ category: 'A' });
     const topic = createPrompt({ category: 'B', thread: 7 });
-    repo.create({ group_id: otherGroupId, user_id: userId, category: 'C', currency: 'EUR' });
-    repo.create({ group_id: groupId, user_id: otherUserId, category: 'D', currency: 'EUR' });
+    repo.create({
+      group_id: otherGroupId,
+      user_id: userId,
+      category: 'C',
+      target_month: '2026-10',
+      currency: 'EUR',
+    });
+    repo.create({
+      group_id: groupId,
+      user_id: otherUserId,
+      category: 'D',
+      target_month: '2026-10',
+      currency: 'EUR',
+    });
 
     expect(repo.findActiveForUser(groupId, userId, null).map((p) => p.id)).toEqual([general.id]);
     expect(repo.findActiveForUser(groupId, userId, 7).map((p) => p.id)).toEqual([topic.id]);

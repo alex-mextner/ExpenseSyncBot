@@ -7,15 +7,16 @@ export class BudgetPromptRepository {
 
   create(data: CreateBudgetPromptData): BudgetPrompt {
     const result = this.db
-      .query<{ id: number }, [number, number, string, string, number | null]>(`
+      .query<{ id: number }, [number, number, string, string, number | null, string]>(`
         INSERT INTO budget_prompts (
           group_id,
           user_id,
           category,
           currency,
-          message_thread_id
+          message_thread_id,
+          target_month
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id
       `)
       .get(
@@ -24,6 +25,7 @@ export class BudgetPromptRepository {
         data.category,
         data.currency,
         data.message_thread_id ?? null,
+        data.target_month,
       );
 
     if (!result) throw new Error('Failed to create budget prompt');

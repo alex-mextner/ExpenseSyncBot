@@ -35,6 +35,7 @@ export interface BudgetReadRepository {
   findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null;
   getBudgetForMonth(groupId: number, category: string, month: string): Budget | null;
   getAllBudgetsForMonth(groupId: number, month: string): Budget[];
+  getBudgetCandidatesForMonth(groupId: number, month: string): Budget[];
   findByGroupId(groupId: number): Budget[];
   getBudgetProgress(
     groupId: number,
@@ -92,9 +93,7 @@ export class BudgetRepository implements BudgetReadRepository {
    * Uses full fuzzy matching pipeline (exact → case → trim → phonetic → Levenshtein)
    * to handle typos, case differences, and minor spelling variations. */
   findByGroupCategoryMonth(groupId: number, category: string, month: string): Budget | null {
-    const rows = this.db
-      .query<Budget, [number, string]>('SELECT * FROM budgets WHERE group_id = ? AND month = ?')
-      .all(groupId, month);
+    const rows = this.getBudgetCandidatesForMonth(groupId, month);
 
     if (rows.length === 0) return null;
 
@@ -108,6 +107,13 @@ export class BudgetRepository implements BudgetReadRepository {
   /** Get budget for exact month — no fallback */
   getBudgetForMonth(groupId: number, category: string, month: string): Budget | null {
     return this.findByGroupCategoryMonth(groupId, category, month);
+  }
+
+  /** Preserve the existing candidate order used by the first-match fuzzy resolver. */
+  getBudgetCandidatesForMonth(groupId: number, month: string): Budget[] {
+    return this.db
+      .query<Budget, [number, string]>('SELECT * FROM budgets WHERE group_id = ? AND month = ?')
+      .all(groupId, month);
   }
 
   /** Get all budgets for exact month — no inheritance loop */

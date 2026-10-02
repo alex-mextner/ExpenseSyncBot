@@ -44,7 +44,7 @@ import { handleDisconnectCancel, handleDisconnectConfirm } from '../commands/dis
 import { cancelPendingFeedback } from '../commands/feedback';
 import { handleSettingsCallback } from '../commands/settings';
 import { createCategoriesListKeyboard } from '../keyboards';
-import { sendBudgetPrompt } from '../services/budget-prompt';
+import { sendBudgetPrompts } from '../services/budget-prompt';
 import {
   getPendingCategoryExpense,
   getPendingCategorySiblings,
@@ -527,9 +527,11 @@ async function advanceCategoryWizard(
 
   // Category confirmation is complete. Only now surface deferred budget actions,
   // so the user never has several different actionable wizard messages at once.
-  for (const category of takeQueuedCategoryBudgetPrompts(userId, sourceMessageId)) {
-    await sendBudgetPrompt({ group, userId, category });
-  }
+  await sendBudgetPrompts({
+    group,
+    userId,
+    categories: takeQueuedCategoryBudgetPrompts(userId, sourceMessageId),
+  });
 }
 
 /**
