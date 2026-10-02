@@ -20,6 +20,9 @@ interface EnvConfig {
   AI_MODEL: string;
   AI_FAST_MODEL: string;
 
+  // Groq Whisper speech-to-text (optional; voice input disabled when absent)
+  GROQ_API_KEY: string;
+
   // HuggingFace Router (fallback + vision)
   HF_TOKEN: string;
   HF_BASE_URL: string;
@@ -71,6 +74,8 @@ function validateEnv(): EnvConfig {
     AI_BASE_URL: getEnvVariable('AI_BASE_URL'),
     AI_MODEL: getEnvVariable('AI_MODEL'),
     AI_FAST_MODEL: getEnvVariable('AI_FAST_MODEL'),
+
+    GROQ_API_KEY: getEnvVariable('GROQ_API_KEY', false),
 
     HF_TOKEN: getEnvVariable('HF_TOKEN'),
     HF_BASE_URL: getEnvVariable('HF_BASE_URL'),

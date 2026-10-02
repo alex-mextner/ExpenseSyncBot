@@ -38,6 +38,20 @@ import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
 
+const VOICE_CONFIRMATION_REQUIRED_TOOLS = new Set([
+  'set_budget',
+  'delete_budget',
+  'add_expense',
+  'delete_expense',
+  'sync_from_sheets',
+  'sync_budgets',
+  'set_custom_prompt',
+  'manage_category',
+  'update_group_setting',
+  'send_feedback',
+  'manage_recurring_pattern',
+]);
+
 /**
  * Execute a tool by name with given input
  */
@@ -47,6 +61,18 @@ export async function executeTool(
   ctx: AgentContext,
 ): Promise<ToolResult> {
   try {
+    if (
+      ctx.inputMode === 'voice_message' &&
+      !ctx.voiceMutationConfirmed &&
+      VOICE_CONFIRMATION_REQUIRED_TOOLS.has(name)
+    ) {
+      return {
+        success: false,
+        error:
+          'Voice input requires confirmation before any change. Summarize the intended change in structured form and ask the user to confirm it. Do not retry this mutating tool in the current turn.',
+      };
+    }
+
     // Pre-sync for tools that read expense/budget data
     const needsExpenseSync = ['get_expenses', 'add_expense', 'delete_expense'].includes(name);
     const needsBudgetSync = ['get_budgets', 'set_budget', 'delete_budget'].includes(name);

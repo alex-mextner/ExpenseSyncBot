@@ -27,6 +27,19 @@ import type { Ctx } from '../types';
 
 const logger = createLogger('ask');
 
+export type AgentInputMode = 'text' | 'voice_message';
+
+export function isExplicitVoiceConfirmation(text: string): boolean {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, '')
+    .trim();
+  return /^(да|давай|верно|подтверждаю|применяй|записывай|добавляй|удаляй|сохраняй|ок|окей|yes|confirm|confirmed|apply|do it|go ahead)$/.test(
+    normalized,
+  );
+}
+
 /**
  * Hard cap on how long the advice stream may run before we abort it.
  * Without this, a provider stream that stalls mid-flight leaves the user
@@ -48,6 +61,7 @@ export async function handleAskQuestion(
   question: string,
   bot: Bot,
   isMention = false,
+  inputMode: AgentInputMode = 'text',
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   const chatType = ctx.chat?.type;
@@ -110,7 +124,17 @@ export async function handleAskQuestion(
     return;
   }
 
-  await handleAskWithAnthropic(ctx, question, bot, group, user, userName, userFullName, isMention);
+  await handleAskWithAnthropic(
+    ctx,
+    question,
+    bot,
+    group,
+    user,
+    userName,
+    userFullName,
+    isMention,
+    inputMode,
+  );
 }
 
 /**
@@ -125,6 +149,7 @@ async function handleAskWithAnthropic(
   userName: string,
   userFullName: string,
   isMention = false,
+  inputMode: AgentInputMode = 'text',
 ): Promise<void> {
   const chatId = ctx.chat?.id;
 
@@ -147,6 +172,8 @@ async function handleAskWithAnthropic(
       });
     },
     isMention,
+    inputMode,
+    voiceMutationConfirmed: inputMode === 'voice_message' && isExplicitVoiceConfirmation(question),
     isForumWithoutTopic: ctx.chat?.isForum === true && group.active_topic_id == null,
   };
 

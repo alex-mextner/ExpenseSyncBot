@@ -46,6 +46,10 @@ export interface AgentContext {
   sendPhoto?: (imageBuffer: Buffer) => Promise<void>;
   /** True when the message was sent via explicit @mention — never skip in this case. */
   isMention?: boolean;
+  /** How the current user message entered the agent. */
+  inputMode?: 'text' | 'voice_message';
+  /** True only for a short, explicit voice confirmation such as "да" / "confirm". */
+  voiceMutationConfirmed?: boolean;
   /** True when the group is a forum and /topic has not been configured yet. */
   isForumWithoutTopic?: boolean;
 }

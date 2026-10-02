@@ -318,3 +318,24 @@ describe('validateResponse', () => {
     expect(userMsg?.content).toContain('a, b, c');
   });
 });
+
+describe('voice mutation confirmation validation', () => {
+  test('tells the validator that an unconfirmed voice mutation must stay non-mutating', async () => {
+    mockAiStreamRound.mockResolvedValueOnce(streamResult('APPROVE'));
+
+    await validateResponse({
+      userMessage: 'добавь кофе 3500 динар',
+      toolCalls: [],
+      response: 'Я понял так: кофе, 3500 RSD. Добавить?',
+      voiceMutationConfirmationRequired: true,
+    });
+
+    type MsgOpts = { messages: Array<{ role: string; content: string }> };
+    const opts = (mockAiStreamRound.mock.calls.at(-1) as unknown as [MsgOpts])[0];
+    const systemMsg = opts.messages.find((m) => m.role === 'system');
+    const userMsg = opts.messages.find((m) => m.role === 'user');
+    expect(systemMsg?.content).toContain('VOICE CONFIRMATION EXCEPTION');
+    expect(systemMsg?.content).toContain('must NOT call a mutating tool');
+    expect(userMsg?.content).toContain('VOICE MUTATION CONFIRMATION REQUIRED: yes');
+  });
+});

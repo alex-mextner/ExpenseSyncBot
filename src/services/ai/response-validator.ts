@@ -22,8 +22,14 @@ Your job: check the assistant's response for problems. Be fast and decisive.
 4. **Invented links or sources** — any URL or reference not from tool output.
 5. **Math done manually** — sums, conversions, or arithmetic not performed by the calculate tool (small counts like "3 operations" are OK; pre-calculated stats from tool responses like total/avg/median/min/max are OK — they don't need recalculation).
 
+## VOICE CONFIRMATION EXCEPTION
+When the payload says "VOICE MUTATION CONFIRMATION REQUIRED: yes", the current user message came from speech recognition and has NOT yet been confirmed.
+For a state-changing request in that mode, the assistant must NOT call a mutating tool. A structured interpretation of the intended change plus an explicit confirmation question is the correct response.
+Read-only tools are still required when the answer depends on real financial data, and they should be used to resolve ambiguous categories/recent expense names before asking.
+
 ## AUTOMATIC APPROVE:
 - Greeting, help, or non-data conversational responses (no tools needed).
+- A structured confirmation request for an unconfirmed voice mutation, as described above.
 - Response correctly uses data from tool results with no fabrication.
 - Assistant explicitly told the user that data is incomplete/unavailable.
 
@@ -36,6 +42,7 @@ interface ValidationInput {
   userMessage: string;
   toolCalls: string[];
   response: string;
+  voiceMutationConfirmationRequired?: boolean;
 }
 
 export type ValidationResult = { approved: true } | { approved: false; reason: string };
@@ -45,6 +52,8 @@ export async function validateResponse(input: ValidationInput): Promise<Validati
     input.toolCalls.length > 0 ? input.toolCalls.join(', ') : '(none — no tools were called)';
 
   const userContent = `USER MESSAGE: ${input.userMessage}
+
+VOICE MUTATION CONFIRMATION REQUIRED: ${input.voiceMutationConfirmationRequired ? 'yes' : 'no'}
 
 TOOL CALLS MADE: ${toolCallsSummary}
 

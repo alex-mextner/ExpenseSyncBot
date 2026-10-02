@@ -2677,3 +2677,61 @@ describe('get_bank_balances array bank_name', () => {
     expect(result.summary).toContain('tbc-ge');
   });
 });
+
+describe('voice mutation safety', () => {
+  const mutatingTools = [
+    'set_budget',
+    'delete_budget',
+    'add_expense',
+    'delete_expense',
+    'sync_from_sheets',
+    'sync_budgets',
+    'set_custom_prompt',
+    'manage_category',
+    'update_group_setting',
+    'send_feedback',
+    'manage_recurring_pattern',
+  ];
+
+  test('blocks every mutating tool on an unconfirmed voice request', async () => {
+    const voiceCtx: AgentContext = {
+      ...ctx,
+      inputMode: 'voice_message',
+      voiceMutationConfirmed: false,
+    };
+
+    for (const name of mutatingTools) {
+      const result = await executeTool(name, {}, voiceCtx);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Voice input requires confirmation');
+    }
+  });
+
+  test('still allows calculator calls for a clear voice request', async () => {
+    const voiceCtx: AgentContext = {
+      ...ctx,
+      inputMode: 'voice_message',
+      voiceMutationConfirmed: false,
+    };
+
+    const result = await executeTool('calculate', { expression: '100 - 70' }, voiceCtx);
+    expect(result.success).toBe(true);
+    expect(result.output).toBe('30');
+  });
+
+  test('allows mutation after an explicit short voice confirmation', async () => {
+    const voiceCtx: AgentContext = {
+      ...ctx,
+      inputMode: 'voice_message',
+      voiceMutationConfirmed: true,
+    };
+
+    const result = await executeTool(
+      'add_expense',
+      { amount: 12, currency: 'EUR', category: 'Food', comment: 'coffee' },
+      voiceCtx,
+    );
+
+    expect(result.success).toBe(true);
+  });
+});

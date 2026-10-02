@@ -6,6 +6,7 @@ import { initSender } from '../services/bank/telegram-sender';
 import { runYearSplitMigration } from '../services/google/budget-migration';
 import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets';
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
+import { TranscriptionService } from '../services/voice/transcription-service';
 import { loadDigitEmojis, loadReactionEmojis } from '../utils/digit-emoji';
 import { createLogger } from '../utils/logger.ts';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
@@ -35,6 +36,7 @@ import { requireGoogle, requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
+import { handleVoiceMessage } from './handlers/voice.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
@@ -60,6 +62,8 @@ export function createBot(): Bot {
 
   // Initialize telegram-sender with bot instance — must be after middleware registration
   initSender(bot);
+
+  const transcriptionService = env.GROQ_API_KEY ? new TranscriptionService(env.GROQ_API_KEY) : null;
 
   // Cache bot username
   let botUsername: string | undefined;
@@ -140,6 +144,15 @@ export function createBot(): Bot {
     // Handle photo messages (receipts with QR codes)
     if (ctx.photo && ctx.photo.length > 0) {
       await handlePhotoMessage(ctx);
+      return;
+    }
+
+    // Voice messages: topic filtering happens before STT inside the handler.
+    if (ctx.voice) {
+      await handleVoiceMessage(ctx, bot, {
+        botToken: env.BOT_TOKEN,
+        transcriptionService,
+      });
       return;
     }
 

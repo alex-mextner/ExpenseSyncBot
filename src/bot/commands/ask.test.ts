@@ -427,7 +427,7 @@ describe('handleAdviceCommand — validation and logging', () => {
 
 // ── maybeSmartAdvice ────────────────────────────────────────────────────
 
-const { maybeSmartAdvice } = await import('./ask');
+const { isExplicitVoiceConfirmation, maybeSmartAdvice } = await import('./ask');
 
 describe('maybeSmartAdvice', () => {
   beforeEach(() => {
@@ -518,5 +518,19 @@ describe('maybeSmartAdvice', () => {
 
     await expect(maybeSmartAdvice(1)).resolves.toBeUndefined();
     expect(logMock.error).toHaveBeenCalled();
+  });
+});
+
+describe('isExplicitVoiceConfirmation', () => {
+  test('accepts short explicit confirmations', () => {
+    for (const value of ['да', 'Да!', 'подтверждаю', 'применяй', 'yes', 'go ahead']) {
+      expect(isExplicitVoiceConfirmation(value)).toBe(true);
+    }
+  });
+
+  test('does not treat a confirmation with changed financial details as final approval', () => {
+    for (const value of ['да, но сумма 3000', 'да, категория еда', 'применяй 500 RSD']) {
+      expect(isExplicitVoiceConfirmation(value)).toBe(false);
+    }
   });
 });

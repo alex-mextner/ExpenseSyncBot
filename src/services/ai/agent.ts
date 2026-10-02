@@ -238,6 +238,8 @@ export class ExpenseBotAgent {
       userMessage,
       toolCalls: toolCallNames,
       response: initial.text,
+      voiceMutationConfirmationRequired:
+        this.ctx.inputMode === 'voice_message' && !this.ctx.voiceMutationConfirmed,
     });
     if (validation.approved) {
       logger.info('[AGENT] Validation APPROVED');
@@ -293,9 +295,14 @@ export class ExpenseBotAgent {
     const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
     messages.push({ role: 'assistant', content: rejectedText });
+    const retryInstruction =
+      this.ctx.inputMode === 'voice_message' && !this.ctx.voiceMutationConfirmed
+        ? `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${reason}. This is unconfirmed voice input: do NOT call any mutating tool. Use appropriate read-only tools when needed to verify financial data or resolve ambiguous categories/recent expenses, then present the structured interpretation and ask for confirmation. Do NOT repeat the same mistake.`
+        : `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`;
+
     messages.push({
       role: 'user',
-      content: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
+      content: retryInstruction,
     });
 
     try {
@@ -527,6 +534,7 @@ This bot tracks expenses and budgets. It can:
 - Track budgets per category/month
 - Sync with Google Sheets (/sync, /push)
 - Scan receipt photos (QR and OCR)
+- Understand voice messages via speech-to-text, with confirmation before any state-changing action
 - Give financial advice and analytics
 - Detect and track recurring monthly expenses (rent, subscriptions, etc.)
 - Calculate with currency conversion (calculator tool)
@@ -542,7 +550,6 @@ The bot CANNOT:
 - Schedule tasks or appointments
 - Send notifications at specific times
 - Manage contacts, notes, or to-do lists
-- Process voice messages
 - Do anything unrelated to expense tracking
 
 NEVER mention, suggest, or describe features that are NOT listed above. If a user asks for something outside these capabilities — say directly that the bot doesn't support it.
@@ -551,6 +558,7 @@ When a user asks "что ты умеешь?", "what can you do?", or similar —
 - Записывать и удалять расходы (сумма, валюта, категория, комментарий)
 - Вести бюджеты по категориям и месяцам
 - Сканировать чеки по фото (просто скинь фотку)
+- Понимать голосовые сообщения и подтверждать изменения перед применением
 - Показывать статистику и аналитику расходов
 - Синхронизировать данные с Google Sheets (в обе стороны)
 - Подключать банки и автоматически импортировать транзакции
@@ -580,6 +588,20 @@ Respond only when:
 - Someone explicitly addresses you by name or @mention
 
 Respond in Russian if the user writes in Russian, otherwise in English.`;
+
+    if (this.ctx.inputMode === 'voice_message') {
+      prompt += `\n\n## Voice Message Safety
+The current message was transcribed from speech recognition. The transcription may contain homophones, wrong word boundaries, wrong digits, wrong currencies, or misheard category/merchant/comment names.
+Do not silently guess any detail that could change financial data. Amount, currency, category, expense name/comment, budget, date, account, and deletion target are consequential.
+If a word may be mistranscribed, investigate BEFORE asking: call get_categories and get_expenses for recent relevant data; when useful also inspect bank transactions. Use those results to offer 2–4 likely alternatives instead of asking an open-ended question.
+Read-only questions and calculate requests may be completed without confirmation when the interpretation is clear. If ambiguity materially changes the answer, ask only about the ambiguous detail and include likely alternatives.
+${
+  this.ctx.voiceMutationConfirmed
+    ? 'The user has just given a short explicit voice confirmation. You may now perform the previously proposed mutation, using exactly the previously confirmed values. If anything changed or is still ambiguous, ask again instead.'
+    : 'For ANY state-changing request, Do NOT call a mutating tool in this turn. First reply with a structured “Я понял так / I understood this as” summary containing the operation and every relevant field (especially amount, currency, category, expense/comment name, date/account/target), then ask for explicit confirmation. Never apply the change merely because the transcription looks clear.'
+}
+Do not ask the user to repeat the whole voice message. Resolve what you can from context and tools, then ask a narrow confirmation question.`;
+    }
 
     if (this.ctx.isForumWithoutTopic) {
       prompt += `\n\nЭта группа использует топики (форум), но команда /topic ещё не настроена — бот слушает все топики.

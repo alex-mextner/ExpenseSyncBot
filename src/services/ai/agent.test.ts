@@ -37,6 +37,7 @@ const mockValidateResponse = mock<
     userMessage: string;
     toolCalls: string[];
     response: string;
+    voiceMutationConfirmationRequired?: boolean;
   }) => Promise<{ approved: true } | { approved: false; reason: string }>
 >(async () => ({ approved: true }));
 mock.module('./response-validator', () => ({
@@ -959,5 +960,108 @@ describe('ExpenseBotAgent', () => {
       expect(sentText().some((t) => t.includes('Ошибка AI'))).toBe(true);
       expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('voice-input system prompt', () => {
+  it('requires structured confirmation before changing financial data from a first voice request', async () => {
+    const voiceAgent = new ExpenseBotAgent(
+      'key',
+      makeCtx({ inputMode: 'voice_message', voiceMutationConfirmed: false }),
+    );
+    mockStreamReturn();
+
+    await voiceAgent.run(
+      'добавь кофе 3500 динар',
+      [],
+      makeMockBot() as unknown as import('gramio').Bot,
+    );
+
+    const prompt = getLastCallOpts().messages[0]?.content as string;
+    expect(prompt).toContain('Voice Message Safety');
+    expect(prompt).toContain('structured');
+    expect(prompt).toContain('amount');
+    expect(prompt).toContain('category');
+    expect(prompt).toContain('Do NOT call a mutating tool');
+  });
+
+  it('tells the agent to inspect categories and recent expenses before asking about a likely STT error', async () => {
+    const voiceAgent = new ExpenseBotAgent(
+      'key',
+      makeCtx({ inputMode: 'voice_message', voiceMutationConfirmed: false }),
+    );
+    mockStreamReturn();
+
+    await voiceAgent.run(
+      'добавь в категорию кафэ',
+      [],
+      makeMockBot() as unknown as import('gramio').Bot,
+    );
+
+    const prompt = getLastCallOpts().messages[0]?.content as string;
+    expect(prompt).toContain('get_categories');
+    expect(prompt).toContain('get_expenses');
+    expect(prompt).toContain('likely alternatives');
+  });
+
+  it('allows clear read-only and calculation requests without mandatory confirmation', async () => {
+    const voiceAgent = new ExpenseBotAgent(
+      'key',
+      makeCtx({ inputMode: 'voice_message', voiceMutationConfirmed: false }),
+    );
+    mockStreamReturn();
+
+    await voiceAgent.run(
+      'сколько всего за неделю',
+      [],
+      makeMockBot() as unknown as import('gramio').Bot,
+    );
+
+    const prompt = getLastCallOpts().messages[0]?.content as string;
+    expect(prompt).toContain('Read-only');
+    expect(prompt).toContain('calculate');
+    expect(prompt).toContain('without confirmation');
+  });
+
+  it('does not add the voice safety section to ordinary text input', async () => {
+    const textAgent = new ExpenseBotAgent('key', makeCtx({ inputMode: 'text' }));
+    mockStreamReturn();
+
+    await textAgent.run('добавь кофе 3500', [], makeMockBot() as unknown as import('gramio').Bot);
+
+    const prompt = getLastCallOpts().messages[0]?.content as string;
+    expect(prompt).not.toContain('Voice Message Safety');
+  });
+
+  it('lists voice input as a supported capability instead of saying it cannot process voice', async () => {
+    const textAgent = new ExpenseBotAgent('key', makeCtx());
+    mockStreamReturn();
+
+    await textAgent.run('что ты умеешь', [], makeMockBot() as unknown as import('gramio').Bot);
+
+    const prompt = getLastCallOpts().messages[0]?.content as string;
+    expect(prompt).toContain('voice');
+    expect(prompt).not.toContain('Process voice messages');
+  });
+});
+
+describe('voice-input validator integration', () => {
+  it('marks an unconfirmed voice turn as confirmation-required for the validator', async () => {
+    mockValidateResponse.mockClear();
+    const voiceAgent = new ExpenseBotAgent(
+      'key',
+      makeCtx({ inputMode: 'voice_message', voiceMutationConfirmed: false }),
+    );
+    mockStreamReturn(['Я понял так: кофе, 3500 RSD. Добавить?']);
+
+    await voiceAgent.run(
+      'добавь кофе 3500 динар',
+      [],
+      makeMockBot() as unknown as import('gramio').Bot,
+    );
+
+    expect(mockValidateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ voiceMutationConfirmationRequired: true }),
+    );
   });
 });
