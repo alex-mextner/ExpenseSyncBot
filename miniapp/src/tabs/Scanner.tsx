@@ -77,13 +77,31 @@ function pluralize(n: number, one: string, few: string, many: string): string {
 
 type Phase = 'idle' | 'url-input' | 'ocr-input' | 'streaming' | 'confirm' | 'done' | 'error';
 
+/** Stable key for item list rendering — survives reorder but not duplicate name+total */
+let itemKeyCounter = 0;
+function nextItemKey(item: ReceiptItem): string {
+	return `${item.name}-${item.total}-${++itemKeyCounter}`;
+}
+
+interface KeyedItem extends ReceiptItem {
+	_key: string;
+}
+
+function keyItem(item: ReceiptItem): KeyedItem {
+	return { ...item, _key: nextItemKey(item) };
+}
+
+function keyItems(items: ReceiptItem[]): KeyedItem[] {
+	return items.map(keyItem);
+}
+
 interface Props {
 	groupId: number;
 }
 
 export function Scanner({ groupId }: Props) {
 	const [phase, setPhase] = useState<Phase>('idle');
-	const [items, setItems] = useState<ReceiptItem[]>([]);
+	const [items, setItems] = useState<KeyedItem[]>([]);
 	const [fileId, setFileId] = useState<string | null>(null);
 	const [currency, setCurrency] = useState<string>('');
 	const [error, setError] = useState<string>('');
@@ -144,7 +162,7 @@ export function Scanner({ groupId }: Props) {
 			if (photo) setPhotoPreview(photo);
 
 			if (state.phase === 'done') {
-				setItems(state.items);
+				setItems(keyItems(state.items));
 				setCurrency(state.currency ?? '');
 				setFileId(state.fileId ?? null);
 				setPhase('confirm');
@@ -161,7 +179,7 @@ export function Scanner({ groupId }: Props) {
 
 			// Still processing — set known items, open SSE
 			setPhase('streaming');
-			setItems(state.items);
+			setItems(keyItems(state.items));
 			if (state.url) setStreamUrl(state.url);
 			setIsOcrMode(!!photo);
 
@@ -170,13 +188,13 @@ export function Scanner({ groupId }: Props) {
 
 			cleanupRef.current = streamScan(id, {
 				onUrl: (url) => setStreamUrl(url),
-				onItem: () => {
+				onItem: (item) => {
 					sseItemIndex++;
 					if (sseItemIndex <= knownCount) return;
-					// Items beyond knownCount are new — but we get full list in onDone
+					setItems((prev) => [...prev, keyItem(item)]);
 				},
 				onDone: (result) => {
-					setItems(result.items);
+					setItems(keyItems(result.items));
 					setCurrency(result.currency ?? '');
 					setFileId(result.fileId ?? null);
 					setPhase('confirm');
@@ -214,7 +232,7 @@ export function Scanner({ groupId }: Props) {
 		if (saved.scanId) {
 			reconnectToScan(saved.scanId, saved.photoPreview);
 		} else {
-			setItems(saved.items);
+			setItems(keyItems(saved.items));
 			setPhase(saved.phase);
 			requestAnimationFrame(() => window.scrollTo(0, saved.scrollY));
 		}
@@ -259,9 +277,9 @@ export function Scanner({ groupId }: Props) {
 
 				cleanupRef.current = streamScan(id, {
 					onUrl: (url) => setStreamUrl(url),
-					onItem: (item) => setItems((prev) => [...prev, item]),
+					onItem: (item) => setItems((prev) => [...prev, keyItem(item)]),
 					onDone: (result) => {
-						setItems(result.items);
+						setItems(keyItems(result.items));
 						setCurrency(result.currency ?? '');
 						setFileId(result.fileId ?? null);
 						setPhase('confirm');
@@ -339,9 +357,9 @@ export function Scanner({ groupId }: Props) {
 				sessionStorage.setItem('scanner_scanId', id);
 
 				cleanupRef.current = streamScan(id, {
-					onItem: (item) => setItems((prev) => [...prev, item]),
+					onItem: (item) => setItems((prev) => [...prev, keyItem(item)]),
 					onDone: (result) => {
-						setItems(result.items);
+						setItems(keyItems(result.items));
 						setCurrency(result.currency ?? '');
 						setFileId(result.fileId ?? null);
 						setPhase('confirm');
@@ -503,8 +521,8 @@ export function Scanner({ groupId }: Props) {
 				</div>
 
 				{/* Items appearing one by one */}
-				{items.map((item, i) => (
-					<div key={i} style={{ ...streamingItemStyle, animation: 'slideIn 0.3s ease' }}>
+				{items.map((item) => (
+					<div key={item._key} style={{ ...streamingItemStyle, animation: 'slideIn 0.3s ease' }}>
 						<div style={{ display: 'flex', justifyContent: 'space-between' }}>
 							<span
 								style={{
@@ -575,7 +593,7 @@ export function Scanner({ groupId }: Props) {
 
 				{items.map((item, i) => (
 					<div
-						key={i}
+						key={item._key}
 						style={{
 							border: '1px solid var(--tg-theme-hint-color, rgba(128,128,128,0.2))',
 							borderRadius: 10,

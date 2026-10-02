@@ -830,11 +830,15 @@ export async function handleMiniAppRequest(
           send(
             `event: done\ndata: ${JSON.stringify({ items: state.items, currency: state.currency, fileId: state.fileId })}\n\n`,
           );
+          controller.close();
+          return;
         }
         if (state.phase === 'error') {
           send(
             `event: error\ndata: ${JSON.stringify({ message: state.error, code: state.errorCode })}\n\n`,
           );
+          controller.close();
+          return;
         }
 
         pingInterval = setInterval(() => send('event: ping\ndata: {}\n\n'), 15_000);
@@ -1007,34 +1011,8 @@ async function processOcrInBackground(
       emitEvent(scanId, 'item', scanItem);
     }
 
-    // Upload image to Telegram to get file_id
-    let telegramFileId: string | null = null;
-    try {
-      const tgFormData = new FormData();
-      tgFormData.append(
-        'document',
-        new File([compressedBuffer], 'receipt.jpg', { type: 'image/jpeg' }),
-      );
-      tgFormData.append('chat_id', String(telegramGroupId));
-
-      const telegramResp = await fetch(
-        `https://api.telegram.org/bot${env.BOT_TOKEN}/sendDocument`,
-        { method: 'POST', body: tgFormData },
-      );
-      const tgResult = (await telegramResp.json()) as {
-        ok: boolean;
-        result?: { document?: { file_id: string } };
-      };
-      telegramFileId = tgResult.result?.document?.file_id ?? null;
-    } catch (tgError) {
-      logger.warn(
-        { err: tgError },
-        '[OCR] Failed to upload receipt to Telegram, continuing without file_id',
-      );
-    }
-
     // Enrich with categories via DeepSeek
-    updateScan(scanId, { phase: 'extracting', fileId: telegramFileId });
+    updateScan(scanId, { phase: 'extracting' });
 
     const enrichedResult = await enrichExtractedItems(ocrResult, categoryNames);
     const enrichedItems = enrichedResult.items.map(mapAiToScanItem);
@@ -1046,14 +1024,13 @@ async function processOcrInBackground(
     const ocrDonePatch: Partial<import('./scan-store').ScanState> = {
       phase: 'done',
       items: enrichedItems,
-      fileId: telegramFileId,
     };
     if (enrichedResult.currency) ocrDonePatch.currency = enrichedResult.currency;
     updateScan(scanId, ocrDonePatch);
     emitEvent(scanId, 'done', {
       items: enrichedItems,
       currency: enrichedResult.currency,
-      fileId: telegramFileId,
+      fileId: null,
     });
 
     logger.info({ scanId, itemCount: enrichedItems.length }, 'OCR scan completed');

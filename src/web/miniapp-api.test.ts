@@ -1072,6 +1072,357 @@ describe('GET /api/dashboard/events', () => {
   });
 });
 
+// ── GET /api/receipt/scan/:scanId/stream (SSE) ────────────────────────────────
+
+describe('GET /api/receipt/scan/:scanId/stream', () => {
+  const GROUP_ID = -1001234567;
+  const SCAN_ID = 'stream-test-scan';
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryOne.mockReset();
+    mockGetScan.mockReset();
+    mockSubscribe.mockReset();
+    mockSubscribe.mockImplementation(() => () => {});
+  });
+
+  test('unknown scanId → 404', async () => {
+    mockGetScan.mockImplementation(() => undefined);
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}/stream?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(404);
+  });
+
+  test('missing initData → 401', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [],
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    const req = makeRequest(`/api/receipt/scan/${SCAN_ID}/stream`);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('wrong group → 403', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 999,
+          telegramGroupId: -999,
+          items: [],
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}/stream?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(403);
+  });
+
+  test('valid auth → 200 text/event-stream', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [],
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}/stream?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/event-stream');
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(CORS_ORIGIN);
+    expect(mockSubscribe).toHaveBeenCalled();
+  });
+
+  test('too many subscribers → stream returns error event and closes', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [],
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockSubscribe.mockImplementation(() => null); // simulate max subscribers
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}/stream?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+
+    const text = await res.text();
+    expect(text).toContain('event: error');
+    expect(text).toContain('TOO_MANY_SUBSCRIBERS');
+  });
+
+  test('terminal done state → replays items+done and closes stream', async () => {
+    const testItems: ScanReceiptItem[] = [
+      { name: 'Молоко', qty: 1, price: 89, total: 89, category: 'Еда' },
+    ];
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'done',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: testItems,
+          currency: 'RSD',
+          fileId: null,
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}/stream?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+
+    const text = await res.text();
+    expect(text).toContain('event: item');
+    expect(text).toContain('Молоко');
+    expect(text).toContain('event: done');
+    expect(text).toContain('"currency":"RSD"');
+  });
+
+  test('terminal error state → replays error and closes stream', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'error',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [],
+          error: 'AI timeout',
+          errorCode: 'EXTRACTION_FAILED',
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}/stream?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+
+    const text = await res.text();
+    expect(text).toContain('event: error');
+    expect(text).toContain('AI timeout');
+    expect(text).toContain('EXTRACTION_FAILED');
+  });
+});
+
+// ── GET /api/receipt/scan/:scanId (poll) ──────────────────────────────────────
+
+describe('GET /api/receipt/scan/:scanId (poll)', () => {
+  const GROUP_ID = -1001234567;
+  const SCAN_ID = 'poll-test-scan';
+
+  beforeEach(() => {
+    mockFindByTelegramId.mockReset();
+    mockDbQueryOne.mockReset();
+    mockGetScan.mockReset();
+  });
+
+  test('unknown scanId → 404', async () => {
+    mockGetScan.mockImplementation(() => undefined);
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(404);
+  });
+
+  test('missing initData → 401', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [],
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    const req = makeRequest(`/api/receipt/scan/${SCAN_ID}`);
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(401);
+  });
+
+  test('wrong group → 403', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 999,
+          telegramGroupId: -999,
+          items: [],
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(403);
+  });
+
+  test('returns current state as JSON', async () => {
+    const testItems: ScanReceiptItem[] = [
+      { name: 'Хлеб', qty: 1, price: 50, total: 50, category: 'Еда' },
+      { name: 'Сыр', qty: 2, price: 200, total: 400, category: 'Еда' },
+    ];
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'extracting',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: testItems,
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('application/json');
+
+    const body = (await res.json()) as {
+      phase: string;
+      url: string | null;
+      items: ScanReceiptItem[];
+      currency: string | null;
+      fileId: string | null;
+      error: string | null;
+      errorCode: string | null;
+    };
+    expect(body.phase).toBe('extracting');
+    expect(body.items).toHaveLength(2);
+    expect(body.items[0]?.name).toBe('Хлеб');
+    expect(body.currency).toBeNull();
+    expect(body.error).toBeNull();
+  });
+
+  test('done state returns full result', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'done',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [{ name: 'Кефир', qty: 1, price: 120, total: 120, category: 'Молочные' }],
+          currency: 'RSD',
+          fileId: 'tg_file_456',
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    const body = (await res.json()) as {
+      phase: string;
+      currency: string;
+      fileId: string;
+      items: ScanReceiptItem[];
+    };
+    expect(body.phase).toBe('done');
+    expect(body.currency).toBe('RSD');
+    expect(body.fileId).toBe('tg_file_456');
+    expect(body.items).toHaveLength(1);
+  });
+
+  test('error state returns error details', async () => {
+    mockGetScan.mockImplementation(
+      () =>
+        ({
+          phase: 'error',
+          groupId: 7,
+          telegramGroupId: GROUP_ID,
+          items: [],
+          error: 'Provider timeout',
+          errorCode: 'EXTRACTION_FAILED',
+          createdAt: Date.now(),
+        }) as ScanState,
+    );
+    mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+    mockDbQueryOne.mockImplementation(() => ({ id: 7 }));
+
+    const initData = buildInitData(42);
+    const req = makeRequest(
+      `/api/receipt/scan/${SCAN_ID}?initData=${encodeURIComponent(initData)}`,
+    );
+    const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+    if (!res) throw new Error('expected Response, got null');
+    const body = (await res.json()) as { phase: string; error: string; errorCode: string };
+    expect(body.phase).toBe('error');
+    expect(body.error).toBe('Provider timeout');
+    expect(body.errorCode).toBe('EXTRACTION_FAILED');
+  });
+});
+
 // Restore global.fetch, env overrides, and spyOn mocks so they don't pollute other test files
 afterAll(() => {
   global.fetch = originalFetch;

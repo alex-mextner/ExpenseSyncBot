@@ -70,7 +70,7 @@ export function updateScan(id: string, patch: Partial<ScanState>): void {
   if (!state) return;
   Object.assign(state, patch);
 
-  if (patch.phase) {
+  if (patch.phase && patch.phase !== 'done' && patch.phase !== 'error') {
     emitEvent(id, 'status', { phase: patch.phase });
   }
 }

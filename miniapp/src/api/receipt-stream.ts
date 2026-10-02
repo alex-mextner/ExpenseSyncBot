@@ -150,6 +150,7 @@ export function streamScan(scanId: string, callbacks: StreamCallbacks): () => vo
 
   function startPolling() {
     if (closed) return;
+    let knownItemCount = 0;
 
     async function poll() {
       if (closed) return;
@@ -157,6 +158,14 @@ export function streamScan(scanId: string, callbacks: StreamCallbacks): () => vo
         const state = await pollScan(scanId);
 
         if (state.url) callbacks.onUrl?.(state.url);
+
+        // Replay items the client hasn't seen yet
+        if (state.items.length > knownItemCount) {
+          for (let i = knownItemCount; i < state.items.length; i++) {
+            callbacks.onItem?.(state.items[i]);
+          }
+          knownItemCount = state.items.length;
+        }
 
         if (state.phase === 'done') {
           callbacks.onDone?.({

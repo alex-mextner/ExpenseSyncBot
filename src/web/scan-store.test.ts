@@ -49,7 +49,7 @@ describe('updateScan', () => {
     updateScan('nonexistent', { phase: 'done' });
   });
 
-  it('notifies SSE subscribers on phase update', () => {
+  it('notifies SSE subscribers on non-terminal phase update', () => {
     const scanId = createScan(1, 100);
     const received: string[] = [];
     subscribe(scanId, (event) => received.push(event));
@@ -58,6 +58,18 @@ describe('updateScan', () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toContain('event: status');
     expect(received[0]).toContain('"phase":"extracting"');
+  });
+
+  it('does not emit status event for terminal phases (done/error)', () => {
+    const scanId = createScan(1, 100);
+    const received: string[] = [];
+    subscribe(scanId, (event) => received.push(event));
+
+    updateScan(scanId, { phase: 'done' });
+    expect(received).toHaveLength(0);
+
+    updateScan(scanId, { phase: 'error' });
+    expect(received).toHaveLength(0);
   });
 });
 
