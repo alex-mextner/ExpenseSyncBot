@@ -15,7 +15,7 @@ import { getErrorMessage } from '../../utils/error';
 import { findBestCategoryMatchAsync } from '../../utils/fuzzy-search';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
-import { maybeSmartAdvice } from '../commands/ask';
+import { handleAskQuestion, maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
 import { showNextPendingCategoryStep } from '../services/category-wizard';
@@ -293,6 +293,11 @@ export async function handleExpenseMessage(
   // line must match the expense-entry grammar. If even one line is prose
   // (for example a budget-planning instruction followed by amount/category
   // lines), do not persist the parseable tail. Route the whole message to AI.
+  if (/(?:^|[^\p{L}])(?:бюджет|budget)\p{L}*(?=$|[^\p{L}])/iu.test(text)) {
+    logger.info('[MSG] Budget intent — routing the whole message to AI');
+    return false;
+  }
+
   const parsedLines = lines.map((line) => parseExpenseMessage(line, group.default_currency));
   if (parsedLines.length === 0 || parsedLines.some((parsed) => !validateParsedExpense(parsed))) {
     logger.info('[MSG] Mixed/non-canonical message — routing the whole message to AI');
@@ -755,4 +760,16 @@ export function buildBudgetAlertStatus(
     isExceeded: progress.is_exceeded,
     isWarning: progress.is_warning,
   };
+}
+
+/** Preserve the full message and context when direct expense entry declines it. */
+export async function routeTextMessage(
+  ctx: Ctx['Message'],
+  bot: BotInstance,
+  allowDirectAI: boolean,
+): Promise<void> {
+  const expenseHandled = await handleExpenseMessage(ctx, bot);
+  if (!expenseHandled && allowDirectAI && ctx.text) {
+    await handleAskQuestion(ctx, ctx.text, bot);
+  }
 }

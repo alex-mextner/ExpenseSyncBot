@@ -33,7 +33,7 @@ import { handleTopicCommand } from './commands/topic';
 import { registerExchangeRateCron, registerMonthlyCron } from './cron';
 import { requireGoogle, requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
-import { handleExpenseMessage } from './handlers/message.handler';
+import { routeTextMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
@@ -189,10 +189,7 @@ export function createBot(): Bot {
 
     // Deterministic expense input is handled locally; everything else may fall through
     // to AI, which stores its own exact current-turn history row before reading context.
-    const expenseHandled = await handleExpenseMessage(ctx, bot);
-    if (!expenseHandled && allowDirectAI) {
-      await handleAskQuestion(ctx, text, bot);
-    }
+    await routeTextMessage(ctx, bot, allowDirectAI);
   });
 
   // Global error handler — catches unhandled errors in bot middleware/handlers
