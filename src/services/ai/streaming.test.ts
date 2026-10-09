@@ -19,6 +19,10 @@ const mockEnv = {
   GROQ_BASE_URL: 'https://test.groq/v1',
   GROQ_MODEL: 'groq-smart',
   GROQ_FAST_MODEL: 'groq-fast',
+  CLAUDE_API_TOKEN: '',
+  CLAUDE_BASE_URL: 'https://test.claude/v1/',
+  CLAUDE_MODEL: 'claude-smart',
+  CLAUDE_FAST_MODEL: 'claude-fast',
   GEMINI_API_KEY: 'test-gemini',
   GEMINI_BASE_URL: 'https://test.gemini/v1',
   GEMINI_MODEL: 'gemini-test',
@@ -36,6 +40,7 @@ mock.module('../../config/env', () => ({ env: mockEnv }));
 mock.module('./clients', () => ({
   zaiClient: () => ({}),
   groqClient: () => ({}),
+  claudeClient: () => ({}),
   geminiClient: () => ({}),
   hfClient: () => ({}),
 }));
@@ -44,11 +49,29 @@ import OpenAI from 'openai';
 import { isProviderDemoted, resetProviderBreaker } from './provider-breaker';
 import {
   classifyAiError,
+  claudeThinkingParam,
   getBackoffDelay,
   getRateLimitCooldownMs,
   isRetryableError,
   pickRepresentativeError,
 } from './streaming';
+
+describe('claudeThinkingParam', () => {
+  // Values measured against the live API: the wrong thinking-off value is a 400 for that model.
+  const betweenTools = { thinking: { type: 'between_tools' as const } };
+  const disabled = { thinking: { type: 'disabled' as const } };
+  it.each([
+    ['claude-sonnet-5-5', betweenTools],
+    ['claude-sonnet-5-5-20261001', betweenTools],
+    ['claude-haiku-5-5', disabled],
+    ['claude-sonnet-5', disabled],
+    ['claude-opus-4-8', disabled],
+    ['claude-opus-5-5', {}],
+    ['claude-fable-5-1', {}],
+  ])('%s → %j', (model, expected) => {
+    expect(claudeThinkingParam(model)).toEqual(expected);
+  });
+});
 
 describe('isRetryableError', () => {
   it('returns true for 429 rate limit', () => {
@@ -188,6 +211,9 @@ describe('aiStreamRound fallback chain', () => {
     // The provider breaker is module-global state — reset it so demotions don't leak between tests.
     resetProviderBreaker();
     mockEnv.GROQ_API_KEY = '';
+    mockEnv.CLAUDE_API_TOKEN = '';
+    mockEnv.CLAUDE_MODEL = 'claude-smart';
+    mockEnv.CLAUDE_FAST_MODEL = 'claude-fast';
     // Re-import to get fresh module with mocked deps
     streamingModule = await import('./streaming');
   });
@@ -226,6 +252,97 @@ describe('aiStreamRound fallback chain', () => {
       expect(calls).toEqual([expectedModel]);
     } finally {
       groqSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['smart' as const, ['test-model', 'claude-smart']],
+    ['fast' as const, ['test-fast', 'claude-fast']],
+  ])('tries Claude right after z.ai, before Gemini, in the %s chain', async (chain, expected) => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    const calls: string[] = [];
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      calls.push(params.model);
+      if (params.model === 'test-model' || params.model === 'test-fast') {
+        throw new OpenAI.APIError(500, { message: 'glm down' }, 'glm down', new Headers());
+      }
+      return {
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'hello from Claude' }, finish_reason: 'stop' }] };
+        },
+      };
+    });
+
+    const clientsMod = await import('./clients');
+    const spies = (['zaiClient', 'claudeClient', 'geminiClient', 'hfClient'] as const).map((fn) =>
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI),
+    );
+
+    try {
+      const result = await streamingModule.aiStreamRound({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 100,
+        chain,
+      });
+
+      expect(result.text).toBe('hello from Claude');
+      expect(result.providerUsed).toContain('Claude');
+      expect(calls).toEqual(expected);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['smart' as const, 'claude-sonnet-5-5', 'test-model', 'gemini-test', 'between_tools'],
+    ['fast' as const, 'claude-haiku-5-5', 'test-fast', 'gemini-fast', 'disabled'],
+  ])('Claude requests in the %s chain omit temperature and turn thinking off for the configured model; other providers are unchanged', async (chain, claudeModel, zaiModel, geminiModel, thinkingOff) => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    if (chain === 'smart') mockEnv.CLAUDE_MODEL = claudeModel;
+    else mockEnv.CLAUDE_FAST_MODEL = claudeModel;
+    // Claude 5.x: `temperature` → 400; default adaptive thinking can spend the whole small
+    // max_tokens budget (validators: 256, prefill: 200) and stream zero text (finish=length).
+    type SentParams = OpenAI.ChatCompletionCreateParamsStreaming & { thinking?: unknown };
+    const sent = new Map<string, SentParams>();
+    const create = mock(async (params: SentParams) => {
+      sent.set(params.model, params);
+      if (params.model !== geminiModel) {
+        throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
+      }
+      return {
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+        },
+      };
+    });
+
+    const clientsMod = await import('./clients');
+    const spies = (['zaiClient', 'claudeClient', 'geminiClient'] as const).map((fn) =>
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI),
+    );
+
+    try {
+      await streamingModule.aiStreamRound({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 100,
+        temperature: 0.7,
+        chain,
+      });
+
+      const claude = sent.get(claudeModel);
+      expect(claude).toBeDefined();
+      expect(claude && 'temperature' in claude).toBe(false);
+      expect(claude?.thinking).toEqual({ type: thinkingOff });
+      for (const model of [zaiModel, geminiModel]) {
+        expect(sent.get(model)?.temperature).toBe(0.7);
+        expect(sent.get(model)?.thinking).toBeUndefined();
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
     }
   });
 

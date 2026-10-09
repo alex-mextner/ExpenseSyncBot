@@ -26,6 +26,12 @@ interface EnvConfig {
   GROQ_MODEL: string;
   GROQ_FAST_MODEL: string;
 
+  // Anthropic Claude (OpenAI-compat endpoint; optional key — next after z.ai in smart/fast chains)
+  CLAUDE_API_TOKEN: string;
+  CLAUDE_BASE_URL: string;
+  CLAUDE_MODEL: string;
+  CLAUDE_FAST_MODEL: string;
+
   // HuggingFace Router (fallback + vision)
   HF_TOKEN: string;
   HF_BASE_URL: string;
@@ -82,6 +88,11 @@ function validateEnv(): EnvConfig {
     GROQ_BASE_URL: getEnvVariable('GROQ_BASE_URL', false) || 'https://api.groq.com/openai/v1',
     GROQ_MODEL: getEnvVariable('GROQ_MODEL', false) || 'openai/gpt-oss-120b',
     GROQ_FAST_MODEL: getEnvVariable('GROQ_FAST_MODEL', false) || 'openai/gpt-oss-20b',
+
+    CLAUDE_API_TOKEN: getEnvVariable('CLAUDE_API_TOKEN', false),
+    CLAUDE_BASE_URL: getEnvVariable('CLAUDE_BASE_URL', false) || 'https://api.anthropic.com/v1/',
+    CLAUDE_MODEL: getEnvVariable('CLAUDE_MODEL', false) || 'claude-sonnet-5-5',
+    CLAUDE_FAST_MODEL: getEnvVariable('CLAUDE_FAST_MODEL', false) || 'claude-haiku-5-5',
 
     HF_TOKEN: getEnvVariable('HF_TOKEN'),
     HF_BASE_URL: getEnvVariable('HF_BASE_URL'),
