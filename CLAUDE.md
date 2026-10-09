@@ -157,7 +157,7 @@ Bot has a full AI agent with tool calling, accessible by mentioning `@ExpenseSyn
 - Uses custom system prompt defined per-group in `/prompt` command
 - Daily advice feature (`/advice`) with scheduling via `src/services/analytics/advice-triggers.ts`
 
-**Configuration:** Uses `ANTHROPIC_API_KEY` and optional `AI_BASE_URL` env vars. Model configured in `agent.ts`.
+**Configuration:** All providers go through the OpenAI SDK with a fallback chain in [streaming.ts](src/services/ai/streaming.ts): smart = Groq → z.ai GLM → Claude Sonnet → Gemini → HF; fast (validators, bank prefill, merchant agent) = Groq → z.ai GLM fast → Claude Haiku → Gemini → HF; OCR = Gemini → HF. Groq and Claude slots are skipped when their key is absent. Claude 5.x rejects `temperature` (400) and thinks adaptively by default — hidden reasoning can eat a small `max_tokens` budget and stream zero text (`finish_reason: length`) — so Claude slots never send temperature and turn thinking off per model via `claudeThinkingParam()`: the accepted value is model-specific and the wrong one is a 400 (Sonnet 5.5 only `between_tools`; Opus 5.5 / Fable 5.1 cannot turn it off; the rest `disabled`). After changing `CLAUDE_MODEL`/`CLAUDE_FAST_MODEL`, run `scripts/verify-ai-chains.ts`; to validate a provider change on real traffic, run `scripts/replay-ai-logs.ts` against `logs/chats` and a DB copy.
 
 #### 5. State Management for User Flows
 
@@ -482,8 +482,8 @@ Required in `.env` (see [.env.example](.env.example)):
 - `DATABASE_PATH` - SQLite database path
 - `ENCRYPTION_KEY` - 32-byte hex (generate: `openssl rand -hex 32`)
 - `NODE_ENV` - development/production
-- `ANTHROPIC_API_KEY` - Anthropic API key (for AI agent)
-- `AI_BASE_URL` - optional, custom Anthropic API base URL
+- `ANTHROPIC_API_KEY` - historical name: actually the z.ai GLM key; `AI_BASE_URL`, `AI_MODEL`, `AI_FAST_MODEL` - z.ai endpoint and models
+- `CLAUDE_API_TOKEN` - optional Anthropic key (Claude slot after z.ai); `CLAUDE_MODEL` (default `claude-sonnet-5-5`), `CLAUDE_FAST_MODEL` (default `claude-haiku-5-5`), `CLAUDE_BASE_URL` (default OpenAI-compat `https://api.anthropic.com/v1/`)
 - `BOT_ADMIN_CHAT_ID` - admin Telegram chat ID (for merchant-agent notifications, feedback forwarding)
 
 ## Production Deployment

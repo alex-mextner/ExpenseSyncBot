@@ -2,8 +2,8 @@
  * Unified AI streaming round with automatic provider fallback.
  *
  * Three chains, selected via options.chain:
- *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Gemini ${GEMINI_MODEL} → HF ${HF_MODEL}
- *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
+ *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → Gemini ${GEMINI_MODEL} → HF ${HF_MODEL}
+ *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
  *   OCR:   Gemini ${GEMINI_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
  *
  * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
@@ -22,7 +22,7 @@
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
-import { geminiClient, groqClient, hfClient, zaiClient } from './clients';
+import { claudeClient, geminiClient, groqClient, hfClient, zaiClient } from './clients';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -207,26 +207,68 @@ interface ProviderSlot {
   stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<StreamRoundResult>;
 }
 
+interface SlotOptions {
+  /**
+   * Anthropic (Claude) request shape: never send `temperature` (Claude 5.x → 400 "temperature is
+   * deprecated") and turn thinking off via claudeThinkingParam(model).
+   */
+  anthropic?: boolean;
+}
+
+type ClaudeThinkingOff = 'disabled' | 'between_tools';
+
+/** Anthropic-only request field accepted by its OpenAI-compat endpoint; the SDK forwards it as-is. */
+interface ThinkingParam {
+  thinking?: { type: ClaudeThinkingOff };
+}
+
+/**
+ * Model-id prefixes whose thinking-off value is not 'disabled' (measured against the live API,
+ * 2026-10; the wrong value is a 400). null = thinking cannot be turned off, send nothing.
+ */
+const CLAUDE_THINKING_OFF_EXCEPTIONS: Record<string, ClaudeThinkingOff | null> = {
+  'claude-sonnet-5-5': 'between_tools',
+  'claude-opus-5-5': null,
+  'claude-fable-5-1': null,
+};
+
+/**
+ * `thinking` field that turns Claude's thinking off for `model`. By default Claude 5.x thinks
+ * adaptively: hidden reasoning can consume a small max_tokens budget (validators 256, prefill 200)
+ * and stream zero text with finish_reason=length. The OpenAI-compat endpoint also drops thinking
+ * blocks, so they could not be passed back across tool-use rounds anyway.
+ */
+export function claudeThinkingParam(model: string): ThinkingParam {
+  const exception = Object.entries(CLAUDE_THINKING_OFF_EXCEPTIONS).find(([prefix]) =>
+    model.startsWith(prefix),
+  );
+  const type = exception ? exception[1] : 'disabled';
+  return type ? { thinking: { type } } : {};
+}
+
 /**
  * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
- * (z.ai, Gemini, HF) via the shared OpenAI SDK.
+ * (z.ai, Groq, Claude, Gemini, HF) via the shared OpenAI SDK.
  */
 function streamingSlot(
   name: string,
   key: string,
   getClient: () => OpenAI,
   model: string,
+  slotOptions: SlotOptions = {},
 ): ProviderSlot {
   return {
     name,
     key,
     stream: async (opts, cbs) => {
-      const params: OpenAI.ChatCompletionCreateParamsStreaming = {
+      const params: OpenAI.ChatCompletionCreateParamsStreaming & ThinkingParam = {
         model,
         messages: opts.messages,
         max_tokens: opts.maxTokens,
-        temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
         stream: true,
+        ...(slotOptions.anthropic
+          ? claudeThinkingParam(model)
+          : { temperature: opts.temperature ?? DEFAULT_TEMPERATURE }),
       };
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
@@ -346,8 +388,15 @@ function buildSmartChain(): ProviderSlot[] {
   if (env.GROQ_API_KEY) {
     chain.push(streamingSlot(`Groq (${env.GROQ_MODEL})`, 'groq', groqClient, env.GROQ_MODEL));
   }
+  chain.push(streamingSlot(`z.ai (${env.AI_MODEL})`, 'zai', zaiClient, env.AI_MODEL));
+  if (env.CLAUDE_API_TOKEN) {
+    chain.push(
+      streamingSlot(`Claude (${env.CLAUDE_MODEL})`, 'claude', claudeClient, env.CLAUDE_MODEL, {
+        anthropic: true,
+      }),
+    );
+  }
   chain.push(
-    streamingSlot(`z.ai (${env.AI_MODEL})`, 'zai', zaiClient, env.AI_MODEL),
     streamingSlot(`Gemini (${env.GEMINI_MODEL})`, 'gemini', geminiClient, env.GEMINI_MODEL),
     streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL),
   );
@@ -361,8 +410,19 @@ function buildFastChain(): ProviderSlot[] {
       streamingSlot(`Groq (${env.GROQ_FAST_MODEL})`, 'groq', groqClient, env.GROQ_FAST_MODEL),
     );
   }
+  chain.push(streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, 'zai', zaiClient, env.AI_FAST_MODEL));
+  if (env.CLAUDE_API_TOKEN) {
+    chain.push(
+      streamingSlot(
+        `Claude (${env.CLAUDE_FAST_MODEL})`,
+        'claude',
+        claudeClient,
+        env.CLAUDE_FAST_MODEL,
+        { anthropic: true },
+      ),
+    );
+  }
   chain.push(
-    streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, 'zai', zaiClient, env.AI_FAST_MODEL),
     streamingSlot(
       `Gemini (${env.GEMINI_FAST_MODEL})`,
       'gemini',

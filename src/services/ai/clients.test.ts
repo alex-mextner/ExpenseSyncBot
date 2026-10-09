@@ -17,6 +17,8 @@ mock.module('../../config/env', () => ({
     AI_BASE_URL: 'https://zai.test/v1',
     GROQ_API_KEY: 'groq-key',
     GROQ_BASE_URL: 'https://groq.test/v1',
+    CLAUDE_API_TOKEN: 'claude-key',
+    CLAUDE_BASE_URL: 'https://claude.test/v1/',
     HF_TOKEN: 'hf-key',
     HF_BASE_URL: 'https://hf.test/v1',
     GEMINI_API_KEY: 'gemini-key',
@@ -55,7 +57,9 @@ mock.module('openai', () => ({
   default: FakeOpenAI,
 }));
 
-const { zaiClient, groqClient, hfClient, geminiClient, resetClients } = await import('./clients');
+const { zaiClient, groqClient, claudeClient, hfClient, geminiClient, resetClients } = await import(
+  './clients'
+);
 
 describe('client factories', () => {
   beforeEach(() => {
@@ -124,6 +128,20 @@ describe('client factories', () => {
     });
   });
 
+  describe('claudeClient', () => {
+    it('constructs OpenAI with CLAUDE_API_TOKEN and CLAUDE_BASE_URL', () => {
+      const c = claudeClient() as unknown as FakeOpenAI;
+      expect(c.apiKey).toBe('claude-key');
+      expect(c.baseURL).toBe('https://claude.test/v1/');
+      expect(c.maxRetries).toBe(0);
+      expect(c.timeout).toBe(60_000);
+    });
+
+    it('caches the instance (singleton)', () => {
+      expect(claudeClient()).toBe(claudeClient());
+    });
+  });
+
   describe('hfClient', () => {
     it('constructs OpenAI with HF_TOKEN and HF_BASE_URL', () => {
       const c = hfClient() as unknown as FakeOpenAI;
@@ -161,9 +179,10 @@ describe('client factories', () => {
   });
 
   describe('resetClients', () => {
-    it('clears all four cached clients independently', () => {
+    it('clears all cached clients independently', () => {
       const z1 = zaiClient();
       const r1 = groqClient();
+      const c1 = claudeClient();
       const h1 = hfClient();
       const g1 = geminiClient();
 
@@ -171,11 +190,13 @@ describe('client factories', () => {
 
       const z2 = zaiClient();
       const r2 = groqClient();
+      const c2 = claudeClient();
       const h2 = hfClient();
       const g2 = geminiClient();
 
       expect(z2).not.toBe(z1);
       expect(r2).not.toBe(r1);
+      expect(c2).not.toBe(c1);
       expect(h2).not.toBe(h1);
       expect(g2).not.toBe(g1);
     });

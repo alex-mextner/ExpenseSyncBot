@@ -1,5 +1,5 @@
 /**
- * OpenAI SDK client factories for all AI providers (z.ai, Groq, HF, Gemini).
+ * OpenAI SDK client factories for all AI providers (z.ai, Groq, Claude, HF, Gemini).
  * All providers share the same OpenAI SDK — only baseURL and apiKey differ.
  * Base URLs and keys are loaded from env — no hardcoded values.
  */
@@ -24,6 +24,7 @@ function makeFetchDelegate(): (
 
 let _zai: OpenAI | null = null;
 let _groq: OpenAI | null = null;
+let _claude: OpenAI | null = null;
 let _hf: OpenAI | null = null;
 let _gemini: OpenAI | null = null;
 
@@ -51,6 +52,19 @@ export function groqClient(): OpenAI {
     });
   }
   return _groq;
+}
+
+export function claudeClient(): OpenAI {
+  if (!_claude) {
+    _claude = new OpenAI({
+      apiKey: env.CLAUDE_API_TOKEN,
+      baseURL: env.CLAUDE_BASE_URL,
+      timeout: DEFAULT_TIMEOUT_MS,
+      maxRetries: 0,
+      fetch: makeFetchDelegate(),
+    });
+  }
+  return _claude;
 }
 
 export function hfClient(): OpenAI {
@@ -83,6 +97,7 @@ export function geminiClient(): OpenAI {
 export function resetClients(): void {
   _zai = null;
   _groq = null;
+  _claude = null;
   _hf = null;
   _gemini = null;
 }
