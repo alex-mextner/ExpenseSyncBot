@@ -1,4 +1,4 @@
-name: Deploy to Digital Ocean
+name: Deploy to home server
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 # Least-privilege default for GITHUB_TOKEN. The `check` job needs read access to
-# clone the repo; `deploy` and `notify-failure` use no token (SSH + Telegram curl).
+# clone the repo; `deploy` and `notify-failure` use no token (local shell + Telegram curl).
 permissions:
   contents: read
 
@@ -33,16 +33,13 @@ jobs:
 
   deploy:
     needs: [check]
-    runs-on: ubuntu-latest
+    # Self-hosted runner on the home server (odroid), running as www-data.
+    runs-on: [self-hosted, odroid]
 
     steps:
       - name: Deploy via git pull
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
-        with:
-          host: 104.248.84.190
-          username: www-data
-          key: ${{ secrets.DIGITAL_OCEAN_SSH_KEY }}
-          script: |
+        shell: bash {0}
+        run: |
             set -e
             cd /var/www/ExpenseSyncBot
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"

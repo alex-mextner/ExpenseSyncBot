@@ -46,7 +46,10 @@ jobs:
         run: bun run test
 
   stage-bot:
-    runs-on: ubuntu-latest
+    # Runs on the home server (odroid) self-hosted runner. Fork PRs are excluded:
+    # this repo is public and the runner executes on production hardware.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, odroid]
 
     permissions:
       pull-requests: write
@@ -54,23 +57,19 @@ jobs:
     steps:
       - name: Deploy or stop stage bot
         id: deploy
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        shell: bash {0}
         env:
           ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           GH_EVENT_ACTION: ${{ github.event.action }}
-        with:
-          host: 104.248.84.190
-          username: www-data
-          key: ${{ secrets.DIGITAL_OCEAN_SSH_KEY }}
-          envs: ADMIN_CHAT_ID,REPO,PR_NUMBER,PR_TITLE,GH_EVENT_ACTION
-          script: |
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
             set -e
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
 
-            BRANCH="${{ github.head_ref }}"
+            BRANCH="$HEAD_REF"
             MAIN_DIR="/var/www/ExpenseSyncBot"
             WORKTREE="$MAIN_DIR/.claude/worktrees/$BRANCH"
             STAGE_CWD="/var/www/ExpenseSyncBot-stage"
@@ -89,7 +88,7 @@ jobs:
               echo "Merged env → $STAGE_CWD/.env ($(wc -l < "$STAGE_CWD/.env") vars)"
 
               $PM2 delete expensesyncbot-stage 2>/dev/null || true
-              $PM2 start "$BUN --no-env-file --env-file=$STAGE_CWD/.env $code_dir/index.ts" \
+              TZ=UTC $PM2 start "$BUN --no-env-file --env-file=$STAGE_CWD/.env $code_dir/index.ts" \
                    --name expensesyncbot-stage \
                    --cwd "$STAGE_CWD"
 
@@ -204,7 +203,7 @@ jobs:
 
       - name: Comment on PR with stage bot link
         if: github.event.action != 'closed'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const marker = '<!-- stage-bot-comment -->';
@@ -235,7 +234,7 @@ jobs:
 
       - name: Comment PR closed
         if: github.event.action == 'closed'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const marker = '<!-- stage-bot-comment -->';
