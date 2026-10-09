@@ -1,4 +1,4 @@
-expense-sync-bot.invntrm.ru {
+expense-sync-bot.invntrm.ru, expense-sync-bot.mextner.com {
 	# Automatic HTTPS with Let's Encrypt
 
 	# Static pages: homepage, privacy policy, terms of service
@@ -48,7 +48,7 @@ expense-sync-bot.invntrm.ru {
 	}
 }
 
-expense-sync-stage-bot.invntrm.ru {
+expense-sync-stage-bot.invntrm.ru, expense-sync-stage-bot.mextner.com {
 	@backend path /callback* /health /api/*
 	handle @backend {
 		reverse_proxy localhost:3312 {
@@ -67,7 +67,7 @@ expense-sync-stage-bot.invntrm.ru {
 	}
 }
 
-expense-sync-stage-bot-app.invntrm.ru {
+expense-sync-stage-bot-app.invntrm.ru, expense-sync-stage-bot-app.mextner.com {
 	handle /api/* {
 		reverse_proxy localhost:3312 {
 			lb_try_duration 10s
@@ -87,7 +87,7 @@ expense-sync-stage-bot-app.invntrm.ru {
 	}
 }
 
-expense-sync-bot-app.invntrm.ru {
+expense-sync-bot-app.invntrm.ru, expense-sync-bot-app.mextner.com {
 	# API requests proxied to the Bun server — retry during PM2 reload
 	# Must be in a separate handle block BEFORE the SPA catch-all,
 	# otherwise try_files rewrites /api/* to /index.html → 405
