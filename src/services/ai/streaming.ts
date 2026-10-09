@@ -210,40 +210,39 @@ interface ProviderSlot {
 interface SlotOptions {
   /**
    * Anthropic (Claude) request shape: never send `temperature` (Claude 5.x → 400 "temperature is
-   * deprecated") and turn thinking off via claudeThinkingParam(model).
+   * deprecated"); thinking and max_tokens come from claudeRequestParams(model, maxTokens).
    */
   anthropic?: boolean;
 }
 
-type ClaudeThinkingOff = 'disabled' | 'between_tools';
+/**
+ * Extra output tokens granted on top of the caller's budget when Claude thinks. Thinking is billed
+ * against the same max_tokens as the visible answer: at medium effort Sonnet 5.5 spent ~150 tokens
+ * thinking on a 10-item prefill prompt and truncated the answer in 3/6 calls at max_tokens=200.
+ * max_tokens is only a cap — unused reserve costs nothing.
+ */
+export const CLAUDE_THINKING_RESERVE_TOKENS = 8192;
 
-/** Anthropic-only request field accepted by its OpenAI-compat endpoint; the SDK forwards it as-is. */
-interface ThinkingParam {
-  thinking?: { type: ClaudeThinkingOff };
+/** Anthropic-only request fields accepted by its OpenAI-compat endpoint; the SDK forwards them as-is. */
+interface ClaudeParams {
+  max_tokens: number;
+  reasoning_effort?: 'medium';
+  thinking?: { type: 'disabled' };
 }
 
 /**
- * Model-id prefixes whose thinking-off value is not 'disabled' (measured against the live API,
- * 2026-10; the wrong value is a 400). null = thinking cannot be turned off, send nothing.
+ * Thinking settings for a Claude model (measured against the live API, 2026-10). Sonnet/Opus/Fable
+ * think at medium effort with CLAUDE_THINKING_RESERVE_TOKENS on top, so the caller's whole budget
+ * stays available for the visible answer. Haiku runs with thinking disabled: even at medium effort
+ * it spent the entire small budget (validators 256, prefill 200) and streamed zero text. The
+ * OpenAI-compat endpoint rejects explicit adaptive thinking and handles tool rounds without
+ * thinking blocks in the history.
  */
-const CLAUDE_THINKING_OFF_EXCEPTIONS: Record<string, ClaudeThinkingOff | null> = {
-  'claude-sonnet-5-5': 'between_tools',
-  'claude-opus-5-5': null,
-  'claude-fable-5-1': null,
-};
-
-/**
- * `thinking` field that turns Claude's thinking off for `model`. By default Claude 5.x thinks
- * adaptively: hidden reasoning can consume a small max_tokens budget (validators 256, prefill 200)
- * and stream zero text with finish_reason=length. The OpenAI-compat endpoint also drops thinking
- * blocks, so they could not be passed back across tool-use rounds anyway.
- */
-export function claudeThinkingParam(model: string): ThinkingParam {
-  const exception = Object.entries(CLAUDE_THINKING_OFF_EXCEPTIONS).find(([prefix]) =>
-    model.startsWith(prefix),
-  );
-  const type = exception ? exception[1] : 'disabled';
-  return type ? { thinking: { type } } : {};
+export function claudeRequestParams(model: string, maxTokens: number): ClaudeParams {
+  if (model.startsWith('claude-haiku')) {
+    return { thinking: { type: 'disabled' }, max_tokens: maxTokens };
+  }
+  return { reasoning_effort: 'medium', max_tokens: maxTokens + CLAUDE_THINKING_RESERVE_TOKENS };
 }
 
 /**
@@ -261,15 +260,15 @@ function streamingSlot(
     name,
     key,
     stream: async (opts, cbs) => {
-      const params: OpenAI.ChatCompletionCreateParamsStreaming & ThinkingParam = {
-        model,
-        messages: opts.messages,
-        max_tokens: opts.maxTokens,
-        stream: true,
-        ...(slotOptions.anthropic
-          ? claudeThinkingParam(model)
-          : { temperature: opts.temperature ?? DEFAULT_TEMPERATURE }),
-      };
+      const params: OpenAI.ChatCompletionCreateParamsStreaming & Omit<ClaudeParams, 'max_tokens'> =
+        {
+          model,
+          messages: opts.messages,
+          stream: true,
+          ...(slotOptions.anthropic
+            ? claudeRequestParams(model, opts.maxTokens)
+            : { max_tokens: opts.maxTokens, temperature: opts.temperature ?? DEFAULT_TEMPERATURE }),
+        };
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
       }
