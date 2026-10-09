@@ -29,6 +29,15 @@ import type { BankTransaction } from '../src/database/types';
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
+// The report is this script's product: write it to stdout, usage errors to stderr.
+function say(line: string): void {
+  process.stdout.write(`${line}\n`);
+}
+
+function fail(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
+
 function argValue(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
   return i >= 0 ? process.argv[i + 1] : undefined;
@@ -39,20 +48,20 @@ const DB_PATH = argValue('--db');
 const LIMIT = Number(argValue('--limit') ?? '30');
 
 if (!LOGS_DIR && !DB_PATH) {
-  console.error('Usage: bun run scripts/replay-ai-logs.ts [--logs <dir>] [--db <copy.db>] [--limit N]');
+  fail('Usage: bun run scripts/replay-ai-logs.ts [--logs <dir>] [--db <copy.db>] [--limit N]');
   process.exit(2);
 }
 if (!Number.isInteger(LIMIT) || LIMIT <= 0) {
-  console.error(`--limit must be a positive integer, got "${argValue('--limit')}"`);
+  fail(`--limit must be a positive integer, got "${argValue('--limit')}"`);
   process.exit(2);
 }
 // bun:sqlite would silently create an empty DB at a mistyped path and replay nothing.
 if (DB_PATH && !existsSync(DB_PATH)) {
-  console.error(`--db file not found: ${DB_PATH}`);
+  fail(`--db file not found: ${DB_PATH}`);
   process.exit(2);
 }
 if (LOGS_DIR && !existsSync(LOGS_DIR)) {
-  console.error(`--logs directory not found: ${LOGS_DIR}`);
+  fail(`--logs directory not found: ${LOGS_DIR}`);
   process.exit(2);
 }
 
@@ -99,7 +108,7 @@ const { TOOL_DEFINITIONS } = await import('../src/services/ai/tools');
 const { validateResponse } = await import('../src/services/ai/response-validator');
 
 if (!env.CLAUDE_API_TOKEN) {
-  console.error('CLAUDE_API_TOKEN is not set — nothing to replay');
+  fail('CLAUDE_API_TOKEN is not set — nothing to replay');
   process.exit(2);
 }
 
@@ -369,12 +378,10 @@ async function replayAgentRuns(dir: string): Promise<void> {
     .slice(0, LIMIT);
 
   // Separates "no logs" from "logs found but the debug-logger format drifted" when nothing replays.
-  console.log(
-    `\n=== Agent runs: ${files.length} .log files, ${parsed.length} runs parsed, ` +
-      `${runs.length} replayed (newest first; skipped = no system prompt/message)`,
-  );
-  console.log(`smart → ${env.CLAUDE_MODEL}, validator → ${env.CLAUDE_FAST_MODEL}`);
-  console.log('#   R1        R2        VALID     hist-tools → claude-tools | message');
+  say(`\n=== Agent runs: ${files.length} .log files, ${parsed.length} runs parsed, ` +
+    `${runs.length} replayed (newest first; skipped = no system prompt/message)`);
+  say(`smart → ${env.CLAUDE_MODEL}, validator → ${env.CLAUDE_FAST_MODEL}`);
+  say('#   R1        R2        VALID     hist-tools → claude-tools | message');
 
   let toolAgreement = 0;
   let toolComparable = 0;
@@ -470,18 +477,14 @@ async function replayAgentRuns(dir: string): Promise<void> {
     }
 
     const r1Status = r1.ok ? `ok ${(r1.ms / 1000).toFixed(1)}s` : 'FAIL';
-    console.log(
-      `${String(idx + 1).padEnd(3)} ${r1Status.padEnd(9)} ${r2Status.padEnd(9)} ${validStatus.padEnd(9)} ` +
-        `[${histTools.join(',')}] → [${claudeTools.join(',')}] | ${run.message.replace(/\s+/g, ' ').slice(0, 70)}`,
-    );
-    if (finalText) console.log(`    claude: ${finalText.replace(/\s+/g, ' ').slice(0, 160)}`);
+    say(`${String(idx + 1).padEnd(3)} ${r1Status.padEnd(9)} ${r2Status.padEnd(9)} ${validStatus.padEnd(9)} ` +
+      `[${histTools.join(',')}] → [${claudeTools.join(',')}] | ${run.message.replace(/\s+/g, ' ').slice(0, 70)}`);
+    if (finalText) say(`    claude: ${finalText.replace(/\s+/g, ' ').slice(0, 160)}`);
   }
 
   if (toolComparable > 0) {
-    console.log(
-      `Round-1 tool choice agrees with history: ${toolAgreement}/${toolComparable} ` +
-        '(agreement = same "no tools" decision or at least one shared tool)',
-    );
+    say(`Round-1 tool choice agrees with history: ${toolAgreement}/${toolComparable} ` +
+      '(agreement = same "no tools" decision or at least one shared tool)');
   }
 }
 
@@ -510,7 +513,7 @@ async function replayPrefill(): Promise<void> {
     LIMIT,
   );
 
-  console.log(`\n=== Bank prefill: ${rows.length} debit transactions → ${env.CLAUDE_FAST_MODEL}`);
+  say(`\n=== Bank prefill: ${rows.length} debit transactions → ${env.CLAUDE_FAST_MODEL}`);
   if (rows.length === 0) return;
 
   const byGroup = new Map<number, HistoricalTx[]>();
@@ -546,19 +549,15 @@ async function replayPrefill(): Promise<void> {
           if (same(tx.prefill_category, suggested)) prodHits++;
           if (tx.prefill_category === 'прочее') prodOther++;
         }
-        console.log(
-          `${(tx.merchant_normalized ?? tx.merchant ?? '?').slice(0, 30).padEnd(30)} ` +
-            `MCC ${String(tx.mcc ?? '-').padEnd(5)} ${String(tx.amount).padStart(9)} ${tx.currency} ` +
-            `confirmed=${tx.confirmed_category ?? '—'} prod=${tx.prefill_category ?? '—'} haiku=${suggested}`,
-        );
+        say(`${(tx.merchant_normalized ?? tx.merchant ?? '?').slice(0, 30).padEnd(30)} ` +
+          `MCC ${String(tx.mcc ?? '-').padEnd(5)} ${String(tx.amount).padStart(9)} ${tx.currency} ` +
+          `confirmed=${tx.confirmed_category ?? '—'} prod=${tx.prefill_category ?? '—'} haiku=${suggested}`);
       }
     }
   }
-  console.log(
-    `Haiku vs user-confirmed category: ${confirmedHits}/${confirmedTotal}; ` +
-      `vs stored production prefill: ${prodHits}/${prodTotal}; ` +
-      `"прочее": production ${prodOther}/${prodTotal}, Haiku ${haikuOther}/${rows.length}`,
-  );
+  say(`Haiku vs user-confirmed category: ${confirmedHits}/${confirmedTotal}; ` +
+    `vs stored production prefill: ${prodHits}/${prodTotal}; ` +
+    `"прочее": production ${prodOther}/${prodTotal}, Haiku ${haikuOther}/${rows.length}`);
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -566,12 +565,12 @@ async function replayPrefill(): Promise<void> {
 if (LOGS_DIR) await replayAgentRuns(LOGS_DIR);
 if (DB_PATH) await replayPrefill();
 
-console.log(`\n=== Claude answered ${stepsOk}/${stepsTotal} replayed requests`);
+say(`\n=== Claude answered ${stepsOk}/${stepsTotal} replayed requests`);
 for (const issue of issues) {
-  console.log(`FAIL ${issue.step.padEnd(9)} ${issue.run}\n     ${issue.detail}`);
+  say(`FAIL ${issue.step.padEnd(9)} ${issue.run}\n     ${issue.detail}`);
 }
 if (stepsTotal === 0) {
-  console.log('Nothing was replayed — no parseable runs / confirmed transactions found');
+  say('Nothing was replayed — no parseable runs / confirmed transactions found');
   process.exit(1);
 }
 process.exit(issues.length > 0 ? 1 : 0);
