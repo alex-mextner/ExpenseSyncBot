@@ -74,15 +74,33 @@ describe('CategoryRepository findFuzzyMatch', () => {
     expect(result).toBeNull();
   });
 
-  test('should match with high similarity (above 0.9 threshold)', () => {
+  test('should match with 1 typo (threshold 0.75)', () => {
+    // "Продукты" (8 chars) vs "Продукта" (1 char diff) = 0.875 similarity
+    const result = repo.findFuzzyMatch(1, 'Продукта');
+    expect(result?.name).toBe('Продукты');
+  });
+
+  test('should match with 2 typos in 8-char word (threshold 0.75)', () => {
+    // "Продукты" (8 chars) vs "Прадукта" (2 char diff) = 0.75 similarity
+    const result = repo.findFuzzyMatch(1, 'Прадукта');
+    expect(result?.name).toBe('Продукты');
+  });
+
+  test('should match with high similarity for long words', () => {
     // "Развлечения" (11 chars) vs "Развлечениа" (1 char diff) = 0.909 similarity
     const result = repo.findFuzzyMatch(1, 'Развлечениа');
     expect(result?.name).toBe('Развлечения');
   });
 
-  test('should NOT match with low similarity (below 0.9 threshold)', () => {
-    // "Продукты" (8 chars) vs "Продукта" (1 char diff) = 0.875 similarity
-    const result = repo.findFuzzyMatch(1, 'Продукта');
+  test('should match with 2 typos in long word', () => {
+    // "Развлечения" (11 chars) vs "Развлетения" (2 char diff) = 0.818 similarity
+    const result = repo.findFuzzyMatch(1, 'Развлетения');
+    expect(result?.name).toBe('Развлечения');
+  });
+
+  test('should NOT match with too many typos (3+ in short word)', () => {
+    // "Продукты" (8 chars) vs "Продук" (3 char diff) = 0.625 similarity (below 0.75)
+    const result = repo.findFuzzyMatch(1, 'Продук');
     expect(result).toBeNull();
   });
 
@@ -92,5 +110,17 @@ describe('CategoryRepository findFuzzyMatch', () => {
     
     const result = repo.findFuzzyMatch(2, 'Продукты');
     expect(result?.group_id).toBe(2);
+  });
+
+  test('should match with missing character', () => {
+    // "Продукты" vs "Продукт" (missing 'ы') - 1 char diff
+    const result = repo.findFuzzyMatch(1, 'Продукт');
+    expect(result?.name).toBe('Продукты');
+  });
+
+  test('should match with extra character', () => {
+    // "Продукты" vs "Продуктыы" (extra 'ы') - 1 char diff
+    const result = repo.findFuzzyMatch(1, 'Продуктыы');
+    expect(result?.name).toBe('Продукты');
   });
 });

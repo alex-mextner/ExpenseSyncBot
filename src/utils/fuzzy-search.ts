@@ -44,7 +44,6 @@ export function levenshteinDistance(a: string, b: string): number {
 
 /**
  * Calculate similarity ratio between two strings (0 to 1)
- * Uses Levenshtein distance normalized by the maximum length
  * Returns 1.0 for identical strings, 0.0 for completely different
  */
 export function calculateSimilarity(a: string, b: string): number {
@@ -58,23 +57,18 @@ export function calculateSimilarity(a: string, b: string): number {
 }
 
 /**
- * Normalize category name - capitalize first letter
+ * Normalize category name for storage
+ * Capitalizes first letter, lowercases the rest, trims spaces
  */
 export function normalizeCategoryName(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return trimmed;
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
 }
 
 /**
- * Find best matching category using fuzzy search with Levenshtein distance
- * Returns the best match or null if no match found
- * 
- * Matching priority:
- * 1. Exact match (case-insensitive)
- * 2. Category contains input (only for short partial inputs with high similarity)
- * 3. Input contains category
- * 4. Fuzzy match with similarity >= 0.9
+ * Find best matching category using fuzzy search
+ * Allows up to 2 typos in 8-character words (threshold 0.75)
  */
 export function findBestCategoryMatch(
   input: string,
@@ -142,8 +136,8 @@ export function findBestCategoryMatch(
     return containedInMatch;
   }
 
-  // Try fuzzy matching with similarity threshold of 0.9
-  const FUZZY_THRESHOLD = 0.9;
+  // Fuzzy match: allow 2 typos in 8-char word (threshold 0.75)
+  const FUZZY_THRESHOLD = 0.75;
   let bestMatch: string | null = null;
   let bestSimilarity = 0;
 

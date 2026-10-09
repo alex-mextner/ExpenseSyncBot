@@ -97,19 +97,33 @@ describe('findBestCategoryMatch with fuzzy matching', () => {
 
   test('should match with one character typo', () => {
     // "Продукта" (wrong last char) vs "Продукты" - distance 1, similarity 0.875
-    // Below threshold 0.9, should NOT match
-    expect(findBestCategoryMatch('Продукта', categories)).toBeNull();
+    // Should match with threshold 0.75
+    expect(findBestCategoryMatch('Продукта', categories)).toBe('Продукты');
   });
 
-  test('should match with transposed characters', () => {
+  test('should match with two character typos', () => {
+    // "прадукта" vs "продукты" - 2 typos (a instead of o, a instead of ы)
+    // similarity = 1 - 2/8 = 0.75
+    expect(findBestCategoryMatch('прадукта', categories)).toBe('Продукты');
+  });
+
+  test('should match "продукты" with missing letter', () => {
     // "продукт" (missing 'ы') vs "Продукты" - distance 1, similarity 7/8 = 0.875
-    // Below 0.9 threshold
-    expect(findBestCategoryMatch('продукт', categories)).toBeNull();
+    expect(findBestCategoryMatch('продукт', categories)).toBe('Продукты');
   });
 
-  test('should NOT match when similarity is below threshold', () => {
-    // Too many differences
+  test('should match with 2 typos in 8-char word', () => {
+    // "продукты" (8 chars) with 2 typos: similarity = 1 - 2/8 = 0.75
+    // "продуки" (missing 'т', 'ы') vs "продукты" - distance 2
+    expect(findBestCategoryMatch('продуки', categories)).toBe('Продукты');
+    // "прадукты" (a instead of o) - 1 typo
+    expect(findBestCategoryMatch('прадукты', categories)).toBe('Продукты');
+  });
+
+  test('should NOT match when too many typos (3+ in short word)', () => {
+    // "продук" (3 chars missing) vs "продукты" - distance 3, similarity 5/8 = 0.625
     expect(findBestCategoryMatch('продук', categories)).toBeNull();
+    // "прод" (4 chars missing) - distance 4, similarity 4/8 = 0.5
     expect(findBestCategoryMatch('прод', categories)).toBeNull();
   });
 
@@ -133,10 +147,10 @@ describe('findBestCategoryMatch with fuzzy matching', () => {
     expect(findBestCategoryMatch('Да', shortCategories)).toBe('Да');
     expect(findBestCategoryMatch('да', shortCategories)).toBe('Да');
     
-    // One char difference in 2-char word (1 - 1/2 = 0.5) - below threshold
+    // One char difference in 2-char word (1 - 1/2 = 0.5) - below threshold 0.75
     expect(findBestCategoryMatch('Ду', shortCategories)).toBeNull();
     
-    // One char difference in 3-char word (1 - 1/3 = 0.67) - below threshold
+    // One char difference in 3-char word (1 - 1/3 = 0.67) - below threshold 0.75
     expect(findBestCategoryMatch('Авт', shortCategories)).toBeNull();
   });
 
@@ -169,24 +183,85 @@ describe('findBestCategoryMatch with fuzzy matching', () => {
     expect(findBestCategoryMatch('молоко', cats)).toBe('Молоко');
   });
 
-  test('should match with similarity just above threshold (0.9)', () => {
-    // "Развлечения" (11 chars) with 1 char diff = 1 - 1/11 = 0.909 (above 0.9)
+  test('should match with similarity just above threshold for long words', () => {
+    // "Развлечения" (11 chars) with 1 char diff = 1 - 1/11 = 0.909 (above 0.75)
     const longCategories = ['Развлечения']; // 11 chars
     // Use actual character difference, not case difference
     expect(findBestCategoryMatch('Развлечениа', longCategories)).toBe('Развлечения');
   });
 
-  test('should NOT match with similarity just below threshold', () => {
-    // "Продукты" (8 chars) with 1 char diff = 0.875 (below 0.9)
-    // Use actual character difference: "Продукта" vs "Продукты"
-    expect(findBestCategoryMatch('Продукта', categories)).toBeNull();
+  test('should match with 2 typos in long word', () => {
+    // "Развлечения" (11 chars) with 2 char diff = 1 - 2/11 = 0.818 (above 0.75)
+    const longCategories = ['Развлечения'];
+    // "Развлетения" (ч->т) = 1 typo
+    expect(findBestCategoryMatch('Развлетения', longCategories)).toBe('Развлечения');
+  });
+
+  test('should NOT match completely different words', () => {
+    // "xyzabc" vs "продукты" - completely different
+    expect(findBestCategoryMatch('xyzabc', categories)).toBeNull();
+  });
+
+  test('should match with insertion (extra character)', () => {
+    // "продуктыы" (extra 'ы') vs "Продукты" - distance 1
+    expect(findBestCategoryMatch('продуктыы', categories)).toBe('Продукты');
+  });
+
+  test('should match with deletion (missing character)', () => {
+    // "продукы" (missing 'т') vs "Продукты" - distance 1
+    expect(findBestCategoryMatch('продукы', categories)).toBe('Продукты');
+  });
+
+  test('should match with extra space', () => {
+    // "продукт ы" vs "продукты" - extra space = 1 difference
+    expect(findBestCategoryMatch('продукт ы', categories)).toBe('Продукты');
+  });
+
+  test('should handle mixed case and spaces', () => {
+    expect(findBestCategoryMatch('  ПрОдУкТы  ', categories)).toBe('Продукты');
+  });
+});
+
+describe('findBestCategoryMatch - edge cases', () => {
+  test('should handle null-like inputs', () => {
+    const categories = ['Продукты'];
+    expect(findBestCategoryMatch('', categories)).toBeNull();
+    expect(findBestCategoryMatch('   ', categories)).toBeNull();
+  });
+
+  test('should handle categories with spaces', () => {
+    const categories = ['Бытовые товары', 'Бытовые услуги'];
+    expect(findBestCategoryMatch('бытовые товары', categories)).toBe('Бытовые товары');
+    expect(findBestCategoryMatch('БЫТОВЫЕ ТОВАРЫ', categories)).toBe('Бытовые товары');
+  });
+
+  test('should match with typo in multi-word category', () => {
+    const categories = ['Бытовые товары'];
+    // "Бытовые товар" (missing 'ы') - distance 1
+    expect(findBestCategoryMatch('Бытовые товар', categories)).toBe('Бытовые товары');
+  });
+
+  test('should return best match among multiple candidates', () => {
+    const categories = ['Продукты', 'Продуктовая', 'Прод'];
+    // "Продукты" is exact match for first category
+    expect(findBestCategoryMatch('Продукты', categories)).toBe('Продукты');
+    // "Продуктовая" should match "Продуктовая" exactly
+    expect(findBestCategoryMatch('Продуктовая', categories)).toBe('Продуктовая');
+  });
+
+  test('should handle categories with special characters', () => {
+    const categories = ['Здоровье/Медицина', 'Транспорт/Такси'];
+    expect(findBestCategoryMatch('здоровье/медицина', categories)).toBe('Здоровье/Медицина');
   });
 });
 
 describe('normalizeCategoryName', () => {
-  test('should capitalize first letter', () => {
+  test('should capitalize first letter and lowercase rest', () => {
     expect(normalizeCategoryName('продукты')).toBe('Продукты');
+    expect(normalizeCategoryName('ПРОДУКТЫ')).toBe('Продукты');
+    expect(normalizeCategoryName('ПрОдУкТы')).toBe('Продукты');
     expect(normalizeCategoryName('test')).toBe('Test');
+    expect(normalizeCategoryName('TEST')).toBe('Test');
   });
 
   test('should trim spaces', () => {
@@ -199,8 +274,13 @@ describe('normalizeCategoryName', () => {
     expect(normalizeCategoryName('   ')).toBe('');
   });
 
-  test('should preserve already capitalized strings', () => {
+  test('should preserve already normalized strings', () => {
     expect(normalizeCategoryName('Продукты')).toBe('Продукты');
     expect(normalizeCategoryName('Test')).toBe('Test');
+  });
+
+  test('should handle multi-word names', () => {
+    expect(normalizeCategoryName('бытовые товары')).toBe('Бытовые товары');
+    expect(normalizeCategoryName('БЫТОВЫЕ ТОВАРЫ')).toBe('Бытовые товары');
   });
 });

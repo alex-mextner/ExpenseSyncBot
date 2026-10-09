@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import type { Category, CreateCategoryData } from '../types';
-import { findBestCategoryMatch } from '../../utils/fuzzy-search';
+import { findBestCategoryMatch, normalizeCategoryName } from '../../utils/fuzzy-search';
 
 export class CategoryRepository {
   constructor(private db: Database) {}
@@ -31,8 +31,8 @@ export class CategoryRepository {
   }
 
   /**
-   * Find category using fuzzy matching with Levenshtein distance
-   * Returns the best matching category or null if no match found (threshold 0.9)
+   * Find category using fuzzy matching
+   * Returns the best matching category or null if no match found (threshold 0.75)
    */
   findFuzzyMatch(groupId: number, name: string): Category | null {
     const categories = this.findByGroupId(groupId);
@@ -48,20 +48,11 @@ export class CategoryRepository {
   }
 
   /**
-   * Normalize category name - capitalize first letter
-   */
-  private normalizeCategory(name: string): string {
-    const trimmed = name.trim();
-    if (!trimmed) return trimmed;
-    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
-  }
-
-  /**
    * Create new category
    */
   create(data: CreateCategoryData): Category {
     // Normalize category name
-    const normalizedName = this.normalizeCategory(data.name);
+    const normalizedName = normalizeCategoryName(data.name);
 
     // Check if category already exists
     const existing = this.findByName(data.group_id, normalizedName);
