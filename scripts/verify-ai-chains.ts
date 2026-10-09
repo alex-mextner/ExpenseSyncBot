@@ -17,7 +17,7 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, geminiClient, hfClient, zaiClient } from '../src/services/ai/clients';
-import { claudeThinkingParam } from '../src/services/ai/streaming';
+import { claudeRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
   chain: 'smart' | 'fast' | 'ocr';
@@ -25,7 +25,7 @@ interface SlotSpec {
   client: () => OpenAI;
   model: string;
   vision: boolean;
-  /** Anthropic request shape, same as the Claude slots in streaming.ts: no `temperature` (400), thinking off. */
+  /** Anthropic request shape, same as the Claude slots in streaming.ts: no `temperature` (400), per-model thinking. */
   anthropic?: boolean;
 }
 
@@ -175,8 +175,9 @@ async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {
     const response = await spec.client().chat.completions.create({
       model: spec.model,
       messages: [{ role: 'user', content: TEXT_PROMPT }],
-      max_tokens: maxTokens,
-      ...(spec.anthropic ? claudeThinkingParam(spec.model) : { temperature: 0.1 }),
+      ...(spec.anthropic
+        ? claudeRequestParams(spec.model, maxTokens)
+        : { max_tokens: maxTokens, temperature: 0.1 }),
     });
     const text = response.choices[0]?.message?.content?.trim() ?? '';
     const ms = Date.now() - start;

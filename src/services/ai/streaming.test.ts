@@ -48,28 +48,39 @@ mock.module('./clients', () => ({
 import OpenAI from 'openai';
 import { isProviderDemoted, resetProviderBreaker } from './provider-breaker';
 import {
+  CLAUDE_THINKING_RESERVE_TOKENS,
   classifyAiError,
-  claudeThinkingParam,
+  claudeRequestParams,
   getBackoffDelay,
   getRateLimitCooldownMs,
   isRetryableError,
   pickRepresentativeError,
 } from './streaming';
 
-describe('claudeThinkingParam', () => {
-  // Values measured against the live API: the wrong thinking-off value is a 400 for that model.
-  const betweenTools = { thinking: { type: 'between_tools' as const } };
-  const disabled = { thinking: { type: 'disabled' as const } };
+describe('claudeRequestParams', () => {
+  // Measured against the live API (2026-10): every model accepts reasoning_effort=medium, and
+  // thinking spends the same max_tokens budget as the visible answer.
   it.each([
-    ['claude-sonnet-5-5', betweenTools],
-    ['claude-sonnet-5-5-20261001', betweenTools],
-    ['claude-haiku-5-5', disabled],
-    ['claude-sonnet-5', disabled],
-    ['claude-opus-4-8', disabled],
-    ['claude-opus-5-5', {}],
-    ['claude-fable-5-1', {}],
-  ])('%s → %j', (model, expected) => {
-    expect(claudeThinkingParam(model)).toEqual(expected);
+    'claude-sonnet-5-5',
+    'claude-sonnet-5-5-20261001',
+    'claude-opus-5-5',
+    'claude-fable-5-1',
+  ])('%s thinks at medium effort with a reserve on top of the caller budget', (model) => {
+    expect(claudeRequestParams(model, 200)).toEqual({
+      reasoning_effort: 'medium',
+      max_tokens: 200 + CLAUDE_THINKING_RESERVE_TOKENS,
+    });
+  });
+
+  it.each([
+    'claude-haiku-5-5',
+    'claude-haiku-4-5-20251001',
+  ])('%s runs with thinking disabled and the caller budget unchanged', (model) => {
+    // Haiku 5.5 starves the visible answer at small budgets even at medium effort.
+    expect(claudeRequestParams(model, 200)).toEqual({
+      thinking: { type: 'disabled' },
+      max_tokens: 200,
+    });
   });
 });
 
@@ -296,14 +307,12 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it.each([
-    ['smart' as const, 'claude-sonnet-5-5', 'test-model', 'gemini-test', 'between_tools'],
-    ['fast' as const, 'claude-haiku-5-5', 'test-fast', 'gemini-fast', 'disabled'],
-  ])('Claude requests in the %s chain omit temperature and turn thinking off for the configured model; other providers are unchanged', async (chain, claudeModel, zaiModel, geminiModel, thinkingOff) => {
+    ['smart' as const, 'claude-sonnet-5-5', 'test-model', 'gemini-test'],
+    ['fast' as const, 'claude-haiku-5-5', 'test-fast', 'gemini-fast'],
+  ])('Claude requests in the %s chain omit temperature and use the per-model thinking params; other providers are unchanged', async (chain, claudeModel, zaiModel, geminiModel) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     if (chain === 'smart') mockEnv.CLAUDE_MODEL = claudeModel;
     else mockEnv.CLAUDE_FAST_MODEL = claudeModel;
-    // Claude 5.x: `temperature` → 400; default adaptive thinking can spend the whole small
-    // max_tokens budget (validators: 256, prefill: 200) and stream zero text (finish=length).
     type SentParams = OpenAI.ChatCompletionCreateParamsStreaming & { thinking?: unknown };
     const sent = new Map<string, SentParams>();
     const create = mock(async (params: SentParams) => {
@@ -336,9 +345,10 @@ describe('aiStreamRound fallback chain', () => {
       const claude = sent.get(claudeModel);
       expect(claude).toBeDefined();
       expect(claude && 'temperature' in claude).toBe(false);
-      expect(claude?.thinking).toEqual({ type: thinkingOff });
+      expect(claude).toMatchObject(claudeRequestParams(claudeModel, 100));
       for (const model of [zaiModel, geminiModel]) {
         expect(sent.get(model)?.temperature).toBe(0.7);
+        expect(sent.get(model)?.max_tokens).toBe(100);
         expect(sent.get(model)?.thinking).toBeUndefined();
       }
     } finally {
