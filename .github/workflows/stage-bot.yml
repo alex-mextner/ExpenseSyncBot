@@ -204,10 +204,13 @@ jobs:
       - name: Comment on PR with stage bot link
         if: github.event.action != 'closed'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          # Via env, not template expansion: branch names may contain backticks/${} that would inject JS.
+          HEAD_REF: ${{ github.head_ref }}
         with:
           script: |
             const marker = '<!-- stage-bot-comment -->';
-            const body = `${marker}\n🤖 **Stage bot deployed!** Test it: https://t.me/ExpenseSyncStageBot\n\nBranch: \`${{ github.head_ref }}\` @ \`${context.sha.slice(0, 7)}\``;
+            const body = `${marker}\n🤖 **Stage bot deployed!** Test it: https://t.me/ExpenseSyncStageBot\n\nBranch: \`${process.env.HEAD_REF}\` @ \`${context.sha.slice(0, 7)}\``;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
