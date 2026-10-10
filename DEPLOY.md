@@ -124,6 +124,27 @@ The healthcheck probes the public URL (`https://finbot.mextner.com/health`), so 
 The odroid gets its LAN address (currently 192.168.0.39) from DHCP without a reservation; it may change.
 Nothing depends on it: cloudflared and the GitHub runner dial out; SSH uses Tailscale (`odroidn2`, 100.116.57.66).
 
+### 8. Storage: WD500 HDD, not the SD card
+
+The SD card has caused hangs, so the bot's directories live on the WD500 HDD (`/mnt/wd500`, ext4,
+UUID `83c5bd3c-2cfa-494e-b0a5-17d3c92d0925`) and are bind-mounted back to their usual paths:
+
+| Path | HDD source |
+|---|---|
+| `/var/www/ExpenseSyncBot` (code, `data/`, `logs/`) | `/mnt/wd500/odroid-rt/www/ExpenseSyncBot` |
+| `/var/www/ExpenseSyncBot-stage` | `/mnt/wd500/odroid-rt/www/ExpenseSyncBot-stage` |
+| `/var/www/actions-runner` (runner + `_work`) | `/mnt/wd500/odroid-rt/www/actions-runner` |
+
+- fstab block `# >>> expensesyncbot-www` (`bind,nofail,x-systemd.requires-mounts-for=/mnt/wd500`),
+  next to the host's own `# >>> wd500-runtime` block (docker, containerd, `/home/ultra`, swap).
+- `pm2-www-data.service` and the runner service have `RequiresMountsFor=` drop-ins
+  (`/etc/systemd/system/<unit>.d/10-wd500.conf`): without the HDD they don't start, rather than
+  starting on empty SD directories.
+- Move script: `/usr/local/sbin/expensesyncbot-move-to-wd500` (final rsync + bind mount, ~16 s downtime).
+  The pre-move SD copies are kept as `/var/www/*.sd-old` for rollback.
+
+Check: `findmnt /var/www/ExpenseSyncBot` must show `<wd500 device>[/odroid-rt/www/ExpenseSyncBot]` (the `sdX` letter can change across boots).
+
 ---
 
 ## Public Ingress (Cloudflare Tunnel)
