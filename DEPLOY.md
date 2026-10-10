@@ -1,295 +1,223 @@
 # Deployment Guide for ExpenseSyncBot
 
-This guide covers the initial setup and automated deployment to Digital Ocean.
+The bot runs on a home server (**odroidn2**, Odroid N2, Armbian, aarch64). Public HTTPS
+traffic enters through the Digital Ocean droplet (**do-edge**), whose Caddy terminates TLS
+for `*.invntrm.ru` and reverse-proxies to the home server over Tailscale.
 
 ## Table of Contents
 
-1. [Initial Server Setup](#initial-server-setup)
-2. [GitHub Actions Setup](#github-actions-setup)
-3. [Automated Deployment](#automated-deployment)
-4. [Manual Operations](#manual-operations)
-5. [Troubleshooting](#troubleshooting)
+1. [Architecture Overview](#architecture-overview)
+2. [Home Server Setup](#home-server-setup)
+3. [Edge Proxy (Digital Ocean)](#edge-proxy-digital-ocean)
+4. [GitHub Actions Setup](#github-actions-setup)
+5. [Automated Deployment](#automated-deployment)
+6. [Manual Operations](#manual-operations)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
-## Initial Server Setup
+## Architecture Overview
 
-These steps need to be done **once** on the Digital Ocean server.
+```
+Telegram ◄── long polling ── bot (pm2: expensesyncbot, bank-sync, expensesyncbot-stage)
+                                 │ :3311 prod / :3312 stage
+                                 ▼
+                         Caddy on odroid (plain HTTP :80, Caddyfile from this repo)
+                                 ▲
+                                 │ Tailscale (100.116.57.66)
+                                 │
+Users ── HTTPS ──► Caddy on DO edge (104.248.84.190, Let's Encrypt)
+                   expense-sync-bot.invntrm.ru, expense-sync-bot-app.invntrm.ru,
+                   expense-sync-stage-bot.invntrm.ru, expense-sync-stage-bot-app.invntrm.ru
 
-### 1. SSH into the server
-
-```bash
-ssh www-data@104.248.84.190
+GitHub push to main ──► Actions: check (ubuntu-latest) ──► deploy (self-hosted runner on odroid)
 ```
 
-### 2. Create project directory
+The bot itself only needs outbound internet (Telegram long polling, Google, AI APIs, banks).
+The edge proxy is required for the OAuth callback, the Mini App and its `/api`.
+If the edge is down, the bot keeps working; only the Mini App and `/connect` OAuth stop.
+
+| Host | Access | Role |
+|---|---|---|
+| odroidn2 | `ssh root@odroidn2` (Tailscale) | bot, data, Caddy origin, GitHub runner |
+| do-edge | `ssh root@104.248.84.190` | TLS edge only (also hosts unrelated projects) |
+
+---
+
+## Home Server Setup
+
+Paths mirror the old droplet so `ecosystem.config.cjs`, `start.sh` and the cron scripts work unchanged.
+
+### 1. System packages (as root)
 
 ```bash
-sudo mkdir -p /var/www/ExpenseSyncBot
-sudo chown www-data:www-data /var/www/ExpenseSyncBot
+apt-get install -y git jq curl rsync unzip caddy sqlite3 ca-certificates
+usermod -s /bin/bash www-data   # runner and pm2 run as www-data
+chown www-data:www-data /var/www
+```
+
+### 2. Runtime (as www-data, `su - www-data`)
+
+```bash
+cd /var/www
+mkdir -p .nvm/versions/node
+curl -fsSL https://nodejs.org/dist/v22.17.0/node-v22.17.0-linux-arm64.tar.xz | tar -xJ -C .nvm/versions/node
+mv .nvm/versions/node/node-v22.17.0-linux-arm64 .nvm/versions/node/v22.17.0
+curl -fsSL https://bun.sh/install | bash -s bun-v1.2.17
+export PATH=/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH
+bun add -g pm2
+# .bashrc for interactive shells, .profile for `su - www-data -c "pm2 ..."`
+for f in ~/.bashrc ~/.profile; do echo 'export PATH=/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH' >> "$f"; done
+```
+
+`/var/www/.ssh/id_ed25519` is the key `git pull` uses (`origin` is `git@github.com:alex-mextner/ExpenseSyncBot.git`).
+
+### 3. Project
+
+```bash
+git clone git@github.com:alex-mextner/ExpenseSyncBot.git /var/www/ExpenseSyncBot
 cd /var/www/ExpenseSyncBot
+git submodule update --init
+mkdir -p data logs
+cp .env.example .env && nano .env   # GOOGLE_REDIRECT_URI=https://expense-sync-bot.invntrm.ru/callback, OAUTH_SERVER_PORT=3311
+bun install
+bun install --cwd src/services/bank/ZenPlugins
+bunx playwright install chromium     # table renderer (as root: bunx playwright install-deps chromium)
+(cd miniapp && bun install --frozen-lockfile && bun run build)
 ```
 
-**Note:** Files will be deployed via rsync from GitHub Actions. No need to clone the repository manually.
+Stage bot: `.env.stage` in the repo dir holds overrides (stage `BOT_TOKEN`, port 3312, `./data/expenses-stage.db`);
+its working directory is `/var/www/ExpenseSyncBot-stage`.
 
-### 3. Create the data directory
+### 4. PM2
 
 ```bash
-mkdir -p data
+pm2 start ecosystem.config.cjs
+pm2 save
+# as root — registers pm2-www-data.service for boot:
+env PATH=$PATH:/var/www/.nvm/versions/node/v22.17.0/bin /var/www/.bun/bin/pm2 startup systemd -u www-data --hp /var/www
 ```
 
-### 5. Create `.env` file
+`ecosystem.config.cjs` pins `TZ=UTC`: cron schedules (exchange rates, monthly tab clone) and date math
+have always run in UTC, while the odroid system clock is Europe/Belgrade.
+
+### 5. Caddy (origin)
 
 ```bash
-cp .env.example .env
-nano .env
+ln -sf /var/www/ExpenseSyncBot/Caddyfile /etc/caddy/Caddyfile
+systemctl reload caddy
 ```
 
-Fill in the following values:
+The repo `Caddyfile` uses `http://` site addresses: TLS lives on the edge. Deploys run
+`caddy reload --config /etc/caddy/Caddyfile`, so Caddyfile changes ship with the code.
 
-```env
-# From @BotFather
-BOT_TOKEN=your_bot_token_here
+### 6. Cron (as www-data, `crontab -e`)
 
-# From Google Cloud Console
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-GOOGLE_REDIRECT_URI=https://expense-sync-bot.invntrm.ru/callback
-
-# OAuth server port
-OAUTH_SERVER_PORT=3000
-
-# Database (default path is fine)
-DATABASE_PATH=./data/expenses.db
-
-# Generate with: openssl rand -hex 32
-ENCRYPTION_KEY=your_32_byte_hex_key
-
-# Environment
-NODE_ENV=production
+```cron
+0 3 * * * cd /var/www/ExpenseSyncBot && PATH=/var/www/.bun/bin:$PATH ./scripts/backup-db.sh >> logs/backup.log 2>&1
+*/2 * * * * /var/www/ExpenseSyncBot/scripts/healthcheck-alert.sh >> /var/www/ExpenseSyncBot/logs/healthcheck.log 2>&1
 ```
 
-### 6. Create logs directory
+The healthcheck probes the public URL, so it alerts on edge, tunnel or bot failure alike.
 
-```bash
-mkdir -p logs
+### 7. LAN address
+
+The odroid gets its LAN address (currently 192.168.0.38) from DHCP without a reservation; it may change.
+Nothing depends on it: the edge and CI use Tailscale (`odroidn2`, 100.116.57.66).
+
+---
+
+## Edge Proxy (Digital Ocean)
+
+The droplet is in the tailnet as `do-edge` (`tailscale up --hostname=do-edge --accept-dns=false`;
+`--accept-dns=false` keeps MagicDNS from touching the other projects on the droplet).
+
+The droplet's `/etc/caddy/Caddyfile` is shared with other projects and imports `/var/www/*/Caddyfile`
+and `/etc/caddy/Caddyfile.d/*`. The old checkout's `Caddyfile` was renamed to
+`/var/www/ExpenseSyncBot/Caddyfile.migrated-to-odroid` so the glob no longer picks it up;
+the edge config lives in `/etc/caddy/Caddyfile.d/expensesyncbot.caddy`:
+
+```caddy
+expense-sync-bot.invntrm.ru, expense-sync-bot-app.invntrm.ru, expense-sync-stage-bot.invntrm.ru, expense-sync-stage-bot-app.invntrm.ru,
+expense-sync-bot.mextner.com, expense-sync-bot-app.mextner.com, expense-sync-stage-bot.mextner.com, expense-sync-stage-bot-app.mextner.com {
+	# Origin is the home server (odroidn2) over Tailscale; Host header is preserved.
+	reverse_proxy 100.116.57.66:80 {
+		lb_try_duration 10s
+		lb_try_interval 500ms
+	}
+	log {
+		output file /var/log/caddy/expensesyncbot.log
+		format console
+	}
+}
 ```
 
-### 7. Test the bot manually (optional)
-
-```bash
-/var/www/.bun/bin/bun run index.ts
-```
-
-Press Ctrl+C to stop.
-
-**Note:** Bun is installed at `/var/www/.bun/bin/bun` for www-data user.
-
-### 8. Install PM2 globally (if not installed)
-
-```bash
-/var/www/.bun/bin/bun add -g pm2
-```
-
-**Note:** PM2 will be installed at `/var/www/.bun/bin/pm2`
-
-### 9. Setup environment for PM2
-
-PM2 requires Node.js in PATH. Add to `~/.bashrc`:
-
-```bash
-echo 'export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-### 10. Start the bot with PM2
-
-```bash
-/var/www/.bun/bin/pm2 start ecosystem.config.cjs
-/var/www/.bun/bin/pm2 save
-/var/www/.bun/bin/pm2 startup
-```
-
-**Note:** `pm2 startup` will show you a command to run with sudo. Copy and execute it to enable PM2 auto-start on server reboot.
-
-### 11. Check PM2 status
-
-```bash
-/var/www/.bun/bin/pm2 list
-/var/www/.bun/bin/pm2 status expensesyncbot
-```
-
-### 12. View logs
-
-```bash
-# Follow logs in real-time
-/var/www/.bun/bin/pm2 logs expensesyncbot
-
-# View recent logs
-/var/www/.bun/bin/pm2 logs expensesyncbot --lines 100
-
-# Clear logs
-/var/www/.bun/bin/pm2 flush
-```
-
-### 13. Configure Caddy
-
-```bash
-# Copy Caddyfile to Caddy config directory
-sudo cp Caddyfile /etc/caddy/Caddyfile
-
-# Test configuration
-sudo caddy validate --config /etc/caddy/Caddyfile
-
-# Reload Caddy
-sudo systemctl reload caddy
-
-# Check Caddy status
-sudo systemctl status caddy
-```
-
-### 14. Update Google Cloud Console
-
-Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and update the OAuth redirect URI to:
-
-```
-https://expense-sync-bot.invntrm.ru/callback
-```
+Apply with `caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy`.
+Google OAuth redirect URIs and the BotFather Mini App URL stay on `*.invntrm.ru`.
 
 ---
 
 ## GitHub Actions Setup
 
-### 1. Generate SSH key on the server
-
-On the Digital Ocean server, generate a new SSH key for GitHub Actions:
-
-```bash
-ssh-keygen -t ed25519 -C "github-actions" -f ~/.ssh/github-actions
-```
-
-**Don't set a passphrase** (just press Enter when prompted).
-
-### 2. Add public key to authorized_keys
+`deploy.yml` and the stage job in `stage-bot.yml` run on a self-hosted runner (labels `self-hosted, odroid`)
+installed in `/var/www/actions-runner` as a systemd service running as `www-data`:
 
 ```bash
-cat ~/.ssh/github-actions.pub >> ~/.ssh/authorized_keys
+# as root on odroid
+cd /var/www/actions-runner
+./bin/installdependencies.sh
+TOKEN=...   # gh api -X POST repos/alex-mextner/ExpenseSyncBot/actions/runners/registration-token --jq .token
+su - www-data -c "cd /var/www/actions-runner && ./config.sh --unattended --url https://github.com/alex-mextner/ExpenseSyncBot --token $TOKEN --name odroid --labels odroid --work _work --replace"
+./svc.sh install www-data && ./svc.sh start
 ```
 
-### 3. Copy private key
+The repository is public, so `stage-bot.yml` only runs the stage job for PRs whose head branch
+lives in this repository — fork PRs never reach the home server.
 
-```bash
-cat ~/.ssh/github-actions
-```
-
-Copy the entire output (including `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----`).
-
-### 4. Add to GitHub Secrets
-
-1. Go to your GitHub repository: <https://github.com/alex-mextner/ExpenseSyncBot>
-2. Click **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Name: `DIGITAL_OCEAN_SSH_KEY`
-5. Value: Paste the private key from step 3
-6. Click **Add secret**
-
-### 5. Test the workflow
-
-Push a commit to the `main` branch or manually trigger the workflow:
-
-1. Go to **Actions** tab
-2. Select **Deploy to Digital Ocean**
-3. Click **Run workflow** → **Run workflow**
+Secrets used: `BOT_TOKEN`, `BOT_ADMIN_CHAT_ID` (deploy notifications).
 
 ---
 
 ## Automated Deployment
 
-Once setup is complete, deployment happens automatically:
+1. Push to `main`
+2. `check` job (ubuntu-latest): typecheck, lint, tests, Mini App build
+3. `deploy` job (odroid runner) in `/var/www/ExpenseSyncBot`:
+   - `git pull origin main`, `git submodule update --init`
+   - `bun install` (root + ZenPlugins), Mini App build
+   - log rotation, `caddy reload`, pm2-logrotate config
+   - `pm2 reload ecosystem.config.cjs --update-env`
+4. Telegram notification to the admin chat
 
-1. Push code to the `main` branch
-2. GitHub Actions triggers the workflow
-3. The workflow:
-   - SSH into the server
-   - Pulls latest changes from `main`
-   - Installs dependencies with `bun install`
-   - Restarts the systemd service
-4. The bot is now running with the latest code
-
-### What happens during deployment
-
-- ✅ Code is updated (`git pull`)
-- ✅ Dependencies are installed
-- ✅ Database migrations run automatically on bot startup
-- ✅ Service is restarted
-- ❌ `.env` file is **not** touched
-- ❌ `data/` directory is **not** touched
+`.env` and `data/` are never touched by the deploy. Migrations run on bot startup.
 
 ---
 
 ## Manual Operations
 
-### Restart the bot
+All as `www-data` on odroid (`ssh root@odroidn2`, then `su - www-data`).
 
 ```bash
-/var/www/.bun/bin/pm2 restart expensesyncbot
+pm2 list
+pm2 restart expensesyncbot
+pm2 stop expensesyncbot
+pm2 reload expensesyncbot              # zero-downtime
+pm2 logs expensesyncbot --lines 100 --nostream
+pm2 logs expensesyncbot --err
+
+# After editing .env
+cd /var/www/ExpenseSyncBot && pm2 reload ecosystem.config.cjs --update-env
 ```
 
-### Stop the bot
+### Backup / restore the database
 
-```bash
-/var/www/.bun/bin/pm2 stop expensesyncbot
-```
-
-### Start the bot
-
-```bash
-/var/www/.bun/bin/pm2 start expensesyncbot
-```
-
-### Reload the bot (zero-downtime)
-
-```bash
-/var/www/.bun/bin/pm2 reload expensesyncbot
-```
-
-### View logs
-
-```bash
-# Real-time logs
-/var/www/.bun/bin/pm2 logs expensesyncbot
-
-# Last 100 lines
-/var/www/.bun/bin/pm2 logs expensesyncbot --lines 100
-
-# View only error logs
-/var/www/.bun/bin/pm2 logs expensesyncbot --err
-
-# Clear all logs
-/var/www/.bun/bin/pm2 flush
-```
-
-### Update environment variables
-
-```bash
-cd /var/www/ExpenseSyncBot
-nano .env
-/var/www/.bun/bin/pm2 reload expensesyncbot --update-env
-```
-
-### Backup the database
+Daily backups land in `data/backups/` (cron, keeps 30 days).
 
 ```bash
 cd /var/www/ExpenseSyncBot/data
-cp expenses.db expenses.db.backup.$(date +%Y%m%d_%H%M%S)
-```
-
-### Restore database from backup
-
-```bash
-cd /var/www/ExpenseSyncBot/data
-cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
-/var/www/.bun/bin/pm2 restart expensesyncbot
+pm2 stop expensesyncbot bank-sync
+gunzip -c backups/expenses_YYYY-MM-DD_HH-MM-SS.db.gz > expenses.db && rm -f expenses.db-wal expenses.db-shm
+pm2 start expensesyncbot bank-sync
 ```
 
 ---
@@ -298,206 +226,38 @@ cp expenses.db.backup.YYYYMMDD_HHMMSS expenses.db
 
 ### Bot is not starting
 
-1. Check PM2 status:
+1. `pm2 describe expensesyncbot`, `pm2 logs expensesyncbot --lines 50 --nostream`
+2. Run manually: `cd /var/www/ExpenseSyncBot && bun run index.ts`
+3. Common causes: missing/invalid `.env`, port 3311 in use, `data/` not writable by www-data,
+   native module built for another arch (re-run `bun install` on the odroid).
 
-   ```bash
-   /var/www/.bun/bin/pm2 status
-   /var/www/.bun/bin/pm2 describe expensesyncbot
-   ```
+### Public URLs return 502
 
-2. Check the logs:
-
-   ```bash
-   /var/www/.bun/bin/pm2 logs expensesyncbot --lines 50
-   ```
-
-3. Try to start manually:
-
-   ```bash
-   cd /var/www/ExpenseSyncBot
-   /var/www/.bun/bin/bun run index.ts
-   ```
-
-4. Common issues:
-   - Missing `.env` file
-   - Invalid environment variables
-   - Port 3000 already in use
-   - Database permissions issue
-   - PM2 not installed or not in PATH
+1. Origin: `curl -H 'Host: expense-sync-bot.invntrm.ru' http://127.0.0.1/health` on odroid
+2. Tunnel: `tailscale ping odroidn2` on the droplet; `tailscale status` on both
+3. Edge: `journalctl -u caddy -n 50` on the droplet
 
 ### GitHub Actions deployment fails
 
-1. Check the GitHub Actions logs in the repository
-2. Verify SSH key is correct in GitHub Secrets
-3. Verify `www-data` user has permissions on `/var/www/ExpenseSyncBot`
-4. Check if PM2 is installed:
-
-   ```bash
-   /var/www/.bun/bin/pm2 --version
-   ```
-
-5. Check if the bot is running:
-
-   ```bash
-   /var/www/.bun/bin/pm2 list
-   ```
-
-### OAuth callback not working
-
-1. Verify Caddy is running:
-
-   ```bash
-   sudo systemctl status caddy
-   ```
-
-2. Check Caddy logs:
-
-   ```bash
-   sudo journalctl -u caddy -f
-   ```
-
-3. Verify redirect URI in Google Cloud Console matches:
-
-   ```
-   https://expense-sync-bot.invntrm.ru/callback
-   ```
-
-4. Test the OAuth endpoint:
-
-   ```bash
-   curl https://expense-sync-bot.invntrm.ru/health
-   ```
-
-### Bot responds slowly or times out
-
-1. Check if bot process is running:
-
-   ```bash
-   ps aux | grep bun
-   ```
-
-2. Check system resources:
-
-   ```bash
-   top
-   df -h
-   free -m
-   ```
-
-3. Check database size:
-
-   ```bash
-   ls -lh /var/www/ExpenseSyncBot/data/
-   ```
+1. Runner online? `gh api repos/alex-mextner/ExpenseSyncBot/actions/runners`
+2. On odroid: `systemctl status 'actions.runner.*'`, logs in `/var/www/actions-runner/_diag/`
+3. `www-data` must own `/var/www/ExpenseSyncBot` and be able to `git pull` (`/var/www/.ssh/id_ed25519`)
 
 ### PM2 process not reloading
 
-If deployment fails with PM2 errors:
-
 ```bash
-# Check if PM2 daemon is running
-/var/www/.bun/bin/pm2 ping
-
-# Check PM2 logs
-/var/www/.bun/bin/pm2 logs
-
-# If PM2 is broken, try resetting it
-/var/www/.bun/bin/pm2 kill
-/var/www/.bun/bin/pm2 start ecosystem.config.cjs
-/var/www/.bun/bin/pm2 save
+pm2 ping
+pm2 kill
+pm2 start ecosystem.config.cjs
+pm2 save
 ```
 
 ---
 
 ## Security Notes
 
-1. **Never commit `.env` file** - It's in `.gitignore`
-2. **Keep `ENCRYPTION_KEY` secret** - Used to encrypt Google tokens
-3. **SSH key is for GitHub Actions only** - Don't share it
+1. **Never commit `.env`** — it's in `.gitignore`
+2. **Keep `ENCRYPTION_KEY` secret** — encrypts Google tokens
+3. **Self-hosted runner = code execution on the home server** — keep the fork-PR guard in `stage-bot.yml`
 4. **Database backups should be encrypted** if stored externally
-5. **Review Caddy logs regularly** for unusual OAuth activity
-
----
-
-## Architecture Overview
-
-```
-GitHub (main branch push)
-    ↓
-GitHub Actions Workflow
-    ↓
-SSH to Digital Ocean (www-data@104.248.84.190)
-    ↓
-/var/www/ExpenseSyncBot
-    ├── rsync files (excluding .git, node_modules, data)
-    ├── bun install
-    └── pm2 reload
-          ↓
-    PM2 process manager
-          ↓
-    Bun runtime runs index.ts
-          ├── Bot connects to Telegram
-          ├── OAuth server on port 3000
-          └── SQLite database in ./data/
-                ↓
-    Caddy reverse proxy
-          ↓
-    expense-sync-bot.invntrm.ru (HTTPS)
-```
-
----
-
-## Useful Commands Reference
-
-```bash
-# PM2 management
-pm2 list
-pm2 status expensesyncbot
-pm2 start expensesyncbot
-pm2 stop expensesyncbot
-pm2 restart expensesyncbot
-pm2 reload expensesyncbot
-pm2 delete expensesyncbot
-
-# Logs
-pm2 logs expensesyncbot
-pm2 logs expensesyncbot --lines 100
-pm2 logs expensesyncbot --err
-pm2 flush
-
-# PM2 process info
-pm2 describe expensesyncbot
-pm2 monit
-
-# Caddy
-sudo systemctl reload caddy
-sudo systemctl status caddy
-sudo journalctl -u caddy -f
-
-# Database
-sqlite3 /var/www/ExpenseSyncBot/data/expenses.db
-# Inside sqlite3:
-# .tables
-# .schema users
-# SELECT * FROM users;
-# .quit
-
-# Check bot process
-ps aux | grep bun
-pm2 list
-
-# Test OAuth endpoint
-curl https://expense-sync-bot.invntrm.ru/health
-
-# Check disk space
-df -h
-du -sh /var/www/ExpenseSyncBot/data/
-```
-
----
-
-## Contact
-
-For issues or questions:
-
-- GitHub Issues: <https://github.com/alex-mextner/ExpenseSyncBot/issues>
+5. The origin Caddy is plain HTTP and reachable from the LAN and tailnet only (no router port forwards)

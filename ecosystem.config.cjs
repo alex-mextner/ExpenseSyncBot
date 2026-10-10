@@ -11,6 +11,8 @@ module.exports = {
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
+        // node-cron schedules and date math use process-local time; the bot has always run in UTC.
+        TZ: 'UTC',
         PATH: `/var/www/.bun/bin:/var/www/.nvm/versions/node/v22.17.0/bin:${process.env.PATH}`,
       },
       error_file: '/var/www/ExpenseSyncBot/logs/error.log',
@@ -32,6 +34,7 @@ module.exports = {
       max_memory_restart: '300M',
       env: {
         NODE_ENV: 'production',
+        TZ: 'UTC',
         PATH: `/var/www/.bun/bin:/var/www/.nvm/versions/node/v22.17.0/bin:${process.env.PATH}`,
       },
       error_file: '/var/www/ExpenseSyncBot/logs/bank-sync-error.log',

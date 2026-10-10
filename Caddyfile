@@ -1,6 +1,6 @@
-expense-sync-bot.invntrm.ru {
-	# Automatic HTTPS with Let's Encrypt
-
+# Origin config for the home server (odroid). Plain HTTP: TLS terminates at the
+# DO edge Caddy, which reverse-proxies these hosts here over Tailscale (see DEPLOY.md).
+http://expense-sync-bot.invntrm.ru, http://expense-sync-bot.mextner.com {
 	# Static pages: homepage, privacy policy, terms of service
 	handle / {
 		root * /var/www/ExpenseSyncBot/public
@@ -48,7 +48,7 @@ expense-sync-bot.invntrm.ru {
 	}
 }
 
-expense-sync-stage-bot.invntrm.ru {
+http://expense-sync-stage-bot.invntrm.ru, http://expense-sync-stage-bot.mextner.com {
 	@backend path /callback* /health /api/*
 	handle @backend {
 		reverse_proxy localhost:3312 {
@@ -67,7 +67,7 @@ expense-sync-stage-bot.invntrm.ru {
 	}
 }
 
-expense-sync-stage-bot-app.invntrm.ru {
+http://expense-sync-stage-bot-app.invntrm.ru, http://expense-sync-stage-bot-app.mextner.com {
 	handle /api/* {
 		reverse_proxy localhost:3312 {
 			lb_try_duration 10s
@@ -87,7 +87,7 @@ expense-sync-stage-bot-app.invntrm.ru {
 	}
 }
 
-expense-sync-bot-app.invntrm.ru {
+http://expense-sync-bot-app.invntrm.ru, http://expense-sync-bot-app.mextner.com {
 	# API requests proxied to the Bun server — retry during PM2 reload
 	# Must be in a separate handle block BEFORE the SPA catch-all,
 	# otherwise try_files rewrites /api/* to /index.html → 405

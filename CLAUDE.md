@@ -33,9 +33,9 @@ node_modules/.bin/lefthook install --force
 
 ### Deployment
 
-**Auto-deploy via GitHub Actions** on every push to `main`. The pipeline runs typecheck → lint → tests → SSH deploy → PM2 reload. If tests fail, deploy is blocked.
+**Auto-deploy via GitHub Actions** on every push to `main`. The pipeline runs typecheck → lint → tests → deploy on the self-hosted runner on the home server (odroid) → PM2 reload. If tests fail, deploy is blocked.
 
-**NEVER manually SSH to the server to `git pull` and restart.** Use `git push` and let CI handle it. Manual deploys bypass test gates and can conflict with the CI pipeline.
+**NEVER manually `git pull` and restart on the server.** Use `git push` and let CI handle it. Manual deploys bypass test gates and can conflict with the CI pipeline.
 
 ```bash
 # Monitor deploy status
@@ -488,10 +488,11 @@ Required in `.env` (see [.env.example](.env.example)):
 
 ## Production Deployment
 
-- **Server:** Digital Ocean (www-data user)
-- **Process Manager:** PM2
-- **Reverse Proxy:** Caddy (for HTTPS OAuth callback)
-- **Auto-deploy:** GitHub Actions on push to main (test → deploy → PM2 reload). Never bypass with manual SSH.
+- **Server:** home server odroidn2 (Odroid N2, Armbian, aarch64), user `www-data`. SSH: `root@odroidn2` (Tailscale; LAN address is dynamic DHCP)
+- **Edge:** Digital Ocean droplet `104.248.84.190` (tailnet name `do-edge`) — its Caddy terminates TLS for `*.invntrm.ru` and proxies to odroid over Tailscale. It hosts other projects too; ExpenseSyncBot runs nothing there.
+- **Process Manager:** PM2 (`expensesyncbot`, `bank-sync`, `expensesyncbot-stage`), `TZ=UTC`
+- **Reverse Proxy:** Caddy on odroid, plain HTTP origin; config is the repo `Caddyfile` (symlinked to `/etc/caddy/Caddyfile`)
+- **Auto-deploy:** GitHub Actions on push to main; `deploy` job runs on the self-hosted runner `odroid`. Never bypass with manual deploys.
 - **Logs:** PM2 logs at `/var/www/ExpenseSyncBot/logs/`
 
 See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
@@ -502,13 +503,13 @@ See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 
 ```bash
 # Последние 100 строк (out + error вместе):
-ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 logs expensesyncbot --lines 100 --nostream'
+ssh root@odroidn2 'su - www-data -c "pm2 logs expensesyncbot --lines 100 --nostream"'
 
 # Только ошибки:
-ssh www-data@104.248.84.190 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
+ssh root@odroidn2 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
 
 # Состояние процессов:
-ssh www-data@104.248.84.190 'PATH=/var/www/.bun/bin:$PATH pm2 list'
+ssh root@odroidn2 'su - www-data -c "pm2 list"'
 ```
 
 ### AI chat logs
