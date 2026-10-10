@@ -1,18 +1,20 @@
 # Deployment Guide for ExpenseSyncBot
 
 The bot runs on a home server (**odroidn2**, Odroid N2, Armbian, aarch64). Public HTTPS
-traffic enters through the Digital Ocean droplet (**do-edge**), whose Caddy terminates TLS
-for `*.invntrm.ru` and reverse-proxies to the home server over Tailscale.
+traffic enters through Cloudflare: the Cloudflare Tunnel `odroid-home` (cloudflared on odroid)
+forwards `finbot*.mextner.com` to the origin Caddy on odroid. The legacy `*.invntrm.ru` hosts
+still go through the Digital Ocean droplet (**do-edge**) until it is shut down.
 
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
 2. [Home Server Setup](#home-server-setup)
-3. [Edge Proxy (Digital Ocean)](#edge-proxy-digital-ocean)
-4. [GitHub Actions Setup](#github-actions-setup)
-5. [Automated Deployment](#automated-deployment)
-6. [Manual Operations](#manual-operations)
-7. [Troubleshooting](#troubleshooting)
+3. [Public Ingress (Cloudflare Tunnel)](#public-ingress-cloudflare-tunnel)
+4. [Legacy Edge Proxy (Digital Ocean)](#legacy-edge-proxy-digital-ocean)
+5. [GitHub Actions Setup](#github-actions-setup)
+6. [Automated Deployment](#automated-deployment)
+7. [Manual Operations](#manual-operations)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -24,23 +26,23 @@ Telegram ◄── long polling ── bot (pm2: expensesyncbot, bank-sync, expe
                                  ▼
                          Caddy on odroid (plain HTTP :80, Caddyfile from this repo)
                                  ▲
-                                 │ Tailscale (100.116.57.66)
+                                 │ cloudflared (tunnel odroid-home → http://localhost:80, Host preserved)
                                  │
-Users ── HTTPS ──► Caddy on DO edge (104.248.84.190, Let's Encrypt)
-                   expense-sync-bot.invntrm.ru, expense-sync-bot-app.invntrm.ru,
-                   expense-sync-stage-bot.invntrm.ru, expense-sync-stage-bot-app.invntrm.ru
+Users ── HTTPS ──► Cloudflare (TLS)
+                   finbot.mextner.com, finbot-app.mextner.com,
+                   finbot-stage.mextner.com, finbot-stage-app.mextner.com
 
 GitHub push to main ──► Actions: check (ubuntu-latest) ──► deploy (self-hosted runner on odroid)
 ```
 
 The bot itself only needs outbound internet (Telegram long polling, Google, AI APIs, banks).
-The edge proxy is required for the OAuth callback, the Mini App and its `/api`.
-If the edge is down, the bot keeps working; only the Mini App and `/connect` OAuth stop.
+The tunnel is required for the OAuth callback, the Mini App and its `/api`.
+If it is down, the bot keeps working; only the Mini App and `/connect` OAuth stop.
 
 | Host | Access | Role |
 |---|---|---|
 | odroidn2 | `ssh root@odroidn2` (Tailscale) | bot, data, Caddy origin, GitHub runner |
-| do-edge | `ssh root@104.248.84.190` | TLS edge only (also hosts unrelated projects) |
+| do-edge | `ssh root@104.248.84.190` | legacy TLS edge for `*.invntrm.ru` (being retired; also hosts unrelated projects) |
 
 ---
 
@@ -79,7 +81,7 @@ git clone git@github.com:alex-mextner/ExpenseSyncBot.git /var/www/ExpenseSyncBot
 cd /var/www/ExpenseSyncBot
 git submodule update --init
 mkdir -p data logs
-cp .env.example .env && nano .env   # GOOGLE_REDIRECT_URI=https://expense-sync-bot.invntrm.ru/callback, OAUTH_SERVER_PORT=3311
+cp .env.example .env && nano .env   # GOOGLE_REDIRECT_URI=https://finbot.mextner.com/callback, MINIAPP_URL=https://finbot-app.mextner.com, OAUTH_SERVER_PORT=3311
 bun install
 bun install --cwd src/services/bank/ZenPlugins
 bunx playwright install chromium     # table renderer (as root: bunx playwright install-deps chromium)
@@ -108,7 +110,7 @@ ln -sf /var/www/ExpenseSyncBot/Caddyfile /etc/caddy/Caddyfile
 systemctl reload caddy
 ```
 
-The repo `Caddyfile` uses `http://` site addresses: TLS lives on the edge. Deploys run
+The repo `Caddyfile` uses `http://` site addresses: TLS lives at Cloudflare (and the legacy edge). Deploys run
 `caddy reload --config /etc/caddy/Caddyfile`, so Caddyfile changes ship with the code.
 
 ### 6. Cron (as www-data, `crontab -e`)
@@ -118,16 +120,39 @@ The repo `Caddyfile` uses `http://` site addresses: TLS lives on the edge. Deplo
 */2 * * * * /var/www/ExpenseSyncBot/scripts/healthcheck-alert.sh >> /var/www/ExpenseSyncBot/logs/healthcheck.log 2>&1
 ```
 
-The healthcheck probes the public URL, so it alerts on edge, tunnel or bot failure alike.
+The healthcheck probes the public URL (`https://finbot.mextner.com/health`), so it alerts on tunnel or bot failure alike.
 
 ### 7. LAN address
 
 The odroid gets its LAN address (currently 192.168.0.38) from DHCP without a reservation; it may change.
-Nothing depends on it: the edge and CI use Tailscale (`odroidn2`, 100.116.57.66).
+Nothing depends on it: cloudflared dials out, the legacy edge and CI use Tailscale (`odroidn2`, 100.116.57.66).
 
 ---
 
-## Edge Proxy (Digital Ocean)
+## Public Ingress (Cloudflare Tunnel)
+
+DNS for `mextner.com` is on Cloudflare. The tunnel `odroid-home` runs as the `cloudflared`
+service on odroid (token-based, ingress managed in the Cloudflare dashboard) and routes
+these hostnames to `http://localhost:80` with the original Host header:
+
+| Hostname | Caddy site | Serves |
+|---|---|---|
+| `finbot.mextner.com` | prod bot | landing, `/privacy`, `/terms`, `/callback`, `/health`, `/api`, `/temp-images` |
+| `finbot-app.mextner.com` | prod Mini App | `miniapp/dist`, `/api` |
+| `finbot-stage.mextner.com` | stage bot | `/callback`, `/health`, `/api` |
+| `finbot-stage-app.mextner.com` | stage Mini App | `miniapp/dist`, `/api` |
+
+Google OAuth redirect URIs (`https://finbot*.mextner.com/callback`) and the BotFather Mini App URL
+must match `GOOGLE_REDIRECT_URI` / `MINIAPP_URL` in the prod and stage `.env`.
+After changing `MINIAPP_URL`, re-point the per-group menu buttons with
+`bun run scripts/update-menu-buttons.ts` (dry run by default, `--apply` to send).
+
+---
+
+## Legacy Edge Proxy (Digital Ocean)
+
+Serves only the old `*.invntrm.ru` / `expense-sync-*.mextner.com` names while users and Google
+OAuth move to `finbot*.mextner.com`; drop those names from the `Caddyfile` once the droplet is gone.
 
 The droplet is in the tailnet as `do-edge` (`tailscale up --hostname=do-edge --accept-dns=false`;
 `--accept-dns=false` keeps MagicDNS from touching the other projects on the droplet).
@@ -153,7 +178,6 @@ expense-sync-bot.mextner.com, expense-sync-bot-app.mextner.com, expense-sync-sta
 ```
 
 Apply with `caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy`.
-Google OAuth redirect URIs and the BotFather Mini App URL stay on `*.invntrm.ru`.
 
 ---
 
@@ -233,9 +257,9 @@ pm2 start expensesyncbot bank-sync
 
 ### Public URLs return 502
 
-1. Origin: `curl -H 'Host: expense-sync-bot.invntrm.ru' http://127.0.0.1/health` on odroid
-2. Tunnel: `tailscale ping odroidn2` on the droplet; `tailscale status` on both
-3. Edge: `journalctl -u caddy -n 50` on the droplet
+1. Origin: `curl -H 'Host: finbot.mextner.com' http://127.0.0.1/health` on odroid
+2. Tunnel: `systemctl status cloudflared` / `journalctl -u cloudflared -n 50` on odroid; tunnel health in the Cloudflare dashboard
+3. Legacy hosts: `tailscale ping odroidn2` and `journalctl -u caddy -n 50` on the droplet
 
 ### GitHub Actions deployment fails
 
@@ -260,4 +284,4 @@ pm2 save
 2. **Keep `ENCRYPTION_KEY` secret** — encrypts Google tokens
 3. **Self-hosted runner = code execution on the home server** — keep the fork-PR guard in `stage-bot.yml`
 4. **Database backups should be encrypted** if stored externally
-5. The origin Caddy is plain HTTP and reachable from the LAN and tailnet only (no router port forwards)
+5. The origin Caddy is plain HTTP and reachable from the LAN and tailnet only (no router port forwards; cloudflared dials out)

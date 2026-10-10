@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-HEALTH_URL="https://expense-sync-bot.invntrm.ru/health"
+HEALTH_URL="https://finbot.mextner.com/health"
 ENV_FILE="/var/www/ExpenseSyncBot/.env"
 STATE_FILE="/tmp/expensesyncbot-down"
 TIMEOUT=10
