@@ -532,6 +532,8 @@ ssh root@odroidn2 'su - www-data -c "pm2 list"'
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
 12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendMessage()` from `src/services/bank/telegram-sender.ts`. See "Sending Messages" section above.
 13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
+14. **Several agent sessions may work on the servers at once** (odroid, the DO droplet). Before treating a missing config or a stopped/started process as a bug, check other sessions' transcripts in `~/.omp/agent/sessions/` or ask — e.g. the DO Caddy block for ExpenseSyncBot was removed on purpose during the move to Cloudflare Tunnel. Never restore it blindly.
+15. **Odroid logs used to live in RAM** (armbian-ramlog on zram) and vanished on a hard hang. It is now disabled and journald is `Storage=persistent`; keep it that way so `journalctl -b -1` works after a crash. Bot data lives on the WD500 HDD, not the SD card (DEPLOY.md, "Storage").
 
 ## When Modifying Code
 
