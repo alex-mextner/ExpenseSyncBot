@@ -307,7 +307,7 @@ Edit [src/config/constants.ts](src/config/constants.ts):
 
 ## Production Deployment
 
-The bot is deployed on Digital Ocean using PM2 process manager. See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
+The bot runs on a home server (Odroid N2) under PM2, deployed by GitHub Actions on a self-hosted runner. See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 
 **Key features:**
 
