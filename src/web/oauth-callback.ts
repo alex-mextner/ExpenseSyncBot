@@ -27,7 +27,7 @@ export function startOAuthServer(): void {
     // Max allowed is 255s. See https://bun.com/docs/api/http
     idleTimeout: 255,
     async fetch(req) {
-      const corsOrigin = env.MINIAPP_URL ?? 'https://expense-sync-bot-app.invntrm.ru';
+      const corsOrigin = env.MINIAPP_URL ?? 'https://finbot-app.mextner.com';
       const miniAppResponse = await handleMiniAppRequest(req, corsOrigin);
       if (miniAppResponse !== null) return miniAppResponse;
 
