@@ -60,7 +60,7 @@ const chatIds = db
   .map((row) => row.telegram_group_id);
 db.close();
 
-console.log(`${APPLY ? 'APPLY' : 'DRY RUN'}: ${chatIds.length} groups from ${databasePath}, url ${miniAppUrl}`);
+console.info(`${APPLY ? 'APPLY' : 'DRY RUN'}: ${chatIds.length} groups from ${databasePath}, url ${miniAppUrl}`);
 
 let updated = 0;
 let skipped = 0;
@@ -94,7 +94,7 @@ for (const chatId of chatIds) {
   }
   if (!APPLY) {
     updated++;
-    console.log(`would set ${chatId}: ${currentUrl} → ${url}`);
+    console.info(`would set ${chatId}: ${currentUrl} → ${url}`);
     continue;
   }
 
@@ -104,14 +104,14 @@ for (const chatId of chatIds) {
   });
   if (set.ok) {
     updated++;
-    console.log(`set ${chatId}: ${currentUrl} → ${url}`);
+    console.info(`set ${chatId}: ${currentUrl} → ${url}`);
   } else {
     failed++;
     console.warn(`failed ${chatId}: ${set.error}`);
   }
 }
 
-console.log(
+console.info(
   `${APPLY ? 'updated' : 'would update'}: ${updated}, skipped (no web_app button / already current): ${skipped}, failed: ${failed}`,
 );
 if (failed > 0) process.exitCode = 1;
