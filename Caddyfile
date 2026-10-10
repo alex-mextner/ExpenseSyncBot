@@ -1,8 +1,7 @@
 # Origin config for the home server (odroid). Plain HTTP: TLS terminates at Cloudflare,
 # whose tunnel (cloudflared on odroid) forwards finbot*.mextner.com here with the original
-# Host header (see DEPLOY.md). The invntrm.ru / expense-sync-*.mextner.com names are legacy
-# hosts still served via the DO edge during the transition.
-http://finbot.mextner.com, http://expense-sync-bot.invntrm.ru, http://expense-sync-bot.mextner.com {
+# Host header (see DEPLOY.md).
+http://finbot.mextner.com {
 	# Static pages: homepage, privacy policy, terms of service
 	handle / {
 		root * /var/www/ExpenseSyncBot/public
@@ -50,7 +49,7 @@ http://finbot.mextner.com, http://expense-sync-bot.invntrm.ru, http://expense-sy
 	}
 }
 
-http://finbot-stage.mextner.com, http://expense-sync-stage-bot.invntrm.ru, http://expense-sync-stage-bot.mextner.com {
+http://finbot-stage.mextner.com {
 	@backend path /callback* /health /api/*
 	handle @backend {
 		reverse_proxy localhost:3312 {
@@ -69,7 +68,7 @@ http://finbot-stage.mextner.com, http://expense-sync-stage-bot.invntrm.ru, http:
 	}
 }
 
-http://finbot-stage-app.mextner.com, http://expense-sync-stage-bot-app.invntrm.ru, http://expense-sync-stage-bot-app.mextner.com {
+http://finbot-stage-app.mextner.com {
 	handle /api/* {
 		reverse_proxy localhost:3312 {
 			lb_try_duration 10s
@@ -89,7 +88,7 @@ http://finbot-stage-app.mextner.com, http://expense-sync-stage-bot-app.invntrm.r
 	}
 }
 
-http://finbot-app.mextner.com, http://expense-sync-bot-app.invntrm.ru, http://expense-sync-bot-app.mextner.com {
+http://finbot-app.mextner.com {
 	# API requests proxied to the Bun server — retry during PM2 reload
 	# Must be in a separate handle block BEFORE the SPA catch-all,
 	# otherwise try_files rewrites /api/* to /index.html → 405
