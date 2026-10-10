@@ -489,7 +489,7 @@ Required in `.env` (see [.env.example](.env.example)):
 ## Production Deployment
 
 - **Server:** home server odroidn2 (Odroid N2, Armbian, aarch64), user `www-data`. SSH: `root@odroidn2` (Tailscale; LAN address is dynamic DHCP)
-- **Ingress:** Cloudflare Tunnel `odroid-home` (cloudflared on odroid) → origin Caddy for `finbot.mextner.com`, `finbot-app.mextner.com`, `finbot-stage.mextner.com`, `finbot-stage-app.mextner.com`. Legacy `*.invntrm.ru` and `expense-sync-*.mextner.com` still go via the DO droplet `104.248.84.190` (`do-edge`, Tailscale) until it is shut down; ExpenseSyncBot runs nothing there.
+- **Ingress:** Cloudflare Tunnel `odroid-home` (cloudflared on odroid) → origin Caddy for `finbot.mextner.com`, `finbot-app.mextner.com`, `finbot-stage.mextner.com`, `finbot-stage-app.mextner.com`.
 - **Process Manager:** PM2 (`expensesyncbot`, `bank-sync`, `expensesyncbot-stage`), `TZ=UTC`
 - **Reverse Proxy:** Caddy on odroid, plain HTTP origin; config is the repo `Caddyfile` (symlinked to `/etc/caddy/Caddyfile`)
 - **Auto-deploy:** GitHub Actions on push to main; `deploy` job runs on the self-hosted runner `odroid`. Never bypass with manual deploys.
