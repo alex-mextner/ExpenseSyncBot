@@ -11,11 +11,19 @@ export interface BunTestSummary {
 
 // Parse bun test's own summary lines (" N pass" / " N fail" alone on a line). An unanchored
 // match also caught test names and log lines such as "3 failed attempts" and inflated the count.
+// Bun writes the summary last on stderr, which runFile appends after stdout, so the last match
+// wins over summary-shaped lines a test logged earlier on either stream. Expects ANSI-stripped
+// output. Counts are informational: the child's exit code decides pass/fail.
+const SUMMARY_LINE = /^[ \t]*(\d+)[ \t]+(pass|fail)[ \t]*$/gm;
+
 export function parseBunTestSummary(cleanOutput: string): BunTestSummary | null {
-  const passMatch = cleanOutput.match(/^\s*(\d+)\s+pass\s*$/m);
-  const failMatch = cleanOutput.match(/^\s*(\d+)\s+fail\s*$/m);
-  if (!passMatch || !failMatch) return null;
-  return { pass: Number(passMatch[1]), fail: Number(failMatch[1]) };
+  let pass: number | null = null;
+  let fail: number | null = null;
+  for (const [, count, word] of cleanOutput.matchAll(SUMMARY_LINE)) {
+    if (word === 'pass') pass = Number(count);
+    else fail = Number(count);
+  }
+  return pass !== null && fail !== null ? { pass, fail } : null;
 }
 
 interface FileResult {
