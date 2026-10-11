@@ -141,7 +141,8 @@ UUID `83c5bd3c-2cfa-494e-b0a5-17d3c92d0925`) and are bind-mounted back to their 
   (`/etc/systemd/system/<unit>.d/10-wd500.conf`): without the HDD they don't start, rather than
   starting on empty SD directories.
 - Move script: `/usr/local/sbin/expensesyncbot-move-to-wd500` (final rsync + bind mount, ~16 s downtime).
-  The pre-move SD copies are kept as `/var/www/*.sd-old` for rollback.
+  The pre-move SD copies (`/var/www/*.sd-old`) have since been deleted; a rollback copies the live
+  data back from the HDD instead (~2.8 GB, the SD card has room).
 
 Check: `findmnt /var/www/ExpenseSyncBot` must show `<wd500 device>[/odroid-rt/www/ExpenseSyncBot]` (the `sdX` letter can change across boots).
 
@@ -151,16 +152,49 @@ Check: `findmnt /var/www/ExpenseSyncBot` must show `<wd500 device>[/odroid-rt/ww
 mount -a && systemctl start pm2-www-data actions.runner.alex-mextner-ExpenseSyncBot.odroid
 ```
 
-**Rollback to the SD copies** (loses everything written since the move):
+**Rollback to the SD card** (keeps all data). Run as root in bash. The subshell stops at the first
+failed step; any failure before the fstab edit re-mounts the HDD over the original paths and restarts
+the services, so the bot keeps running on the HDD (then delete leftover `/var/www/*.sd-new` copies):
 
 ```bash
-R=actions.runner.alex-mextner-ExpenseSyncBot.odroid
-systemctl stop "$R"; su - www-data -c "pm2 stop expensesyncbot bank-sync expensesyncbot-stage"
-for d in ExpenseSyncBot ExpenseSyncBot-stage actions-runner; do umount /var/www/$d && rmdir /var/www/$d && mv /var/www/$d.sd-old /var/www/$d; done
-sed -i '/# >>> expensesyncbot-www/,/# <<< expensesyncbot-www/d' /etc/fstab
-rm /etc/systemd/system/{pm2-www-data,$R}.service.d/10-wd500.conf && systemctl daemon-reload
-su - www-data -c "pm2 start expensesyncbot bank-sync expensesyncbot-stage"; systemctl start "$R"
+(
+  set -Eeuo pipefail
+  R=actions.runner.alex-mextner-ExpenseSyncBot.odroid
+  # the stage bot exists only after a stage workflow run, so its stop/start may fail
+  apps() { su - www-data -c "pm2 $1 expensesyncbot bank-sync"; su - www-data -c "pm2 $1 expensesyncbot-stage" || true; }
+  DIRS="ExpenseSyncBot ExpenseSyncBot-stage actions-runner"
+  stopped=0 fstab_edited=0
+  recover() {
+    trap - ERR
+    mount -a || echo "mount -a failed: fix the listed path, mount -a, then start the services" >&2
+    apps start || true; systemctl start "$R" || true   # without the mounts the drop-ins keep them down
+  }
+  trap 'echo "rollback stopped at: $BASH_COMMAND" >&2; [[ $stopped == 0 || $fstab_edited == 1 ]] || recover' ERR
+  # exactly one ordered marker pair, else the range delete below could run on to eat wd500-runtime/swap
+  markers_ok() {
+    open=$(grep -nxF '# >>> expensesyncbot-www' /etc/fstab | cut -d: -f1)
+    close=$(grep -nxF '# <<< expensesyncbot-www' /etc/fstab | cut -d: -f1)
+    [[ $open =~ ^[0-9]+$ && $close =~ ^[0-9]+$ && $open -lt $close ]]
+  }
+  markers_ok
+  # copy the HDD data onto the SD card next to each mountpoint: a warm pass while running, a final one stopped
+  copy() { for d in $DIRS; do rsync -aHAXS --numeric-ids --delete "/var/www/$d/" "/var/www/$d.sd-new/"; done; }
+  copy
+  stopped=1; systemctl stop "$R"; apps stop
+  copy
+  for d in $DIRS; do umount "/var/www/$d"; done
+  for d in $DIRS; do rmdir "/var/www/$d"; mv "/var/www/$d.sd-new" "/var/www/$d"; done
+  markers_ok   # re-check right before the edit
+  sed -i '/^# >>> expensesyncbot-www$/,/^# <<< expensesyncbot-www$/d' /etc/fstab
+  fstab_edited=1
+  rm -f "/etc/systemd/system/pm2-www-data.service.d/10-wd500.conf" "/etc/systemd/system/$R.service.d/10-wd500.conf"
+  systemctl daemon-reload
+  apps start; systemctl start "$R"   # the bot first: a runner failure must not keep it down
+)
 ```
+
+The PM2 daemon keeps running throughout, so `pm2 start` also brings back `expensesyncbot-stage` (if it
+existed), which the stage workflow creates on the fly and never saves to the dump.
 
 ---
 
