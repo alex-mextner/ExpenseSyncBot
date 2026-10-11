@@ -15,7 +15,11 @@ pre-push:
     global-git-hooks-dispatcher:
       run: '"${XDG_CONFIG_HOME:-$HOME/.config}/git/run-global-hooks" pre-push'
     tests:
-      run: bun run test
+      # The full suite never runs on the shared workstation (CLAUDE.md § Heavy work runs on
+      # Runpod): where runpod-run is installed the push waits for the pod run; elsewhere local.
+      # Absolute path: a GUI/IDE git has no ~/.local/bin on PATH, and a silent local fallback
+      # on that machine is the overload this exists to prevent.
+      run: r="$HOME/.agents/skills/runpod-offload/runpod-run"; [ -x "$r" ] || r=$(command -v runpod-run); if [ -n "$r" ]; then "$r" --ttl 30 -- bun run test; else bun run test; fi
 commit-msg:
   commands:
     global-git-hooks-dispatcher:
