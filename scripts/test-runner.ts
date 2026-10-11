@@ -4,6 +4,28 @@ import { cpus } from 'node:os';
 const CONCURRENCY = Number(process.env['TEST_CONCURRENCY']) || cpus().length;
 const FILTER = process.argv[2] ?? '';
 
+export interface BunTestSummary {
+  pass: number;
+  fail: number;
+}
+
+// Parse bun test's own summary lines (" N pass" / " N fail" alone on a line). An unanchored
+// match also caught test names and log lines such as "3 failed attempts" and inflated the count.
+// Bun writes the summary last on stderr, which runFile appends after stdout, so the last match
+// wins over summary-shaped lines a test logged earlier on either stream. Expects ANSI-stripped
+// output. Counts are informational: the child's exit code decides pass/fail.
+const SUMMARY_LINE = /^[ \t]*(\d+)[ \t]+(pass|fail)[ \t]*$/gm;
+
+export function parseBunTestSummary(cleanOutput: string): BunTestSummary | null {
+  let pass: number | null = null;
+  let fail: number | null = null;
+  for (const [, count, word] of cleanOutput.matchAll(SUMMARY_LINE)) {
+    if (word === 'pass') pass = Number(count);
+    else fail = Number(count);
+  }
+  return pass !== null && fail !== null ? { pass, fail } : null;
+}
+
 interface FileResult {
   file: string;
   pass: number;
@@ -58,15 +80,12 @@ async function runFile(file: string): Promise<FileResult> {
   // Strip ANSI escape codes before parsing — FORCE_COLOR produces them
   const clean = rawOutput.replace(/\x1b\[[0-9;]*m/g, '');
 
-  // Parse bun test's own summary lines (" N pass" / " N fail" alone on a line). An unanchored
-  // match also caught test names and log lines such as "3 failed attempts" and inflated the count.
-  const passMatch = clean.match(/^\s*(\d+) pass\s*$/m);
-  const failMatch = clean.match(/^\s*(\d+) fail\s*$/m);
+  const summary = parseBunTestSummary(clean);
 
   return {
     file,
-    pass: passMatch ? Number(passMatch[1]) : 0,
-    fail: failMatch ? Number(failMatch[1]) : 0,
+    pass: summary?.pass ?? 0,
+    fail: summary?.fail ?? 0,
     duration,
     ok: exitCode === 0,
     output: rawOutput,
@@ -126,4 +145,4 @@ async function runPool(files: string[], concurrency: number): Promise<FileResult
   return results;
 }
 
-run();
+if (import.meta.main) await run();
