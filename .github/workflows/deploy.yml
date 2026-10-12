@@ -122,6 +122,20 @@ jobs:
             -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
               '{chat_id: $chat_id, text: $text, parse_mode: "HTML"}')"
 
+      - name: Restart stage bot if it runs main
+        # Stage follows main when no PR holds it; a PR worktree is left alone
+        # (scripts/stage-follow-main.sh). continue-on-error: a stage problem must not
+        # mark the prod deploy as failed (notify-failure would announce "Deploy
+        # failed"); the script warns the admin chat itself.
+        continue-on-error: true
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+          bash /var/www/ExpenseSyncBot/scripts/stage-follow-main.sh
+
   notify-failure:
     name: Notify on failure
     needs: [check, deploy]

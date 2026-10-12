@@ -16,6 +16,7 @@
     "postinstall": "sh scripts/install-git-hooks.sh"
   },
   "devDependencies": {
+    "@actions/expressions": "^0.3.61",
     "@biomejs/biome": "^2.4.8",
     "@gramio/types": "^9.2.3",
     "@types/big.js": "^6.2.2",
