@@ -38,7 +38,7 @@ export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 const MAX_TOOL_ROUNDS = 10;
 /**
- * Sent as the last message when the tool-round cap is hit: the next round runs without tools,
+ * Sent as the last message when the tool-round cap is hit: the next round forbids tool calls,
  * so the model has to answer from what it already gathered instead of ending with no text.
  */
 const FINAL_ANSWER_PROMPT =
@@ -531,20 +531,39 @@ export class ExpenseBotAgent {
     }
 
     if (continueLoop) {
-      // Round cap hit while the model still wanted tools: without a last tool-free round the run
-      // would end with no text at all (prod 2026-10-12, gpt-oss making one call per round).
+      // Round cap hit while the model still wanted tools: without a last round that forbids tool
+      // calls the run would end with no text at all (prod 2026-10-12, gpt-oss making one call per
+      // round). The tools stay declared with tool_choice 'none': every smart-chain provider
+      // accepted that live (2026-10-12), and without the tools Claude refused to add up the
+      // grand total because rule 7 sends all arithmetic to calculate.
       logger.warn(
         { rounds: MAX_TOOL_ROUNDS, toolCalls: totalToolCalls },
-        '[AGENT] Tool round cap reached — forcing a final answer without tools',
+        '[AGENT] Tool round cap reached — forcing a final answer with tool calls forbidden',
       );
       messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
       debugCtx?.logRound(round + 1);
       try {
         const final = await aiStreamRound(
-          { messages, maxTokens: 4096, temperature: 0.3, chain: 'smart', signal },
+          {
+            messages,
+            tools: TOOL_DEFINITIONS,
+            toolChoice: 'none',
+            maxTokens: 4096,
+            temperature: 0.3,
+            chain: 'smart',
+            signal,
+          },
           { onTextDelta: (text) => writer.appendText(text) },
         );
         this.logRoundProvider(round + 1, final, debugCtx);
+        if (final.toolCalls.length > 0) {
+          // The provider ignored tool_choice 'none'. Its calls never run: past the cap only the
+          // text counts (none of the providers did this in the 2026-10-12 smoke).
+          logger.warn(
+            { provider: final.providerUsed, toolCalls: final.toolCalls.map((tc) => tc.name) },
+            '[AGENT] Forced final round returned tool calls despite tool_choice none — ignored',
+          );
+        }
       } catch (err) {
         if (signal.aborted) {
           // The run deadline fired: report the timeout whatever error the round ended with.
