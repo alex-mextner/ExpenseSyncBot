@@ -1197,6 +1197,68 @@ describe('ExpenseBotAgent', () => {
       expect(mockBot.api.deleteMessage).toHaveBeenCalled();
     });
 
+    it('keeps an explicit [SKIP] from a non-mention run that only read data silent', async () => {
+      // Chatter the model looked into (a read) and then chose not to answer: nothing changed,
+      // so silence is still the right outcome.
+      mockToolCallRound('get_expenses', '{"period":"2026-10"}');
+      mockStreamReturn(['[SKIP]']);
+
+      const result = await agent.run('ну мы и потратили в октябре', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('');
+      expect(mockBot.api.deleteMessage).toHaveBeenCalled();
+    });
+
+    it('shows the failure message for a non-mention [SKIP] after a write tool ran', async () => {
+      // A write changed data — the user must see a reply, never a silent change.
+      mockToolCallRound('add_expense', '{"amount":100}');
+      mockStreamReturn(['[SKIP]']);
+
+      const result = await agent.run('100 еда', [], mockBot as unknown as Bot);
+
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+    });
+
+    it('remembers a write from an attempt that failed and was retried — no silent [SKIP] after it', async () => {
+      // Attempt 1 adds the expense, then the provider fails; the retry only reads and skips.
+      mockIsRetryableError.mockReturnValue(true);
+      mockToolCallRound('add_expense', '{"amount":100}');
+      mockAiStreamRound.mockImplementationOnce(async () => {
+        throw Object.assign(new Error('Server error'), { status: 500 });
+      });
+      mockToolCallRound('get_expenses', '{"period":"2026-10"}');
+      mockStreamReturn(['[SKIP]']);
+
+      const result = await agent.run('100 еда', [], mockBot as unknown as Bot);
+
+      expect(mockExecuteTool.mock.calls.map((c) => c[0])).toEqual(['add_expense', 'get_expenses']);
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+      expect(logMock.warn).toHaveBeenCalledWith(expect.stringContaining('retrying'));
+    });
+
+    it('shows the failure message when a non-mention run ends with no text after read-only tools', async () => {
+      // Empty text is not the model choosing silence (prod 2026-10-12), even after reads only.
+      mockToolCallRound('get_expenses', '{"period":"2026-10"}');
+      mockStreamReturn([]);
+
+      const result = await agent.run('сколько потратили', [], mockBot as unknown as Bot);
+
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+    });
+
+    it('shows the failure message for a non-mention [SKIP] from the forced final round', async () => {
+      // The round cap was hit: the run is exhausted, not a choice to stay silent.
+      mockEndlessToolCalls('[SKIP]');
+
+      const result = await agent.run('сумма в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+    });
+
     it('returns the cached result for an identical repeated read-only tool call', async () => {
       mockToolCallRound('calculate', '{"expression":"52829.45 RSD","target_currency":"EUR"}');
       // Same call with reordered keys — still the same normalized arguments.

@@ -495,12 +495,34 @@ describe('finalize: tools without AI text', () => {
     expect(writer.getText()).toBe('[SKIP]');
   });
 
-  test('allowSilence never applies once tools ran', async () => {
+  test.each([
+    ['no text', ''],
+    ['an ellipsis', '...'],
+    ['a unicode ellipsis', '…'],
+    // Short text that only contains the marker can be a real answer — never deleted silently.
+    ['the marker next to an answer', '[SKIP] Потрачено 1 200 EUR'],
+  ])('allowSilence never keeps %s once tools ran — that is a failed answer', async (_label, text) => {
     const { writer } = makeShippingWriter();
     writer.setToolLabel('get_budgets', {});
     writer.markToolResult(true);
+    writer.appendText(text);
     await writer.finalize({ allowSilence: true });
     expect(writer.getText()).toBe(NO_ANSWER_MESSAGE);
+  });
+
+  test.each([
+    '[SKIP]',
+    ' [skip]. ',
+    '[ПРОПУСК]',
+  ])('allowSilence keeps the bare marker %p after tool calls for the caller to delete', async (marker) => {
+    const { writer, shipped } = makeShippingWriter();
+    writer.setToolLabel('get_budgets', {});
+    writer.markToolResult(true);
+    writer.commitIntermediate();
+    writer.appendText(marker);
+    await writer.finalize({ allowSilence: true });
+    expect(writer.getText()).toBe(marker.trim());
+    expect(shipped.join('\n')).not.toContain(NO_ANSWER_MESSAGE);
   });
 
   test('with AI text: tool summary wrapped in expandable blockquote', async () => {
