@@ -3,6 +3,8 @@
  *
  * Streams text to Telegram, executes tools, and manages the conversation loop.
  * Only final text responses are saved to chat history (not intermediate tool_use rounds).
+ * A run always ends in a real answer, a short failure message, or (for unaddressed chatter
+ * without tool calls only) intentional silence — never in an empty or tools-only message.
  */
 
 import { format } from 'date-fns';
@@ -26,8 +28,8 @@ import {
 } from './streaming';
 import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
-import { TOOL_DEFINITIONS } from './tools';
-import type { AgentContext, ToolCallResult } from './types';
+import { READ_ONLY_TOOL_NAMES, SYNCING_READ_TOOL_NAMES, TOOL_DEFINITIONS } from './tools';
+import type { AgentContext, ToolCallResult, ToolResult } from './types';
 
 const logger = createLogger('agent');
 
@@ -35,6 +37,12 @@ const logger = createLogger('agent');
 export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 const MAX_TOOL_ROUNDS = 10;
+/**
+ * Sent as the last message when the tool-round cap is hit: the next round runs without tools,
+ * so the model has to answer from what it already gathered instead of ending with no text.
+ */
+const FINAL_ANSWER_PROMPT =
+  '[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. If some numbers are missing, give what you have and say what is missing.';
 /**
  * Overall wall-clock cap for one agent run (all rounds + all retries combined).
  * A legitimate multi-round query with a slow model needs well over 60s, so this
@@ -44,8 +52,27 @@ const MAX_TOOL_ROUNDS = 10;
 const AGENT_TIMEOUT_MS = 180_000;
 const MAX_API_RETRIES = 2; // 3 attempts total (1 initial + 2 retries)
 
+/**
+ * JSON with object keys sorted at every level, so two tool calls with the same arguments in a
+ * different key order produce the same cache key.
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 export class ExpenseBotAgent {
   private ctx: AgentContext;
+  /**
+   * Results of read-only tool calls in the current run, keyed by tool name + canonical args.
+   * Models without parallel tool calls (gpt-oss on Groq) repeat identical calls and burn the
+   * round budget; a repeat gets the stored result back instead of running the tool again.
+   */
+  private readonly readOnlyToolResults = new Map<string, ToolResult>();
 
   constructor(_apiKey: string, ctx: AgentContext) {
     this.ctx = ctx;
@@ -70,30 +97,24 @@ export class ExpenseBotAgent {
       { role: 'user', content: userMessage },
     ];
 
-    logger.info(`[AGENT] Starting: model=${env.AI_MODEL}`);
+    logger.info('[AGENT] Starting (smart chain)');
     logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
     debugCtx?.logSystemPrompt(messages[0]?.content as string);
     debugCtx?.logHistory(conversationHistory.map((m) => ({ role: m.role, content: m.content })));
 
     const toolCallNames: string[] = [];
+    this.readOnlyToolResults.clear();
 
     try {
       const result = await this.runWithRetry(messages, writer, debugCtx, toolCallNames);
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
 
-      // Skip signal — bot chose to stay silent
-      if (isSkipSignal(finalText) && !this.ctx.isMention) {
-        logger.info('[AGENT] Skip signal — staying silent');
-        await writer.deleteSentMessage();
-        return '';
-      }
-
       // --- Validation pass (runs only when no tools were called AND tools were available) ---
       // If the model already called tools the data is real; if no tools existed there's nothing
-      // to validate against.
-      if (toolCallNames.length === 0 && TOOL_DEFINITIONS.length > 0) {
+      // to validate against. An intentional [SKIP] is not an answer, so it is not validated.
+      if (toolCallNames.length === 0 && TOOL_DEFINITIONS.length > 0 && !isSkipSignal(finalText)) {
         const validated = await this.finalizeWithValidation({
           userMessage,
           messages,
@@ -106,6 +127,17 @@ export class ExpenseBotAgent {
         totalToolCalls = validated.toolCount;
       }
 
+      // Skip signal — bot chose to stay silent. The writer replaces a missing answer with the
+      // failure message unless silence is allowed (no mention, no tool calls), so a skip here is
+      // always intentional — including one emitted by the validator re-run (#108).
+      if (isSkipSignal(finalText)) {
+        logger.info('[AGENT] Skip signal — staying silent');
+        debugCtx?.logFinal(finalText, totalToolCalls);
+        debugCtx?.flush();
+        await writer.deleteSentMessage();
+        return '';
+      }
+
       debugCtx?.logAiText(finalText);
       debugCtx?.logFinal(finalText, totalToolCalls);
       debugCtx?.flush();
@@ -116,6 +148,10 @@ export class ExpenseBotAgent {
       await writer.deleteSentMessage();
 
       const classification = classifyAiError(error);
+      debugCtx?.logError(
+        `${classification?.kind ?? 'unclassified'}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      debugCtx?.flush();
       if (!classification) {
         // Not a recognizable AI/network/timeout failure — propagate so the caller
         // (and logs) see the real, unrelated error instead of a masked generic one.
@@ -376,9 +412,11 @@ export class ExpenseBotAgent {
         },
         callbacks,
       );
+      this.logRoundProvider(round, result, debugCtx);
 
       // Execute tool calls
       const toolResults: ToolCallResult[] = [];
+      const repeatedCallIds = new Set<string>();
 
       for (const tc of result.toolCalls) {
         let input: Record<string, unknown>;
@@ -404,7 +442,25 @@ export class ExpenseBotAgent {
         writer.setToolLabel(tc.name, input);
         await writer.flush(true);
 
-        const toolResult = await executeTool(tc.name, input, this.ctx);
+        const isReadOnly = READ_ONLY_TOOL_NAMES[tc.name] === true;
+        const cacheKey = `${tc.name}:${canonicalJson(input)}`;
+        const cached = isReadOnly ? this.readOnlyToolResults.get(cacheKey) : undefined;
+        let toolResult: ToolResult;
+        if (cached) {
+          logger.info(`[AGENT] Repeated tool call: ${tc.name} — reusing the earlier result`);
+          repeatedCallIds.add(tc.id);
+          toolResult = cached;
+        } else {
+          toolResult = await executeTool(tc.name, input, this.ctx);
+          if (!isReadOnly || SYNCING_READ_TOOL_NAMES[tc.name] === true) {
+            // The data may have changed (a write, or a read that synced from Sheets first) —
+            // earlier reads are stale now.
+            this.readOnlyToolResults.clear();
+          }
+          if (isReadOnly && toolResult.success) {
+            this.readOnlyToolResults.set(cacheKey, toolResult);
+          }
+        }
 
         if (toolResult.success) {
           const preview = toolResult.output ? toolResult.output.substring(0, 300) : '(no output)';
@@ -460,7 +516,13 @@ export class ExpenseBotAgent {
               : tr.result.output || 'Success'
             : `Error: ${tr.result.error}`;
 
-          messages.push({ role: 'tool', tool_call_id: tr.id, content });
+          messages.push({
+            role: 'tool',
+            tool_call_id: tr.id,
+            content: repeatedCallIds.has(tr.id)
+              ? `[This exact call was already made earlier in this answer — same result again. Do not repeat it; use the result.]\n${content}`
+              : content,
+          });
         }
         continueLoop = true;
       } else {
@@ -468,7 +530,34 @@ export class ExpenseBotAgent {
       }
     }
 
-    await writer.finalize();
+    if (continueLoop) {
+      // Round cap hit while the model still wanted tools: without a last tool-free round the run
+      // would end with no text at all (prod 2026-10-12, gpt-oss making one call per round).
+      logger.warn(
+        { rounds: MAX_TOOL_ROUNDS, toolCalls: totalToolCalls },
+        '[AGENT] Tool round cap reached — forcing a final answer without tools',
+      );
+      messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
+      debugCtx?.logRound(round + 1);
+      try {
+        const final = await aiStreamRound(
+          { messages, maxTokens: 4096, temperature: 0.3, chain: 'smart', signal },
+          { onTextDelta: (text) => writer.appendText(text) },
+        );
+        this.logRoundProvider(round + 1, final, debugCtx);
+      } catch (err) {
+        // Rethrowing would make runWithRetry replay all tool rounds, and write tools
+        // (add_expense, …) would run twice. The finalize below shows the failure message.
+        logger.warn(
+          { err },
+          '[AGENT] Forced final answer round failed — showing the failure message',
+        );
+      }
+    }
+
+    // Silence is a choice only for chatter the bot was not asked about; once tools ran or the
+    // user addressed the bot, a missing answer becomes the failure message.
+    await writer.finalize({ allowSilence: !this.ctx.isMention && totalToolCalls === 0 });
 
     const finalText = writer.getText();
     logger.info(
@@ -476,6 +565,19 @@ export class ExpenseBotAgent {
     );
 
     return { text: finalText, toolCount: totalToolCalls };
+  }
+
+  /** Record which provider actually answered — the chain can fall back on any round. */
+  private logRoundProvider(
+    round: number,
+    result: StreamRoundResult,
+    debugCtx: AiDebugRunContext | null,
+  ): void {
+    logger.info(
+      { round, provider: result.providerUsed, toolCalls: result.toolCalls.length },
+      '[AGENT] Round answered',
+    );
+    debugCtx?.logProvider(result.providerUsed);
   }
 
   /**
