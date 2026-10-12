@@ -11,6 +11,7 @@ import { AgentError } from '../../errors';
 import { validateAdvice } from '../../services/ai/advice-validator';
 import { ExpenseBotAgent } from '../../services/ai/agent';
 import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
+import { NO_ANSWER_MESSAGE } from '../../services/ai/telegram-stream';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
 import {
@@ -252,7 +253,9 @@ async function handleAskWithAnthropic(
     if (!finalResponse) return false;
 
     persistAssistantReply(finalResponse);
-    return true;
+    // The agent's no-answer message is a failure, not an answer — like the error paths below,
+    // it does not trigger advice.
+    return finalResponse !== NO_ANSWER_MESSAGE;
   } catch (error) {
     if (error instanceof AgentError) {
       // Agent already sent the error message to the user and cleaned up. Don't trigger advice.

@@ -127,7 +127,10 @@ mock.module('../../services/bank/telegram-sender', () => ({
     fn(),
 }));
 
+// Loaded after the mocks above: a static import is hoisted and would load these modules
+// (and the real logger) before mock.module applies.
 const { handleAskQuestion } = await import('./ask');
+const { NO_ANSWER_MESSAGE } = await import('../../services/ai/telegram-stream');
 
 function fakeCtx(isForum: boolean, threadId?: number): Ctx['Message'] {
   return {
@@ -404,5 +407,18 @@ describe('handleAskQuestion — recent history scoping', () => {
     await handleAskQuestion(fakeCtx(false), 'ок', fakeBot());
 
     expect(createHistoryMock.mock.calls.map((call) => call[0]?.['role'])).toEqual(['user']);
+  });
+
+  test('a failure message in place of an answer is stored but does not trigger advice', async () => {
+    // Control: a real answer runs the post-answer advice check.
+    await handleAskQuestion(fakeCtx(false), 'сколько в евро?', fakeBot());
+    expect(checkSmartTriggersMock).toHaveBeenCalledTimes(1);
+
+    agentRunMock.mockImplementation(async () => NO_ANSWER_MESSAGE);
+    await handleAskQuestion(fakeCtx(false), 'ты завис?', fakeBot());
+
+    expect(createHistoryMock.mock.calls.at(-1)?.[0]?.['content']).toBe(NO_ANSWER_MESSAGE);
+    // Like the error paths: no advice after a turn the bot failed to answer.
+    expect(checkSmartTriggersMock).toHaveBeenCalledTimes(1);
   });
 });
