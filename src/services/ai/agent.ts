@@ -546,6 +546,13 @@ export class ExpenseBotAgent {
         );
         this.logRoundProvider(round + 1, final, debugCtx);
       } catch (err) {
+        if (signal.aborted) {
+          // The run deadline fired: report the timeout whatever error the round ended with.
+          // runWithRetry never retries once the deadline fired, so no tool round is replayed.
+          const deadlineError = new Error('AI overall deadline exceeded', { cause: err });
+          deadlineError.name = 'AbortError';
+          throw deadlineError;
+        }
         // Rethrowing would make runWithRetry replay all tool rounds, and write tools
         // (add_expense, …) would run twice. The finalize below shows the failure message.
         logger.warn(

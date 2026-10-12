@@ -1278,5 +1278,52 @@ describe('ExpenseBotAgent', () => {
       expect(mockExecuteTool).toHaveBeenCalledTimes(10);
       expect(logMock.warn).toHaveBeenCalled();
     });
+
+    it.each([
+      ['an AbortError', () => Object.assign(new Error('aborted'), { name: 'AbortError' })],
+      // The round can also end with a provider error right as the deadline fires.
+      ['a retryable 503', () => Object.assign(new Error('unavailable'), { status: 503 })],
+    ])('a run-deadline abort during the forced final round ending in %s surfaces the timeout without a replay', async (_label, roundError) => {
+      // Capture the run-deadline timer (AGENT_TIMEOUT_MS, 180 s) so the test can fire it mid-round.
+      const deadlineHandlers: Array<() => void> = [];
+      const realSetTimeout = globalThis.setTimeout;
+      // Bun types setTimeout with overloads and __promisify__, which a plain function can't satisfy.
+      const capturingSetTimeout = ((handler: () => void, ms?: number) => {
+        if (ms === 180_000) deadlineHandlers.push(handler);
+        return realSetTimeout(handler, ms);
+      }) as typeof setTimeout;
+      spyOn(globalThis, 'setTimeout').mockImplementation(capturingSetTimeout);
+      mockIsRetryableError.mockReturnValue(true);
+      mockClassifyAiError.mockImplementation((error) =>
+        error instanceof Error && error.name === 'AbortError'
+          ? { kind: 'timeout', userMessage: '⏳ Время ожидания истекло. Попробуй ещё раз.' }
+          : { kind: 'generic', userMessage: '❌ Ошибка AI. Попробуй позже.' },
+      );
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts) => {
+        if (!opts.tools) {
+          for (const fire of deadlineHandlers) fire();
+          throw roundError();
+        }
+        n++;
+        return {
+          ...makeToolCallResult('add_expense'),
+          toolCalls: [{ id: `c${n}`, name: 'add_expense', arguments: `{"n":${n}}` }],
+        };
+      });
+
+      const { AgentError } = await import('../../errors');
+      const error = await agent.run('добавь всё', [], mockBot as unknown as Bot).catch((e) => e);
+
+      expect(error).toBeInstanceOf(AgentError);
+      expect((error as InstanceType<typeof AgentError>).userMessage).toContain('ожидания');
+      // No replay: 10 tool rounds + the forced round, every add_expense ran once.
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(11);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(10);
+      expect(logMock.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'timeout' }),
+        expect.stringContaining('AI run failed'),
+      );
+    });
   });
 });
