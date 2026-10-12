@@ -199,7 +199,20 @@ su - www-data -c "cd /var/www/actions-runner && ./config.sh --unattended --url h
 ```
 
 The repository is public, so `stage-bot.yml` only runs the stage job for PRs whose head branch
-lives in this repository — fork PRs never reach the home server.
+lives in this repository, that were not opened by a GitHub App bot (Dependabot, Renovate,
+github-actions, …) and whose triggering event did not come from one — except `closed`, which runs
+no PR code (it removes the worktree and restarts stage from main). So a bot's push alone never puts
+code on the home server; a later human push to the same branch carries the bot's commits along, as
+that person's call. An automation that works under a normal user account (a PAT) looks like a
+person to that guard: don't give such accounts write access. The guard lives in the
+PR's own copy of the workflow: it stops untrusted *code*, not untrusted *workflow edits*. Anyone who
+can push a workflow file to this repository can target the runner (e.g. with an `on: push`
+workflow), so the trust boundary is write access to `.github/workflows` — keep it to people and to
+bots that only bump versions. Fork PRs can edit workflows too: fork-PR workflows must wait for
+manual approval for **all** outside contributors, and a fork run is approved only after reading
+its workflow changes (approval is the only gate GitHub offers a user-owned public repo; it does not
+make the runner safe by itself). Settings → Actions → General → fork pull request workflows, or
+`gh api -X PUT repos/alex-mextner/ExpenseSyncBot/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors`
 
 Secrets used: `BOT_TOKEN`, `BOT_ADMIN_CHAT_ID` (deploy notifications).
 
@@ -284,6 +297,6 @@ pm2 save
 
 1. **Never commit `.env`** — it's in `.gitignore`
 2. **Keep `ENCRYPTION_KEY` secret** — encrypts Google tokens
-3. **Self-hosted runner = code execution on the home server** — keep the fork-PR guard in `stage-bot.yml`
+3. **Self-hosted runner = code execution on the home server** — keep the fork-PR and bot-PR guards in `stage-bot.yml` and fork-PR workflow approval for all outside contributors
 4. **Database backups should be encrypted** if stored externally
 5. The origin Caddy is plain HTTP and reachable from the LAN and tailnet only (no router port forwards; cloudflared dials out)

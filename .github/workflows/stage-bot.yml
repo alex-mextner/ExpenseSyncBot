@@ -46,9 +46,14 @@ jobs:
         run: bun run test
 
   stage-bot:
-    # Runs on the home server (odroid) self-hosted runner. Fork PRs are excluded:
-    # this repo is public and the runner executes on production hardware.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Runs PR code on the home server, next to production data: no forks, no PRs
+    # opened by a GitHub App bot, no bot-triggered events except `closed` (which
+    # runs no PR code). Rationale and trust boundary: DEPLOY.md "GitHub Actions
+    # Setup"; cases: src/tooling/stage-bot-guard.test.ts.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot' &&
+      (github.event.action == 'closed' || github.event.sender.type != 'Bot')
     runs-on: [self-hosted, odroid]
 
     permissions:
