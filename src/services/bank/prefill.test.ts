@@ -1,5 +1,6 @@
 // Tests for prefill.ts — AI pre-fills category for unmatched bank transactions.
-// Covers: happy path, empty input, AI failure fallback, malformed JSON, batch cap (10).
+// Covers: happy path, empty input, AI failure fallback, malformed JSON, batch cap (10),
+// case-insensitive mapping onto group categories, reasoning-model token budget.
 
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { BankTransaction } from '../../database/types';
@@ -293,5 +294,70 @@ describe('preFillTransactions', () => {
     expect(result[11]?.category).toBe('транспорт');
     expect(aiStreamRoundMock).toHaveBeenCalledTimes(2);
     expect(logMock.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps AI categories case-insensitively onto the group category names', async () => {
+    store.categoriesByGroup.set(1, ['Подписки', 'Продукты', 'Прочее']);
+    aiStreamRoundMock.mockResolvedValueOnce(aiResponse(['подписки', 'ПРОДУКТЫ', ' прочее ']));
+
+    const txs = [
+      makeBankTransaction({ id: 1, external_id: 'a', merchant: 'NETFLIX' }),
+      makeBankTransaction({ id: 2, external_id: 'b', merchant: 'LIDL 156 BEOGRAD' }),
+      makeBankTransaction({ id: 3, external_id: 'c', merchant: 'J05B' }),
+    ];
+
+    const { preFillTransactions } = await import('./prefill.ts');
+    const result = await preFillTransactions(txs, 1);
+
+    expect(result).toEqual([
+      { category: 'Подписки' },
+      { category: 'Продукты' },
+      { category: 'Прочее' },
+    ]);
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
+  it('uses the group spelling of прочее when the AI call fails', async () => {
+    store.categoriesByGroup.set(1, ['Продукты', 'Прочее']);
+    aiStreamRoundMock.mockRejectedValueOnce(new Error('AI boom'));
+
+    const txs = [makeBankTransaction({ id: 1, external_id: 'a', merchant: 'X' })];
+
+    const { preFillTransactions } = await import('./prefill.ts');
+    const result = await preFillTransactions(txs, 1);
+
+    expect(result).toEqual([{ category: 'Прочее' }]);
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives reasoning models enough output budget to finish the JSON array (prod: LIDL → прочее)', async () => {
+    // Replays the measured z.ai glm-4.5-flash behaviour on a 10-tx prod batch: reasoning tokens
+    // share max_tokens with the answer; at 200 and 1000 the visible text stopped mid-array
+    // ("```json\n[\n  \"") → "No JSON array in response" → every card got прочее. At 2000 it completed.
+    const REASONING_TOKENS = 1500;
+    const categories = Array.from({ length: 10 }, () => 'Продукты');
+    aiStreamRoundMock.mockImplementationOnce(async (opts) => {
+      const full = `\`\`\`json\n${JSON.stringify(categories, null, 2)}\n\`\`\``;
+      const truncated = opts.maxTokens - REASONING_TOKENS < full.length;
+      const text = truncated ? '```json\n[\n  "' : full;
+      return {
+        text,
+        toolCalls: [],
+        finishReason: 'stop',
+        assistantMessage: { role: 'assistant', content: text },
+        providerUsed: 'z.ai (glm-4.5-flash)',
+      };
+    });
+    store.categoriesByGroup.set(1, ['Продукты', 'Прочее']);
+
+    const txs: BankTransaction[] = Array.from({ length: 10 }, (_, i) =>
+      makeBankTransaction({ id: i + 1, external_id: `tx${i + 1}`, merchant: 'LIDL 156 BEOGRAD' }),
+    );
+
+    const { preFillTransactions } = await import('./prefill.ts');
+    const result = await preFillTransactions(txs, 1);
+
+    expect(result.every((r) => r.category === 'Продукты')).toBe(true);
+    expect(logMock.warn).not.toHaveBeenCalled();
   });
 });

@@ -15,6 +15,21 @@ export interface PrefillResult {
 const BATCH_SIZE = 10;
 
 /**
+ * Output budget for one batch. Reasoning models (z.ai glm-4.5-flash) spend their thinking from the
+ * same max_tokens as the answer: on a 10-tx prod batch they stopped mid-array at 200 and 1000 tokens
+ * and finished at 2000, so every card fell back to прочее. It is only a cap — unused tokens cost nothing.
+ */
+const MAX_TOKENS = 4096;
+
+const FALLBACK_CATEGORY = 'прочее';
+
+/** Map a category onto the group's own spelling (case/whitespace-insensitive); unknown names pass through. */
+function toGroupCategory(category: string, groupCategories: string[]): string {
+  const key = category.trim().toLowerCase();
+  return groupCategories.find((name) => name.trim().toLowerCase() === key) ?? category;
+}
+
+/**
  * Build a map of MCC code → categories used for past confirmed transactions in this group.
  * Used to give the AI historical context for better classification.
  */
@@ -86,7 +101,7 @@ ${txLines}
   try {
     const { text } = await aiStreamRound({
       messages: [{ role: 'user', content: prompt }],
-      maxTokens: 200,
+      maxTokens: MAX_TOKENS,
       chain: 'fast',
     });
 
@@ -100,10 +115,12 @@ ${txLines}
         `AI returned ${Array.isArray(parsed) ? parsed.length : 'non-array'}, expected ${txs.length}`,
       );
     }
-    return parsed.map((v) => (typeof v === 'string' ? v : 'прочее'));
+    return parsed.map((v) =>
+      toGroupCategory(typeof v === 'string' ? v : FALLBACK_CATEGORY, groupCategories),
+    );
   } catch (error) {
     logger.warn({ err: error }, 'AI batch pre-fill failed, using defaults');
-    return txs.map(() => 'прочее');
+    return txs.map(() => toGroupCategory(FALLBACK_CATEGORY, groupCategories));
   }
 }
 
