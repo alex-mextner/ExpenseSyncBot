@@ -57,6 +57,11 @@ export class AiDebugRunContext {
     this.parts.push(`## ROUND ${round}`);
   }
 
+  /** Which provider in the fallback chain actually answered the round. */
+  logProvider(provider: string): void {
+    this.parts.push(`PROVIDER: ${provider}`);
+  }
+
   logToolCall(name: string, input: Record<string, unknown>): void {
     this.parts.push(`TOOL CALL: ${name}`);
     this.parts.push(
@@ -113,6 +118,14 @@ export class AiDebugRunContext {
         .map((l) => `  ${l}`)
         .join('\n'),
     );
+    this.parts.push('='.repeat(80));
+  }
+
+  /** A run that failed — recorded so failed turns are not missing from the chat log. */
+  logError(message: string): void {
+    this.parts.push('');
+    this.parts.push('## ERROR');
+    this.parts.push(`  ${message.slice(0, 600)}`);
     this.parts.push('='.repeat(80));
   }
 

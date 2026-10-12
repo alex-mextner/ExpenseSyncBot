@@ -265,6 +265,28 @@ describe('AiDebugRunContext content', () => {
     expect(written).toContain('final answer to user');
   });
 
+  test('logProvider records which provider answered', () => {
+    const logger = new AiDebugLogger(true, '/tmp/logs');
+    const ctx = logger.createRunContext(1, -1, undefined, 'U', 'x');
+    ctx?.logRound(1);
+    ctx?.logProvider('Groq (openai/gpt-oss-120b)');
+    ctx?.flush();
+
+    expect(appendCalls[0]?.data ?? '').toContain('PROVIDER: Groq (openai/gpt-oss-120b)');
+  });
+
+  test('logError records the failure, truncated to 600 chars', () => {
+    const logger = new AiDebugLogger(true, '/tmp/logs');
+    const ctx = logger.createRunContext(1, -1, undefined, 'U', 'x');
+    ctx?.logError(`provider_down: ${'z'.repeat(700)}`);
+    ctx?.flush();
+
+    const written = appendCalls[0]?.data ?? '';
+    expect(written).toContain('## ERROR');
+    expect(written).toContain('provider_down: ');
+    expect(written).not.toContain('z'.repeat(600));
+  });
+
   test('flush writes everything accumulated as a single appendFileSync call', () => {
     const logger = new AiDebugLogger(true, '/tmp/logs');
     const ctx = logger.createRunContext(1, -1, undefined, 'U', 'hi');

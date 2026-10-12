@@ -103,6 +103,14 @@ export function isSkipSignal(text: string): boolean {
   return trimmed.length <= 50;
 }
 
+/**
+ * Shown (and stored in history) when the agent ends without answer text and silence is not an
+ * option: tools ran, or the user addressed the bot directly. A message made only of tool
+ * status lines is not an answer, so this replaces it.
+ */
+export const NO_ANSWER_MESSAGE =
+  '⚠️ Не получилось сформулировать ответ. Попробуй спросить ещё раз или переформулировать вопрос.';
+
 const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
 const ERROR_COOLDOWN_MS = 10000;
 const MAX_MESSAGE_LENGTH = 4000;
@@ -261,8 +269,12 @@ export class TelegramStreamWriter {
   /**
    * Build and send the final message:
    * collapsed tool blockquote (if any tools ran) followed by AI response.
+   *
+   * A missing answer ('' / '...' / [SKIP]) stays as-is only when `allowSilence` is set and no
+   * tool ran — the caller then deletes the message. Otherwise the user sees NO_ANSWER_MESSAGE,
+   * never a message made only of tool status lines.
    */
-  async finalize(): Promise<void> {
+  async finalize({ allowSilence = false }: { allowSilence?: boolean } = {}): Promise<void> {
     this.stopTyping();
     this.toolLabel = null;
 
@@ -272,21 +284,24 @@ export class TelegramStreamWriter {
       this.toolLines = [];
     }
 
-    const response = processThinkTags(this.fullText.trim());
+    const toolsRan = this.intermediateChunks.length > 0;
+    let response = processThinkTags(this.fullText.trim());
+    if (isSkipSignal(response)) {
+      if (allowSilence && !toolsRan) {
+        // Silence: nothing to show — the caller deletes the placeholder.
+        this.historyText = response;
+        this.finalDisplayText = '';
+        return;
+      }
+      response = NO_ANSWER_MESSAGE;
+    }
     // Save clean text for chat history before adding UI chrome
     this.historyText = response;
 
-    let finalText: string;
-    if (this.intermediateChunks.length > 0) {
+    let finalText = response;
+    if (toolsRan) {
       const body = this.intermediateChunks.join('\n');
-      if (response) {
-        finalText = `<blockquote expandable>⚙️ <b>Инструменты</b>\n${body}</blockquote>\n\n${response}`;
-      } else {
-        // AI only called tools, no text — show tool results inline
-        finalText = body;
-      }
-    } else {
-      finalText = response || '⚠️ AI did not produce a response.';
+      finalText = `<blockquote expandable>⚙️ <b>Инструменты</b>\n${body}</blockquote>\n\n${response}`;
     }
 
     finalText = finalText.replace(/\n{3,}/g, '\n\n').trim();

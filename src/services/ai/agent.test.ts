@@ -2,6 +2,7 @@
 // Tests for ExpenseBotAgent — streaming via aiStreamRound, tool calls, error handling
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import type { Bot } from 'gramio';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 import type { StreamRoundResult } from './streaming';
 
@@ -55,8 +56,14 @@ mock.module('./tool-executor', () => ({
   executeTool: mockExecuteTool,
 }));
 
-import { ExpenseBotAgent } from './agent';
+import { AiDebugRunContext } from './debug-logger';
+import { NO_ANSWER_MESSAGE } from './telegram-stream';
 import type { AgentContext } from './types';
+
+// Loaded after the mocks above: a static import is hoisted and would create the agent's
+// logger from the real module, so log assertions would see nothing.
+const { aiDebugLogger, ExpenseBotAgent } = await import('./agent');
+type ExpenseBotAgent = InstanceType<typeof ExpenseBotAgent>;
 
 // Minimal AgentContext with all required fields
 function makeCtx(overrides?: Partial<AgentContext>): AgentContext {
@@ -321,10 +328,11 @@ describe('ExpenseBotAgent', () => {
         [],
         mockBot as unknown as import('gramio').Bot,
       );
-      // The return value is the retry's getText() = '' (NOT the stale initial). The writer's
-      // finalize() substitutes a placeholder for display, but the returned/history text is '',
-      // which the caller (ask.ts: `if (!finalResponse) return;`) treats as a silent no-op.
+      // The return value is the retry's getText() = '' (NOT the stale initial). A non-mention
+      // retry without tool calls may stay silent, so the agent deletes its message and returns
+      // '', which the caller (ask.ts: `if (!finalResponse) return;`) treats as a silent no-op.
       expect(result).toBe('');
+      expect(mockBot.api.deleteMessage).toHaveBeenCalled();
     });
 
     it('propagates a retry failure to the catch path (AgentError + admin report)', async () => {
@@ -1041,6 +1049,234 @@ describe('ExpenseBotAgent', () => {
         expect((err as InstanceType<typeof AgentError>).userMessage).toContain('ожидания');
         expect((err as InstanceType<typeof AgentError>).userMessage).not.toContain('Ошибка AI');
       }
+    });
+  });
+
+  // Prod incident 2026-10-12: a model without parallel tool calls spent every round on one
+  // `calculate` each, hit the round cap and finished with empty text — the user got either
+  // silence (non-mention → treated as [SKIP]) or a message made only of ✅ tool lines.
+  describe('run() -- tool round cap and empty answers', () => {
+    /** Every round that offers tools gets another distinct calculate call back. */
+    function mockEndlessToolCalls(finalText: string) {
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (opts.tools && opts.tools.length > 0) {
+          n++;
+          const args = JSON.stringify({ expression: `${n} RSD`, target_currency: 'EUR' });
+          callbacks.onToolCallStart?.('calculate');
+          return {
+            text: '',
+            toolCalls: [{ id: `call_${n}`, name: 'calculate', arguments: args }],
+            finishReason: 'tool_calls',
+            assistantMessage: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: `call_${n}`,
+                  type: 'function',
+                  function: { name: 'calculate', arguments: args },
+                },
+              ],
+            },
+            providerUsed: 'mock',
+          } satisfies StreamRoundResult;
+        }
+        if (finalText) callbacks.onTextDelta?.(finalText);
+        return makeTextResult(finalText);
+      });
+    }
+
+    function lastEditedText(): string {
+      const calls = mockBot.api.editMessageText.mock.calls as unknown as Array<[{ text: string }]>;
+      return calls.at(-1)?.[0].text ?? '';
+    }
+
+    beforeEach(() => {
+      mockAiStreamRound.mockReset();
+      logMock.warn.mockClear();
+      logMock.info.mockClear();
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
+    });
+
+    it('forces one final round without tools when the round cap is hit, and returns its text', async () => {
+      const mentionAgent = new ExpenseBotAgent('key', makeCtx({ isMention: true }));
+      mockEndlessToolCalls('Итого: 1 000 EUR');
+
+      const result = await mentionAgent.run(
+        'Сумма по категориям в евро',
+        [],
+        mockBot as unknown as Bot,
+      );
+
+      expect(result).toBe('Итого: 1 000 EUR');
+      const lastOpts = getLastCallOpts();
+      expect(lastOpts.tools).toBeUndefined();
+      // The forced round tells the model to answer now from what it already gathered.
+      expect(JSON.stringify(lastOpts.messages.at(-1))).toContain('[SYSTEM]');
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(11);
+      expect(logMock.warn).toHaveBeenCalled();
+    });
+
+    it('never treats an empty answer after tool calls as [SKIP] — shows a failure message instead', async () => {
+      // Default ctx is a non-mention run: before the fix this deleted the message silently.
+      mockEndlessToolCalls('');
+
+      const result = await agent.run(
+        'Объедини по категориям и выведи сумму в евро',
+        [],
+        mockBot as unknown as Bot,
+      );
+
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      // The shipped message carries the failure text, not only ✅ tool lines.
+      expect(lastEditedText()).toContain(NO_ANSWER_MESSAGE);
+    });
+
+    it('replaces a [SKIP] emitted after tool calls in a mention with the failure message', async () => {
+      const mentionAgent = new ExpenseBotAgent('key', makeCtx({ isMention: true }));
+      mockToolCallRound('get_expenses');
+      mockStreamReturn(['[SKIP]']);
+
+      const result = await mentionAgent.run('сколько потратили?', [], mockBot as unknown as Bot);
+
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(lastEditedText()).not.toContain('[SKIP]');
+    });
+
+    it('keeps an intentional [SKIP] from a non-mention run without tool calls silent', async () => {
+      mockStreamReturn(['[SKIP]']);
+
+      const result = await agent.run('надо будет обсудить', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('');
+      expect(mockBot.api.deleteMessage).toHaveBeenCalled();
+    });
+
+    it('stays silent when the validator retry of a non-mention run emits [SKIP] (#108)', async () => {
+      mockStreamReturn(['initial bad answer']);
+      mockStreamReturn(['[SKIP]']);
+      mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+
+      const result = await agent.run('ну ок', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('');
+      expect(mockBot.api.deleteMessage).toHaveBeenCalled();
+    });
+
+    it('returns the cached result for an identical repeated read-only tool call', async () => {
+      mockToolCallRound('calculate', '{"expression":"52829.45 RSD","target_currency":"EUR"}');
+      // Same call with reordered keys — still the same normalized arguments.
+      mockToolCallRound('calculate', '{"target_currency":"EUR","expression":"52829.45 RSD"}');
+      mockToolCallRound('calculate', '{"expression":"52829.45 RSD","target_currency":"EUR"}');
+      mockStreamReturn(['450 EUR']);
+      mockExecuteTool.mockResolvedValue({ success: true, output: '450 EUR' });
+
+      const result = await agent.run('сколько в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('450 EUR');
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      const toolMessages = getLastCallOpts().messages.filter((m) => m.role === 'tool');
+      expect(toolMessages).toHaveLength(3);
+      expect(String(toolMessages[0]?.content)).toBe('450 EUR');
+      expect(String(toolMessages[1]?.content)).toContain('already');
+      expect(String(toolMessages[1]?.content)).toContain('450 EUR');
+      expect(String(toolMessages[2]?.content)).toContain('already');
+    });
+
+    it('re-executes a read tool after a mutating tool changed the data', async () => {
+      mockToolCallRound('get_budgets', '{"month":"2026-10"}');
+      mockToolCallRound('set_budget', '{"category":"Еда","amount":100}');
+      mockToolCallRound('get_budgets', '{"month":"2026-10"}');
+      mockStreamReturn(['Бюджет обновлён']);
+
+      await agent.run('поставь бюджет', [], mockBot as unknown as Bot);
+
+      expect(mockExecuteTool.mock.calls.map((c) => c[0])).toEqual([
+        'get_budgets',
+        'set_budget',
+        'get_budgets',
+      ]);
+    });
+
+    it('re-executes a read tool after another read pulled fresh data from Sheets', async () => {
+      // get_expenses syncs expenses from Google Sheets first, so budget spending read before it
+      // may be stale afterwards.
+      mockToolCallRound('get_budgets', '{"month":"2026-10"}');
+      mockToolCallRound('get_expenses', '{"period":"2026-10","summary_only":true}');
+      mockToolCallRound('get_budgets', '{"month":"2026-10"}');
+      mockStreamReturn(['Сводка']);
+
+      await agent.run('бюджеты и траты', [], mockBot as unknown as Bot);
+
+      expect(mockExecuteTool.mock.calls.map((c) => c[0])).toEqual([
+        'get_budgets',
+        'get_expenses',
+        'get_budgets',
+      ]);
+    });
+
+    it('logs the provider that actually answered each round', async () => {
+      mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
+        callbacks.onTextDelta?.('ответ');
+        return { ...makeTextResult('ответ'), providerUsed: 'Groq (openai/gpt-oss-120b)' };
+      });
+
+      await agent.run('вопрос', [], mockBot as unknown as Bot);
+
+      const infoLogs = JSON.stringify(logMock.info.mock.calls);
+      expect(infoLogs).toContain('Groq (openai/gpt-oss-120b)');
+    });
+
+    describe('chat debug log', () => {
+      function spyDebugRun(): AiDebugRunContext {
+        const runCtx = new AiDebugRunContext('/dev/null', 10, 123, 'testuser', 'Test User', 'q');
+        spyOn(aiDebugLogger, 'createRunContext').mockReturnValue(runCtx);
+        spyOn(runCtx, 'flush').mockImplementation(() => undefined);
+        return runCtx;
+      }
+
+      it('is flushed when the run stays silent on [SKIP]', async () => {
+        const runCtx = spyDebugRun();
+        mockStreamReturn(['[SKIP]']);
+
+        await agent.run('ок', [], mockBot as unknown as Bot);
+
+        expect(runCtx.flush).toHaveBeenCalledTimes(1);
+      });
+
+      it('is flushed when the run fails with an AI error', async () => {
+        const runCtx = spyDebugRun();
+        mockAiStreamRound.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+
+        await expect(agent.run('вопрос', [], mockBot as unknown as Bot)).rejects.toThrow();
+
+        expect(runCtx.flush).toHaveBeenCalledTimes(1);
+        expect(logMock.error).toHaveBeenCalled();
+      });
+    });
+
+    it('a failed forced final round shows the failure message instead of redoing every tool', async () => {
+      mockIsRetryableError.mockReturnValue(true);
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts) => {
+        if (!opts.tools) throw Object.assign(new Error('overloaded'), { status: 529 });
+        n++;
+        return {
+          ...makeToolCallResult('add_expense'),
+          toolCalls: [{ id: `c${n}`, name: 'add_expense', arguments: `{"n":${n}}` }],
+        };
+      });
+
+      const result = await agent.run('добавь всё', [], mockBot as unknown as Bot);
+
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(10);
+      expect(logMock.warn).toHaveBeenCalled();
     });
   });
 });

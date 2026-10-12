@@ -7,8 +7,8 @@ mock.module('../../utils/logger.ts', () => ({
   logger: logMock,
 }));
 
-import { TelegramError } from 'gramio';
-import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
+import { type Bot, TelegramError } from 'gramio';
+import { isSkipSignal, NO_ANSWER_MESSAGE, TelegramStreamWriter } from './telegram-stream';
 
 /**
  * Helper to construct TelegramError instances for tests.
@@ -426,38 +426,81 @@ describe('sendRemainingChunks edge cases', () => {
 // ── finalize: tools-only (no AI text) ────────────────────────────────
 
 describe('finalize: tools without AI text', () => {
-  test('shows tool lines inline when AI produced no text', async () => {
-    const fakeBot = {
+  /** Writer whose bot records every text it puts on screen (placeholder edits included). */
+  function makeShippingWriter(): { writer: TelegramStreamWriter; shipped: string[] } {
+    const shipped: string[] = [];
+    const bot = {
       api: {
-        sendMessage: mock(() => Promise.resolve({ message_id: 1 })),
-        sendChatAction: () => Promise.resolve(),
-        deleteMessage: () => Promise.resolve(),
-        editMessageText: mock(() => Promise.resolve()),
+        sendMessage: () => Promise.resolve({ message_id: 1 }),
+        sendChatAction: () => Promise.resolve(true),
+        deleteMessage: () => Promise.resolve(true),
+        editMessageText: (params: { text: string }) => {
+          shipped.push(params.text);
+          return Promise.resolve(true);
+        },
       },
-      // biome-ignore lint/suspicious/noExplicitAny: test stub
-    } as any;
-    const writer = new TelegramStreamWriter(fakeBot, 123);
+    };
+    // Test stub: only the four API methods the writer calls exist on it.
+    const writer = new TelegramStreamWriter(bot as unknown as Bot, 123);
+    return { writer, shipped };
+  }
+
+  // Contract change (prod incident 2026-10-12): a reply made only of ✅ tool lines is not an
+  // answer. When tools ran but the AI produced no text, the user sees the failure message
+  // under the collapsed tool summary, and that message is what history stores. This replaces
+  // the old 'shows tool lines inline when AI produced no text' test, which pinned the bug.
+  test('never ships only tool lines when AI produced no text — shows the failure message', async () => {
+    const { writer, shipped } = makeShippingWriter();
     writer.setToolLabel('get_expenses', { period: '2026-03' });
     writer.markToolResult(true);
     await writer.finalize();
 
-    // biome-ignore lint/suspicious/noExplicitAny: access private field
-    const displayText: string = (writer as any).finalDisplayText;
-    // Should show tool lines inline — no collapsed blockquote header
-    expect(displayText).not.toContain('<blockquote expandable>');
-    // Must contain the tool result line
-    expect(displayText).toContain('\u2705');
-    expect(displayText).toContain('Загружаю расходы');
+    const finalText = shipped.at(-1) ?? '';
+    expect(finalText).toContain(NO_ANSWER_MESSAGE);
+    // Tool lines stay available, collapsed under the summary header
+    expect(finalText).toContain('<blockquote expandable>');
+    expect(finalText).toContain('Загружаю расходы');
   });
 
-  test('tools-only: getText() history is empty (no text to save)', async () => {
-    const writer = makeWriter();
+  test('tools-only: getText() returns the failure message the user saw', async () => {
+    const { writer } = makeShippingWriter();
     writer.setToolLabel('get_budgets', {});
     writer.markToolResult(true);
     await writer.finalize();
-    expect(writer.getText()).toBe('');
-    // biome-ignore lint/suspicious/noExplicitAny: access private method
-    (writer as any).stopTyping();
+    expect(writer.getText()).toBe(NO_ANSWER_MESSAGE);
+  });
+
+  test('a [SKIP] after tool calls is replaced by the failure message', async () => {
+    const { writer, shipped } = makeShippingWriter();
+    writer.setToolLabel('get_budgets', {});
+    writer.markToolResult(true);
+    writer.commitIntermediate();
+    writer.appendText('[SKIP]');
+    await writer.finalize();
+    expect(writer.getText()).toBe(NO_ANSWER_MESSAGE);
+    expect(shipped.at(-1)).not.toContain('[SKIP]');
+  });
+
+  test('no tools and no text: shows the Russian failure message', async () => {
+    const { writer, shipped } = makeShippingWriter();
+    await writer.finalize();
+    expect(writer.getText()).toBe(NO_ANSWER_MESSAGE);
+    expect(shipped.at(-1)).toBe(NO_ANSWER_MESSAGE);
+  });
+
+  test('allowSilence keeps a bare [SKIP] for the caller to delete', async () => {
+    const { writer } = makeShippingWriter();
+    writer.appendText('[SKIP]');
+    await writer.finalize({ allowSilence: true });
+    expect(writer.getText()).toBe('[SKIP]');
+  });
+
+  test('allowSilence never applies once tools ran', async () => {
+    const { writer } = makeShippingWriter();
+    writer.setToolLabel('get_budgets', {});
+    writer.markToolResult(true);
+    await writer.finalize({ allowSilence: true });
+    expect(writer.getText()).toBe(NO_ANSWER_MESSAGE);
   });
 
   test('with AI text: tool summary wrapped in expandable blockquote', async () => {
