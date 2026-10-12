@@ -17,7 +17,7 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, geminiClient, hfClient, zaiClient } from '../src/services/ai/clients';
-import { claudeRequestParams } from '../src/services/ai/streaming';
+import { chatRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
   chain: 'smart' | 'fast' | 'ocr';
@@ -175,9 +175,7 @@ async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {
     const response = await spec.client().chat.completions.create({
       model: spec.model,
       messages: [{ role: 'user', content: TEXT_PROMPT }],
-      ...(spec.anthropic
-        ? claudeRequestParams(spec.model, maxTokens)
-        : { max_tokens: maxTokens, temperature: 0.1 }),
+      ...chatRequestParams(spec.model, maxTokens, 0.1, spec.anthropic ?? false),
     });
     const text = response.choices[0]?.message?.content?.trim() ?? '';
     const ms = Date.now() - start;

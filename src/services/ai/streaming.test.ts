@@ -49,6 +49,7 @@ import OpenAI from 'openai';
 import { isProviderDemoted, resetProviderBreaker } from './provider-breaker';
 import {
   CLAUDE_THINKING_RESERVE_TOKENS,
+  chatRequestParams,
   classifyAiError,
   claudeRequestParams,
   getBackoffDelay,
@@ -58,16 +59,19 @@ import {
 } from './streaming';
 
 describe('claudeRequestParams', () => {
-  // Measured against the live API (2026-10): every model accepts reasoning_effort=medium, and
-  // thinking spends the same max_tokens budget as the visible answer.
+  // Anthropic's OpenAI-compat endpoint ignores reasoning_effort (measured 2026-10-10, #146), so it
+  // is never sent; thinking spends the same max_tokens budget as the visible answer, hence the reserve.
   it.each([
     'claude-sonnet-5-5',
     'claude-sonnet-5-5-20261001',
     'claude-opus-5-5',
     'claude-fable-5-1',
-  ])('%s thinks at medium effort with a reserve on top of the caller budget', (model) => {
+    // Legacy and unlisted IDs (#144): a config swap must still get the safe thinking-on shape.
+    'claude-sonnet-5',
+    'claude-opus-4-8',
+    'claude-unlisted-9-9',
+  ])('%s keeps thinking on with a reserve on top of the caller budget', (model) => {
     expect(claudeRequestParams(model, 200)).toEqual({
-      reasoning_effort: 'medium',
       max_tokens: 200 + CLAUDE_THINKING_RESERVE_TOKENS,
     });
   });
@@ -76,10 +80,24 @@ describe('claudeRequestParams', () => {
     'claude-haiku-5-5',
     'claude-haiku-4-5-20251001',
   ])('%s runs with thinking disabled and the caller budget unchanged', (model) => {
-    // Haiku 5.5 starves the visible answer at small budgets even at medium effort.
     expect(claudeRequestParams(model, 200)).toEqual({
       thinking: { type: 'disabled' },
       max_tokens: 200,
+    });
+  });
+});
+
+describe('chatRequestParams', () => {
+  it('builds the Claude shape (no temperature) for anthropic slots', () => {
+    expect(chatRequestParams('claude-sonnet-5-5', 256, 0.1, true)).toEqual({
+      max_tokens: 256 + CLAUDE_THINKING_RESERVE_TOKENS,
+    });
+  });
+
+  it('passes max_tokens and temperature through for other providers', () => {
+    expect(chatRequestParams('glm-5', 256, 0.1, false)).toEqual({
+      max_tokens: 256,
+      temperature: 0.1,
     });
   });
 });
