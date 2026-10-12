@@ -123,7 +123,12 @@ async function runDeploy({
   writeFileSync(join(mainDir, '.env'), 'BOT_TOKEN=prod\n');
   writeFileSync(join(mainDir, '.env.stage'), 'BOT_TOKEN=stage\n');
   writeFileSync(join(bunBin, 'bun'), BUN_STUB, { mode: 0o755 });
-  writeFileSync(join(bunBin, 'pm2'), LOGGING_STUB('pm2'), { mode: 0o755 });
+  // pm2 stand-in that also records which calls saw the runner's job tracking id
+  writeFileSync(
+    join(bunBin, 'pm2'),
+    `#!/usr/bin/env bash\necho "pm2 $*" >> "$CALLS"\n[ -n "\${RUNNER_TRACKING_ID:-}" ] && echo "pm2 $1" >> "$CALLS.tracked"\nexit 0\n`,
+    { mode: 0o755 },
+  );
   writeFileSync(join(stubs, 'git'), GIT_STUB, { mode: 0o755 });
   writeFileSync(join(stubs, 'curl'), LOGGING_STUB('curl'), { mode: 0o755 });
   writeFileSync(join(stubs, 'sleep'), '#!/bin/sh\n', { mode: 0o755 });
@@ -136,6 +141,9 @@ async function runDeploy({
       ...evaluateEnv(step.env, eventContext(action)),
       PATH: `${stubs}:${process.env['PATH']}`,
       CALLS: calls,
+      // Set by the self-hosted runner on every step; at job end it SIGKILLs any process
+      // still carrying this value ("Terminate orphan process").
+      RUNNER_TRACKING_ID: 'github_test-job',
       STAGE_STATUS: stageStatus,
     },
     encoding: 'utf8',
@@ -147,6 +155,9 @@ async function runDeploy({
     stderr: result.stderr,
     git: log.filter((l) => l.startsWith('git ')),
     pm2: log.filter((l) => l.startsWith('pm2 ')),
+    pm2Tracked: existsSync(`${calls}.tracked`)
+      ? readFileSync(`${calls}.tracked`, 'utf8').split('\n').filter(Boolean)
+      : [],
   };
 }
 
@@ -190,5 +201,17 @@ describe('stage-bot deploy step', () => {
     const r = await runDeploy({ worktreeExists: false });
     const start = r.pm2.find((call) => call.startsWith('pm2 start'));
     expect(start).toContain('--exp-backoff-restart-delay 2000');
+  });
+
+  // On 2026-10-12 every stage deploy's bot was SIGKILLed ~7 s after start by the runner's
+  // orphan cleanup, because pm2 inherited the job's RUNNER_TRACKING_ID into the app env.
+  test.each([
+    ['PR deploy', 'opened'],
+    ['PR closed, stage back on main', 'closed'],
+  ] as const)('%s: pm2 never sees the runner job tracking id', async (_name, action) => {
+    const r = await runDeploy({ worktreeExists: false, action });
+    expect(r.status).toBe(0);
+    expect(r.pm2.some((call) => call.startsWith('pm2 start'))).toBe(true);
+    expect(r.pm2Tracked).toEqual([]);
   });
 });

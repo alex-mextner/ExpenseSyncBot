@@ -41,6 +41,11 @@ jobs:
         shell: bash {0}
         run: |
             set -e
+            # The runner SIGKILLs every process still carrying this job's tracking id when
+            # the job ends ("Terminate orphan process"); pm2 would hand it to the apps it
+            # (re)starts here, e.g. pm2-logrotate after `pm2 set`. Only pm2 runs without
+            # it: install and build scripts keep the runner's orphan cleanup.
+            PM2="env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2"
             cd /var/www/ExpenseSyncBot
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
 
@@ -90,21 +95,21 @@ jobs:
             caddy reload --config /etc/caddy/Caddyfile
 
             echo "📜 Ensuring pm2-logrotate module is installed and configured..."
-            if ! /var/www/.bun/bin/pm2 list 2>/dev/null | grep -q pm2-logrotate; then
-              /var/www/.bun/bin/pm2 install pm2-logrotate
+            if ! $PM2 list 2>/dev/null | grep -q pm2-logrotate; then
+              $PM2 install pm2-logrotate
             fi
-            /var/www/.bun/bin/pm2 set pm2-logrotate:max_size 20M
-            /var/www/.bun/bin/pm2 set pm2-logrotate:retain 14
-            /var/www/.bun/bin/pm2 set pm2-logrotate:compress true
-            /var/www/.bun/bin/pm2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
+            $PM2 set pm2-logrotate:max_size 20M
+            $PM2 set pm2-logrotate:retain 14
+            $PM2 set pm2-logrotate:compress true
+            $PM2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
 
             echo "🔄 Reloading PM2 process..."
-            /var/www/.bun/bin/pm2 reload ecosystem.config.cjs --update-env
+            $PM2 reload ecosystem.config.cjs --update-env
 
             echo "✅ Deployment completed successfully!"
 
             echo "📊 PM2 status:"
-            /var/www/.bun/bin/pm2 list
+            $PM2 list
 
       - name: Notify deploy success
         if: success()

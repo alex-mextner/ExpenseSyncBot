@@ -218,6 +218,11 @@ make the runner safe by itself). Settings → Actions → General → fork pull 
 
 Secrets used: `BOT_TOKEN`, `BOT_ADMIN_CHAT_ID` (deploy notifications, runner watchdog).
 
+When a job ends, the runner SIGKILLs every process that still carries the job's
+`RUNNER_TRACKING_ID` ("Terminate orphan process" in the job log). Steps therefore run pm2 as
+`env -u RUNNER_TRACKING_ID …/pm2`; otherwise pm2 passes the id to the apps it (re)starts and they
+are killed seconds after the deploy.
+
 **Runner watchdog** (`runner-watchdog.yml`, every 15 min): queues a no-op `ping` job on the
 odroid runner and, from a GitHub-hosted job, checks that it gets picked up within 5 minutes
 (a runner busy with a job started in the last 30 minutes counts as online). If not, it alerts the
