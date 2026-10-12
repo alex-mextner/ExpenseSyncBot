@@ -217,32 +217,45 @@ interface SlotOptions {
 
 /**
  * Extra output tokens granted on top of the caller's budget when Claude thinks. Thinking is billed
- * against the same max_tokens as the visible answer: at medium effort Sonnet 5.5 spent ~150 tokens
- * thinking on a 10-item prefill prompt and truncated the answer in 3/6 calls at max_tokens=200.
- * max_tokens is only a cap — unused reserve costs nothing.
+ * against the same max_tokens as the visible answer: Sonnet 5.5 spent ~150 tokens thinking on a
+ * 10-item prefill prompt and truncated the answer in 3/6 calls at max_tokens=200.
+ * max_tokens is only a cap — unused reserve costs nothing. No clamp to the model's output ceiling is
+ * needed: measured ceiling for claude-sonnet-5-5 is 128000 (2026-10-10), and the largest caller
+ * budget is 8192, so 8192 + 8192 stays far below it (#144).
  */
 export const CLAUDE_THINKING_RESERVE_TOKENS = 8192;
 
 /** Anthropic-only request fields accepted by its OpenAI-compat endpoint; the SDK forwards them as-is. */
 interface ClaudeParams {
   max_tokens: number;
-  reasoning_effort?: 'medium';
   thinking?: { type: 'disabled' };
 }
 
 /**
  * Thinking settings for a Claude model (measured against the live API, 2026-10). Sonnet/Opus/Fable
- * think at medium effort with CLAUDE_THINKING_RESERVE_TOKENS on top, so the caller's whole budget
- * stays available for the visible answer. Haiku runs with thinking disabled: even at medium effort
- * it spent the entire small budget (validators 256, prefill 200) and streamed zero text. The
- * OpenAI-compat endpoint rejects explicit adaptive thinking and handles tool rounds without
- * thinking blocks in the history.
+ * (and any unlisted model) think at the model's own level — the OpenAI-compat endpoint ignores
+ * `reasoning_effort`, `output_config.effort` and `thinking.budget_tokens`, so none is sent (#146) —
+ * with CLAUDE_THINKING_RESERVE_TOKENS on top, so the caller's whole budget stays available for the
+ * visible answer. Haiku serves the latency-sensitive fast chain (validators, prefill) and runs with
+ * thinking disabled: with thinking on it spent the entire small budget (validators 256, prefill 200)
+ * and streamed zero text. The endpoint rejects explicit adaptive thinking and handles tool rounds
+ * without thinking blocks in the history.
  */
 export function claudeRequestParams(model: string, maxTokens: number): ClaudeParams {
   if (model.startsWith('claude-haiku')) {
     return { thinking: { type: 'disabled' }, max_tokens: maxTokens };
   }
-  return { reasoning_effort: 'medium', max_tokens: maxTokens + CLAUDE_THINKING_RESERVE_TOKENS };
+  return { max_tokens: maxTokens + CLAUDE_THINKING_RESERVE_TOKENS };
+}
+
+/** Budget/sampling fields for one chat request: Claude shape for Anthropic slots, otherwise max_tokens + temperature. */
+export function chatRequestParams(
+  model: string,
+  maxTokens: number,
+  temperature: number,
+  anthropic: boolean,
+): ClaudeParams | { max_tokens: number; temperature: number } {
+  return anthropic ? claudeRequestParams(model, maxTokens) : { max_tokens: maxTokens, temperature };
 }
 
 /**
@@ -265,9 +278,12 @@ function streamingSlot(
           model,
           messages: opts.messages,
           stream: true,
-          ...(slotOptions.anthropic
-            ? claudeRequestParams(model, opts.maxTokens)
-            : { max_tokens: opts.maxTokens, temperature: opts.temperature ?? DEFAULT_TEMPERATURE }),
+          ...chatRequestParams(
+            model,
+            opts.maxTokens,
+            opts.temperature ?? DEFAULT_TEMPERATURE,
+            slotOptions.anthropic ?? false,
+          ),
         };
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
