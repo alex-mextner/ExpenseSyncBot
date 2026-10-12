@@ -5,6 +5,7 @@
 
 import { env } from '../../config/env';
 import { database } from '../../database';
+import { neutralizeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { sendDirect } from '../bank/telegram-sender';
 
@@ -93,16 +94,6 @@ function isThrottled(signature: string, now: number): boolean {
 }
 
 const NAME_MAX = 80;
-
-/**
- * Make untrusted text safe inside the HTML report. A plain escapeHtml() would be UNDONE here:
- * the outgoing-HTML sanitizer (sanitizeHtmlForTelegram) decodes entities and restores whitelisted
- * tags, so a user's `<b>` / `<a href>` would become real markup in the admin alert. So neutralize
- * angle brackets to look-alikes (no tag can form) and escape `&` (idempotent through the sanitizer).
- */
-function neutralizeHtml(raw: string): string {
-  return raw.replace(/</g, '‹').replace(/>/g, '›').replace(/&/g, '&amp;');
-}
 
 /** Cap to `max` chars, dropping a trailing half-written `&entity;` so the HTML stays valid. */
 function capSafe(safe: string, max: number): string {

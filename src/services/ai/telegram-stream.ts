@@ -1,11 +1,18 @@
 /**
  * Telegram streaming adapter for the AI agent
- * Handles throttled message updates, tool indicators, and message chunking
+ * Handles throttled message updates, the work log of tool steps, and message chunking
  */
 import type { Bot } from 'gramio';
 import { TelegramError } from 'gramio';
-import { processThinkTags, sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
+import {
+  escapeHtml,
+  neutralizeHtml,
+  processThinkTags,
+  sanitizeHtmlForTelegram,
+  stripAllHtml,
+} from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
+import { pluralize } from '../../utils/pluralize';
 import { TOOL_LABELS } from './tools';
 
 const logger = createLogger('telegram-stream');
@@ -125,6 +132,20 @@ const UPDATE_INTERVAL_MS = 1000; // ~Telegram's safe edit rate per chat
 const ERROR_COOLDOWN_MS = 10000;
 const MAX_MESSAGE_LENGTH = 4000;
 
+/**
+ * Work log: the tool steps of a run, shown as a collapsed blockquote at the TOP of the reply
+ * (owner, 2026-10-12: progress lines never go into the answer). Its markup is two entities —
+ * the blockquote and the bold header — however many steps there are (Telegram: 100/message).
+ */
+const WORK_LOG_HEADER = '⚙️ <b>Инструменты</b>';
+/** The log's share of a message; the rest belongs to the answer. */
+const WORK_LOG_MAX_LENGTH = 1000;
+/** Room for the shortest log: the header and the "… ещё N шагов раньше" line. */
+const WORK_LOG_MIN_LENGTH = 100;
+/** One step stays one short line: long expressions or comments are cut. */
+const WORK_LOG_STEP_MAX_LENGTH = 100;
+const WORK_LOG_GAP = '\n\n';
+
 export class TelegramStreamWriter {
   private sentMessageId: number | null = null;
   private placeholderIdPromise: Promise<number | null>;
@@ -133,12 +154,11 @@ export class TelegramStreamWriter {
   private lastFlushTime = Date.now();
   private lastSentText = ''; // last display text actually sent
   private lastErrorTime = 0;
-  private flushInProgress = false; // mutex: prevents concurrent API calls
-  private toolLabel: string | null = null; // live indicator shown during flush
-  private pendingIndicators: string[] = []; // in-flight tool labels
-  private toolLines: string[] = []; // completed ✅/❌ lines
-  private intermediateChunks: string[] = []; // committed snapshots per tool-use round
-  private finalDisplayText = ''; // full final text for sendRemainingChunks
+  private activeFlush: Promise<void> | null = null; // streaming edit in flight; also the mutex
+  private toolLabel: string | null = null; // step running now, shown last in the work log
+  private pendingIndicators: string[] = []; // in-flight steps
+  private workLog: string[] = []; // finished ✅/❌ steps of every round, display-safe
+  private remainingChunks: string[] = []; // answer parts after the first message
   private typingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -173,9 +193,11 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Reset writer state for a retry pass (validation rejection).
+   * Reset writer state for a retry pass (API retry or validation rejection).
    * Keeps the existing Telegram message ID so edits continue in-place.
    * Clears error cooldown so the retry can flush tool indicators immediately.
+   * Keeps the work log: those tools did run (a write may have changed data), so their steps
+   * stay on screen even if every retry fails.
    */
   reset(): void {
     this.fullText = '';
@@ -184,9 +206,7 @@ export class TelegramStreamWriter {
     this.lastErrorTime = 0;
     this.toolLabel = null;
     this.pendingIndicators = [];
-    this.toolLines = [];
-    this.intermediateChunks = [];
-    this.finalDisplayText = '';
+    this.remainingChunks = [];
   }
 
   /**
@@ -213,72 +233,81 @@ export class TelegramStreamWriter {
     const now = Date.now();
     if (now - this.lastErrorTime < ERROR_COOLDOWN_MS) return;
     if (!force && now - this.lastFlushTime < UPDATE_INTERVAL_MS) return;
-    if (this.flushInProgress) return;
+    if (this.activeFlush) return;
 
-    this.flushInProgress = true;
+    this.activeFlush = this.flushNow();
     try {
-      // Build display: current streamed text + typing indicator + live tool indicator suffix
-      let display = this.truncateForTelegram(processThinkTags(this.fullText)) || '⏳';
+      await this.activeFlush;
+    } finally {
+      this.activeFlush = null;
+    }
+  }
+
+  private async flushNow(): Promise<void> {
+    try {
+      // Display: work log (if any tool started) on top, then the streamed text with a typing mark
+      const text = processThinkTags(this.fullText);
+      const log = this.workLogFor(text.length);
+      const bodyLimit = log
+        ? MAX_MESSAGE_LENGTH - WORK_LOG_GAP.length - log.length
+        : MAX_MESSAGE_LENGTH;
+      let body = this.truncateForTelegram(text, bodyLimit) || '⏳';
       // Append "..." to indicate the AI is still writing.
       // Skip if truncateForTelegram already added "..." (truncation) or if text is empty (placeholder).
-      if (this.fullText && !/\.{3}(<\/[a-z]+>)*$/i.test(display)) {
-        display += '...';
-      }
-      if (this.toolLabel) {
-        display = `${display}\n\n${this.toolLabel}`;
+      if (this.fullText && !/\.{3}(<\/[a-z]+>)*$/i.test(body)) {
+        body += '...';
       }
 
-      await this.sendOrEdit(display);
+      await this.sendOrEdit(log ? `${log}${WORK_LOG_GAP}${body}` : body);
     } catch (err) {
       logger.error({ err }, '[STREAM] Unexpected flush error');
       this.lastErrorTime = Date.now();
-    } finally {
-      this.flushInProgress = false;
     }
   }
 
   /**
-   * Set the live indicator for the tool currently executing.
-   * Shown as suffix in flush() until markToolResult() clears it.
+   * Set the step for the tool currently executing.
+   * Shown as the last line of the work log until markToolResult() finishes it.
    */
   setToolLabel(name: string, input?: Record<string, unknown>): void {
     const label = TOOL_LABELS[name] || name;
     const details = formatToolInput(name, input);
-    const suffix = details ? `: ${details}` : '';
-    const labelText = `${label}${suffix}`;
-    this.toolLabel = `<i>${labelText}...</i>`;
-    this.pendingIndicators.push(labelText);
+    // One line per step; code points, not UTF-16 units, so an emoji is never cut in half
+    const chars = Array.from((details ? `${label}: ${details}` : label).replace(/\s+/g, ' '));
+    const step =
+      chars.length > WORK_LOG_STEP_MAX_LENGTH
+        ? `${chars.slice(0, WORK_LOG_STEP_MAX_LENGTH - 1).join('')}…`
+        : chars.join('');
+    // Tool input comes from the model and user text: it must never turn into markup
+    const safeStep = neutralizeHtml(step);
+    this.toolLabel = safeStep;
+    this.pendingIndicators.push(safeStep);
   }
 
   /**
-   * Mark the most recently started tool as done.
-   * Moves label from live indicator to completed ✅/❌ line (shown in finalize blockquote).
+   * Mark the most recently started tool as done: its step becomes a ✅/❌ line of the work log.
    */
   markToolResult(success: boolean): void {
-    const indicator = this.pendingIndicators.pop();
-    if (indicator) {
-      this.toolLines.push(`${success ? '✅' : '❌'} <i>${indicator}</i>`);
+    const step = this.pendingIndicators.pop();
+    if (step) {
+      this.workLog.push(`${success ? '✅' : '❌'} ${step}`);
     }
     this.toolLabel = null;
   }
 
   /**
-   * Commit this round's tool lines to history and reset text buffer.
-   * Called after each tool-use round so the next round starts fresh.
+   * Start the next round's text. Called after each tool-use round; its steps stay in the work log.
    */
   commitIntermediate(): void {
-    if (this.toolLines.length > 0) {
-      this.intermediateChunks.push(this.toolLines.join('\n'));
-      this.toolLines = [];
-    }
     this.fullText = '';
     this.lastSentText = '';
     this.lastFlushTime = Date.now();
   }
 
   /**
-   * Build and send the final message:
-   * collapsed tool blockquote (if any tools ran) followed by AI response.
+   * Build and send the final message: the collapsed work log (if any tools ran) on top, the AI
+   * response below. An answer longer than one message is split; only the first part carries the
+   * log, the rest goes out in sendRemainingChunks(). The log is cut to fit, never the answer.
    *
    * A missing answer ('' / '...' / [SKIP]) stays as-is only when `allowSilence` is set — the
    * caller then deletes the message. Once tools ran, only the bare [SKIP] marker counts: a
@@ -288,20 +317,16 @@ export class TelegramStreamWriter {
   async finalize({ allowSilence = false }: { allowSilence?: boolean } = {}): Promise<void> {
     this.stopTyping();
     this.toolLabel = null;
+    // A streaming edit still in flight would land over the final message
+    await this.activeFlush;
 
-    // Collect any remaining tool lines from the last round
-    if (this.toolLines.length > 0) {
-      this.intermediateChunks.push(this.toolLines.join('\n'));
-      this.toolLines = [];
-    }
-
-    const toolsRan = this.intermediateChunks.length > 0;
+    const toolsRan = this.workLog.length > 0;
     let response = processThinkTags(this.fullText.trim());
     if (isSkipSignal(response)) {
       if (allowSilence && (!toolsRan || isBareSkipMarker(response))) {
         // Silence: nothing to show — the caller deletes the placeholder.
         this.historyText = response;
-        this.finalDisplayText = '';
+        this.remainingChunks = [];
         return;
       }
       response = NO_ANSWER_MESSAGE;
@@ -309,16 +334,85 @@ export class TelegramStreamWriter {
     // Save clean text for chat history before adding UI chrome
     this.historyText = response;
 
-    let finalText = response;
-    if (toolsRan) {
-      const body = this.intermediateChunks.join('\n');
-      finalText = `<blockquote expandable>⚙️ <b>Инструменты</b>\n${body}</blockquote>\n\n${response}`;
+    const answer = response.replace(/\n{3,}/g, '\n\n').trim();
+    const log = this.workLogFor(answer.length);
+    const firstLimit = log
+      ? MAX_MESSAGE_LENGTH - WORK_LOG_GAP.length - log.length
+      : MAX_MESSAGE_LENGTH;
+    // The first chunk is a prefix of the answer (the split keeps every separator it does not
+    // break at), so the rest is the answer after it, split at the full message size.
+    const first = this.splitIntoChunks(answer, firstLimit)[0] ?? '';
+    const rest = answer.slice(first.length).trim();
+    this.remainingChunks = rest ? this.splitIntoChunks(rest, MAX_MESSAGE_LENGTH) : [];
+
+    // No cut by HTML length: the chunk is already within the limit, and Telegram counts the
+    // parsed text — escaping `&` as `&amp;` must not cost the answer its tail.
+    const firstHtml = this.truncateForTelegram(first, Number.POSITIVE_INFINITY);
+    await this.sendOrEdit(log ? `${log}${WORK_LOG_GAP}${firstHtml}` : firstHtml);
+  }
+
+  /**
+   * Show an AI failure. Once tools ran, the message keeps its work log and shows the failure
+   * under it: a write tool may already have changed data, and the log is the user's record of
+   * what was done. Without tools, the placeholder is deleted and the failure sent as plain text.
+   */
+  async fail(message: string): Promise<void> {
+    this.stopTyping();
+    this.toolLabel = null;
+    // A streaming edit still in flight would land over the failure
+    await this.activeFlush;
+    if (this.workLog.length === 0) {
+      await this.deleteSentMessage();
+      await this.sendFailure({ chat_id: this.chatId, text: message });
+      return;
     }
+    const text = `${this.workLogFor(message.length)}${WORK_LOG_GAP}${escapeHtml(message)}`;
+    await this.sendOrEdit(text);
+    // sendOrEdit records only what reached the screen. When the edit failed, the failure still
+    // has to reach the user: the old message goes (if it still exists) and this one is sent anew.
+    if (this.lastSentText !== text) {
+      await this.deleteSentMessage();
+      await this.sendFailure({ chat_id: this.chatId, text, parse_mode: 'HTML' });
+    }
+  }
 
-    finalText = finalText.replace(/\n{3,}/g, '\n\n').trim();
-    this.finalDisplayText = finalText;
+  /** Best effort: the run is already failing, so a send error is logged, not thrown. */
+  private async sendFailure(params: {
+    chat_id: number;
+    text: string;
+    parse_mode?: 'HTML';
+  }): Promise<void> {
+    try {
+      await this.bot.api.sendMessage(params);
+    } catch (err) {
+      logger.error({ err }, '[STREAM] Failed to send the failure message');
+    }
+  }
 
-    await this.sendOrEdit(this.truncateForTelegram(finalText));
+  /**
+   * Work log for a message whose answer part is `answerLength` chars: shrunk to fit beside an
+   * answer that leaves room for it, else full-size (the answer is then split across messages).
+   * Empty when no tool started.
+   */
+  private workLogFor(answerLength: number): string {
+    const room = MAX_MESSAGE_LENGTH - WORK_LOG_GAP.length - answerLength;
+    const budget =
+      room >= WORK_LOG_MIN_LENGTH ? Math.min(room, WORK_LOG_MAX_LENGTH) : WORK_LOG_MAX_LENGTH;
+    const steps = this.toolLabel ? [...this.workLog, `⏳ ${this.toolLabel}...`] : this.workLog;
+    if (steps.length === 0) return '';
+
+    const render = (lines: string[]) =>
+      `<blockquote expandable>${WORK_LOG_HEADER}\n${lines.join('\n')}</blockquote>`;
+    const full = render(steps);
+    // Under 3 steps nothing is worth hiding (N+2 rule): show them all, the answer splits if needed
+    if (full.length <= budget || steps.length < 3) return full;
+    // Too long: keep the newest steps and hide at least 3 older ones. Hiding every step always
+    // fits, since WORK_LOG_MIN_LENGTH covers the header and the "ещё N" line.
+    for (let hidden = 3; ; hidden++) {
+      const more = `… ещё ${hidden} ${pluralize(hidden, 'шаг', 'шага', 'шагов')} раньше`;
+      const log = render([more, ...steps.slice(hidden)]);
+      if (log.length <= budget || hidden === steps.length) return log;
+    }
   }
 
   /**
@@ -329,26 +423,18 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Send additional chunks for long final messages
+   * Send the answer parts that did not fit into the first message (see finalize()).
    */
   async sendRemainingChunks(): Promise<void> {
-    if (this.finalDisplayText.length <= MAX_MESSAGE_LENGTH) return;
-
-    const chunks = this.splitIntoChunks(this.finalDisplayText, MAX_MESSAGE_LENGTH);
-
-    // First chunk was already sent/edited via finalize()
-    for (let i = 1; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (chunk) {
-        try {
-          await this.bot.api.sendMessage({
-            chat_id: this.chatId,
-            text: chunk,
-            parse_mode: 'HTML',
-          });
-        } catch (err) {
-          logger.error({ err }, '[STREAM] Failed to send chunk');
-        }
+    for (const chunk of this.remainingChunks) {
+      try {
+        await this.bot.api.sendMessage({
+          chat_id: this.chatId,
+          text: chunk,
+          parse_mode: 'HTML',
+        });
+      } catch (err) {
+        logger.error({ err }, '[STREAM] Failed to send chunk');
       }
     }
   }
@@ -461,11 +547,11 @@ export class TelegramStreamWriter {
   }
 
   /**
-   * Truncate text to fit Telegram message limit and close any unclosed HTML tags.
+   * Truncate text to `maxLength` (default: a whole message) and close any unclosed HTML tags.
    * Unclosed tags must always be fixed — not only on truncation — because
    * intermediate stream flushes can cut mid-tag while the AI is still generating.
    */
-  private truncateForTelegram(text: string): string {
+  private truncateForTelegram(text: string, maxLength = MAX_MESSAGE_LENGTH): string {
     // Convert <br> to newline before sanitization — sanitize would otherwise escape it.
     // Telegram HTML does not support <br>.
     const withNewlines = text.replace(/<br\s*\/?>/gi, '\n');
@@ -476,12 +562,12 @@ export class TelegramStreamWriter {
     let truncated = sanitizeHtmlForTelegram(withNewlines);
     let wasTruncated = false;
 
-    if (truncated.length > MAX_MESSAGE_LENGTH) {
-      truncated = truncated.substring(0, MAX_MESSAGE_LENGTH);
+    if (truncated.length > maxLength) {
+      truncated = truncated.substring(0, maxLength);
       wasTruncated = true;
     }
 
-    // Fix incomplete HTML tags that result from truncation at MAX_MESSAGE_LENGTH.
+    // Fix incomplete HTML tags that result from the cut at maxLength.
     // Sanitization ensures only whitelisted tags remain, so these regexes only
     // ever fire on valid-but-truncated tags (e.g. <blockquote expandabl…).
     // Case 1: incomplete tag before a newline — complete it in-place
@@ -549,7 +635,8 @@ export class TelegramStreamWriter {
 
   /**
    * Split text at word boundaries so no chunk exceeds maxLength.
-   * If a single word is longer than maxLength it stays in its own chunk.
+   * A word longer than maxLength (a URL, a long run of digits) is cut: Telegram rejects a longer
+   * message, so keeping it whole would lose the whole message.
    */
   private splitByWords(text: string, maxLength: number): string[] {
     if (text.length <= maxLength) return [text];
@@ -560,11 +647,18 @@ export class TelegramStreamWriter {
 
     for (const word of words) {
       const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > maxLength && current) {
-        result.push(current);
-        current = word;
-      } else {
+      if (candidate.length <= maxLength) {
         current = candidate;
+        continue;
+      }
+      if (current) result.push(current);
+      current = word;
+      while (current.length > maxLength) {
+        // Never cut between the two halves of a UTF-16 surrogate pair (an emoji)
+        const code = current.charCodeAt(maxLength - 1);
+        const cut = code >= 0xd800 && code <= 0xdbff && maxLength > 1 ? maxLength - 1 : maxLength;
+        result.push(current.slice(0, cut));
+        current = current.slice(cut);
       }
     }
     if (current) result.push(current);

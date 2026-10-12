@@ -152,8 +152,6 @@ export class ExpenseBotAgent {
       await writer.sendRemainingChunks();
       return finalText;
     } catch (error) {
-      await writer.deleteSentMessage();
-
       const classification = classifyAiError(error);
       debugCtx?.logError(
         `${classification?.kind ?? 'unclassified'}: ${error instanceof Error ? error.message : String(error)}`,
@@ -163,6 +161,7 @@ export class ExpenseBotAgent {
         // Not a recognizable AI/network/timeout failure — propagate so the caller
         // (and logs) see the real, unrelated error instead of a masked generic one.
         // (No admin AI-failure report here: it isn't an AI failure.)
+        await writer.deleteSentMessage();
         throw error;
       }
 
@@ -194,7 +193,8 @@ export class ExpenseBotAgent {
       } else {
         logger.warn(logFields, logMsg);
       }
-      await this.sendErrorToUser(bot, classification.userMessage);
+      // Under the work log when tools ran (they may have changed data), else as a plain message
+      await writer.fail(classification.userMessage);
       throw new AgentError(classification.userMessage);
     }
   }
@@ -375,14 +375,6 @@ export class ExpenseBotAgent {
 
   protected async sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private async sendErrorToUser(bot: Bot, message: string): Promise<void> {
-    try {
-      await bot.api.sendMessage({ chat_id: this.ctx.chatId, text: message });
-    } catch {
-      // Best-effort error notification
-    }
   }
 
   /**
