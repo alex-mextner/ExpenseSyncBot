@@ -237,6 +237,8 @@ public repo after 60 days without repository activity; re-enable with
    - log rotation, `caddy reload`, pm2-logrotate config
    - `pm2 reload ecosystem.config.cjs --update-env`
 4. Telegram notification to the admin chat
+5. If the stage bot runs from the main checkout (no PR holds the stage slot), it is restarted on
+   the new commit; a stage bot running a PR worktree is left alone (`scripts/stage-follow-main.sh`)
 
 `.env` and `data/` are never touched by the deploy. Migrations run on bot startup.
 
