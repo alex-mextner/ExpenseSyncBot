@@ -68,6 +68,11 @@ export interface StreamRoundResult {
 export interface StreamRoundOptions {
   messages: OpenAI.ChatCompletionMessageParam[];
   tools?: OpenAI.ChatCompletionTool[];
+  /**
+   * 'none': the model sees `tools` but must answer in text. For a round whose history holds tool
+   * calls but must not make new ones. Sent only together with `tools`.
+   */
+  toolChoice?: 'none';
   maxTokens: number;
   temperature?: number;
   /** Which chain to run. Default: 'smart'. */
@@ -287,6 +292,7 @@ function streamingSlot(
         };
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
+        if (opts.toolChoice) params.tool_choice = opts.toolChoice;
       }
 
       const stream = await getClient().chat.completions.create(

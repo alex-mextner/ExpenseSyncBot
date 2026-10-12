@@ -63,6 +63,7 @@ import type { AgentContext } from './types';
 // Loaded after the mocks above: a static import is hoisted and would create the agent's
 // logger from the real module, so log assertions would see nothing.
 const { aiDebugLogger, ExpenseBotAgent } = await import('./agent');
+const { TOOL_DEFINITIONS } = await import('./tools');
 type ExpenseBotAgent = InstanceType<typeof ExpenseBotAgent>;
 
 // Minimal AgentContext with all required fields
@@ -1060,7 +1061,7 @@ describe('ExpenseBotAgent', () => {
     function mockEndlessToolCalls(finalText: string) {
       let n = 0;
       mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
-        if (opts.tools && opts.tools.length > 0) {
+        if (opts.toolChoice !== 'none') {
           n++;
           const args = JSON.stringify({ expression: `${n} RSD`, target_currency: 'EUR' });
           callbacks.onToolCallStart?.('calculate');
@@ -1102,7 +1103,7 @@ describe('ExpenseBotAgent', () => {
       ).mockResolvedValue(undefined);
     });
 
-    it('forces one final round without tools when the round cap is hit, and returns its text', async () => {
+    it('forces one final round with tool calls forbidden when the round cap is hit, and returns its text', async () => {
       const mentionAgent = new ExpenseBotAgent('key', makeCtx({ isMention: true }));
       mockEndlessToolCalls('Итого: 1 000 EUR');
 
@@ -1114,11 +1115,39 @@ describe('ExpenseBotAgent', () => {
 
       expect(result).toBe('Итого: 1 000 EUR');
       const lastOpts = getLastCallOpts();
-      expect(lastOpts.tools).toBeUndefined();
+      // Tools stay declared (the history holds tool calls) but tool_choice forbids new ones.
+      expect(lastOpts.toolChoice).toBe('none');
+      expect(lastOpts.tools).toBe(TOOL_DEFINITIONS);
       // The forced round tells the model to answer now from what it already gathered.
       expect(JSON.stringify(lastOpts.messages.at(-1))).toContain('[SYSTEM]');
       expect(mockAiStreamRound).toHaveBeenCalledTimes(11);
       expect(logMock.warn).toHaveBeenCalled();
+    });
+
+    it('never runs a tool call the forced final round returns despite tool_choice none, and logs it', async () => {
+      // A provider that ignores tool_choice 'none' must not get a tool executed past the cap.
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        n++;
+        if (opts.toolChoice === 'none') {
+          callbacks.onTextDelta?.('Итого: 2001 EUR');
+          return { ...makeToolCallResult('add_expense'), text: 'Итого: 2001 EUR' };
+        }
+        return {
+          ...makeToolCallResult('calculate'),
+          toolCalls: [{ id: `c${n}`, name: 'calculate', arguments: `{"expression":"${n}"}` }],
+        };
+      });
+
+      const result = await agent.run('сумма в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Итого: 2001 EUR');
+      expect(mockExecuteTool.mock.calls.map((c) => c[0])).not.toContain('add_expense');
+      expect(mockExecuteTool).toHaveBeenCalledTimes(10);
+      expect(logMock.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ toolCalls: ['add_expense'] }),
+        expect.stringContaining('ignored'),
+      );
     });
 
     it('never treats an empty answer after tool calls as [SKIP] — shows a failure message instead', async () => {
@@ -1264,7 +1293,8 @@ describe('ExpenseBotAgent', () => {
       mockIsRetryableError.mockReturnValue(true);
       let n = 0;
       mockAiStreamRound.mockImplementation(async (opts) => {
-        if (!opts.tools) throw Object.assign(new Error('overloaded'), { status: 529 });
+        if (opts.toolChoice === 'none')
+          throw Object.assign(new Error('overloaded'), { status: 529 });
         n++;
         return {
           ...makeToolCallResult('add_expense'),
@@ -1301,7 +1331,7 @@ describe('ExpenseBotAgent', () => {
       );
       let n = 0;
       mockAiStreamRound.mockImplementation(async (opts) => {
-        if (!opts.tools) {
+        if (opts.toolChoice === 'none') {
           for (const fire of deadlineHandlers) fire();
           throw roundError();
         }
