@@ -26,10 +26,11 @@ case "$1" in
 esac
 exit 0
 `;
-// Stand-in bun: `bun -e …` is the pm2-status probe, everything else (install) succeeds.
+// Stand-in bun: `bun -e …` is the pm2-status probe and answers $STAGE_STATUS; everything
+// else (install) succeeds.
 const BUN_STUB = `#!/usr/bin/env bash
 echo "bun $*" >> "$CALLS"
-[ "$1" = -e ] && echo online
+[ "$1" = -e ] && echo "\${STAGE_STATUS:-online}"
 exit 0
 `;
 const LOGGING_STUB = (name: string) =>
@@ -48,7 +49,9 @@ function dictionary(entries: Record<string, data.ExpressionData>): data.Dictiona
   return d;
 }
 
-function eventContext(action: 'opened' | 'synchronize'): data.Dictionary {
+type PullRequestAction = 'opened' | 'synchronize' | 'closed';
+
+function eventContext(action: PullRequestAction): data.Dictionary {
   const head = dictionary({
     sha: new data.StringData(HEAD_SHA),
     ref: new data.StringData(BRANCH),
@@ -97,7 +100,15 @@ function evaluateEnv(env: Record<string, string>, context: data.Dictionary) {
   );
 }
 
-async function runDeploy({ worktreeExists }: { worktreeExists: boolean }) {
+async function runDeploy({
+  worktreeExists,
+  action = worktreeExists ? 'synchronize' : 'opened',
+  stageStatus = 'online',
+}: {
+  worktreeExists: boolean;
+  action?: PullRequestAction;
+  stageStatus?: string;
+}) {
   const root = mkdtempSync(join(tmpdir(), 'stage-bot-deploy-'));
   const www = join(root, 'var/www');
   const bunBin = join(www, '.bun/bin');
@@ -122,9 +133,10 @@ async function runDeploy({ worktreeExists }: { worktreeExists: boolean }) {
   writeFileSync(script, step.run.replaceAll('/var/www', www));
   const result = spawnSync('bash', [script], {
     env: {
-      ...evaluateEnv(step.env, eventContext(worktreeExists ? 'synchronize' : 'opened')),
+      ...evaluateEnv(step.env, eventContext(action)),
       PATH: `${stubs}:${process.env['PATH']}`,
       CALLS: calls,
+      STAGE_STATUS: stageStatus,
     },
     encoding: 'utf8',
     timeout: 20_000,
@@ -134,6 +146,7 @@ async function runDeploy({ worktreeExists }: { worktreeExists: boolean }) {
     status: result.status,
     stderr: result.stderr,
     git: log.filter((l) => l.startsWith('git ')),
+    pm2: log.filter((l) => l.startsWith('pm2 ')),
   };
 }
 
@@ -151,5 +164,31 @@ describe('stage-bot deploy step', () => {
     expect(r.status).toBe(0);
     expect(r.git).toContain(`git reset --hard ${HEAD_SHA}`);
     expect(r.git.some((call) => call.includes(`origin/${BRANCH}`))).toBe(false);
+  });
+
+  // A reboot resurrects pm2's saved list; without a save it brings back whatever stage ran
+  // when someone last saved by hand (on 2026-10-12: a deleted worktree, ~7000 crash loops).
+  test.each([
+    ['PR opened', false, 'opened'],
+    ['PR updated', true, 'synchronize'],
+    ['PR closed, stage back on main', false, 'closed'],
+  ] as const)('%s: the started stage bot is saved for resurrect', async (_name, worktreeExists, action) => {
+    const r = await runDeploy({ worktreeExists, action });
+    expect(r.status).toBe(0);
+    const start = r.pm2.findIndex((call) => call.startsWith('pm2 start'));
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(r.pm2.indexOf('pm2 save')).toBeGreaterThan(start);
+  });
+
+  test('a stage bot that fails to come online is not saved', async () => {
+    const r = await runDeploy({ worktreeExists: false, stageStatus: 'errored' });
+    expect(r.status).not.toBe(0);
+    expect(r.pm2).not.toContain('pm2 save');
+  });
+
+  test('a crashing stage bot backs off instead of restarting in a hot loop', async () => {
+    const r = await runDeploy({ worktreeExists: false });
+    const start = r.pm2.find((call) => call.startsWith('pm2 start'));
+    expect(start).toContain('--exp-backoff-restart-delay 2000');
   });
 });

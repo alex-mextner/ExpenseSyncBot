@@ -86,7 +86,9 @@ bunx playwright install chromium     # table renderer (as root: bunx playwright 
 ```
 
 Stage bot: `.env.stage` in the repo dir holds overrides (stage `BOT_TOKEN`, port 3312, `./data/expenses-stage.db`);
-its working directory is `/var/www/ExpenseSyncBot-stage`.
+its working directory is `/var/www/ExpenseSyncBot-stage`. `stage-bot.yml` and `scripts/stage-follow-main.sh`
+run `pm2 save` after every successful stage start, so a reboot resurrects the stage bot that is currently
+deployed; it restarts with exponential backoff, so missing code cannot crash-loop it hot.
 
 ### 4. PM2
 
