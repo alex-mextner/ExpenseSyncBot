@@ -11,7 +11,8 @@ const SCRIPT = join(import.meta.dir, '../../scripts/stage-follow-main.sh');
 const BUN = '/var/www/.bun/bin/bun --no-env-file --env-file=/var/www/ExpenseSyncBot-stage/.env';
 
 // Stand-in pm2: `jlist` prints $FIX/jlist (or $FIX/jlist.after once `restart` ran),
-// `restart` exits with $RESTART_EXIT; every call is logged to $FIX/calls.
+// `restart` exits with $RESTART_EXIT, `save` with $SAVE_EXIT; every call is logged to
+// $FIX/calls.
 const PM2_STUB = `#!/usr/bin/env bash
 echo "$*" >> "$FIX/calls"
 case "$1" in
@@ -20,6 +21,8 @@ case "$1" in
   restart)
     touch "$FIX/restarted"
     exit "\${RESTART_EXIT:-0}" ;;
+  save)
+    exit "\${SAVE_EXIT:-0}" ;;
 esac
 `;
 
@@ -50,7 +53,11 @@ const stageOnPr = stage('/var/www/ExpenseSyncBot/.claude/worktrees/chore/deploy-
 
 function followMain(
   jlist: Pm2Process[] | string,
-  { afterRestart, restartExit = 0 }: { afterRestart?: Pm2Process[]; restartExit?: number } = {},
+  {
+    afterRestart,
+    restartExit = 0,
+    saveExit = 0,
+  }: { afterRestart?: Pm2Process[]; restartExit?: number; saveExit?: number } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'stage-follow-main-'));
   const bin = join(dir, 'bin');
@@ -69,6 +76,7 @@ function followMain(
       FIX: fix,
       PM2: join(bin, 'pm2'),
       RESTART_EXIT: String(restartExit),
+      SAVE_EXIT: String(saveExit),
       BOT_TOKEN: 'test-token',
       ADMIN_CHAT_ID: '42',
       COMMIT_SHA: 'abcdef1234567890',
@@ -84,6 +92,8 @@ function followMain(
     status: result.status,
     stdout: result.stdout,
     restarted: lines('calls').some((call) => call.startsWith('restart expensesyncbot-stage')),
+    // `save` after the restart: what a reboot's `pm2 resurrect` brings back
+    saved: lines('calls').indexOf('save') > lines('calls').indexOf('restart expensesyncbot-stage'),
     telegram: lines('telegram').map((line): string => JSON.parse(line)),
   };
 }
@@ -95,6 +105,7 @@ describe('stage-follow-main.sh', () => {
     expect(r.restarted).toBe(true);
     expect(r.stdout).toContain('✅ Stage bot online on main abcdef1');
     expect(r.telegram).toEqual([]);
+    expect(r.saved).toBe(true);
   });
 
   test('stage started by start-stage.sh runs main too: restarts it', () => {
@@ -117,6 +128,14 @@ describe('stage-follow-main.sh', () => {
     expect(r.restarted).toBe(false);
     expect(r.stdout).toContain('runs a PR worktree');
     expect(r.telegram).toEqual([]);
+    expect(r.saved).toBe(false);
+  });
+
+  test('pm2 save fails: the online stage bot still counts as moved, with a warning', () => {
+    const r = followMain([prod, stageOnMain], { saveExit: 1 });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('pm2 save failed');
+    expect(r.telegram).toEqual([]);
   });
 
   test('no stage process at all: nothing to do', () => {
@@ -134,6 +153,7 @@ describe('stage-follow-main.sh', () => {
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toStartWith('⚠️ <b>Stage bot was not moved to the new main</b>');
     expect(r.telegram[0]).toContain('status: <code>errored</code>');
+    expect(r.saved).toBe(false);
   });
 
   test('pm2 restart fails: warns the admin and fails the step', () => {

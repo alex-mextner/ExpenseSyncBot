@@ -105,9 +105,15 @@ jobs:
               echo "Merged env → $STAGE_CWD/.env ($(wc -l < "$STAGE_CWD/.env") vars)"
 
               $PM2 delete expensesyncbot-stage 2>/dev/null || true
+              # Exponential backoff (2 s, growing to pm2's 15 s cap): a stage bot whose
+              # code is gone (e.g. a removed worktree resurrected after a reboot) retries
+              # a few times a minute instead of thousands of times. --max-restarts would
+              # not help: pm2 6 counts only crashes in the first min_uptime×max_restarts
+              # (10 s) after start, which backoff delays outlast.
               TZ=UTC $PM2 start "$BUN --no-env-file --env-file=$STAGE_CWD/.env $code_dir/index.ts" \
                    --name expensesyncbot-stage \
-                   --cwd "$STAGE_CWD"
+                   --cwd "$STAGE_CWD" \
+                   --exp-backoff-restart-delay 2000
 
               sleep 3
               STATUS=$($PM2 jlist | $BUN -e "
@@ -124,7 +130,11 @@ jobs:
                 return 1
               fi
 
-              echo "✅ Stage bot online (cwd: $cwd)"
+              echo "✅ Stage bot online (code: $code_dir)"
+              # Persist the process list so a reboot's `pm2 resurrect` brings back this
+              # stage bot, not whatever was running at the last manual save. The bot is
+              # already up, so a failed save warns instead of failing the deploy.
+              $PM2 save || echo "⚠️  pm2 save failed — a reboot may resurrect an older stage bot"
             }
 
             # HTML-escape the three characters Telegram's HTML parse mode

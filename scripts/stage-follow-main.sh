@@ -7,7 +7,7 @@
 # updated its code and a restart puts stage on the commit prod now runs. A stage bot
 # running a PR worktree is left untouched: that PR is under QA. When stage runs main
 # but does not come back online, the admin gets a Telegram warning and the script
-# exits 1.
+# exits 1; when it does, the pm2 list is saved so a reboot resurrects it.
 #
 # Env:
 #   BOT_TOKEN, ADMIN_CHAT_ID  Telegram bot + chat for the warning
@@ -67,3 +67,6 @@ if [ "$STATUS" != "online" ]; then
   exit 1
 fi
 echo "✅ Stage bot online on main $SHORT_SHA"
+# Persist the process list so a reboot's `pm2 resurrect` brings back this stage bot. It
+# is already online, so a failed save warns instead of failing the step.
+$PM2 save || echo "⚠️  pm2 save failed — a reboot may resurrect an older stage bot"
