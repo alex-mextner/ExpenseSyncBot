@@ -990,6 +990,44 @@ describe('ExpenseBotAgent', () => {
       expect(sentText().some((t) => t.includes('Ошибка AI'))).toBe(true);
       expect(mockReportAiFailureToAdmin).toHaveBeenCalledTimes(1);
     });
+
+    it('an AI failure after tools keeps the work log and shows the error under it', async () => {
+      // Owner 2026-10-12: the work log is always on top of a reply that used tools — a write tool
+      // may already have changed data, so deleting the message would hide what was done.
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '⏳ Слишком много запросов к AI. Подожди минуту.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('429'), { status: 429 }));
+      mockToolCallRound('get_expenses', '{"period":"2026-10"}');
+
+      await agent.run('сколько я потратил', [], mockBot as unknown as Bot).catch(() => {});
+
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+      const edits = mockBot.api.editMessageText.mock.calls as unknown as Array<[{ text: string }]>;
+      const shown = edits.at(-1)?.[0].text ?? '';
+      expect(shown.startsWith('<blockquote expandable>')).toBe(true);
+      expect(shown).toContain('Загружаю расходы: 2026-10');
+      expect(shown.endsWith('⏳ Слишком много запросов к AI. Подожди минуту.')).toBe(true);
+    });
+
+    it('a write tool, then AI errors through every retry: the work log still shows the write', async () => {
+      mockIsRetryableError.mockReturnValue(true);
+      mockClassifyAiError.mockReturnValue({
+        kind: 'rate_limit',
+        userMessage: '⏳ Слишком много запросов к AI. Подожди минуту.',
+      });
+      mockAiStreamRound.mockRejectedValue(Object.assign(new Error('429'), { status: 429 }));
+      mockToolCallRound('add_expense', '{"amount":5,"currency":"EUR","category":"Еда"}');
+
+      await agent.run('запиши 5 евро еда', [], mockBot as unknown as Bot).catch(() => {});
+
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+      const edits = mockBot.api.editMessageText.mock.calls as unknown as Array<[{ text: string }]>;
+      const shown = edits.at(-1)?.[0].text ?? '';
+      expect(shown).toContain('Записываю расход: 5 EUR, Еда');
+      expect(shown.endsWith('⏳ Слишком много запросов к AI. Подожди минуту.')).toBe(true);
+    });
   });
   // -- run() -- multi-round completion & overall timeout ---------------------
 

@@ -10,6 +10,17 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * Make untrusted text safe inside an HTML message that will pass the outgoing sanitizer.
+ * A plain escapeHtml() would be UNDONE there: sanitizeHtmlForTelegram decodes entities and
+ * restores whitelisted tags, so a user's `<b>` / `<a href>` would become real markup. So
+ * neutralize angle brackets to look-alikes (no tag can form) and escape `&` (idempotent
+ * through the sanitizer).
+ */
+export function neutralizeHtml(raw: string): string {
+  return raw.replace(/</g, '‹').replace(/>/g, '›').replace(/&/g, '&amp;');
+}
+
+/**
  * Telegram-allowed HTML tags whitelist.
  */
 const ALLOWED_TAGS = [
