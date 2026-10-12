@@ -56,6 +56,14 @@ jobs:
       (github.event.action == 'closed' || github.event.sender.type != 'Bot')
     runs-on: [self-hosted, odroid]
 
+    # Each run deploys its own event's commit, so a delayed older run must not reset
+    # stage back after a newer one. Serialize per PR; a newer event replaces any run of
+    # the PR still pending, and an in-progress deploy is left to finish (not killed
+    # halfway through pm2 delete/start).
+    concurrency:
+      group: stage-bot-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+
     permissions:
       pull-requests: write
 
@@ -70,6 +78,10 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           GH_EVENT_ACTION: ${{ github.event.action }}
           HEAD_REF: ${{ github.head_ref }}
+          # The commit the guarded event is about. Deploy exactly this, never the branch
+          # tip: a bot may have pushed to the branch since (that push is skipped by the
+          # job guard, so its code must not ride along here).
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
             set -e
             export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
@@ -184,19 +196,19 @@ jobs:
               exit 0
             fi
 
-            echo "🚀 Deploying stage bot from branch: $BRANCH"
+            echo "🚀 Deploying stage bot from branch: $BRANCH @ ${HEAD_SHA:0:7}"
 
             cd "$MAIN_DIR"
-            git fetch origin
+            # GitHub serves any reachable commit by SHA, even if the branch moved on.
+            git fetch origin "$HEAD_SHA"
 
             if [ ! -d "$WORKTREE" ]; then
               echo "📁 Creating worktree..."
-              git worktree add "$WORKTREE" "origin/$BRANCH"
+              git worktree add --detach "$WORKTREE" "$HEAD_SHA"
             else
               echo "🔄 Updating worktree..."
               cd "$WORKTREE"
-              git fetch origin
-              git reset --hard "origin/$BRANCH"
+              git reset --hard "$HEAD_SHA"
             fi
 
             cd "$WORKTREE"
@@ -212,10 +224,11 @@ jobs:
         env:
           # Via env, not template expansion: branch names may contain backticks/${} that would inject JS.
           HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
             const marker = '<!-- stage-bot-comment -->';
-            const body = `${marker}\n🤖 **Stage bot deployed!** Test it: https://t.me/ExpenseSyncStageBot\n\nBranch: \`${process.env.HEAD_REF}\` @ \`${context.sha.slice(0, 7)}\``;
+            const body = `${marker}\n🤖 **Stage bot deployed!** Test it: https://t.me/ExpenseSyncStageBot\n\nBranch: \`${process.env.HEAD_REF}\` @ \`${process.env.HEAD_SHA.slice(0, 7)}\``;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
