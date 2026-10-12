@@ -102,7 +102,10 @@ have always run in UTC, while the odroid system clock is Europe/Belgrade.
 It also sets `NODE_ENV=production` (info-level JSON logs). Bun's `.env` autoload never overrides a
 variable already in the process environment, so a `NODE_ENV` line in `.env` has no effect on prod;
 the stage bot runs outside the ecosystem file with `--no-env-file --env-file=<merged .env>` and takes
-`NODE_ENV` from that file (anything but `production` gives debug-level pino-pretty logs).
+`NODE_ENV` from that file: `production` gives info-level JSON logs; `test` gives silent logs and
+an in-memory SQLite database (`DATABASE_PATH` is ignored, data is lost on restart), so never use it
+on stage; anything else (use `development`) gives debug-level pino-pretty logs. `LOG_LEVEL`, when
+set, overrides the level in every case.
 
 ### 5. Caddy (origin)
 
