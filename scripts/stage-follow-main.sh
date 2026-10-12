@@ -15,6 +15,9 @@
 #   PM2                       pm2 binary        (default: /var/www/.bun/bin/pm2)
 #   MAIN_DIR                  main checkout     (default: /var/www/ExpenseSyncBot)
 set -uo pipefail
+# The runner SIGKILLs every process still carrying the job's tracking id when the job
+# ends ("Terminate orphan process"); keep it away from pm2 and what pm2 (re)starts.
+unset RUNNER_TRACKING_ID
 
 PM2="${PM2:-/var/www/.bun/bin/pm2}"
 MAIN_DIR="${MAIN_DIR:-/var/www/ExpenseSyncBot}"

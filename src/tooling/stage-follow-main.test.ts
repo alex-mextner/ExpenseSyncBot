@@ -12,9 +12,10 @@ const BUN = '/var/www/.bun/bin/bun --no-env-file --env-file=/var/www/ExpenseSync
 
 // Stand-in pm2: `jlist` prints $FIX/jlist (or $FIX/jlist.after once `restart` ran),
 // `restart` exits with $RESTART_EXIT, `save` with $SAVE_EXIT; every call is logged to
-// $FIX/calls.
+// $FIX/calls, and calls that saw the runner's job tracking id also to $FIX/tracked.
 const PM2_STUB = `#!/usr/bin/env bash
 echo "$*" >> "$FIX/calls"
+[ -n "\${RUNNER_TRACKING_ID:-}" ] && echo "$1" >> "$FIX/tracked"
 case "$1" in
   jlist)
     if [ -f "$FIX/restarted" ] && [ -f "$FIX/jlist.after" ]; then cat "$FIX/jlist.after"; else cat "$FIX/jlist"; fi ;;
@@ -80,6 +81,9 @@ function followMain(
       BOT_TOKEN: 'test-token',
       ADMIN_CHAT_ID: '42',
       COMMIT_SHA: 'abcdef1234567890',
+      // Set by the self-hosted runner on every step; at job end it SIGKILLs any process
+      // still carrying this value ("Terminate orphan process").
+      RUNNER_TRACKING_ID: 'github_test-job',
     },
     encoding: 'utf8',
     timeout: 20_000,
@@ -95,10 +99,19 @@ function followMain(
     // `save` after the restart: what a reboot's `pm2 resurrect` brings back
     saved: lines('calls').indexOf('save') > lines('calls').indexOf('restart expensesyncbot-stage'),
     telegram: lines('telegram').map((line): string => JSON.parse(line)),
+    pm2Tracked: lines('tracked'),
   };
 }
 
 describe('stage-follow-main.sh', () => {
+  // The runner SIGKILLs processes carrying its job tracking id when the job ends; pm2
+  // must not hand it to the stage bot (2026-10-12: killed ~7 s after every deploy).
+  test('pm2 never sees the runner job tracking id', () => {
+    const r = followMain([prod, stageOnMain]);
+    expect(r.restarted).toBe(true);
+    expect(r.pm2Tracked).toEqual([]);
+  });
+
   test('stage runs the main checkout: restarts it on the new commit', () => {
     const r = followMain([prod, stageOnMain]);
     expect(r.status).toBe(0);

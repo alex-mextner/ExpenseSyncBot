@@ -91,7 +91,10 @@ jobs:
             WORKTREE="$MAIN_DIR/.claude/worktrees/$BRANCH"
             STAGE_CWD="/var/www/ExpenseSyncBot-stage"
             STAGE_ENV="$MAIN_DIR/.env.stage"
-            PM2="/var/www/.bun/bin/pm2"
+            # The runner SIGKILLs every process still carrying this job's tracking id when
+            # the job ends ("Terminate orphan process"); pm2 would hand it to the stage bot.
+            # Only pm2 runs without it: install scripts keep the runner's orphan cleanup.
+            PM2="env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2"
             BUN="/var/www/.bun/bin/bun"
 
             # Merge prod .env + stage overrides into STAGE_CWD/.env, then
