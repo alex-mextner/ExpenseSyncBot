@@ -5,7 +5,12 @@
 import type Big from 'big.js';
 import { endOfMonth, format, getDaysInMonth } from 'date-fns';
 import { marked } from 'marked';
-import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
+import {
+  BASE_CURRENCY,
+  type CurrencyCode,
+  isSupportedCurrency,
+  SUPPORTED_CURRENCIES,
+} from '../../config/constants';
 import { database } from '../../database';
 import { computeBudgetProgress } from '../../database/repositories/budget.repository';
 import type { BankTransaction, BankTransactionFilters, Expense } from '../../database/types';
@@ -132,7 +137,21 @@ async function executeGetExpenses(
   const summaryOnly = (input['summary_only'] as boolean) || false;
 
   const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
+  // Totals come in the requested currency when asked (one call instead of a `calculate` per
+  // category), otherwise in the group's default currency. null/blank means "not given".
+  const requestedCurrency = String(input['currency'] ?? '')
+    .trim()
+    .toUpperCase();
+  let displayCurrency: CurrencyCode = group?.default_currency ?? BASE_CURRENCY;
+  if (requestedCurrency) {
+    if (!isSupportedCurrency(requestedCurrency)) {
+      return {
+        success: false,
+        error: `Unknown currency: "${requestedCurrency.slice(0, 32)}". Supported: ${SUPPORTED_CURRENCIES.join(', ')}`,
+      };
+    }
+    displayCurrency = requestedCurrency;
+  }
 
   // Resolve all periods and fetch expenses
   const periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[] =

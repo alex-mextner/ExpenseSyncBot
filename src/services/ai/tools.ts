@@ -1,5 +1,6 @@
 /** OpenAI-format tool definitions for the expense bot agent */
 import type OpenAI from 'openai';
+import { SUPPORTED_CURRENCIES } from '../../config/constants';
 import { GROUP_SETTINGS } from '../settings/group-settings-registry';
 
 /** Shorthand: wraps name+description+parameters into OpenAI tool shape */
@@ -81,6 +82,10 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
           type: 'boolean',
           description:
             'If true, return pre-calculated totals by category with stats (count, total, avg, median, min, max). For multi-period arrays, includes per-period breakdown + diff/trend. ALWAYS prefer this for aggregation questions.',
+        },
+        currency: {
+          type: 'string',
+          description: `Currency code for all totals and stats — one of: ${SUPPORTED_CURRENCIES.join(', ')}. Default: the group's default currency. Use it when the user wants totals or a per-category breakdown in a specific currency — every category total comes converted in this single call.`,
         },
       },
     },
