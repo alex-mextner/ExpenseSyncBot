@@ -13,7 +13,7 @@ import {
 
 const WINDOW = 5 * 60_000;
 const COOLDOWN = 5 * 60_000;
-const slots = [{ key: 'zai' }, { key: 'gemini' }, { key: 'hf' }];
+const slots = [{ key: 'zai' }, { key: 'claude' }, { key: 'hf' }];
 
 describe('provider-breaker', () => {
   beforeEach(() => {
@@ -32,14 +32,14 @@ describe('provider-breaker', () => {
     recordProviderConnectionFailure('zai', 1_000);
     recordProviderConnectionFailure('zai', 2_000);
     expect(isProviderDemoted('zai', 2_000)).toBe(true);
-    expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['gemini', 'hf', 'zai']);
+    expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['claude', 'hf', 'zai']);
   });
 
   it('keeps non-demoted providers in their original relative order', () => {
-    recordProviderConnectionFailure('gemini', 0);
-    recordProviderConnectionFailure('gemini', 1_000);
-    recordProviderConnectionFailure('gemini', 2_000);
-    expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['zai', 'hf', 'gemini']);
+    recordProviderConnectionFailure('claude', 0);
+    recordProviderConnectionFailure('claude', 1_000);
+    recordProviderConnectionFailure('claude', 2_000);
+    expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['zai', 'hf', 'claude']);
   });
 
   it('immediately demotes a rate-limited provider for the supplied cooldown', () => {
@@ -47,7 +47,7 @@ describe('provider-breaker', () => {
 
     expect(isProviderDemoted('zai', 129_999)).toBe(true);
     expect(isProviderDemoted('zai', 130_000)).toBe(false);
-    expect(orderByHealth(slots, 20_000).map((s) => s.key)).toEqual(['gemini', 'hf', 'zai']);
+    expect(orderByHealth(slots, 20_000).map((s) => s.key)).toEqual(['claude', 'hf', 'zai']);
   });
 
   it('rate-limit cooldown never shortens an existing longer cooldown', () => {
@@ -98,11 +98,11 @@ describe('provider-breaker', () => {
   });
 
   it('orderByHealth moves ALL slots to the back in original order when all are demoted', () => {
-    for (const key of ['zai', 'gemini', 'hf']) {
+    for (const key of ['zai', 'claude', 'hf']) {
       for (const t of [0, 1_000, 2_000]) recordProviderConnectionFailure(key, t);
     }
     // Every slot is demoted → healthy is empty, so the order is unchanged (all at the "back").
-    expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['zai', 'gemini', 'hf']);
+    expect(orderByHealth(slots, 2_000).map((s) => s.key)).toEqual(['zai', 'claude', 'hf']);
   });
 
   it('does not accumulate failures spread beyond the window', () => {
@@ -167,9 +167,9 @@ describe('provider-breaker', () => {
 
   it('demotes multiple providers and keeps all of them (never drops)', () => {
     for (const t of [0, 1_000, 2_000]) recordProviderConnectionFailure('zai', t);
-    for (const t of [0, 1_000, 2_000]) recordProviderConnectionFailure('gemini', t);
+    for (const t of [0, 1_000, 2_000]) recordProviderConnectionFailure('claude', t);
     const ordered = orderByHealth(slots, 2_000).map((s) => s.key);
-    expect(ordered).toEqual(['hf', 'zai', 'gemini']);
+    expect(ordered).toEqual(['hf', 'zai', 'claude']);
     expect(ordered).toHaveLength(slots.length);
   });
 
@@ -189,7 +189,7 @@ describe('provider-breaker', () => {
     // Connection failures are endpoint-level: the breaker is keyed by 'zai', not the model name,
     // so a demotion accrued on one chain applies to the other chain's z.ai slot too.
     for (const t of [0, 1_000, 2_000]) recordProviderConnectionFailure('zai', t);
-    const fastChainSlots = [{ key: 'zai' }, { key: 'gemini' }, { key: 'hf' }];
-    expect(orderByHealth(fastChainSlots, 2_000).map((s) => s.key)).toEqual(['gemini', 'hf', 'zai']);
+    const fastChainSlots = [{ key: 'zai' }, { key: 'claude' }, { key: 'hf' }];
+    expect(orderByHealth(fastChainSlots, 2_000).map((s) => s.key)).toEqual(['claude', 'hf', 'zai']);
   });
 });

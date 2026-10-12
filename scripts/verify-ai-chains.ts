@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
-import { claudeClient, geminiClient, hfClient, zaiClient } from '../src/services/ai/clients';
+import { claudeClient, groqClient, hfClient, zaiClient } from '../src/services/ai/clients';
 import { chatRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
@@ -31,6 +31,17 @@ interface SlotSpec {
 
 const SLOTS: SlotSpec[] = [
   // SMART
+  ...(env.GROQ_API_KEY
+    ? [
+        {
+          chain: 'smart' as const,
+          name: `Groq ${env.GROQ_MODEL}`,
+          client: groqClient,
+          model: env.GROQ_MODEL,
+          vision: false,
+        },
+      ]
+    : []),
   {
     chain: 'smart',
     name: `z.ai ${env.AI_MODEL}`,
@@ -52,19 +63,23 @@ const SLOTS: SlotSpec[] = [
     : []),
   {
     chain: 'smart',
-    name: `Gemini ${env.GEMINI_MODEL}`,
-    client: geminiClient,
-    model: env.GEMINI_MODEL,
-    vision: false,
-  },
-  {
-    chain: 'smart',
     name: `HF ${env.HF_MODEL}`,
     client: hfClient,
     model: env.HF_MODEL,
     vision: false,
   },
   // FAST
+  ...(env.GROQ_API_KEY
+    ? [
+        {
+          chain: 'fast' as const,
+          name: `Groq ${env.GROQ_FAST_MODEL}`,
+          client: groqClient,
+          model: env.GROQ_FAST_MODEL,
+          vision: false,
+        },
+      ]
+    : []),
   {
     chain: 'fast',
     name: `z.ai ${env.AI_FAST_MODEL}`,
@@ -86,26 +101,24 @@ const SLOTS: SlotSpec[] = [
     : []),
   {
     chain: 'fast',
-    name: `Gemini ${env.GEMINI_FAST_MODEL}`,
-    client: geminiClient,
-    model: env.GEMINI_FAST_MODEL,
-    vision: false,
-  },
-  {
-    chain: 'fast',
     name: `HF ${env.HF_FAST_MODEL}`,
     client: hfClient,
     model: env.HF_FAST_MODEL,
     vision: false,
   },
   // OCR
-  {
-    chain: 'ocr',
-    name: `Gemini ${env.GEMINI_VISION_MODEL}`,
-    client: geminiClient,
-    model: env.GEMINI_VISION_MODEL,
-    vision: true,
-  },
+  ...(env.CLAUDE_API_TOKEN
+    ? [
+        {
+          chain: 'ocr' as const,
+          name: `Claude ${env.CLAUDE_VISION_MODEL}`,
+          client: claudeClient,
+          model: env.CLAUDE_VISION_MODEL,
+          vision: true,
+          anthropic: true,
+        },
+      ]
+    : []),
   {
     chain: 'ocr',
     name: `HF ${env.HF_VISION_MODEL}`,
@@ -116,14 +129,14 @@ const SLOTS: SlotSpec[] = [
 ];
 
 /**
- * Load a real receipt image for vision testing.
- * Uses the first jpg in ../debug-images/ if available, otherwise returns null.
- * (debug-images/ is outside the worktree — it's in the main repo's gitignore.)
+ * Load a real receipt image for vision testing: the first jpg/png in debug-images/ (main repo,
+ * gitignored) if present, otherwise the first committed receipt fixture.
  */
 function loadTestImage(): { dataUrl: string; mime: string; bytes: number } | null {
   const candidates = [
     path.resolve(__dirname, '../../../../debug-images'),
     path.resolve(__dirname, '../debug-images'),
+    path.resolve(__dirname, '../tests/fixtures/receipts'),
   ];
   for (const dir of candidates) {
     if (!existsSync(dir)) continue;
@@ -167,9 +180,9 @@ const TEXT_PROMPT =
 
 async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {
   const start = Date.now();
-  // Reasoning models (Qwen3, Gemini-pro) can burn lots of tokens on internal thinking
+  // Reasoning models (Qwen3, DeepSeek-R1) can burn lots of tokens on internal thinking
   // before producing visible output. Give them headroom.
-  const isReasoning = /qwen3|gemini-2\.5-pro|deepseek-r1/i.test(spec.model);
+  const isReasoning = /qwen3|deepseek-r1/i.test(spec.model);
   const maxTokens = isReasoning ? 2048 : 256;
   try {
     const response = await spec.client().chat.completions.create({
@@ -224,8 +237,7 @@ async function testVisionSlot(spec: SlotSpec): Promise<SlotResult> {
           ],
         },
       ],
-      max_tokens: 128,
-      temperature: 0.1,
+      ...chatRequestParams(spec.model, 128, 0.1, spec.anthropic ?? false),
     });
     const text = response.choices[0]?.message?.content?.trim() ?? '';
     const ms = Date.now() - start;

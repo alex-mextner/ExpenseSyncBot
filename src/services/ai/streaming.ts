@@ -2,9 +2,10 @@
  * Unified AI streaming round with automatic provider fallback.
  *
  * Three chains, selected via options.chain:
- *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → Gemini ${GEMINI_MODEL} → HF ${HF_MODEL}
- *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
- *   OCR:   Gemini ${GEMINI_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
+ *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → HF ${HF_MODEL}
+ *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → HF ${HF_FAST_MODEL}
+ *   OCR:   Claude ${CLAUDE_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
+ * Groq and Claude slots are skipped when their key is absent (OCR then runs HF-only).
  *
  * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
  * Callers that just want the final text (validator, prefill, merchant-agent) omit callbacks.
@@ -22,7 +23,7 @@
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
-import { claudeClient, geminiClient, groqClient, hfClient, zaiClient } from './clients';
+import { claudeClient, groqClient, hfClient, zaiClient } from './clients';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -207,7 +208,7 @@ export function getRateLimitCooldownMs(error: unknown, now = Date.now()): number
 interface ProviderSlot {
   /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.1)". */
   name: string;
-  /** Stable endpoint id shared across chains/models ('zai'/'gemini'/'hf') — the breaker key. */
+  /** Stable endpoint id shared across chains/models ('zai'/'claude'/'hf') — the breaker key. */
   key: string;
   stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<StreamRoundResult>;
 }
@@ -265,7 +266,7 @@ export function chatRequestParams(
 
 /**
  * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
- * (z.ai, Groq, Claude, Gemini, HF) via the shared OpenAI SDK.
+ * (z.ai, Groq, Claude, HF) via the shared OpenAI SDK.
  */
 function streamingSlot(
   name: string,
@@ -317,7 +318,7 @@ function streamingSlot(
 
           if (delta.tool_calls) {
             for (const tc of delta.tool_calls) {
-              // Resolve index: some providers (HF Router, early Gemini) omit tc.index.
+              // Resolve index: some providers (HF Router) omit tc.index.
               // Fallback: new tool call if id/name present, otherwise append to last.
               let key: number;
               if (typeof tc.index === 'number') {
@@ -417,10 +418,7 @@ function buildSmartChain(): ProviderSlot[] {
       }),
     );
   }
-  chain.push(
-    streamingSlot(`Gemini (${env.GEMINI_MODEL})`, 'gemini', geminiClient, env.GEMINI_MODEL),
-    streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL),
-  );
+  chain.push(streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL));
   return chain;
 }
 
@@ -443,28 +441,25 @@ function buildFastChain(): ProviderSlot[] {
       ),
     );
   }
-  chain.push(
-    streamingSlot(
-      `Gemini (${env.GEMINI_FAST_MODEL})`,
-      'gemini',
-      geminiClient,
-      env.GEMINI_FAST_MODEL,
-    ),
-    streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL),
-  );
+  chain.push(streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL));
   return chain;
 }
 
 function buildOcrChain(): ProviderSlot[] {
-  return [
-    streamingSlot(
-      `Gemini (${env.GEMINI_VISION_MODEL})`,
-      'gemini',
-      geminiClient,
-      env.GEMINI_VISION_MODEL,
-    ),
-    streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL),
-  ];
+  const chain: ProviderSlot[] = [];
+  if (env.CLAUDE_API_TOKEN) {
+    chain.push(
+      streamingSlot(
+        `Claude (${env.CLAUDE_VISION_MODEL})`,
+        'claude',
+        claudeClient,
+        env.CLAUDE_VISION_MODEL,
+        { anthropic: true },
+      ),
+    );
+  }
+  chain.push(streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL));
+  return chain;
 }
 
 function buildChain(chain: ChainName): ProviderSlot[] {

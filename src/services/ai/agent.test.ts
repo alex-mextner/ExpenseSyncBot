@@ -973,7 +973,7 @@ describe('ExpenseBotAgent', () => {
       // rethrowing the raw aggregate after deleting the in-progress message.
       const emptyAggregate = new Error(
         'All 3 providers in smart chain failed: z.ai (glm): Provider z.ai (glm) returned empty ' +
-          'response (no text, no tool calls) — treating as failure; Gemini (g): returned empty ' +
+          'response (no text, no tool calls) — treating as failure; Claude (c): returned empty ' +
           'response; HF (h): returned empty response',
       );
       mockClassifyAiError.mockReturnValue({

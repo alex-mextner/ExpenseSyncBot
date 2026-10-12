@@ -26,11 +26,13 @@ interface EnvConfig {
   GROQ_MODEL: string;
   GROQ_FAST_MODEL: string;
 
-  // Anthropic Claude (OpenAI-compat endpoint; optional key — next after z.ai in smart/fast chains)
+  // Anthropic Claude (OpenAI-compat endpoint; optional key — after z.ai in smart/fast, OCR primary).
+  // Without the key every Claude slot is skipped and OCR runs on HF vision alone.
   CLAUDE_API_TOKEN: string;
   CLAUDE_BASE_URL: string;
   CLAUDE_MODEL: string;
   CLAUDE_FAST_MODEL: string;
+  CLAUDE_VISION_MODEL: string;
 
   // HuggingFace Router (fallback + vision)
   HF_TOKEN: string;
@@ -38,13 +40,6 @@ interface EnvConfig {
   HF_MODEL: string;
   HF_FAST_MODEL: string;
   HF_VISION_MODEL: string;
-
-  // Google Gemini (fallback + vision primary)
-  GEMINI_API_KEY: string;
-  GEMINI_BASE_URL: string;
-  GEMINI_MODEL: string;
-  GEMINI_FAST_MODEL: string;
-  GEMINI_VISION_MODEL: string;
 
   GITHUB_TOKEN: string;
   BOT_ADMIN_CHAT_ID: number | null;
@@ -93,18 +88,14 @@ function validateEnv(): EnvConfig {
     CLAUDE_BASE_URL: getEnvVariable('CLAUDE_BASE_URL', false) || 'https://api.anthropic.com/v1/',
     CLAUDE_MODEL: getEnvVariable('CLAUDE_MODEL', false) || 'claude-sonnet-5-5',
     CLAUDE_FAST_MODEL: getEnvVariable('CLAUDE_FAST_MODEL', false) || 'claude-haiku-5-5',
+    // Sonnet, not Haiku: on degraded receipt photos Haiku returned a wrong yet sum-verified receipt.
+    CLAUDE_VISION_MODEL: getEnvVariable('CLAUDE_VISION_MODEL', false) || 'claude-sonnet-5-5',
 
     HF_TOKEN: getEnvVariable('HF_TOKEN'),
     HF_BASE_URL: getEnvVariable('HF_BASE_URL'),
     HF_MODEL: getEnvVariable('HF_MODEL'),
     HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL'),
     HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL'),
-
-    GEMINI_API_KEY: getEnvVariable('GEMINI_API_KEY'),
-    GEMINI_BASE_URL: getEnvVariable('GEMINI_BASE_URL'),
-    GEMINI_MODEL: getEnvVariable('GEMINI_MODEL'),
-    GEMINI_FAST_MODEL: getEnvVariable('GEMINI_FAST_MODEL'),
-    GEMINI_VISION_MODEL: getEnvVariable('GEMINI_VISION_MODEL'),
 
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']
