@@ -22,7 +22,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .env.production.local
 .env.local
 .env.stage
-.env.bak-*
+# hand-made server backups, e.g. .env.bak.providers-…, .env.stage.bak-finbot-…
+.env*.bak*
 
 # caches
 .eslintcache

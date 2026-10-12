@@ -99,6 +99,13 @@ env PATH=$PATH:/var/www/.nvm/versions/node/v22.17.0/bin /var/www/.bun/bin/pm2 st
 
 `ecosystem.config.cjs` pins `TZ=UTC`: cron schedules (exchange rates, monthly tab clone) and date math
 have always run in UTC, while the odroid system clock is Europe/Belgrade.
+It also sets `NODE_ENV=production` (info-level JSON logs). Bun's `.env` autoload never overrides a
+variable already in the process environment, so a `NODE_ENV` line in `.env` has no effect on prod;
+the stage bot runs outside the ecosystem file with `--no-env-file --env-file=<merged .env>` and takes
+`NODE_ENV` from that file: `production` gives info-level JSON logs; `test` gives silent logs and
+an in-memory SQLite database (`DATABASE_PATH` is ignored, data is lost on restart), so never use it
+on stage; anything else (use `development`) gives debug-level pino-pretty logs. `LOG_LEVEL`, when
+set, overrides the level in every case.
 
 ### 5. Caddy (origin)
 
@@ -123,6 +130,39 @@ The healthcheck probes the public URL (`https://finbot.mextner.com/health`), so 
 
 The odroid gets its LAN address (currently 192.168.0.39) from DHCP without a reservation; it may change.
 Nothing depends on it: cloudflared and the GitHub runner dial out; SSH uses Tailscale (`odroidn2`, 100.116.57.66).
+
+### 8. Storage: WD500 HDD, not the SD card
+
+The SD card is the suspected cause of a hang (no logs survived it), so the bot's directories live on the WD500 HDD (`/mnt/wd500`, ext4,
+UUID `83c5bd3c-2cfa-494e-b0a5-17d3c92d0925`) and are bind-mounted back to their usual paths:
+
+| Path | HDD source |
+|---|---|
+| `/var/www/ExpenseSyncBot` (code, `data/`, `logs/`) | `/mnt/wd500/odroid-rt/www/ExpenseSyncBot` |
+| `/var/www/ExpenseSyncBot-stage` | `/mnt/wd500/odroid-rt/www/ExpenseSyncBot-stage` |
+| `/var/www/actions-runner` (runner + `_work`) | `/mnt/wd500/odroid-rt/www/actions-runner` |
+
+- fstab block `# >>> expensesyncbot-www` (`bind,nofail,x-systemd.requires-mounts-for=/mnt/wd500`),
+  next to the host's own `# >>> wd500-runtime` block (docker, containerd, `/home/ultra`).
+- `pm2-www-data.service` and the runner service have `RequiresMountsFor=` drop-ins
+  (`/etc/systemd/system/<unit>.d/10-wd500.conf`): without the HDD they don't start, rather than
+  starting on empty SD directories.
+- Move script: `/usr/local/sbin/expensesyncbot-move-to-wd500` (final rsync + bind mount, ~16 s downtime;
+  it renames the SD originals to `*.sd-old`, which were then deleted — see below).
+
+Check: `findmnt /var/www/ExpenseSyncBot` must show `<wd500 device>[/odroid-rt/www/ExpenseSyncBot]` (the `sdX` letter can change across boots).
+
+**Booted without the HDD** (pm2 and the runner stay down by design): reconnect the disk, then
+
+```bash
+mount -a && systemctl start pm2-www-data actions.runner.alex-mextner-ExpenseSyncBot.odroid
+```
+
+**No SD fallback.** The pre-move SD copies (`/var/www/*.sd-old`) were deleted on 2026-10-10 after
+verifying the HDD held everything. The WD500 is the only live copy of the code, `data/` and `logs/`.
+The daily DB backups in `data/backups/` sit on the same HDD, so they cover a broken database, not a
+dead disk: copy `data/backups/` off the box if the HDD itself becomes suspect. Code can always be
+redeployed from GitHub.
 
 ---
 
