@@ -73,6 +73,11 @@ export class ExpenseBotAgent {
    * round budget; a repeat gets the stored result back instead of running the tool again.
    */
   private readonly readOnlyToolResults = new Map<string, ToolResult>();
+  /**
+   * A write tool ran somewhere in the current run — also in an attempt runWithRetry threw away
+   * (the data change stays). Such a run must answer; it never ends in silence.
+   */
+  private writeToolRan = false;
 
   constructor(_apiKey: string, ctx: AgentContext) {
     this.ctx = ctx;
@@ -105,6 +110,7 @@ export class ExpenseBotAgent {
 
     const toolCallNames: string[] = [];
     this.readOnlyToolResults.clear();
+    this.writeToolRan = false;
 
     try {
       const result = await this.runWithRetry(messages, writer, debugCtx, toolCallNames);
@@ -128,8 +134,9 @@ export class ExpenseBotAgent {
       }
 
       // Skip signal — bot chose to stay silent. The writer replaces a missing answer with the
-      // failure message unless silence is allowed (no mention, no tool calls), so a skip here is
-      // always intentional — including one emitted by the validator re-run (#108).
+      // failure message unless silence is allowed (no mention, no write tool, round cap not hit;
+      // after reads only an explicit [SKIP]), so a skip here is always intentional — including
+      // one emitted by the validator re-run (#108).
       if (isSkipSignal(finalText)) {
         logger.info('[AGENT] Skip signal — staying silent');
         debugCtx?.logFinal(finalText, totalToolCalls);
@@ -451,6 +458,7 @@ export class ExpenseBotAgent {
           repeatedCallIds.add(tc.id);
           toolResult = cached;
         } else {
+          if (!isReadOnly) this.writeToolRan = true;
           toolResult = await executeTool(tc.name, input, this.ctx);
           if (!isReadOnly || SYNCING_READ_TOOL_NAMES[tc.name] === true) {
             // The data may have changed (a write, or a read that synced from Sheets first) —
@@ -581,9 +589,13 @@ export class ExpenseBotAgent {
       }
     }
 
-    // Silence is a choice only for chatter the bot was not asked about; once tools ran or the
-    // user addressed the bot, a missing answer becomes the failure message.
-    await writer.finalize({ allowSilence: !this.ctx.isMention && totalToolCalls === 0 });
+    // Silence is a choice only for chatter the bot was not asked about. A run that changed data
+    // (a write tool ran in any attempt) or hit the round cap must answer; after read-only tools
+    // the writer accepts only an explicit [SKIP], an empty text is still a failed answer.
+    const roundCapHit = continueLoop;
+    await writer.finalize({
+      allowSilence: !this.ctx.isMention && !roundCapHit && !this.writeToolRan,
+    });
 
     const finalText = writer.getText();
     logger.info(

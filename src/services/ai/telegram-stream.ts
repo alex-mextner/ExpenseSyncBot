@@ -83,6 +83,15 @@ function formatToolInput(name: string, input?: Record<string, unknown>): string 
 }
 
 /**
+ * The skip marker and nothing else (case, surrounding spaces and a final '.'/'!' tolerated): the
+ * model deliberately chose silence. Unlike isSkipSignal it never matches an answer that merely
+ * contains the marker.
+ */
+function isBareSkipMarker(text: string): boolean {
+  return /^\[(?:SKIP|ПРОПУСК)\][.!]?$/i.test(text.trim());
+}
+
+/**
  * Returns true if the AI response is a skip signal — bot chose to stay silent.
  * Strict in the prompt (require [SKIP]), forgiving in parsing (accept variations).
  * Short responses (≤50 chars) use substring match; longer ones require exact match
@@ -105,8 +114,9 @@ export function isSkipSignal(text: string): boolean {
 
 /**
  * Shown (and stored in history) when the agent ends without answer text and silence is not an
- * option: tools ran, or the user addressed the bot directly. A message made only of tool
- * status lines is not an answer, so this replaces it.
+ * option (see finalize): the user addressed the bot, or tools ran and the answer is blank or
+ * the caller forbids silence. A message made only of tool status lines is not an answer, so
+ * this replaces it.
  */
 export const NO_ANSWER_MESSAGE =
   '⚠️ Не получилось сформулировать ответ. Попробуй спросить ещё раз или переформулировать вопрос.';
@@ -270,9 +280,10 @@ export class TelegramStreamWriter {
    * Build and send the final message:
    * collapsed tool blockquote (if any tools ran) followed by AI response.
    *
-   * A missing answer ('' / '...' / [SKIP]) stays as-is only when `allowSilence` is set and no
-   * tool ran — the caller then deletes the message. Otherwise the user sees NO_ANSWER_MESSAGE,
-   * never a message made only of tool status lines.
+   * A missing answer ('' / '...' / [SKIP]) stays as-is only when `allowSilence` is set — the
+   * caller then deletes the message. Once tools ran, only the bare [SKIP] marker counts: a
+   * blank answer, or the marker next to other text, is then a failed answer, not a choice.
+   * Otherwise the user sees NO_ANSWER_MESSAGE, never a message made only of tool status lines.
    */
   async finalize({ allowSilence = false }: { allowSilence?: boolean } = {}): Promise<void> {
     this.stopTyping();
@@ -287,7 +298,7 @@ export class TelegramStreamWriter {
     const toolsRan = this.intermediateChunks.length > 0;
     let response = processThinkTags(this.fullText.trim());
     if (isSkipSignal(response)) {
-      if (allowSilence && !toolsRan) {
+      if (allowSilence && (!toolsRan || isBareSkipMarker(response))) {
         // Silence: nothing to show — the caller deletes the placeholder.
         this.historyText = response;
         this.finalDisplayText = '';
