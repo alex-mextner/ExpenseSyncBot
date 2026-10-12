@@ -214,7 +214,16 @@ its workflow changes (approval is the only gate GitHub offers a user-owned publi
 make the runner safe by itself). Settings → Actions → General → fork pull request workflows, or
 `gh api -X PUT repos/alex-mextner/ExpenseSyncBot/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors`
 
-Secrets used: `BOT_TOKEN`, `BOT_ADMIN_CHAT_ID` (deploy notifications).
+Secrets used: `BOT_TOKEN`, `BOT_ADMIN_CHAT_ID` (deploy notifications, runner watchdog).
+
+**Runner watchdog** (`runner-watchdog.yml`, every 15 min): queues a no-op `ping` job on the
+odroid runner and, from a GitHub-hosted job, checks that it gets picked up within 5 minutes
+(a runner busy with a job started in the last 30 minutes counts as online). If not, it alerts the
+admin chat once and sends a recovery message when the runner is back; the last announced state is
+kept in the Actions cache. Logic: `ci/runner-watchdog/runner-watchdog.sh`.
+Manual check: `gh workflow run runner-watchdog.yml`. GitHub disables scheduled workflows in a
+public repo after 60 days without repository activity; re-enable with
+`gh workflow enable runner-watchdog.yml`.
 
 ---
 
@@ -278,7 +287,8 @@ pm2 start expensesyncbot bank-sync
 
 ### GitHub Actions deployment fails
 
-1. Runner online? `gh api repos/alex-mextner/ExpenseSyncBot/actions/runners`
+1. Runner online? The runner watchdog alerts the admin chat when it is not; check by hand with
+   `gh api repos/alex-mextner/ExpenseSyncBot/actions/runners` (needs admin rights) or `gh workflow run runner-watchdog.yml`
 2. On odroid: `systemctl status 'actions.runner.*'`, logs in `/var/www/actions-runner/_diag/`
 3. `www-data` must own `/var/www/ExpenseSyncBot` and be able to `git pull` (`/var/www/.ssh/id_ed25519`)
 

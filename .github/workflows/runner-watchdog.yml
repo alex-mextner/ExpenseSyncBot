@@ -1,0 +1,88 @@
+# Alert the admin chat when the home-server self-hosted runner (odroid) is offline.
+#
+# deploy.yml and stage-bot.yml run on that runner; while it is down their jobs wait
+# in the queue silently and no failure notification fires. Every 15 minutes this
+# workflow queues a no-op `ping` job on the runner while `watch` (GitHub-hosted)
+# checks that some runner picks it up. Listing runners via the REST API would need
+# an admin token; this needs only GITHUB_TOKEN plus the existing Telegram secrets.
+# The decision logic (busy runner, alert dedup, recovery notice) lives in
+# ci/runner-watchdog/runner-watchdog.sh.
+#
+# Scheduled runs use the default-branch copy of this file. GitHub disables schedules
+# in a public repo after 60 days without repository activity; re-enable with
+# `gh workflow enable runner-watchdog.yml`. Manual check:
+#   gh workflow run runner-watchdog.yml
+
+name: Runner Watchdog
+
+on:
+  schedule:
+    # Off the top of the hour: GitHub delays top-of-hour schedules the most.
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    # Runs on production hardware: no checkout, no secrets, no token.
+    runs-on: [self-hosted, odroid]
+    timeout-minutes: 2
+    steps:
+      - run: echo "Runner $RUNNER_NAME is online"
+
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One watch at a time: overlapping runs (a manual dispatch, a delayed schedule)
+    # would otherwise read the same announced state and both send the alert.
+    concurrency:
+      group: runner-watchdog-watch
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Read job status across runs; cancel this run when the runner is offline so
+      # the ping does not wait in the queue for up to a day.
+      actions: write
+    env:
+      STATE_FILE: .runner-watchdog-state
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: ci/runner-watchdog
+
+      # The last state announced to the admin, saved by the latest run that sent a
+      # message. The exact key never exists; the prefix restores the newest entry.
+      - name: Restore announced runner state
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: runner-watchdog-state-${{ github.run_id }}
+          restore-keys: runner-watchdog-state-
+
+      - name: Check that the runner picks up the ping
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
+          WATCHED_RUNNER: odroid
+        run: bash ci/runner-watchdog/runner-watchdog.sh
+
+      - name: Save announced runner state
+        if: success() && steps.check.outputs.state_changed == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: runner-watchdog-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Last step: cancelling the run also cancels this job.
+      - name: Drop the queued ping
+        if: always() && steps.check.outputs.offline == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh api -X POST "repos/$GH_REPO/actions/runs/$RUN_ID/cancel"
