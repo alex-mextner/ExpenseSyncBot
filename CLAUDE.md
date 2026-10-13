@@ -75,7 +75,7 @@ gh run view <run-id> --log-failed
 /var/www/.bun/bin/pm2 logs expensesyncbot
 ```
 
-**Stage is one shared slot** (`stage-bot.yml`): every same-repo PR event (open, push, reopen) redeploys it with that PR's head. Runs are serialized only per PR, so the last deploy to *finish* owns stage — opening or pushing a PR takes stage from whoever was QA-ing. Push a branch without a PR when you don't want stage. Stacked PRs (base = another PR branch) deploy their head, which carries the whole stack — use that to QA two changes together.
+**Stage is one shared slot** (`stage-bot.yml`): every same-repo human PR event (open, push, reopen) redeploys it with that PR's head commit. Bot-authored PRs never touch stage; on a human PR, bot-triggered events other than `closed` are skipped: after a Renovate/Dependabot push, stage keeps your previous commit until the next human event, which then deploys the current head, bot commits included. Closing or merging *any* eligible PR — by a human or a bot — switches stage back to `main` without checking who owns it; a prod deploy restarts stage on the new `main` only when stage already ran `main`. Runs are serialized only per PR, so the last deploy to *finish* owns stage — opening, pushing or closing a PR takes stage from whoever was QA-ing. Push a branch without a PR when you don't want stage. Stacked PRs (base = another PR branch) deploy their head, which carries the whole stack — use that to QA two changes together.
 
 ### Database
 
