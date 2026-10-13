@@ -75,6 +75,8 @@ gh run view <run-id> --log-failed
 /var/www/.bun/bin/pm2 logs expensesyncbot
 ```
 
+**Stage is one shared slot** (`stage-bot.yml`): every same-repo human PR event (open, push, reopen) redeploys it with that PR's head commit. Bot-authored PRs never touch stage; on a human PR, bot-triggered events other than `closed` are skipped: after a Renovate/Dependabot push, stage keeps your previous commit until the next human event, which then deploys the current head, bot commits included. Closing or merging *any* eligible PR — by a human or a bot — switches stage back to `main` without checking who owns it; a prod deploy restarts stage on the new `main` only when stage already ran `main`. Runs are serialized only per PR, so the last deploy to *finish* owns stage — opening, pushing or closing a PR takes stage from whoever was QA-ing. Push a branch without a PR when you don't want stage. Stacked PRs (base = another PR branch) deploy their head, which carries the whole stack — use that to QA two changes together.
+
 ### Database
 
 Database is SQLite at `./data/expenses.db`. Migrations run automatically on startup via [src/database/schema.ts](src/database/schema.ts).
@@ -185,7 +187,15 @@ Bot has a full AI agent with tool calling, accessible by mentioning `@ExpenseSyn
 - Uses custom system prompt defined per-group in `/prompt` command
 - Daily advice feature (`/advice`) with scheduling via `src/services/analytics/advice-triggers.ts`
 
+**Agent loop rules** ([agent.ts](src/services/ai/agent.ts), [telegram-stream.ts](src/services/ai/telegram-stream.ts)):
+
+- Groq gpt-oss makes one tool call per round (no parallel tool use), so multi-step questions burn rounds fast against `MAX_TOOL_ROUNDS` (10). Prefer tools that answer in one call: `get_expenses` with `summary_only: true` + `currency` returns per-category and grand totals already converted.
+- A mention, a run with a write tool, or a run that hit the round cap never ends silently. When the cap hits while the model still wants tools, one forced final round runs with the tools still declared and `toolChoice: 'none'` (accepted by Groq, z.ai and Claude in the 2026-10-12 live check; dropping the tools made Claude refuse to sum, since rule 7 sends all arithmetic to `calculate`). Tool calls returned anyway are ignored.
+- Empty or tools-only replies are never shipped (`TelegramStreamWriter.finalize`): silence is allowed only for non-mention chatter with no write tool and no cap hit — a blank/`...`/`[SKIP]` answer if no tools ran, only the bare `[SKIP]` marker after read-only tools; otherwise the user sees the no-answer message. The work log is always rendered as a collapsed `<blockquote expandable>` at the TOP of the reply.
+
 **Configuration:** All providers go through the OpenAI SDK with a fallback chain in [streaming.ts](src/services/ai/streaming.ts): smart = Groq → z.ai GLM → Claude Sonnet → HF; fast (validators, bank prefill, merchant agent) = Groq → z.ai GLM fast → Claude Haiku → HF; OCR = Claude (`CLAUDE_VISION_MODEL`, default Sonnet) → HF vision. Groq and Claude slots are skipped when their key is absent — without `CLAUDE_API_TOKEN` OCR runs HF-only. Sonnet is the OCR default because on degraded receipt photos Haiku produced a wrong yet sum-verified receipt while Sonnet refused (2026-10-12, clean fixtures: equal accuracy, Haiku ~25% faster). Request budget fields come from `chatRequestParams()`, which delegates to `claudeRequestParams()` for Claude slots (also used by `scripts/verify-ai-chains.ts`): never `temperature` (400 on Claude 5.x); Sonnet/Opus keep thinking on at the model's own level (the OpenAI-compat endpoint ignores `reasoning_effort`, so none is sent) and get `CLAUDE_THINKING_RESERVE_TOKENS` (8192) added to `max_tokens`, because thinking spends the same budget as the answer (without the reserve Sonnet truncated a 200-token prefill answer in 3/6 calls); Haiku runs with `thinking: {type: 'disabled'}` — at small budgets it otherwise streams zero text. The OpenAI-compat endpoint rejects explicit adaptive thinking. After changing `CLAUDE_MODEL`/`CLAUDE_FAST_MODEL`/`CLAUDE_VISION_MODEL`, run `scripts/verify-ai-chains.ts` (plus `scripts/run-receipt-snapshots.ts` for the vision model); to validate a provider change on real traffic, run `scripts/replay-ai-logs.ts` against `logs/chats` and a DB copy.
+
+HF Router is the last fallback in every text chain and the only OCR fallback, and it runs on prepaid credits: on 2026-10-12 it returned HTTP 402 "no remaining credits", so a chain whose earlier slots fail has nothing left. Check every slot with `bun run scripts/verify-ai-chains.ts` (per-provider status table, exit 1 if a chain has no working provider) before trusting a chain.
 
 #### 5. State Management for User Flows
 
@@ -541,6 +551,8 @@ ssh root@odroidn2 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
 ssh root@odroidn2 'su - www-data -c "pm2 list"'
 ```
 
+**Никаких тяжёлых проверок на odroid.** У odroidn2 ~1 GB свободной RAM, а 2 GB swap уже заняты: 2026-10-12 агент запустил там бенчмарк ONNX-эмбеддингов (модель 118 MB) — нехватка памяти и перезагрузка сервера с прод-ботом. Не загружай модели, не гоняй бенчмарки и браузерные проверки на odroid — меряй на Runpod (`runpod-run`). Любая проверка на самом устройстве — только в окне, согласованном с владельцем.
+
 ### AI chat logs
 
 `logs/chats/` на сервере содержит подробные логи общения бота через ИИ с пользователями —
@@ -563,6 +575,7 @@ ssh root@odroidn2 'su - www-data -c "pm2 list"'
 13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
 14. **Several agent sessions may work on the servers at once** (odroid, the DO droplet). Before treating a missing config or a stopped/started process as a bug, ask, or read only the one session transcript that touched that host (`~/.omp/agent/sessions/`; don't trawl unrelated sessions — they can hold secrets) — e.g. the DO Caddy block for ExpenseSyncBot was removed on purpose during the move to Cloudflare Tunnel. Never restore it blindly.
 15. **Odroid logs used to live in RAM** (armbian-ramlog on zram) and vanished on a hard hang. It is now disabled and journald is `Storage=persistent`; keep it that way so `journalctl -b -1` works after a crash. Bot data lives on the WD500 HDD, not the SD card (DEPLOY.md, "Storage").
+16. **After an odroid reboot pm2 resurrects its saved dump** — a stale dump once left stage crash-looping (6934 restarts). #159 (on `main`) makes stage starts run `pm2 save` and `--exp-backoff-restart-delay`; branches cut before it lack both — rebase before touching `stage-bot.yml`, and keep both.
 
 ## When Modifying Code
 
