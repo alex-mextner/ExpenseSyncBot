@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { ChatMessage, Group, User } from '../../database/types';
+import { AgentError } from '../../errors';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 import type { Ctx } from '../types';
 
@@ -111,8 +112,13 @@ class FakeStatusWriter {
 }
 mock.module('../../services/receipt/status-writer', () => ({ StatusWriter: FakeStatusWriter }));
 
+const sendMessageMock = mock(
+  async (_text: string): Promise<{ message_id: number } | null> => ({
+    message_id: 1,
+  }),
+);
 mock.module('../../services/bank/telegram-sender', () => ({
-  sendMessage: mock(async () => null),
+  sendMessage: sendMessageMock,
   sendDirect: mock(async () => null),
   editMessageText: mock(async () => undefined),
   deleteMessage: mock(async () => undefined),
@@ -121,7 +127,10 @@ mock.module('../../services/bank/telegram-sender', () => ({
     fn(),
 }));
 
+// Loaded after the mocks above: a static import is hoisted and would load these modules
+// (and the real logger) before mock.module applies.
 const { handleAskQuestion } = await import('./ask');
+const { NO_ANSWER_MESSAGE } = await import('../../services/ai/telegram-stream');
 
 function fakeCtx(isForum: boolean, threadId?: number): Ctx['Message'] {
   return {
@@ -160,7 +169,18 @@ beforeEach(() => {
     capturedHistories.push(history);
     return 'ok';
   });
-  createHistoryMock.mockClear();
+  createHistoryMock.mockClear().mockImplementation((data: Record<string, unknown>) => ({
+    id: nextHistoryId++,
+    group_id: data['group_id'] as number,
+    user_id: data['user_id'] as number,
+    role: data['role'] as 'user' | 'assistant',
+    content: data['content'] as string,
+    message_thread_id: (data['message_thread_id'] as number | null | undefined) ?? null,
+    created_at: '2026-10-01 00:00:00',
+  }));
+  sendMessageMock.mockClear();
+  logMock.error.mockClear();
+  logMock.info.mockClear();
   getRecentBeforeMock.mockReset().mockReturnValue([]);
   pruneMock.mockClear();
   mockEnv.AUTO_ADVICE_ENABLED = false;
@@ -288,5 +308,117 @@ describe('handleAskQuestion — recent history scoping', () => {
       'alex: second',
       'second reply',
     ]);
+  });
+
+  // Prod incident 2026-10-12: failed turns left the user's question without an assistant
+  // row, so the next run saw a pile of unanswered questions and redid the old task.
+  test('stores the AI error the user saw as the assistant reply, so the question is answered', async () => {
+    agentRunMock.mockImplementation(async (_question, history) => {
+      capturedHistories.push(history);
+      throw new AgentError('⏳ Время ожидания истекло. Попробуй ещё раз.');
+    });
+
+    await handleAskQuestion(fakeCtx(false), 'сколько в евро?', fakeBot(), true);
+
+    expect(createHistoryMock.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({ role: 'user', content: 'alex: сколько в евро?' }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: '⏳ Время ожидания истекло. Попробуй ещё раз.',
+      }),
+    ]);
+    // History stays bounded on the error path too (user row + assistant row).
+    expect(pruneMock).toHaveBeenCalledTimes(2);
+    expect(pruneMock).toHaveBeenLastCalledWith(1, null, 50, 10);
+    expect(logMock.info).toHaveBeenCalledWith(expect.stringContaining('Agent error'));
+  });
+
+  test('stores the generic failure message the user was sent after an unexpected agent error', async () => {
+    agentRunMock.mockImplementation(async () => {
+      throw new Error('db exploded');
+    });
+
+    await handleAskQuestion(fakeCtx(false), 'вопрос', fakeBot(), true);
+
+    const sentText = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(sentText).toContain('Ошибка');
+    expect(createHistoryMock.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({ role: 'user' }),
+      expect.objectContaining({ role: 'assistant', content: sentText }),
+    ]);
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      '[ASK] Anthropic agent error',
+    );
+  });
+
+  test('stores the failure message even when its Telegram send looked failed', async () => {
+    // A lost response can hide a message Telegram did show; an open question would be redone.
+    agentRunMock.mockImplementation(async () => {
+      throw new Error('db exploded');
+    });
+    sendMessageMock.mockResolvedValueOnce(null);
+
+    await handleAskQuestion(fakeCtx(false), 'вопрос', fakeBot(), true);
+
+    expect(createHistoryMock.mock.calls.map((call) => call[0]?.['role'])).toEqual([
+      'user',
+      'assistant',
+    ]);
+  });
+
+  test('a failure to store the reply does not turn a delivered answer into an error', async () => {
+    createHistoryMock.mockImplementation((data: Record<string, unknown>) => {
+      if (data['role'] === 'assistant') throw new Error('database is locked');
+      return {
+        id: nextHistoryId++,
+        group_id: 1,
+        user_id: 10,
+        role: 'user',
+        content: String(data['content']),
+        message_thread_id: null,
+        created_at: '2026-10-01 00:00:00',
+      };
+    });
+
+    await handleAskQuestion(fakeCtx(false), 'вопрос', fakeBot(), true);
+
+    // The answer reached the user; no extra "❌ Ошибка" message follows it.
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      '[ASK] Failed to store the assistant reply',
+    );
+  });
+
+  test('an unscoped forum stores no rows even when the agent fails', async () => {
+    agentRunMock.mockImplementation(async () => {
+      throw new AgentError('❌ Ошибка AI. Попробуй позже.');
+    });
+
+    await handleAskQuestion(fakeCtx(true, 77), 'вопрос', fakeBot(), true);
+
+    expect(createHistoryMock).not.toHaveBeenCalled();
+  });
+
+  test('an intentional silent run ([SKIP]) stores no assistant row', async () => {
+    agentRunMock.mockImplementation(async () => '');
+
+    await handleAskQuestion(fakeCtx(false), 'ок', fakeBot());
+
+    expect(createHistoryMock.mock.calls.map((call) => call[0]?.['role'])).toEqual(['user']);
+  });
+
+  test('a failure message in place of an answer is stored but does not trigger advice', async () => {
+    // Control: a real answer runs the post-answer advice check.
+    await handleAskQuestion(fakeCtx(false), 'сколько в евро?', fakeBot());
+    expect(checkSmartTriggersMock).toHaveBeenCalledTimes(1);
+
+    agentRunMock.mockImplementation(async () => NO_ANSWER_MESSAGE);
+    await handleAskQuestion(fakeCtx(false), 'ты завис?', fakeBot());
+
+    expect(createHistoryMock.mock.calls.at(-1)?.[0]?.['content']).toBe(NO_ANSWER_MESSAGE);
+    // Like the error paths: no advice after a turn the bot failed to answer.
+    expect(checkSmartTriggersMock).toHaveBeenCalledTimes(1);
   });
 });

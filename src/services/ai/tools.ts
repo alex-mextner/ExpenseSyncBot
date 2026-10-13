@@ -1,5 +1,6 @@
 /** OpenAI-format tool definitions for the expense bot agent */
 import type OpenAI from 'openai';
+import { SUPPORTED_CURRENCIES } from '../../config/constants';
 import { GROUP_SETTINGS } from '../settings/group-settings-registry';
 
 /** Shorthand: wraps name+description+parameters into OpenAI tool shape */
@@ -33,6 +34,34 @@ function fromAnthropicFormat(
 ): OpenAI.ChatCompletionTool[] {
   return defs.map((d) => tool(d.name, d.description, d.input_schema));
 }
+
+/**
+ * Tools that only read data (or compute) and change nothing. Within one agent run an identical
+ * call to one of these returns the same result, so the agent reuses it instead of running the
+ * tool again. Any other tool may change data and invalidates those cached results.
+ */
+export const READ_ONLY_TOOL_NAMES: Record<string, true> = {
+  get_expenses: true,
+  get_budgets: true,
+  get_categories: true,
+  get_group_settings: true,
+  get_exchange_rates: true,
+  calculate: true,
+  get_bank_transactions: true,
+  get_bank_balances: true,
+  get_technical_analysis: true,
+  get_recurring_patterns: true,
+  find_missing_expenses: true,
+};
+
+/**
+ * Read tools that first pull fresh data from Google Sheets (see the pre-sync in executeTool):
+ * running one can change what the other reads return, so it also invalidates cached results.
+ */
+export const SYNCING_READ_TOOL_NAMES: Record<string, true> = {
+  get_expenses: true,
+  get_budgets: true,
+};
 
 export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat([
   // === Read tools ===
@@ -81,6 +110,10 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
           type: 'boolean',
           description:
             'If true, return pre-calculated totals by category with stats (count, total, avg, median, min, max). For multi-period arrays, includes per-period breakdown + diff/trend. ALWAYS prefer this for aggregation questions.',
+        },
+        currency: {
+          type: 'string',
+          description: `Currency code for all totals and stats — one of: ${SUPPORTED_CURRENCIES.join(', ')}. Default: the group's default currency. Use it when the user wants totals or a per-category breakdown in a specific currency — every category total comes converted in this single call.`,
         },
       },
     },

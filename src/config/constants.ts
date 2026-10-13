@@ -572,6 +572,11 @@ export const SUPPORTED_CURRENCIES = [
 
 export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
 
+/** True for the built-in codes — the ones with reliable EUR rates. */
+export function isSupportedCurrency(code: string): code is CurrencyCode {
+  return SUPPORTED_CURRENCIES.some((c) => c === code);
+}
+
 /** Internal calculation base: all expenses are stored as eur_amount, conversions go through EUR */
 export const BASE_CURRENCY = 'EUR' as const satisfies CurrencyCode;
 

@@ -374,6 +374,88 @@ describe('aiStreamRound fallback chain', () => {
     }
   });
 
+  const calculateTool: OpenAI.ChatCompletionTool[] = [
+    { type: 'function', function: { name: 'calculate', parameters: { type: 'object' } } },
+  ];
+
+  it("sends tools with tool_choice 'none' to every smart-chain provider when the caller forbids tool calls", async () => {
+    // The agent's forced final round: the history holds tool calls, so the tools stay declared,
+    // but the model must answer in text (see the forced round in agent.ts).
+    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    const sent: OpenAI.ChatCompletionCreateParamsStreaming[] = [];
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      sent.push(params);
+      throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
+    });
+
+    const clientsMod = await import('./clients');
+    const spies = (
+      ['groqClient', 'zaiClient', 'claudeClient', 'geminiClient', 'hfClient'] as const
+    ).map((fn) =>
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI),
+    );
+
+    try {
+      await expect(
+        streamingModule.aiStreamRound({
+          messages: [{ role: 'user', content: 'hi' }],
+          tools: calculateTool,
+          toolChoice: 'none',
+          maxTokens: 100,
+          chain: 'smart',
+        }),
+      ).rejects.toThrow();
+
+      expect(sent.map((p) => p.model)).toEqual([
+        'groq-smart',
+        'test-model',
+        'claude-smart',
+        'gemini-test',
+        'hf-test',
+      ]);
+      for (const params of sent) {
+        expect(params.tools).toEqual(calculateTool);
+        expect(params.tool_choice).toBe('none');
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it('omits tool_choice unless the caller asks for it and tools are sent', async () => {
+    const sent: OpenAI.ChatCompletionCreateParamsStreaming[] = [];
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      sent.push(params);
+      return {
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+        },
+      };
+    });
+    const clientsMod = await import('./clients');
+    const spy = spyOn(clientsMod, 'zaiClient').mockReturnValue({
+      chat: { completions: { create } },
+    } as unknown as OpenAI);
+
+    try {
+      const messages: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'hi' }];
+      await streamingModule.aiStreamRound({ messages, tools: calculateTool, maxTokens: 100 });
+      // tool_choice is only valid next to tools — a provider rejects it alone.
+      await streamingModule.aiStreamRound({ messages, toolChoice: 'none', maxTokens: 100 });
+
+      expect(sent).toHaveLength(2);
+      expect(sent[0]?.tools).toEqual(calculateTool);
+      expect(sent[0]).not.toHaveProperty('tool_choice');
+      expect(sent[1]).not.toHaveProperty('tools');
+      expect(sent[1]).not.toHaveProperty('tool_choice');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('falls back from a rate-limited Groq request without breaking the existing chain', async () => {
     mockEnv.GROQ_API_KEY = 'test-groq';
     const calls: string[] = [];

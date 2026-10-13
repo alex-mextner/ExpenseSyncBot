@@ -11,6 +11,7 @@ import { AgentError } from '../../errors';
 import { validateAdvice } from '../../services/ai/advice-validator';
 import { ExpenseBotAgent } from '../../services/ai/agent';
 import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
+import { NO_ANSWER_MESSAGE } from '../../services/ai/telegram-stream';
 import type { AgentContext } from '../../services/ai/types';
 import { checkSmartTriggers, recordAdviceSent } from '../../services/analytics/advice-triggers';
 import {
@@ -212,6 +213,31 @@ async function handleAskWithAnthropic(
           ctx.update?.message?.message_thread_id ?? null,
         );
 
+  // Every reply the bot gives — the answer, or the error message that replaced it — is stored
+  // against this question. A question left without an assistant row reads as still open, and
+  // the next run would redo it instead of answering the new message. Error messages are stored
+  // even when their Telegram send failed (or only looked failed — a response lost after
+  // Telegram accepted the message): an old question redone on the next turn is worse.
+  const persistAssistantReply = (content: string): void => {
+    // Persist only when this chat has a safe history scope. Unconfigured forums stay
+    // stateless so a later mention in another topic cannot inherit it.
+    if (currentHistoryMessageId === undefined) return;
+    const threadId = ctx.update?.message?.message_thread_id ?? null;
+    try {
+      database.chatMessages.create({
+        group_id: group.id,
+        user_id: user.id,
+        role: 'assistant',
+        content,
+        message_thread_id: threadId,
+      });
+      database.chatMessages.pruneOldMessagesIfNeeded(group.id, threadId, 50, 10);
+    } catch (err) {
+      // A history write failure must not turn a delivered answer into a second, error message.
+      logger.error({ err }, '[ASK] Failed to store the assistant reply');
+    }
+  };
+
   try {
     // Show "typing" status and placeholder message
     await bot.api.sendChatAction({
@@ -226,34 +252,21 @@ async function handleAskWithAnthropic(
     // Empty response means the agent chose to stay silent ([SKIP] signal)
     if (!finalResponse) return false;
 
-    // Persist the reply only when this chat has a safe history scope. Unconfigured
-    // forums stay stateless so a later mention in another topic cannot inherit it.
-    if (currentHistoryMessageId !== undefined) {
-      database.chatMessages.create({
-        group_id: group.id,
-        user_id: user.id,
-        role: 'assistant',
-        content: finalResponse,
-        message_thread_id: ctx.update?.message?.message_thread_id ?? null,
-      });
-      database.chatMessages.pruneOldMessagesIfNeeded(
-        group.id,
-        ctx.update?.message?.message_thread_id ?? null,
-        50,
-        10,
-      );
-    }
-
-    return true;
+    persistAssistantReply(finalResponse);
+    // The agent's no-answer message is a failure, not an answer — like the error paths below,
+    // it does not trigger advice.
+    return finalResponse !== NO_ANSWER_MESSAGE;
   } catch (error) {
     if (error instanceof AgentError) {
-      // Agent already sent the error message to the user and cleaned up.
-      // Don't save error to chat history, don't trigger advice.
+      // Agent already sent the error message to the user and cleaned up. Don't trigger advice.
       logger.info(`[ASK] Agent error (already reported to user): ${error.userMessage}`);
+      persistAssistantReply(error.userMessage);
       return false;
     }
     logger.error({ err: error }, '[ASK] Anthropic agent error');
-    await sendMessage('❌ Ошибка при обработке вопроса. Попробуй еще раз.');
+    const failureMessage = '❌ Ошибка при обработке вопроса. Попробуй еще раз.';
+    await sendMessage(failureMessage);
+    persistAssistantReply(failureMessage);
     return false;
   }
 }

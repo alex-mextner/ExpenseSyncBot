@@ -13,6 +13,7 @@
  */
 import {
   type CurrencyCode,
+  isSupportedCurrency,
   isValidCurrencyCode,
   SUPPORTED_CURRENCIES,
 } from '../../config/constants';
@@ -152,11 +153,6 @@ const TOGGLE_OFF = new Set([
   'выключено',
   'нет',
 ]);
-
-/** default_currency is restricted to built-in codes — they have reliable EUR rates. */
-function isSupportedCurrency(code: string): code is CurrencyCode {
-  return SUPPORTED_CURRENCIES.some((c) => c === code);
-}
 
 /**
  * enabled_currencies accepts any valid ISO-format code (matching onboarding's custom-currency

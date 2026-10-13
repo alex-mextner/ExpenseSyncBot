@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Budget, Category, Expense, Group } from '../../database/types';
 import { makeExpense } from '../../test-utils/fixtures';
 import { mockDatabase } from '../../test-utils/mocks/database';
+import { convertCurrency, formatAmount } from '../currency/converter';
 import type { AgentContext } from './types';
 
 // ── Mock database ────────────────────────────────────────────────────
@@ -1806,6 +1807,131 @@ describe('executeGetExpenses — batch periods and stats', () => {
     expect(result.output).toContain('max:');
     expect(result.output).toContain('Хлеб');
     expect(result.output).toContain('Кино');
+  });
+
+  // Prod incident 2026-10-12: per-category totals in EUR for an RSD group took one
+  // `calculate` call per category and exhausted the agent's tool rounds. The summary now
+  // returns the totals in the requested currency in one call.
+  describe('summary_only with a requested currency', () => {
+    function useRsdGroup() {
+      mockGroups.findById.mockReturnValue({
+        id: 1,
+        telegram_group_id: 456,
+        title: null,
+        invite_link: null,
+        google_refresh_token: 'token',
+        spreadsheet_id: 'sheet',
+        default_currency: 'RSD',
+        enabled_currencies: ['RSD', 'EUR', 'USD'],
+        custom_prompt: null,
+        active_topic_id: null,
+        oauth_client: 'legacy' as const,
+        bank_panel_summary_message_id: null,
+        bank_cards_enabled: 1,
+        created_at: '',
+        updated_at: '',
+      });
+      mockExpenses.findByDateRange.mockReturnValue([
+        makeExpense({
+          id: 1,
+          date: '2026-10-01',
+          category: 'Квартира',
+          amount: 52829.45,
+          currency: 'RSD',
+          eur_amount: 450,
+        }),
+        makeExpense({
+          id: 2,
+          date: '2026-10-03',
+          category: 'Алекс',
+          amount: 48800,
+          currency: 'RSD',
+          eur_amount: 416.59,
+        }),
+        makeExpense({
+          id: 3,
+          date: '2026-10-04',
+          category: 'Алекс',
+          amount: 10,
+          currency: 'USD',
+          eur_amount: 8,
+        }),
+      ]);
+    }
+
+    test('returns per-category and grand totals in EUR from the stored eur_amount', async () => {
+      useRsdGroup();
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-10', summary_only: true, currency: 'EUR' },
+        ctx,
+      );
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Total: 874.59 EUR');
+      expect(result.output).toContain('Квартира: 450.00 EUR (1 ops)');
+      expect(result.output).toContain('Алекс: 424.59 EUR (2 ops)');
+      // Original amounts per currency stay visible
+      expect(result.output).toContain('48800.00 RSD');
+    });
+
+    test('accepts a lowercase code', async () => {
+      useRsdGroup();
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-10', summary_only: true, currency: 'eur' },
+        ctx,
+      );
+      expect(result.output).toContain('Total: 874.59 EUR');
+    });
+
+    test('without currency keeps the group default currency', async () => {
+      useRsdGroup();
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-10', summary_only: true },
+        ctx,
+      );
+      const rsd = formatAmount(convertCurrency(874.59, 'EUR', 'RSD'), 'RSD', true);
+      expect(result.output).toContain(`Total: ${rsd}`);
+    });
+
+    test('converts totals to a requested currency other than EUR from the EUR sum', async () => {
+      useRsdGroup();
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-10', summary_only: true, currency: 'USD' },
+        ctx,
+      );
+      const usd = (eur: number) => formatAmount(convertCurrency(eur, 'EUR', 'USD'), 'USD', true);
+      expect(result.output).toContain(`Total: ${usd(874.59)}`);
+      expect(result.output).toContain(`Квартира: ${usd(450)} (1 ops)`);
+      expect(result.output).toContain(`Алекс: ${usd(424.59)} (2 ops)`);
+    });
+
+    test('treats a null or blank currency as not given', async () => {
+      useRsdGroup();
+      const rsd = formatAmount(convertCurrency(874.59, 'EUR', 'RSD'), 'RSD', true);
+      for (const currency of [null, '', '  ']) {
+        const result = await executeTool(
+          'get_expenses',
+          { period: '2026-10', summary_only: true, currency },
+          ctx,
+        );
+        expect(result.success).toBe(true);
+        expect(result.output).toContain(`Total: ${rsd}`);
+      }
+    });
+
+    test('rejects an unsupported currency code', async () => {
+      useRsdGroup();
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-10', summary_only: true, currency: 'XYZ' },
+        ctx,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Unknown currency');
+    });
   });
 
   test('empty period array falls back to current_month', async () => {
