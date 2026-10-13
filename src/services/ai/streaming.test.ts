@@ -23,11 +23,7 @@ const mockEnv = {
   CLAUDE_BASE_URL: 'https://test.claude/v1/',
   CLAUDE_MODEL: 'claude-smart',
   CLAUDE_FAST_MODEL: 'claude-fast',
-  GEMINI_API_KEY: 'test-gemini',
-  GEMINI_BASE_URL: 'https://test.gemini/v1',
-  GEMINI_MODEL: 'gemini-test',
-  GEMINI_FAST_MODEL: 'gemini-fast',
-  GEMINI_VISION_MODEL: 'gemini-vision',
+  CLAUDE_VISION_MODEL: 'claude-vision',
   HF_TOKEN: 'test-hf',
   HF_BASE_URL: 'https://test.hf/v1',
   HF_MODEL: 'hf-test',
@@ -41,7 +37,6 @@ mock.module('./clients', () => ({
   zaiClient: () => ({}),
   groqClient: () => ({}),
   claudeClient: () => ({}),
-  geminiClient: () => ({}),
   hfClient: () => ({}),
 }));
 
@@ -240,11 +235,62 @@ describe('aiStreamRound fallback chain', () => {
     // The provider breaker is module-global state — reset it so demotions don't leak between tests.
     resetProviderBreaker();
     mockEnv.GROQ_API_KEY = '';
-    mockEnv.CLAUDE_API_TOKEN = '';
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     mockEnv.CLAUDE_MODEL = 'claude-smart';
     mockEnv.CLAUDE_FAST_MODEL = 'claude-fast';
+    mockEnv.CLAUDE_VISION_MODEL = 'claude-vision';
     // Re-import to get fresh module with mocked deps
     streamingModule = await import('./streaming');
+  });
+
+  // Every slot fails with a 500 so the chain walks all providers; the recorded models are the chain.
+  // The aggregate's provider count must equal the recorded calls, so a slot whose client could not
+  // even be built (it never reaches `create`) still shows up as a mismatch.
+  async function chainModels(chain: 'smart' | 'fast' | 'ocr'): Promise<string[]> {
+    const calls: string[] = [];
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      calls.push(params.model);
+      throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
+    });
+    const clientsMod = await import('./clients');
+    const spies = (['groqClient', 'zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI),
+    );
+    let message = '';
+    try {
+      await streamingModule.aiStreamRound({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 100,
+        chain,
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(message).toStartWith(`All ${calls.length} providers in ${chain} chain failed`);
+    return calls;
+  }
+
+  it.each([
+    ['smart' as const, ['groq-smart', 'test-model', 'claude-smart', 'hf-test']],
+    ['fast' as const, ['groq-fast', 'test-fast', 'claude-fast', 'hf-fast']],
+    ['ocr' as const, ['claude-vision', 'hf-vision']],
+  ])('the %s chain with every key set is exactly %p', async (chain, expected) => {
+    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    expect(await chainModels(chain)).toEqual(expected);
+  });
+
+  it.each([
+    ['smart' as const, ['test-model', 'hf-test']],
+    ['fast' as const, ['test-fast', 'hf-fast']],
+    ['ocr' as const, ['hf-vision']],
+  ])('without Groq and Claude keys the %s chain degrades to %p', async (chain, expected) => {
+    mockEnv.CLAUDE_API_TOKEN = '';
+    expect(await chainModels(chain)).toEqual(expected);
   });
 
   it.each([
@@ -287,7 +333,7 @@ describe('aiStreamRound fallback chain', () => {
   it.each([
     ['smart' as const, ['test-model', 'claude-smart']],
     ['fast' as const, ['test-fast', 'claude-fast']],
-  ])('tries Claude right after z.ai, before Gemini, in the %s chain', async (chain, expected) => {
+  ])('tries Claude right after z.ai in the %s chain', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const calls: string[] = [];
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
@@ -303,7 +349,7 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     const clientsMod = await import('./clients');
-    const spies = (['zaiClient', 'claudeClient', 'geminiClient', 'hfClient'] as const).map((fn) =>
+    const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI),
@@ -325,17 +371,21 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it.each([
-    ['smart' as const, 'claude-sonnet-5-5', 'test-model', 'gemini-test'],
-    ['fast' as const, 'claude-haiku-5-5', 'test-fast', 'gemini-fast'],
-  ])('Claude requests in the %s chain omit temperature and use the per-model thinking params; other providers are unchanged', async (chain, claudeModel, zaiModel, geminiModel) => {
+    ['smart' as const, 'claude-sonnet-5-5', ['test-model', 'hf-test']],
+    ['fast' as const, 'claude-haiku-5-5', ['test-fast', 'hf-fast']],
+    ['ocr' as const, 'claude-sonnet-5-5', ['hf-vision']],
+    ['ocr' as const, 'claude-haiku-5-5', ['hf-vision']],
+  ])('Claude requests in the %s chain (%s) omit temperature and use the per-model thinking params; other providers are unchanged', async (chain, claudeModel, otherModels) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     if (chain === 'smart') mockEnv.CLAUDE_MODEL = claudeModel;
-    else mockEnv.CLAUDE_FAST_MODEL = claudeModel;
+    else if (chain === 'fast') mockEnv.CLAUDE_FAST_MODEL = claudeModel;
+    else mockEnv.CLAUDE_VISION_MODEL = claudeModel;
+    const hfModel = otherModels[otherModels.length - 1];
     type SentParams = OpenAI.ChatCompletionCreateParamsStreaming & { thinking?: unknown };
     const sent = new Map<string, SentParams>();
     const create = mock(async (params: SentParams) => {
       sent.set(params.model, params);
-      if (params.model !== geminiModel) {
+      if (params.model !== hfModel) {
         throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
       }
       return {
@@ -346,7 +396,7 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     const clientsMod = await import('./clients');
-    const spies = (['zaiClient', 'claudeClient', 'geminiClient'] as const).map((fn) =>
+    const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI),
@@ -364,7 +414,7 @@ describe('aiStreamRound fallback chain', () => {
       expect(claude).toBeDefined();
       expect(claude && 'temperature' in claude).toBe(false);
       expect(claude).toMatchObject(claudeRequestParams(claudeModel, 100));
-      for (const model of [zaiModel, geminiModel]) {
+      for (const model of otherModels) {
         expect(sent.get(model)?.temperature).toBe(0.7);
         expect(sent.get(model)?.max_tokens).toBe(100);
         expect(sent.get(model)?.thinking).toBeUndefined();
@@ -390,9 +440,7 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     const clientsMod = await import('./clients');
-    const spies = (
-      ['groqClient', 'zaiClient', 'claudeClient', 'geminiClient', 'hfClient'] as const
-    ).map((fn) =>
+    const spies = (['groqClient', 'zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI),
@@ -413,7 +461,6 @@ describe('aiStreamRound fallback chain', () => {
         'groq-smart',
         'test-model',
         'claude-smart',
-        'gemini-test',
         'hf-test',
       ]);
       for (const params of sent) {
@@ -507,7 +554,7 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it('falls back to next provider on 400 BadRequest', async () => {
-    // Mock: first provider (z.ai) → 400, second (Gemini) should be tried
+    // Mock: first provider (z.ai) → 400, second (Claude) should be tried
     // We test this via the full aiStreamRound by mocking fetch
     const calls: string[] = [];
 
@@ -516,7 +563,7 @@ describe('aiStreamRound fallback chain', () => {
       if (params.model === 'test-model') {
         throw new OpenAI.APIError(400, { message: 'bad request' }, 'bad request', new Headers());
       }
-      if (params.model === 'gemini-test') {
+      if (params.model === 'claude-smart') {
         throw new OpenAI.APIError(
           400,
           { message: 'bad request too' },
@@ -542,7 +589,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -558,7 +605,7 @@ describe('aiStreamRound fallback chain', () => {
     expect(result.text).toBe('hello from HF');
     expect(result.providerUsed).toContain('HF');
     // All three providers were tried
-    expect(calls).toEqual(['test-model', 'gemini-test', 'hf-test']);
+    expect(calls).toEqual(['test-model', 'claude-smart', 'hf-test']);
   });
 
   it('propagates error when text was already emitted', async () => {
@@ -658,7 +705,7 @@ describe('aiStreamRound fallback chain', () => {
     });
     expect(result.finishReason).toBe('tool_calls');
     expect(result.providerUsed).toContain('z.ai');
-    // Gemini/HF should NOT be tried
+    // Claude/HF should NOT be tried
     expect(createMock).toHaveBeenCalledTimes(1);
   });
 
@@ -744,14 +791,14 @@ describe('aiStreamRound fallback chain', () => {
           yield { choices: [{ delta: { content: '' }, finish_reason: 'stop' }] };
           return;
         }
-        // Gemini: actual text
+        // Claude: actual text
         yield { choices: [{ delta: { content: 'recovered' }, finish_reason: 'stop' }] };
       },
     }));
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -762,7 +809,7 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     expect(result.text).toBe('recovered');
-    expect(result.providerUsed).toContain('Gemini');
+    expect(result.providerUsed).toContain('Claude');
   });
 
   it('stops the chain immediately when the overall signal is pre-aborted', async () => {
@@ -778,7 +825,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -841,7 +888,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -853,8 +900,8 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     expect(result.text).toBe('fresh fallback');
-    expect(result.providerUsed).toContain('Gemini');
-    expect(calls).toEqual(['test-model', 'gemini-test']);
+    expect(result.providerUsed).toContain('Claude');
+    expect(calls).toEqual(['test-model', 'claude-smart']);
     // The second provider received a fresh, non-aborted signal.
     expect(secondSignalStates).toEqual([false]);
   });
@@ -877,7 +924,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -1016,7 +1063,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -1034,7 +1081,7 @@ describe('aiStreamRound fallback chain', () => {
       const msg = (err as Error).message;
       expect(msg).toContain('All 3 providers');
       expect(msg).toContain('z.ai');
-      expect(msg).toContain('Gemini');
+      expect(msg).toContain('Claude');
       expect(msg).toContain('HF');
       expect(msg).toContain('smart');
     }
@@ -1048,7 +1095,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -1067,13 +1114,13 @@ describe('aiStreamRound fallback chain', () => {
     }
   });
 
-  it('uses OCR chain (Gemini → HF, no z.ai)', async () => {
+  it('uses OCR chain (Claude vision → HF, no z.ai)', async () => {
     const clientsMod = await import('./clients');
     const calls: string[] = [];
     const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
-      if (params.model === 'gemini-vision') {
-        throw new Error('gemini-vision-fail');
+      if (params.model === 'claude-vision') {
+        throw new Error('claude-vision-fail');
       }
       return {
         [Symbol.asyncIterator]: async function* () {
@@ -1084,7 +1131,7 @@ describe('aiStreamRound fallback chain', () => {
     const zaiSpy = spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -1098,12 +1145,12 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     expect(result.text).toBe('ocr-text');
-    // OCR chain uses only vision models (gemini-vision + hf-vision).
+    // OCR chain uses only vision models (claude-vision + hf-vision).
     // Previous tests in this describe block already spied on zaiClient, so
     // we can't rely on zaiSpy.mock.calls here — instead verify no non-vision
     // model name appears in the calls array.
-    expect(calls.every((m) => m === 'gemini-vision' || m === 'hf-vision')).toBe(true);
-    expect(calls).toContain('gemini-vision');
+    expect(calls.every((m) => m === 'claude-vision' || m === 'hf-vision')).toBe(true);
+    expect(calls).toContain('claude-vision');
     expect(calls).toContain('hf-vision');
     void zaiSpy;
   });
@@ -1125,7 +1172,7 @@ describe('aiStreamRound fallback chain', () => {
     spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'geminiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -1135,9 +1182,9 @@ describe('aiStreamRound fallback chain', () => {
       chain: 'smart',
     });
 
-    // First provider (test-model) was tried and failed, second (gemini-test) succeeded
+    // First provider (test-model) was tried and failed, second (claude-smart) succeeded
     expect(modelsCalled).toContain('test-model');
-    expect(modelsCalled).toContain('gemini-test');
+    expect(modelsCalled).toContain('claude-smart');
     expect(result.text).toBe('ok');
   });
 
@@ -1156,7 +1203,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1168,18 +1215,18 @@ describe('aiStreamRound fallback chain', () => {
         chain: 'smart',
       });
 
-    // Three rounds where z.ai connection-fails first each time (gemini answers).
+    // Three rounds where z.ai connection-fails first each time (Claude answers).
     for (let i = 0; i < 3; i++) {
       order.length = 0;
       await round();
       expect(order[0]).toBe('test-model'); // still tried first while it has < 3 failures
     }
 
-    // 4th round: z.ai is now demoted → gemini is tried first, z.ai is not the head of the chain.
+    // 4th round: z.ai is now demoted → Claude is tried first, z.ai is not the head of the chain.
     order.length = 0;
     const result = await round();
-    expect(order[0]).toBe('gemini-test');
-    expect(order).not.toContain('test-model'); // gemini answered, so the demoted z.ai isn't reached
+    expect(order[0]).toBe('claude-smart');
+    expect(order).not.toContain('test-model'); // Claude answered, so the demoted z.ai isn't reached
     expect(result.text).toBe('ok');
   });
 
@@ -1198,7 +1245,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1237,7 +1284,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1309,7 +1356,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1353,7 +1400,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1388,7 +1435,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1427,7 +1474,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1455,7 +1502,7 @@ describe('aiStreamRound fallback chain', () => {
     const create = mock(async () => {
       throw new OpenAI.APIConnectionError({ message: 'Connection error.' });
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1487,7 +1534,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1518,7 +1565,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1544,7 +1591,7 @@ describe('aiStreamRound fallback chain', () => {
         throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
       throw new OpenAI.APIError(400, { message: 'bad' }, 'bad', new Headers());
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1575,7 +1622,7 @@ describe('aiStreamRound fallback chain', () => {
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       if (round < 3) {
         if (params.model === 'test-model') throw conn(); // z.ai unreachable → accrues toward demotion
-        return ok(); // gemini answers
+        return ok(); // Claude answers
       }
       // Final round: the whole chain fails and the demoted z.ai is reached, returning a 503.
       if (params.model === 'test-model') {
@@ -1583,7 +1630,7 @@ describe('aiStreamRound fallback chain', () => {
       }
       throw conn();
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1624,7 +1671,7 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1648,7 +1695,7 @@ describe('aiStreamRound fallback chain', () => {
       }
       throw new OpenAI.APIError(503, { message: 'down' }, 'down', new Headers()); // the rest 5xx
     });
-    for (const fn of ['zaiClient', 'geminiClient', 'hfClient'] as const) {
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI);
@@ -1780,7 +1827,7 @@ describe('classifyAiError', () => {
   it('classifies an aggregated all-providers connection failure as provider_down', () => {
     const err = new Error(
       'All 3 providers in smart chain failed: z.ai (glm-5.1): Connection error.; ' +
-        'Gemini (g): Connection error.; HF (h): Connection error.',
+        'Claude (c): Connection error.; HF (h): Connection error.',
     );
     const c = mod.classifyAiError(err);
     expect(c?.kind).toBe('provider_down');
@@ -1841,7 +1888,7 @@ describe('classifyAiError', () => {
   it('classifies an aggregated abort (60s agent timeout) as timeout, not provider_down', () => {
     const err = new Error(
       'All 3 providers in smart chain failed: z.ai (glm-5.1): Request was aborted.; ' +
-        'Gemini (g): Request was aborted.; HF (h): Request was aborted.',
+        'Claude (c): Request was aborted.; HF (h): Request was aborted.',
     );
     expect(mod.classifyAiError(err)?.kind).toBe('timeout');
   });
@@ -1857,7 +1904,7 @@ describe('classifyAiError', () => {
     const err = Object.assign(
       new Error(
         'All 3 providers in smart chain failed: z.ai (glm-5.1): 400 Bad Request; ' +
-          'Gemini (g): 400 Bad Request; HF (h): 400 Bad Request',
+          'Claude (c): 400 Bad Request; HF (h): 400 Bad Request',
       ),
       { status: 400 },
     );
@@ -1870,7 +1917,7 @@ describe('classifyAiError', () => {
     const err = Object.assign(
       new Error(
         'All 3 providers in smart chain failed: z.ai (glm-5.1): Connection error.; ' +
-          'Gemini (g): 400 Bad Request; HF (h): 400 Bad Request',
+          'Claude (c): 400 Bad Request; HF (h): 400 Bad Request',
       ),
       { status: 400 },
     );
@@ -1884,7 +1931,7 @@ describe('classifyAiError', () => {
     const err = new Error(
       'All 3 providers in smart chain failed: z.ai (glm-5.1): Provider z.ai (glm-5.1) ' +
         'returned empty response (no text, no tool calls) — treating as failure; ' +
-        'Gemini (g): returned empty response; HF (h): returned empty response',
+        'Claude (c): returned empty response; HF (h): returned empty response',
     );
     const c = mod.classifyAiError(err);
     expect(c?.kind).toBe('generic');

@@ -1,4 +1,4 @@
-// Tests for OpenAI-compatible client factories (zai, hf, gemini).
+// Tests for OpenAI-compatible client factories (zai, groq, claude, hf).
 // Verifies configuration is wired from env and clients are cached (singleton).
 
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
@@ -21,8 +21,6 @@ mock.module('../../config/env', () => ({
     CLAUDE_BASE_URL: 'https://claude.test/v1/',
     HF_TOKEN: 'hf-key',
     HF_BASE_URL: 'https://hf.test/v1',
-    GEMINI_API_KEY: 'gemini-key',
-    GEMINI_BASE_URL: 'https://gemini.test/v1',
   },
 }));
 
@@ -57,9 +55,7 @@ mock.module('openai', () => ({
   default: FakeOpenAI,
 }));
 
-const { zaiClient, groqClient, claudeClient, hfClient, geminiClient, resetClients } = await import(
-  './clients'
-);
+const { zaiClient, groqClient, claudeClient, hfClient, resetClients } = await import('./clients');
 
 describe('client factories', () => {
   beforeEach(() => {
@@ -158,33 +154,12 @@ describe('client factories', () => {
     });
   });
 
-  describe('geminiClient', () => {
-    it('constructs OpenAI with GEMINI_API_KEY and GEMINI_BASE_URL', () => {
-      const c = geminiClient() as unknown as FakeOpenAI;
-      expect(c.apiKey).toBe('gemini-key');
-      expect(c.baseURL).toBe('https://gemini.test/v1');
-      expect(c.maxRetries).toBe(0);
-    });
-
-    it('uses longer 120s timeout (thinking-aware)', () => {
-      const c = geminiClient() as unknown as FakeOpenAI;
-      expect(c.timeout).toBe(120_000);
-    });
-
-    it('caches the instance (singleton)', () => {
-      const a = geminiClient();
-      const b = geminiClient();
-      expect(a).toBe(b);
-    });
-  });
-
   describe('resetClients', () => {
     it('clears all cached clients independently', () => {
       const z1 = zaiClient();
       const r1 = groqClient();
       const c1 = claudeClient();
       const h1 = hfClient();
-      const g1 = geminiClient();
 
       resetClients();
 
@@ -192,21 +167,19 @@ describe('client factories', () => {
       const r2 = groqClient();
       const c2 = claudeClient();
       const h2 = hfClient();
-      const g2 = geminiClient();
 
       expect(z2).not.toBe(z1);
       expect(r2).not.toBe(r1);
       expect(c2).not.toBe(c1);
       expect(h2).not.toBe(h1);
-      expect(g2).not.toBe(g1);
     });
   });
 
   it('does not log errors on happy path', () => {
     zaiClient();
     groqClient();
+    claudeClient();
     hfClient();
-    geminiClient();
     expect(logMock.error).not.toHaveBeenCalled();
     expect(logMock.warn).not.toHaveBeenCalled();
   });

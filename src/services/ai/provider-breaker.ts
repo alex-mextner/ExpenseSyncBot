@@ -30,7 +30,7 @@ interface ProviderHealth {
 const health = new Map<string, ProviderHealth>();
 
 /**
- * Record a connection-type failure for provider `key` (a stable id like 'zai'/'gemini'/'hf', NOT
+ * Record a connection-type failure for provider `key` (a stable id like 'zai'/'claude'/'hf', NOT
  * the per-model display name — connection failures are endpoint-level, shared across chains).
  * Non-connection failures (4xx/5xx responses) and successes are NOT routed here — only true
  * "provider unreachable" errors. Demotes the provider once it accumulates FAILURE_THRESHOLD

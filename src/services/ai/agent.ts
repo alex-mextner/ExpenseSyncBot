@@ -492,7 +492,7 @@ export class ExpenseBotAgent {
         writer.commitIntermediate();
 
         // Sanitize tool_calls before pushing to history — some providers
-        // (Gemini) generate malformed JSON arguments that break subsequent
+        // generate malformed JSON arguments that break subsequent
         // rounds when the next provider tries to parse the history.
         const sanitized = { ...result.assistantMessage };
         if ('tool_calls' in sanitized && Array.isArray(sanitized.tool_calls)) {

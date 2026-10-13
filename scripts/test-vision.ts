@@ -1,58 +1,48 @@
-/** Quick test: vision models via OpenAI-compatible endpoints */
+/**
+ * Quick probe: send one receipt image to a single vision provider and print the raw answer.
+ * Uses the bot's own clients, base URLs, models and request shape (chatRequestParams), so it
+ * tests exactly what production sends. Override a model inline, e.g.
+ *   CLAUDE_VISION_MODEL=claude-haiku-5-5 bun scripts/test-vision.ts receipt.jpg claude
+ */
 import { readFileSync } from 'node:fs';
 import OpenAI from 'openai';
+import { env } from '../src/config/env';
+import { claudeClient, hfClient, zaiClient } from '../src/services/ai/clients';
+import { chatRequestParams } from '../src/services/ai/streaming';
 
-// Provider configs
-const PROVIDERS: Record<string, { baseURL: string; apiKeyEnv: string; defaultModel: string }> = {
-  zai: { baseURL: 'https://api.z.ai/api/paas/v4', apiKeyEnv: 'ANTHROPIC_API_KEY', defaultModel: 'glm-5.1' },
-  gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', apiKeyEnv: 'GEMINI_API_KEY', defaultModel: 'gemini-2.0-flash' },
-  hf: { baseURL: 'https://router.huggingface.co/v1', apiKeyEnv: 'HF_TOKEN', defaultModel: 'Qwen/Qwen2.5-VL-72B-Instruct' },
+const PROVIDERS: Record<string, { client: () => OpenAI; model: string; anthropic: boolean }> = {
+  claude: { client: claudeClient, model: env.CLAUDE_VISION_MODEL, anthropic: true },
+  hf: { client: hfClient, model: env.HF_VISION_MODEL, anthropic: false },
+  zai: { client: zaiClient, model: env.AI_MODEL, anthropic: false },
 };
 
-const providerName = process.argv[3] || 'gemini';
-const provider = PROVIDERS[providerName];
-if (!provider) {
-  console.error(`Unknown provider: ${providerName}. Available: ${Object.keys(PROVIDERS).join(', ')}`);
-  process.exit(1);
-}
-
-const API_KEY = process.env[provider.apiKeyEnv];
-const MODEL = process.env['AI_MODEL'] || provider.defaultModel;
-
-if (!API_KEY) {
-  console.error(`${provider.apiKeyEnv} not set`);
-  process.exit(1);
+// The probe's report is its product: write it to stdout (same convention as replay-ai-logs.ts).
+function say(line: string): void {
+  process.stdout.write(`${line}\n`);
 }
 
 const imagePath = process.argv[2];
-if (!imagePath) {
+const providerName = process.argv[3] || 'claude';
+const provider = PROVIDERS[providerName];
+if (!imagePath || !provider) {
   console.error('Usage: bun scripts/test-vision.ts <image-path> [provider]');
-  console.error('Providers: zai, gemini');
+  console.error(`Providers: ${Object.keys(PROVIDERS).join(', ')}`);
   process.exit(1);
 }
 
 const imageBuffer = readFileSync(imagePath);
-const base64 = imageBuffer.toString('base64');
 const mimeType = imagePath.endsWith('.png') ? 'image/png' : 'image/jpeg';
-const dataUrl = `data:${mimeType};base64,${base64}`;
+const dataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
 
-console.log(`Image: ${imagePath} (${imageBuffer.length} bytes)`);
-console.log(`Provider: ${providerName}`);
-console.log(`Model: ${MODEL}`);
-console.log(`Base URL: ${provider.baseURL}`);
-console.log('---');
-
-const client = new OpenAI({
-  apiKey: API_KEY,
-  baseURL: provider.baseURL,
-  timeout: 60_000,
-  maxRetries: 0,
-});
+say(`Image: ${imagePath} (${imageBuffer.length} bytes)`);
+say(`Provider: ${providerName}`);
+say(`Model: ${provider.model}`);
+say('---');
 
 try {
   const t0 = Date.now();
-  const response = await client.chat.completions.create({
-    model: MODEL,
+  const response = await provider.client().chat.completions.create({
+    model: provider.model,
     messages: [
       {
         role: 'user',
@@ -65,20 +55,19 @@ try {
         ],
       },
     ],
-    max_tokens: 2000,
-    temperature: 0.1,
+    ...chatRequestParams(provider.model, 2000, 0.1, provider.anthropic),
   });
 
   const elapsed = Date.now() - t0;
   const text = response.choices[0]?.message?.content?.trim();
-  console.log(`✅ GLM vision OK (${elapsed}ms, ${text?.length ?? 0} chars)`);
-  console.log('---');
-  console.log(text);
-  console.log('---');
-  console.log(`finish_reason: ${response.choices[0]?.finish_reason}`);
-  console.log(`usage: ${JSON.stringify(response.usage)}`);
+  say(`✅ ${providerName} vision OK (${elapsed}ms, ${text?.length ?? 0} chars)`);
+  say('---');
+  say(text ?? '(no text content in the response)');
+  say('---');
+  say(`finish_reason: ${response.choices[0]?.finish_reason}`);
+  say(`usage: ${JSON.stringify(response.usage)}`);
 } catch (error) {
-  console.error('❌ GLM vision FAILED:');
+  console.error(`❌ ${providerName} vision FAILED:`);
   if (error instanceof OpenAI.APIError) {
     console.error(`  Status: ${error.status}`);
     console.error(`  Message: ${error.message}`);

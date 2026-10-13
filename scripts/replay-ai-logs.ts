@@ -85,11 +85,6 @@ const PLACEHOLDERS: Record<string, string> = {
   HF_MODEL: 'replay',
   HF_FAST_MODEL: 'replay',
   HF_VISION_MODEL: 'replay',
-  GEMINI_API_KEY: 'replay',
-  GEMINI_BASE_URL: DEAD_URL,
-  GEMINI_MODEL: 'replay',
-  GEMINI_FAST_MODEL: 'replay',
-  GEMINI_VISION_MODEL: 'replay',
 };
 for (const [key, value] of Object.entries(PLACEHOLDERS)) {
   if (!process.env[key]) process.env[key] = value;
@@ -115,7 +110,7 @@ if (!env.CLAUDE_API_TOKEN) {
 const CLAUDE_HOST = new URL(env.CLAUDE_BASE_URL).host;
 
 // Claude first: push every other endpoint to the back of the chain for the whole run.
-for (const key of ['groq', 'zai', 'gemini', 'hf']) {
+for (const key of ['groq', 'zai', 'hf']) {
   recordProviderRateLimit(key, Date.now(), 24 * 60 * 60_000);
 }
 
