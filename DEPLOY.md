@@ -127,6 +127,7 @@ The repo `Caddyfile` uses `http://` site addresses: TLS lives at Cloudflare. Dep
 ```
 
 The healthcheck probes the public URL (`https://finbot.mextner.com/health`), so it alerts on tunnel or bot failure alike.
+A failed probe is retried 3 times, 15 s apart, before alerting, so a deploy's ~10 s PM2 restart doesn't trigger a false alert. Log lines and alert times are UTC.
 
 ### 7. LAN address
 
