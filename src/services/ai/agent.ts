@@ -5,6 +5,8 @@
  * Only final text responses are saved to chat history (not intermediate tool_use rounds).
  * A run always ends in a real answer, a short failure message, or (for unaddressed chatter
  * without tool calls only) intentional silence — never in an empty or tools-only message.
+ * A stall guard watches the tool rounds: a stuck model is nudged, then the run moves to the next
+ * provider of the chain, then it must answer; every run's features go to agent_trajectories.
  */
 
 import { format } from 'date-fns';
@@ -12,6 +14,8 @@ import type { Bot } from 'gramio';
 import type OpenAI from 'openai';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 import { env } from '../../config/env';
+import { database } from '../../database';
+import type { AgentRunOutcome } from '../../database/repositories/agent-trajectory.repository';
 import type { ChatMessage } from '../../database/types';
 import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
@@ -19,14 +23,25 @@ import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { reportAiFailureToAdmin } from './error-reporter';
 import { validateResponse } from './response-validator';
 import {
+  FINAL_ROUND_RESERVE_MS,
+  type FinalizeReason,
+  hashFeature,
+  RUN_DEADLINE_MS,
+  type StallDecision,
+  StallGuard,
+  type StallSignal,
+  type ToolCallRecord,
+} from './stall-guard';
+import {
   aiStreamRound,
   classifyAiError,
   getBackoffDelay,
   isRetryableError,
+  nextProvider,
   type StreamCallbacks,
   type StreamRoundResult,
 } from './streaming';
-import { isSkipSignal, TelegramStreamWriter } from './telegram-stream';
+import { isSkipSignal, NO_ANSWER_MESSAGE, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { READ_ONLY_TOOL_NAMES, SYNCING_READ_TOOL_NAMES, TOOL_DEFINITIONS } from './tools';
 import type { AgentContext, ToolCallResult, ToolResult } from './types';
@@ -36,21 +51,51 @@ const logger = createLogger('agent');
 /** Singleton debug logger — writes full AI conversations to logs/chats/ when enabled */
 export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
-const MAX_TOOL_ROUNDS = 10;
 /**
- * Sent as the last message when the tool-round cap is hit: the next round forbids tool calls,
- * so the model has to answer from what it already gathered instead of ending with no text.
+ * Sent as the last message when the stall guard ends the tool rounds (a safety cap, or a stall
+ * with no escalation left): the next round forbids tool calls, so the model has to answer from
+ * what it already gathered instead of ending with no text.
  */
 const FINAL_ANSWER_PROMPT =
   '[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. If some numbers are missing, give what you have and say what is missing.';
 /**
- * Overall wall-clock cap for one agent run (all rounds + all retries combined).
- * A legitimate multi-round query with a slow model needs well over 60s, so this
- * is generous; it only bounds a truly-stuck run. Per-provider timeouts (in
- * streaming.ts) catch individual hung providers much sooner.
+ * What the model was doing when the stall guard stepped in — quoted in the nudge (the first stall
+ * of a run) and in the note for the model that takes the run over (later stalls).
  */
-const AGENT_TIMEOUT_MS = 180_000;
+const STALL_DESCRIPTIONS: Record<StallSignal, string> = {
+  repeated_call: 'the same tool call with the same result, again and again',
+  cheap_tool_streak: 'one calculate call per step instead of one call for the whole computation',
+  error_streak: 'tool calls that keep failing',
+  alternation: 'switching back and forth between the same two tool calls',
+  no_new_info: 'tool calls that return nothing new',
+};
 const MAX_API_RETRIES = 2; // 3 attempts total (1 initial + 2 retries)
+
+/** One agent run as the stall guard and the trajectory log see it. */
+interface RunTrajectory {
+  startedAt: number;
+  /** Seed of this run's feature hashes (hashFeature); never stored. */
+  hashSeed: number;
+  guard: StallGuard;
+  /** Providers the run was handed away from; every later round skips them. */
+  excludedProviders: string[];
+  /** Providers that answered a round, in first-use order. */
+  providers: string[];
+  lastProvider: string | null;
+  finalizeReason: FinalizeReason | null;
+}
+
+function newTrajectory(startedAt: number): RunTrajectory {
+  return {
+    startedAt,
+    hashSeed: Math.floor(Math.random() * 2 ** 32),
+    guard: new StallGuard(),
+    excludedProviders: [],
+    providers: [],
+    lastProvider: null,
+    finalizeReason: null,
+  };
+}
 
 /**
  * JSON with object keys sorted at every level, so two tool calls with the same arguments in a
@@ -78,6 +123,8 @@ export class ExpenseBotAgent {
    * (the data change stays). Such a run must answer; it never ends in silence.
    */
   private writeToolRan = false;
+  /** Stall guard state and features of the current run (reset at the start of each run). */
+  private trajectory: RunTrajectory = newTrajectory(0);
 
   constructor(_apiKey: string, ctx: AgentContext) {
     this.ctx = ctx;
@@ -111,6 +158,12 @@ export class ExpenseBotAgent {
     const toolCallNames: string[] = [];
     this.readOnlyToolResults.clear();
     this.writeToolRan = false;
+    this.trajectory = newTrajectory(this.now());
+    try {
+      database.agentTrajectories.markFollowUp(this.ctx.groupId, this.trajectory.startedAt);
+    } catch (err) {
+      logger.error({ err }, '[AGENT] Failed to mark the previous run trajectory as followed up');
+    }
 
     try {
       const result = await this.runWithRetry(messages, writer, debugCtx, toolCallNames);
@@ -134,13 +187,14 @@ export class ExpenseBotAgent {
       }
 
       // Skip signal — bot chose to stay silent. The writer replaces a missing answer with the
-      // failure message unless silence is allowed (no mention, no write tool, round cap not hit;
+      // failure message unless silence is allowed (no mention, no write tool, no forced answer;
       // after reads only an explicit [SKIP]), so a skip here is always intentional — including
       // one emitted by the validator re-run (#108).
       if (isSkipSignal(finalText)) {
         logger.info('[AGENT] Skip signal — staying silent');
         debugCtx?.logFinal(finalText, totalToolCalls);
         debugCtx?.flush();
+        this.recordTrajectory('silent');
         await writer.deleteSentMessage();
         return '';
       }
@@ -148,6 +202,7 @@ export class ExpenseBotAgent {
       debugCtx?.logAiText(finalText);
       debugCtx?.logFinal(finalText, totalToolCalls);
       debugCtx?.flush();
+      this.recordTrajectory(finalText === NO_ANSWER_MESSAGE ? 'no_answer' : 'answered');
 
       await writer.sendRemainingChunks();
       return finalText;
@@ -157,6 +212,7 @@ export class ExpenseBotAgent {
         `${classification?.kind ?? 'unclassified'}: ${error instanceof Error ? error.message : String(error)}`,
       );
       debugCtx?.flush();
+      this.recordTrajectory('error', classification?.kind ?? 'unclassified');
       if (!classification) {
         // Not a recognizable AI/network/timeout failure — propagate so the caller
         // (and logs) see the real, unrelated error instead of a masked generic one.
@@ -234,10 +290,10 @@ export class ExpenseBotAgent {
     toolCallNames: string[],
   ): Promise<{ text: string; toolCount: number }> {
     // One overall deadline spanning all retries — a truly-stuck run is bounded
-    // by AGENT_TIMEOUT_MS, not AGENT_TIMEOUT_MS × attempts. Once it fires, the
+    // by RUN_DEADLINE_MS, not RUN_DEADLINE_MS × attempts. Once it fires, the
     // signal stays aborted, so any retry attempt aborts immediately.
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), RUN_DEADLINE_MS);
 
     try {
       for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
@@ -348,7 +404,7 @@ export class ExpenseBotAgent {
     toolCallNames.length = 0;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), RUN_DEADLINE_MS);
 
     messages.push({ role: 'assistant', content: rejectedText });
     messages.push({
@@ -389,9 +445,21 @@ export class ExpenseBotAgent {
   ): Promise<{ text: string; toolCount: number }> {
     let totalToolCalls = 0;
     let continueLoop = true;
+    let mustAnswer = false;
     let round = 0;
 
-    while (continueLoop && round < MAX_TOOL_ROUNDS) {
+    // No fixed round cap here: the stall guard ends the tool rounds (40-round and time caps, or a
+    // stall with no escalation left), and the run deadline bounds everything.
+    while (continueLoop) {
+      // Tool rounds only get the time before the final-round reserve: a round still running then
+      // is cut, so the forced answer keeps one full provider timeout before the run deadline.
+      const toolTimeLeft =
+        RUN_DEADLINE_MS - FINAL_ROUND_RESERVE_MS - (this.now() - this.trajectory.startedAt);
+      if (toolTimeLeft <= 0) {
+        this.endToolRounds('time_budget');
+        mustAnswer = true;
+        break;
+      }
       round++;
       debugCtx?.logRound(round);
 
@@ -400,21 +468,34 @@ export class ExpenseBotAgent {
         onToolCallStart: (name) => writer.setToolLabel(name, {}),
       };
 
-      const result: StreamRoundResult = await aiStreamRound(
-        {
-          messages,
-          tools: TOOL_DEFINITIONS,
-          maxTokens: 4096,
-          temperature: 0.3,
-          chain: 'smart',
-          signal,
-        },
-        callbacks,
-      );
+      const toolTime = AbortSignal.timeout(toolTimeLeft);
+      let result: StreamRoundResult;
+      try {
+        result = await aiStreamRound(
+          {
+            messages,
+            tools: TOOL_DEFINITIONS,
+            maxTokens: 4096,
+            temperature: 0.3,
+            chain: 'smart',
+            signal: AbortSignal.any([signal, toolTime]),
+            excludeProviders: [...this.trajectory.excludedProviders],
+          },
+          callbacks,
+        );
+      } catch (err) {
+        // Only the tool-round time ran out (the run deadline did not): the cut round's partial
+        // text is dropped and the forced round answers from what was gathered.
+        if (signal.aborted || !toolTime.aborted) throw err;
+        writer.commitIntermediate();
+        this.endToolRounds('time_budget');
+        mustAnswer = true;
+        break;
+      }
       this.logRoundProvider(round, result, debugCtx);
 
       // Execute tool calls
-      const toolResults: ToolCallResult[] = [];
+      const toolResults: Array<ToolCallResult & { tool: string; argsKey: string }> = [];
       const repeatedCallIds = new Set<string>();
 
       for (const tc of result.toolCalls) {
@@ -427,6 +508,8 @@ export class ExpenseBotAgent {
           );
           toolResults.push({
             id: tc.id,
+            tool: tc.name,
+            argsKey: tc.arguments ?? '',
             result: {
               success: false,
               error: `Malformed arguments: ${tc.arguments?.substring(0, 100)}`,
@@ -442,7 +525,8 @@ export class ExpenseBotAgent {
         await writer.flush(true);
 
         const isReadOnly = READ_ONLY_TOOL_NAMES[tc.name] === true;
-        const cacheKey = `${tc.name}:${canonicalJson(input)}`;
+        const argsKey = canonicalJson(input);
+        const cacheKey = `${tc.name}:${argsKey}`;
         const cached = isReadOnly ? this.readOnlyToolResults.get(cacheKey) : undefined;
         let toolResult: ToolResult;
         if (cached) {
@@ -485,7 +569,7 @@ export class ExpenseBotAgent {
 
         writer.markToolResult(toolResult.success);
 
-        toolResults.push({ id: tc.id, result: toolResult });
+        toolResults.push({ id: tc.id, tool: tc.name, argsKey, result: toolResult });
       }
 
       if (toolResults.length > 0) {
@@ -509,12 +593,20 @@ export class ExpenseBotAgent {
         messages.push(sanitized);
 
         // Add tool results (OpenAI format: role=tool)
+        const seed = this.trajectory.hashSeed;
+        const calls: ToolCallRecord[] = [];
         for (const tr of toolResults) {
           const content = tr.result.success
             ? tr.result.data !== undefined
               ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
               : tr.result.output || 'Success'
             : `Error: ${tr.result.error}`;
+          calls.push({
+            tool: tr.tool,
+            argsHash: hashFeature(tr.argsKey, seed),
+            resultHash: hashFeature(content, seed),
+            isError: !tr.result.success,
+          });
 
           messages.push({
             role: 'tool',
@@ -524,22 +616,31 @@ export class ExpenseBotAgent {
               : content,
           });
         }
-        continueLoop = true;
+
+        const decision = this.trajectory.guard.next(
+          {
+            round: this.trajectory.guard.entries.length + 1,
+            provider: result.providerUsed,
+            elapsedMs: this.now() - this.trajectory.startedAt,
+            calls,
+          },
+          nextProvider('smart', [...this.trajectory.excludedProviders, result.providerUsed]) !==
+            null,
+        );
+        mustAnswer = decision.action === 'finalize';
+        continueLoop = !mustAnswer;
+        await this.applyStallDecision(decision, result.providerUsed, messages, writer);
       } else {
         continueLoop = false;
       }
     }
 
-    if (continueLoop) {
-      // Round cap hit while the model still wanted tools: without a last round that forbids tool
-      // calls the run would end with no text at all (prod 2026-10-12, gpt-oss making one call per
-      // round). The tools stay declared with tool_choice 'none': every smart-chain provider
-      // accepted that live (2026-10-12), and without the tools Claude refused to add up the
-      // grand total because rule 7 sends all arithmetic to calculate.
-      logger.warn(
-        { rounds: MAX_TOOL_ROUNDS, toolCalls: totalToolCalls },
-        '[AGENT] Tool round cap reached — forcing a final answer with tool calls forbidden',
-      );
+    if (mustAnswer) {
+      // The tool rounds are over while the model still wanted tools: without a last round that
+      // forbids tool calls the run would end with no text at all (prod 2026-10-12, gpt-oss making
+      // one call per round). The tools stay declared with tool_choice 'none': every smart-chain
+      // provider accepted that live (2026-10-12), and without the tools Claude refused to add up
+      // the grand total because rule 7 sends all arithmetic to calculate.
       messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
       debugCtx?.logRound(round + 1);
       try {
@@ -552,13 +653,14 @@ export class ExpenseBotAgent {
             temperature: 0.3,
             chain: 'smart',
             signal,
+            excludeProviders: [...this.trajectory.excludedProviders],
           },
           { onTextDelta: (text) => writer.appendText(text) },
         );
         this.logRoundProvider(round + 1, final, debugCtx);
         if (final.toolCalls.length > 0) {
-          // The provider ignored tool_choice 'none'. Its calls never run: past the cap only the
-          // text counts (none of the providers did this in the 2026-10-12 smoke).
+          // The provider ignored tool_choice 'none'. Its calls never run: once the tool rounds are
+          // over only the text counts (none of the providers did this in the 2026-10-12 smoke).
           logger.warn(
             { provider: final.providerUsed, toolCalls: final.toolCalls.map((tc) => tc.name) },
             '[AGENT] Forced final round returned tool calls despite tool_choice none — ignored',
@@ -582,11 +684,12 @@ export class ExpenseBotAgent {
     }
 
     // Silence is a choice only for chatter the bot was not asked about. A run that changed data
-    // (a write tool ran in any attempt) or hit the round cap must answer; after read-only tools
-    // the writer accepts only an explicit [SKIP], an empty text is still a failed answer.
-    const roundCapHit = continueLoop;
+    // (a write tool ran in any attempt) or was forced to answer (in any loop of the run — a
+    // validator re-run included) must answer; after read-only tools the writer accepts only an
+    // explicit [SKIP], an empty text is still a failed answer.
     await writer.finalize({
-      allowSilence: !this.ctx.isMention && !roundCapHit && !this.writeToolRan,
+      allowSilence:
+        !this.ctx.isMention && this.trajectory.finalizeReason === null && !this.writeToolRan,
     });
 
     const finalText = writer.getText();
@@ -608,6 +711,109 @@ export class ExpenseBotAgent {
       '[AGENT] Round answered',
     );
     debugCtx?.logProvider(result.providerUsed);
+    const { providers } = this.trajectory;
+    if (!providers.includes(result.providerUsed)) providers.push(result.providerUsed);
+    this.trajectory.lastProvider = result.providerUsed;
+  }
+
+  /**
+   * Act on the stall guard's decision after a tool round (`finalize` only needs the reason kept:
+   * the caller then runs the forced final round). `provider` answered the round just judged.
+   */
+  private async applyStallDecision(
+    decision: StallDecision,
+    provider: string,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    writer: TelegramStreamWriter,
+  ): Promise<void> {
+    switch (decision.action) {
+      case 'continue':
+        return;
+      case 'nudge':
+        logger.warn(
+          { signal: decision.signal, provider },
+          '[AGENT] Stall detected — nudging the model to change course',
+        );
+        messages.push({
+          role: 'user',
+          content: `[SYSTEM] You are going in circles: ${STALL_DESCRIPTIONS[decision.signal]}. Do not repeat tool calls. If the tool results above already answer the question, answer now. Otherwise change approach: get_expenses with summary_only and currency returns converted per-category and grand totals in one call; one calculate call takes a whole expression.`,
+        });
+        return;
+      case 'handoff': {
+        // The stalled model stays out for the rest of the run (retries and the forced round too);
+        // the next one gets the whole history, every tool result included.
+        this.trajectory.excludedProviders.push(provider);
+        const next = nextProvider('smart', this.trajectory.excludedProviders);
+        logger.warn(
+          { signal: decision.signal, from: provider, to: next },
+          '[AGENT] Stall detected — handing the run to the next provider',
+        );
+        messages.push({
+          role: 'user',
+          content: `[SYSTEM] You are taking over this answer from another model that got stuck (${STALL_DESCRIPTIONS[decision.signal]}). The tool results above are real — reuse them and do not call the same tools again. Answer the user, calling only the tools that are still needed.`,
+        });
+        await writer.addWorkLogNote(`🔄 Передаю задачу ${next ?? 'другой модели'}…`);
+        return;
+      }
+      case 'finalize':
+        this.endToolRounds(decision.reason);
+        return;
+    }
+  }
+
+  /** No more tool rounds in this run: the forced final round answers from what was gathered. */
+  private endToolRounds(reason: FinalizeReason): void {
+    this.trajectory.finalizeReason = reason;
+    logger.warn(
+      { reason, toolRounds: this.trajectory.guard.entries.length },
+      '[AGENT] Tool rounds over — forcing a final answer with tool calls forbidden',
+    );
+  }
+
+  /**
+   * Store the finished run's features (stall-classifier dataset). Best effort: a failed write is
+   * logged and never reaches the user.
+   */
+  private recordTrajectory(outcome: AgentRunOutcome, errorKind: string | null = null): void {
+    const run = this.trajectory;
+    try {
+      database.agentTrajectories.create({
+        groupId: this.ctx.groupId,
+        startedAt: run.startedAt,
+        finishedAt: this.now(),
+        outcome,
+        errorKind,
+        isMention: this.ctx.isMention === true,
+        // Every call the model made in a tool round, malformed ones included — the same calls
+        // the round rows list.
+        toolCalls: run.guard.entries.reduce((sum, entry) => sum + entry.calls.length, 0),
+        nudges: run.guard.nudges,
+        handoffs: run.guard.handoffs,
+        providers: run.providers,
+        answerProvider: outcome === 'error' ? null : run.lastProvider,
+        finalizeReason: run.finalizeReason,
+        rounds: run.guard.entries.map((entry) => ({
+          round: entry.round,
+          provider: entry.provider,
+          elapsedMs: entry.elapsedMs,
+          calls: entry.calls,
+          decision: entry.decision.action,
+          reason:
+            'signal' in entry.decision
+              ? entry.decision.signal
+              : 'reason' in entry.decision
+                ? entry.decision.reason
+                : null,
+        })),
+      });
+    } catch (err) {
+      logger.error({ err }, '[AGENT] Failed to record the run trajectory');
+    }
+  }
+
+  /** Clock of the stall guard and the trajectory log; a seam for tests. */
+  protected now(): number {
+    return Date.now();
   }
 
   /**

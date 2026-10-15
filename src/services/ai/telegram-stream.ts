@@ -296,6 +296,15 @@ export class TelegramStreamWriter {
   }
 
   /**
+   * Add a line about the run itself, not a tool (e.g. a handoff to another model), and show it
+   * now: the next model may think for a while before it streams anything.
+   */
+  async addWorkLogNote(note: string): Promise<void> {
+    this.workLog.push(neutralizeHtml(note));
+    await this.flush(true);
+  }
+
+  /**
    * Start the next round's text. Called after each tool-use round; its steps stay in the work log.
    */
   commitIntermediate(): void {

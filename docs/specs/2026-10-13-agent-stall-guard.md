@@ -31,7 +31,7 @@ Healthy baseline: all 174 runs in the prod chat logs (2026-09…2026-10-12, hash
 |---|---|---|
 | `MAX_TOOL_ROUNDS` | 40 | crash guard only; healthy prod max is 6 tool rounds, a 15-item bulk add on a one-call-per-round model needs 15 |
 | `RUN_DEADLINE_MS` | 240 000 | the AbortController deadline of one run (all rounds and retries), was 180 000 |
-| `FINAL_ROUND_RESERVE_MS` | 45 000 | equals `PER_PROVIDER_TIMEOUT_MS` (streaming.ts): once 195 s have passed the run finalizes, so the forced final round still gets one full provider attempt before the hard abort |
+| `FINAL_ROUND_RESERVE_MS` | 45 000 | equals `PER_PROVIDER_TIMEOUT_MS` (streaming.ts): tool rounds only get the time up to 195 s — the guard finalizes a round that ends past it, and a round still running at 195 s is cut (its own abort signal) — so the forced final round still gets one full provider attempt before the hard abort |
 
 Nothing else assumes the old 180 s: per-provider timeouts stay 45 s, the Telegram typing interval runs for as long as the writer lives, and edits have no time limit. The validator re-run keeps its own deadline of the same length (unchanged structure).
 
@@ -75,7 +75,7 @@ Replayed incidents: 11:53 nudge after round 5, handoff after round 9; 11:55 nudg
 
 - **nudge:** push a `[SYSTEM]` user message: stop repeating, answer if the results above suffice, else change approach (one `get_expenses` with `summary_only` + `currency`, or one `calculate` with the whole expression).
 - **handoff:** the provider that answered the stalled round is excluded for the rest of the run (`aiStreamRound({ excludeProviders })`, filtered before the breaker ordering, so the next provider is whatever the health-ordered smart chain puts first). The history — every tool call and result so far — stays; a `[SYSTEM]` message tells the new model the previous one got stuck and the results are real. The work log gets `🔄 Передаю задачу <provider>…` (`TelegramStreamWriter.addWorkLogNote`). `canHandoff` is false when no other provider is left (`nextProvider('smart', excluded)` is null).
-- **finalize:** the existing forced final round (#158), also with the excluded providers skipped. Such a run never ends in silence.
+- **finalize:** the existing forced final round (#158), also with the excluded providers skipped. Such a run never ends in silence — the flag is run-level, so a validator re-run after a forced answer cannot turn it into silence either.
 
 ### 3.6 Trajectory logging (migration `052_create_agent_trajectories`)
 

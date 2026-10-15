@@ -682,6 +682,43 @@ describe('work log: collapsed at the top, never in the answer', () => {
     expect(log).not.toContain('<a ');
   });
 
+  test('a note line shows right away and stays in the log under the steps before it', async () => {
+    const { writer, edits } = makeRecordingWriter();
+    runToolRound(writer, 'calculate', { expression: '52829.45 RSD', target_currency: 'EUR' });
+    await writer.addWorkLogNote('🔄 Передаю задачу z.ai (glm-5.1)…');
+
+    // Shown before the next model streams anything.
+    expect(splitWorkLog(edits.at(-1) ?? '').log).toContain('🔄 Передаю задачу z.ai (glm-5.1)…');
+
+    runToolRound(writer, 'get_expenses', {
+      period: '2026-10',
+      summary_only: true,
+      currency: 'EUR',
+    });
+    writer.appendText('Итого: 1 639.23 EUR');
+    await writer.finalize();
+    const { log, body } = splitWorkLog(edits.at(-1) ?? '');
+    const lines = log.split('\n');
+    const noteAt = lines.findIndex((line) => line.includes('🔄 Передаю задачу'));
+    expect(lines[noteAt - 1]).toContain('✅ Считаю: 52829.45 RSD');
+    expect(lines[noteAt + 1]).toContain('✅ Загружаю расходы');
+    expect(body).toBe('Итого: 1 639.23 EUR');
+    expect(writer.getText()).toBe('Итого: 1 639.23 EUR');
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+
+  test('markup in a note stays text', async () => {
+    const { writer, edits } = makeRecordingWriter();
+    runToolRound(writer, 'get_budgets', {});
+    await writer.addWorkLogNote('🔄 Передаю задачу <b>x</b>…');
+    writer.appendText('Ок.');
+    await writer.finalize();
+
+    const { log } = splitWorkLog(sanitizeHtmlForTelegram(edits.at(-1) ?? ''));
+    expect(log).not.toContain('<b>x');
+    expect(log).toContain('x');
+  });
+
   test('the log adds at most 2 formatting entities however many tools ran (Telegram: 100/message)', async () => {
     const { writer, edits } = makeRecordingWriter();
     for (let i = 1; i <= 30; i++) {

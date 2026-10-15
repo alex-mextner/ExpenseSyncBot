@@ -1,6 +1,7 @@
 /** Database singleton — initializes all repositories and exposes them via a shared `database` object */
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { AdviceLogRepository } from './repositories/advice-log.repository';
+import { AgentTrajectoryRepository } from './repositories/agent-trajectory.repository';
 import { BankAccountsRepository } from './repositories/bank-accounts.repository';
 import { BankConnectionsRepository } from './repositories/bank-connections.repository';
 import { BankCredentialsRepository } from './repositories/bank-credentials.repository';
@@ -51,6 +52,7 @@ export class DatabaseService {
   public bankAccounts: BankAccountsRepository;
   public bankTransactions: BankTransactionsRepository;
   public merchantRules: MerchantRulesRepository;
+  public agentTrajectories: AgentTrajectoryRepository;
   public recurringPatterns: RecurringPatternRepository;
 
   constructor(db?: Database) {
@@ -77,6 +79,7 @@ export class DatabaseService {
     this.bankCredentials = new BankCredentialsRepository(this.db);
     this.bankAccounts = new BankAccountsRepository(this.db);
     this.bankTransactions = new BankTransactionsRepository(this.db);
+    this.agentTrajectories = new AgentTrajectoryRepository(this.db);
     this.merchantRules = new MerchantRulesRepository(this.db);
     this.recurringPatterns = new RecurringPatternRepository(this.db);
   }
