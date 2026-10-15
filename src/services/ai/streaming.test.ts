@@ -1263,6 +1263,70 @@ describe('aiStreamRound fallback chain', () => {
     }
   });
 
+  // The HF router answers 402 "no remaining credits" (HYP-1667) and stays that way until the
+  // owner tops up — like an exhausted quota, the slot must cool down at the back of the chain
+  // instead of being retried in its normal position on every request.
+  const NO_CREDITS =
+    'You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers.';
+  const noCredits = () =>
+    new OpenAI.APIError(402, { message: NO_CREDITS }, NO_CREDITS, new Headers());
+
+  it('a 402 (no credits) demotes the provider for an hour, so the next round skips past it', async () => {
+    const clientsMod = await import('./clients');
+    const order: string[] = [];
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      order.push(params.model);
+      if (params.model === 'test-model') throw noCredits();
+      return {
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+        },
+      };
+    });
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI);
+    }
+    const round = () =>
+      streamingModule.aiStreamRound({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 50,
+        chain: 'smart',
+      });
+
+    await round();
+    expect(order).toEqual(['test-model', 'claude-smart']);
+
+    order.length = 0;
+    await round();
+    expect(order).toEqual(['claude-smart']); // the out-of-credits z.ai is not paid for again
+    expect(isProviderDemoted('zai', Date.now() + 59 * 60_000)).toBe(true);
+    expect(isProviderDemoted('zai', Date.now() + 61 * 60_000)).toBe(false);
+  });
+
+  it('a 402 from the HF fallback slot demotes HF for an hour', async () => {
+    const clientsMod = await import('./clients');
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+      if (params.model === 'hf-test') throw noCredits();
+      throw new OpenAI.APIError(503, { message: 'down' }, 'down', new Headers());
+    });
+    for (const fn of ['zaiClient', 'claudeClient', 'hfClient'] as const) {
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI);
+    }
+
+    await expect(
+      streamingModule.aiStreamRound({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 50,
+        chain: 'smart',
+      }),
+    ).rejects.toThrow('All 3 providers in smart chain failed');
+    expect(isProviderDemoted('hf', Date.now() + 59 * 60_000)).toBe(true);
+  });
+
   it('does not demote a provider for a 4xx whose message mentions "connection"', async () => {
     const clientsMod = await import('./clients');
     const order: string[] = [];

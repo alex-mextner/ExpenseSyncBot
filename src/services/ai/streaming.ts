@@ -203,6 +203,13 @@ export function getRateLimitCooldownMs(error: unknown, now = Date.now()): number
   return 5 * 60_000;
 }
 
+/**
+ * Cooldown for a provider that answered 402 (out of prepaid credits, e.g. the HF router). Credits
+ * come back only on a manual top-up; a demoted slot is still tried at the back of the chain, and a
+ * clean round there lifts the demotion, so a top-up is picked up without waiting this out.
+ */
+const CREDITS_EXHAUSTED_COOLDOWN_MS = 60 * 60_000;
+
 // ── Provider slots ──────────────────────────────────────────────────────────
 
 interface ProviderSlot {
@@ -613,9 +620,16 @@ export async function aiStreamRound(
       // Read the responded tag off the ORIGINAL thrown value — it's set on `error`, while `lastError`
       // may be a fresh wrapper Error (for a non-Error throw) that never carried the tag.
       if (!isAbortLike(lastError)) {
-        if (numericStatus(lastError) === 429) {
+        const status = numericStatus(lastError);
+        if (status === 429 || status === 402) {
+          // 402 = out of prepaid credits (HF router): back only after a manual top-up, so it
+          // cools down far longer than a rate limit. It still sits at the back of the chain.
+          const cooldownMs =
+            status === 402
+              ? CREDITS_EXHAUSTED_COOLDOWN_MS
+              : getRateLimitCooldownMs(lastError, failedAt);
           recordProviderResponded(slot.key, failedAt);
-          recordProviderRateLimit(slot.key, failedAt, getRateLimitCooldownMs(lastError, failedAt));
+          recordProviderRateLimit(slot.key, failedAt, cooldownMs);
         } else if (isUnreachableFailure(lastError) && !providerResponded(error)) {
           recordProviderConnectionFailure(slot.key, failedAt);
         } else {
