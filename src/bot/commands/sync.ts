@@ -1,4 +1,5 @@
 /** /sync command handler — imports expenses from Google Sheets into the local database */
+import { SQLiteError } from 'bun:sqlite';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { Expense } from '../../database/types';
@@ -53,30 +54,21 @@ function fmtExpense(
   return `${date} ${amount} ${currency} ${category}${cmnt}`;
 }
 
+interface SyncedExpense {
+  date: string;
+  amount: number;
+  currency: string;
+  category: string;
+  comment: string;
+}
+
 export interface SyncResult {
   unchanged: number;
-  added: Array<{
-    date: string;
-    amount: number;
-    currency: string;
-    category: string;
-    comment: string;
-  }>;
-  deleted: Array<{
-    date: string;
-    amount: number;
-    currency: string;
-    category: string;
-    comment: string;
-  }>;
-  updated: Array<{
-    date: string;
-    amount: number;
-    currency: string;
-    category: string;
-    comment: string;
-    field: string;
-  }>;
+  added: SyncedExpense[];
+  deleted: SyncedExpense[];
+  updated: Array<SyncedExpense & { field: string }>;
+  /** Sheet rows left unwritten because they reference a missing user or group (logged). */
+  skipped: SyncedExpense[];
   createdCategories: string[];
   errors: MultiCurrencyRowError[];
   eurMismatches: EurMismatchWarning[];
@@ -119,13 +111,15 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     ? allDbExpenses.filter((e) => e.date.startsWith(`${spreadsheetYear}-`))
     : allDbExpenses;
   const users = database.users.findByGroupId ? database.users.findByGroupId(groupId) : [];
-  const defaultUserId = users[0]?.id ?? 1;
+  // No fallback id: users.id is global, so any constant would hand rows to another group's user.
+  const defaultUserId = users[0]?.id;
 
   const result: SyncResult = {
     unchanged: 0,
     added: [],
     deleted: [],
     updated: [],
+    skipped: [],
     createdCategories: [],
     errors,
     eurMismatches,
@@ -186,9 +180,39 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     }
   }
 
+  /**
+   * Applies one sheet row's writes atomically. A row that violates a foreign key (e.g. its
+   * expense belongs to a user row that no longer exists) is skipped and logged, so one bad row
+   * cannot abort the sync of every other row; the rollback keeps the DB row it would replace.
+   */
+  const writeRow = (expense: SyncedExpense, write: () => void): boolean => {
+    try {
+      database.transaction(write);
+      return true;
+    } catch (error) {
+      // SQLite's error for a write referencing a missing parent row (user, group, receipt).
+      if (!(error instanceof SQLiteError && error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY')) {
+        throw error;
+      }
+      logger.warn(
+        { err: error, groupId, expense },
+        '[SYNC] Sheet row skipped: foreign key violation (missing user or group)',
+      );
+      result.skipped.push(expense);
+      return false;
+    }
+  };
+
   // Pass 2: unmatched sheet rows — try partial match (update) or add
   for (const { row, parsed } of unmatchedSheetRows) {
     const candidates = dbPool.get(parsed.key);
+    const expense: SyncedExpense = {
+      date: row.date,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      category: row.category,
+      comment: row.comment,
+    };
 
     if (candidates && candidates.length > 0) {
       // Partial match — this is an update
@@ -203,44 +227,41 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
         changes.push(`"${existing.comment || ''}"→"${row.comment || ''}"`);
       }
 
-      database.expenses.delete(existing.id);
-      database.expenses.create({
-        group_id: groupId,
-        user_id: existing.user_id,
-        date: row.date,
-        category: row.category,
-        comment: row.comment,
-        amount: parsed.amount,
-        currency: parsed.currency,
-        eur_amount: row.eurAmount,
+      const written = writeRow(expense, () => {
+        database.expenses.delete(existing.id);
+        database.expenses.create({
+          group_id: groupId,
+          user_id: existing.user_id,
+          date: row.date,
+          category: row.category,
+          comment: row.comment,
+          amount: parsed.amount,
+          currency: parsed.currency,
+          eur_amount: row.eurAmount,
+        });
       });
-      result.updated.push({
-        date: row.date,
-        amount: parsed.amount,
-        currency: parsed.currency,
-        category: row.category,
-        comment: row.comment,
-        field: changes.join(', '),
-      });
+      if (written) result.updated.push({ ...expense, field: changes.join(', ') });
+    } else if (defaultUserId === undefined) {
+      logger.warn(
+        { groupId, expense },
+        '[SYNC] Sheet row skipped: the group has no user to own it',
+      );
+      result.skipped.push(expense);
     } else {
       // No match at all — new expense
-      database.expenses.create({
-        group_id: groupId,
-        user_id: defaultUserId,
-        date: row.date,
-        category: row.category,
-        comment: row.comment,
-        amount: parsed.amount,
-        currency: parsed.currency,
-        eur_amount: row.eurAmount,
+      const written = writeRow(expense, () => {
+        database.expenses.create({
+          group_id: groupId,
+          user_id: defaultUserId,
+          date: row.date,
+          category: row.category,
+          comment: row.comment,
+          amount: parsed.amount,
+          currency: parsed.currency,
+          eur_amount: row.eurAmount,
+        });
       });
-      result.added.push({
-        date: row.date,
-        amount: parsed.amount,
-        currency: parsed.currency,
-        category: row.category,
-        comment: row.comment,
-      });
+      if (written) result.added.push(expense);
     }
   }
 
@@ -260,7 +281,7 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
   }
 
   logger.info(
-    `[SYNC] Done: +${result.added.length} -${result.deleted.length} ~${result.updated.length} =${result.unchanged}`,
+    `[SYNC] Done: +${result.added.length} -${result.deleted.length} ~${result.updated.length} =${result.unchanged} skipped:${result.skipped.length}`,
   );
 
   return result;
@@ -299,6 +320,8 @@ function formatSyncResult(result: SyncResult): string {
     }
     if (result.updated.length > 10) lines.push(`  ...и ещё ${result.updated.length - 10}`);
   }
+
+  lines.push(...formatSkippedRows(result.skipped));
 
   if (result.createdCategories.length > 0) {
     lines.push(`\n📁 Новые категории: ${result.createdCategories.join(', ')}`);
@@ -387,6 +410,19 @@ type SyncNotifyMessage = {
   reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
 };
 
+/** Report lines for sheet rows skipped on a foreign-key violation; empty when there are none. */
+function formatSkippedRows(skipped: SyncedExpense[]): string[] {
+  if (skipped.length === 0) return [];
+  const lines = [`\n⚠️ Пропущено (нет автора в базе): ${skipped.length}`];
+  // N+2 rule: show all if ≤12, otherwise 10 + "ещё N" (N≥3)
+  const maxVisible = skipped.length <= 12 ? skipped.length : 10;
+  for (const e of skipped.slice(0, maxVisible)) {
+    lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
+  }
+  if (skipped.length > maxVisible) lines.push(`  ...и ещё ${skipped.length - maxVisible}`);
+  return lines;
+}
+
 function buildAutoSyncExpensesMessage(result: SyncResult, cacheKey: string): SyncNotifyMessage {
   const counts: string[] = [];
   if (result.added.length > 0) counts.push(`+${result.added.length}`);
@@ -434,6 +470,9 @@ function buildAutoSyncExpensesMessage(result: SyncResult, cacheKey: string): Syn
       });
     }
   }
+
+  // Skipped rows alone never trigger a notice (ensureFreshExpenses): they recur on every sync.
+  lines.push(...formatSkippedRows(result.skipped));
 
   const text = lines.join('\n');
   if (buttons.length > 0) {
