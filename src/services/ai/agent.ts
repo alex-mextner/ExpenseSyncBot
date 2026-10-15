@@ -890,6 +890,7 @@ Use ONLY these HTML tags (no Markdown, no ** or *):
 - <code>code</code> for exact numbers and IDs
 Escape < > & as &lt; &gt; &amp;
 Do NOT use <blockquote>, <u>, or any other tags — they are reserved for system UI.
+Do NOT use list tags (<ul>, <ol>, <li>) — Telegram does not support them. Write each list item on its own line starting with "• " (or "1. " for numbered steps).
 Do NOT invent links.
 NEVER use Markdown tables (|---|---| syntax) in chat messages — Telegram does not render them.
 When you have tabular data: ALWAYS call render_table with the full Markdown table AND present the same data as a bullet list in your text reply. Both actions are mandatory — never skip either.

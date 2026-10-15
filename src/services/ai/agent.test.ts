@@ -569,6 +569,16 @@ describe('ExpenseBotAgent', () => {
       expect(systemContent).toContain('update_group_setting');
       expect(systemContent).toContain('never tell the user to open /settings');
     });
+
+    it('system prompt forbids HTML list tags and asks for • lines (#165)', async () => {
+      mockStreamReturn();
+
+      await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
+
+      const systemContent = getLastCallOpts().messages[0]?.content as string;
+      expect(systemContent).toContain('Do NOT use list tags (<ul>, <ol>, <li>)');
+      expect(systemContent).toContain('starting with "• "');
+    });
   });
 
   // -- run() -- error handling (throws AgentError after retries) -------------

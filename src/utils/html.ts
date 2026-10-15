@@ -120,18 +120,192 @@ export function closeUnmatchedTags(html: string): string {
   return result;
 }
 
+/** Nesting levels that still get their own indent; deeper items share the last one. */
+const MAX_LIST_INDENT_LEVELS = 3;
+
+/**
+ * The tag starting at `start`, quotes respected: `{ end }` is its `>`. `{ resumeAt }` when a `<`
+ * outside quotes comes first — no tag here; scanning resumes at that `<` (not inside the failed
+ * span, which keeps the scan linear). null when the text ends inside it.
+ */
+function scanTag(text: string, start: number): { end: number } | { resumeAt: number } | null {
+  let quote = '';
+  for (let k = start + 1; k < text.length; k++) {
+    const ch = text[k];
+    if (quote) {
+      if (ch === quote) quote = '';
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      return { end: k };
+    } else if (ch === '<') {
+      return { resumeAt: k };
+    }
+  }
+  return null;
+}
+
+function isSpace(ch: string | undefined): boolean {
+  return ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r';
+}
+
+/**
+ * Turn HTML lists into plain lines: Telegram HTML has no list tags, and escaped `<ul>`/`<li>`
+ * show up literally (#165). `<ul>` items become `• item`, `<ol>` items `1. item`; nested lists are
+ * indented two spaces per level (capped). Whitespace around list tags (source indentation) goes.
+ * One linear pass over real tags: attribute values and `<code>`/`<pre>` contents are untouched.
+ */
+function convertHtmlLists(text: string): string {
+  if (!/<\/?(?:ul|ol|li)[\s/>]/i.test(text)) return text;
+  const out: string[] = [];
+  const lists: Array<{ kind: string; ordered: boolean; count: number; step: number }> = [];
+  let lastIsText = false;
+  let skipLeadingSpace = false;
+  let lineBreakDue = false;
+
+  const endsWithNewline = () => out.at(-1)?.endsWith('\n') ?? true;
+  const pushText = (raw: string) => {
+    let from = 0;
+    if (skipLeadingSpace) while (from < raw.length && isSpace(raw[from])) from++;
+    if (from === raw.length) return;
+    if (lineBreakDue && !endsWithNewline()) out.push('\n');
+    out.push(from === 0 ? raw : raw.slice(from));
+    lastIsText = true;
+    skipLeadingSpace = false;
+    lineBreakDue = false;
+  };
+  const trimTrailingSpace = () => {
+    while (lastIsText && out.length > 0) {
+      const chunk = out[out.length - 1] ?? '';
+      let end = chunk.length;
+      while (end > 0 && isSpace(chunk[end - 1])) end--;
+      if (end > 0) {
+        out[out.length - 1] = chunk.slice(0, end);
+        return;
+      }
+      out.pop();
+    }
+  };
+  const startLine = () => {
+    trimTrailingSpace();
+    if (out.length > 0 && !endsWithNewline()) out.push('\n');
+    lastIsText = false;
+    skipLeadingSpace = true;
+  };
+
+  let textStart = 0;
+  // Any tag name is read whole (`li_custom`, `x:y`), so its attributes are scanned quote-aware and
+  // only exactly `ul`/`ol`/`li` count as list tags.
+  const tagName = /<(\/?)([a-z][^\s/>"'=<]*)/iy;
+  let i = text.indexOf('<');
+  while (i !== -1) {
+    tagName.lastIndex = i;
+    const nameMatch = tagName.exec(text);
+    if (!nameMatch) {
+      i = text.indexOf('<', i + 1);
+      continue;
+    }
+    const scanned = scanTag(text, i);
+    // A tag the text ends inside: the rest stays text.
+    if (!scanned) break;
+    if ('resumeAt' in scanned) {
+      i = scanned.resumeAt;
+      continue;
+    }
+    const { end } = scanned;
+    const closing = nameMatch[1] === '/';
+    const name = (nameMatch[2] ?? '').toLowerCase();
+    const selfClosing = text[end - 1] === '/';
+    if (!closing && !selfClosing && (name === 'code' || name === 'pre')) {
+      // Code is shown as written: skip to its closing tag — exactly `</code>`, the only form the
+      // sanitizer restores — list markup inside included. With no closing tag (yet — streaming),
+      // everything after it is code.
+      const closeTag = new RegExp(`</${name}>`, 'gi');
+      closeTag.lastIndex = end + 1;
+      const close = closeTag.exec(text);
+      if (!close) break;
+      i = text.indexOf('<', closeTag.lastIndex);
+      continue;
+    }
+    // A self-closing list tag (`<ul/>`) opens nothing; it is dropped like any other list tag.
+    if ((name === 'ul' || name === 'ol') && selfClosing) {
+      pushText(text.slice(textStart, i));
+      textStart = end + 1;
+    } else if (name === 'ul' || name === 'ol' || name === 'li') {
+      pushText(text.slice(textStart, i));
+      // Numbering attributes (<ol start="5" reversed>, <li value="3">) are kept: steps are referred
+      // to by number. Attributes are tokenized with quoted values consumed whole, so text inside
+      // another attribute (`title="start=9"`) is never read as one.
+      const attrs = new Map<string, string>();
+      for (const m of text
+        .slice(i, end)
+        .matchAll(/\s([^\s"'=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
+        const attrName = m[1]?.toLowerCase();
+        if (attrName && !attrs.has(attrName))
+          attrs.set(attrName, (m[2] ?? m[3] ?? m[4] ?? '').trim());
+      }
+      const numberAttr = (attr: string) => {
+        const raw = attrs.get(attr);
+        return raw !== undefined && /^-?\d{1,9}$/.test(raw) ? Number.parseInt(raw, 10) : null;
+      };
+      if (name === 'li' && !closing) {
+        startLine();
+        const list = lists.at(-1);
+        const value = numberAttr('value');
+        if (list) list.count = value ?? list.count + list.step;
+        const level = Math.min(Math.max(lists.length - 1, 0), MAX_LIST_INDENT_LEVELS);
+        out.push(`${'  '.repeat(level)}${list?.ordered ? `${list.count}. ` : '• '}`);
+        lineBreakDue = false;
+      } else if (name === 'li') {
+        // Text after a closed item (`</li> Итого: …`) starts its own line.
+        trimTrailingSpace();
+        lastIsText = false;
+        lineBreakDue = true;
+        skipLeadingSpace = true;
+      } else if (closing) {
+        trimTrailingSpace();
+        lastIsText = false;
+        // Only a closer of the open list's own kind closes it: a stray `</ul>` inside an `<ol>`
+        // must not drop its numbering.
+        if (lists.at(-1)?.kind === name) lists.pop();
+        lineBreakDue = true;
+        skipLeadingSpace = true;
+      } else {
+        startLine();
+        // A reversed list counts down from its start. Without a start its first number is the
+        // item count, unknown in this single pass, so it gets bullets rather than wrong numbers.
+        const reversed = name === 'ol' && attrs.has('reversed');
+        const start = numberAttr('start');
+        const step = reversed ? -1 : 1;
+        lists.push({
+          kind: name,
+          ordered: name === 'ol' && !(reversed && start === null),
+          count: (start ?? 1) - step,
+          step,
+        });
+      }
+      textStart = end + 1;
+    }
+    i = text.indexOf('<', end + 1);
+  }
+  pushText(text.slice(textStart));
+  return out.join('');
+}
+
 /**
  * Sanitize text for Telegram HTML parse mode.
  *
- * Strategy: decode existing entities first (idempotent), escape everything,
- * then restore only whitelisted tags. Safe to call multiple times on the
+ * Strategy: decode existing entities first (idempotent), turn HTML lists into plain lines,
+ * escape everything, then restore only whitelisted tags. Safe to call multiple times on the
  * same text without double-escaping.
  */
 export function sanitizeHtmlForTelegram(text: string): string {
   // Decode existing entities first so re-sanitizing is idempotent.
   // &amp; → & → &amp; (same result), so calling twice is safe. Decode &amp; LAST
   // so `&amp;lt;` resolves to literal `&lt;` rather than double-unescaping into `<`.
-  const decoded = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const decoded = convertHtmlLists(
+    text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'),
+  );
 
   // Step 1: Escape ALL special characters
   let result = decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
