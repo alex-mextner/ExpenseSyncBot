@@ -41,7 +41,11 @@ mock.module('./clients', () => ({
 }));
 
 import OpenAI from 'openai';
-import { isProviderDemoted, resetProviderBreaker } from './provider-breaker';
+import {
+  isProviderDemoted,
+  recordProviderRateLimit,
+  resetProviderBreaker,
+} from './provider-breaker';
 import {
   CLAUDE_THINKING_RESERVE_TOKENS,
   chatRequestParams,
@@ -246,7 +250,10 @@ describe('aiStreamRound fallback chain', () => {
   // Every slot fails with a 500 so the chain walks all providers; the recorded models are the chain.
   // The aggregate's provider count must equal the recorded calls, so a slot whose client could not
   // even be built (it never reaches `create`) still shows up as a mismatch.
-  async function chainModels(chain: 'smart' | 'fast' | 'ocr'): Promise<string[]> {
+  async function chainModels(
+    chain: 'smart' | 'fast' | 'ocr',
+    excludeProviders?: readonly string[],
+  ): Promise<string[]> {
     const calls: string[] = [];
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
@@ -264,6 +271,7 @@ describe('aiStreamRound fallback chain', () => {
         messages: [{ role: 'user', content: 'hi' }],
         maxTokens: 100,
         chain,
+        excludeProviders,
       });
     } catch (err) {
       message = (err as Error).message;
@@ -291,6 +299,42 @@ describe('aiStreamRound fallback chain', () => {
   ])('without Groq and Claude keys the %s chain degrades to %p', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = '';
     expect(await chainModels(chain)).toEqual(expected);
+  });
+
+  // A stalled model is handed off: the agent excludes it for the rest of the run (HYP-1716).
+  it('skips the excluded providers and keeps the rest of the chain in order', async () => {
+    mockEnv.GROQ_API_KEY = 'test-groq';
+    expect(await chainModels('smart', ['Groq (groq-smart)'])).toEqual([
+      'test-model',
+      'claude-smart',
+      'hf-test',
+    ]);
+    expect(await chainModels('smart', ['Groq (groq-smart)', 'z.ai (test-model)'])).toEqual([
+      'claude-smart',
+      'hf-test',
+    ]);
+  });
+
+  it('nextProvider names the slot the chain would try first without the excluded ones', () => {
+    mockEnv.GROQ_API_KEY = 'test-groq';
+    expect(streamingModule.nextProvider('smart', [])).toBe('Groq (groq-smart)');
+    expect(streamingModule.nextProvider('smart', ['Groq (groq-smart)'])).toBe('z.ai (test-model)');
+    expect(
+      streamingModule.nextProvider('smart', [
+        'Groq (groq-smart)',
+        'z.ai (test-model)',
+        'Claude (claude-smart)',
+        'HF (hf-test)',
+      ]),
+    ).toBeNull();
+  });
+
+  it('nextProvider follows the breaker order: a demoted provider is not next', () => {
+    mockEnv.GROQ_API_KEY = 'test-groq';
+    recordProviderRateLimit('zai', Date.now(), 60_000);
+    expect(streamingModule.nextProvider('smart', ['Groq (groq-smart)'])).toBe(
+      'Claude (claude-smart)',
+    );
   });
 
   it.each([
