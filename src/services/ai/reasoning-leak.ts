@@ -48,7 +48,12 @@ export function findReasoningLeak(answer: string, question: string): string | nu
   // gpt-oss's own channel tokens (harmony format) are never part of an answer.
   const channel = unquoted.indexOf('<|channel|>');
   if (channel !== -1) return unquoted.slice(channel);
-  const prose = unquoted.replace(/<[^<>]*>/g, '').replace(/\s+/g, ' ');
+  // Tags go without a trace (a tag inside a word keeps the word whole); any '<' or '>' left after
+  // that (a malformed tag) becomes a space. This text is only counted, never shown or sent.
+  const prose = unquoted
+    .replace(/<[^<>]*>/g, '')
+    .replace(/[<>]/g, ' ')
+    .replace(/\s+/g, ' ');
 
   // One linear pass over the words: a passage is the English text between runs of 3+ Russian
   // words, so line breaks and a Russian category name inside reasoning do not split it.

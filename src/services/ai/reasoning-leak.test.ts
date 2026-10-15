@@ -61,6 +61,13 @@ describe('findReasoningLeak', () => {
     expect(findReasoningLeak(`Итого: <b>8561.59 EUR</b>\n\n${leak}`, RU_QUESTION)).not.toBeNull();
   });
 
+  // Pins tag removal to '' (not ' '): a space would split "us<b>er</b>" into two words.
+  it('finds reasoning with formatting tags inside words', () => {
+    const answer =
+      'Итого: 5 EUR\n\nThe us<b>er</b> asks for the totals per category. The assis<i>tant</i> should use the expenses returned by tools to produce the response.';
+    expect(findReasoningLeak(answer, RU_QUESTION)).toContain('The user asks');
+  });
+
   it('a question about money transfers ("переводы") is still checked', () => {
     const leak =
       'We have a conversation where the user asks about transfers. The assistant must answer with the totals. Let me produce the final answer.';
