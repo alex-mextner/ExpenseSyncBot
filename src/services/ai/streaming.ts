@@ -18,6 +18,8 @@
  *
  * A circuit breaker (provider-breaker.ts) demotes a provider that hits repeated connection-type
  * failures to the back of the chain for a cooldown, so a flapping endpoint stops being tried first.
+ * The agent's stall handoff (stall-guard.ts) passes `excludeProviders` to keep a stalled model out
+ * of the rest of a run; `nextProvider` names the slot such a round would try first.
  */
 
 import OpenAI from 'openai';
@@ -80,6 +82,11 @@ export interface StreamRoundOptions {
   chain?: ChainName;
   /** Overall caller deadline. When aborted, the fallback chain stops immediately. */
   signal?: AbortSignal;
+  /**
+   * Slot names (`StreamRoundResult.providerUsed`) this round must not use: a model the agent
+   * handed the run away from stays out for the rest of that run.
+   */
+  excludeProviders?: readonly string[];
   /** Per-provider timeout override (defaults to PER_PROVIDER_TIMEOUT_MS). For tests. */
   perProviderTimeoutMs?: number;
 }
@@ -480,6 +487,22 @@ function buildChain(chain: ChainName): ProviderSlot[] {
   }
 }
 
+/** The chain's slots minus the excluded names, in breaker order (demoted slots last). */
+function availableSlots(chain: ChainName, exclude: readonly string[], now: number): ProviderSlot[] {
+  return orderByHealth(
+    buildChain(chain).filter((slot) => !exclude.includes(slot.name)),
+    now,
+  );
+}
+
+/**
+ * Name of the slot a round on `chain` would try first with `exclude` left out, or null when none
+ * is left — the agent's handoff target.
+ */
+export function nextProvider(chain: ChainName, exclude: readonly string[]): string | null {
+  return availableSlots(chain, exclude, Date.now())[0]?.name ?? null;
+}
+
 function numericStatus(error: unknown): number | undefined {
   // Optional chain: isProviderDown/isRetryableError call this on `unknown`, which may be a thrown
   // null/undefined/primitive — those must classify as not-retryable, never throw a TypeError.
@@ -549,7 +572,7 @@ export async function aiStreamRound(
   // mutations below read a fresh `Date.now()` at failure time so a cooldown that expires mid-round
   // is honored (the boundary check `demotedUntil <= now` must not use a stale anchor).
   const now = Date.now();
-  const chain = orderByHealth(buildChain(chainName), now);
+  const chain = availableSlots(chainName, options.excludeProviders ?? [], now);
   let lastError: Error | null = null;
   // Once text reaches the user we cannot splice another model's output on a fallback. (Whether the
   // provider was reachable before a failure is read separately, off the thrown error's tag.)

@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import type { Bot } from 'gramio';
 import { createMockLogger } from '../../test-utils/mocks/logger';
-import type { StreamRoundResult } from './streaming';
+import type { ChainName, StreamRoundResult } from './streaming';
 
 const logMock = createMockLogger();
 
@@ -25,12 +25,14 @@ const mockIsRetryableError = mock<(error: unknown) => boolean>();
 const mockGetBackoffDelay = mock<(attempt: number, error: unknown) => number>();
 const mockClassifyAiError =
   mock<(error: unknown) => import('./streaming').AiErrorClassification | null>();
+const mockNextProvider = mock<(chain: ChainName, exclude: readonly string[]) => string | null>();
 
 mock.module('./streaming', () => ({
   aiStreamRound: mockAiStreamRound,
   isRetryableError: mockIsRetryableError,
   getBackoffDelay: mockGetBackoffDelay,
   classifyAiError: mockClassifyAiError,
+  nextProvider: mockNextProvider,
 }));
 
 const mockValidateResponse = mock<
@@ -65,6 +67,12 @@ import type { AgentContext } from './types';
 const { aiDebugLogger, ExpenseBotAgent } = await import('./agent');
 const { TOOL_DEFINITIONS } = await import('./tools');
 type ExpenseBotAgent = InstanceType<typeof ExpenseBotAgent>;
+const { database } = await import('../../database');
+
+// Every run writes an agent_trajectories row, whose group_id references groups(id).
+database.exec(
+  `INSERT OR IGNORE INTO groups (id, telegram_group_id, default_currency, enabled_currencies) VALUES (1, 123, 'EUR', '["EUR"]')`,
+);
 
 // Minimal AgentContext with all required fields
 function makeCtx(overrides?: Partial<AgentContext>): AgentContext {
@@ -79,6 +87,11 @@ function makeCtx(overrides?: Partial<AgentContext>): AgentContext {
     ...overrides,
   };
 }
+
+/** The smart chain as the mocks see it: a round answers from the first provider it did not exclude. */
+const CHAIN = ['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)', 'Claude (sonnet)', 'HF (qwen)'];
+const firstAvailable = (exclude: readonly string[] = []) =>
+  CHAIN.find((provider) => !exclude.includes(provider)) ?? null;
 
 /** Build a StreamRoundResult for a simple text response */
 function makeTextResult(text: string): StreamRoundResult {
@@ -197,6 +210,9 @@ describe('ExpenseBotAgent', () => {
       kind: 'generic',
       userMessage: '\u274c Ошибка AI. Попробуйте позже.',
     });
+    mockNextProvider.mockReset();
+    mockNextProvider.mockImplementation((_chain, exclude) => firstAvailable(exclude));
+    database.exec('DELETE FROM agent_trajectories');
   });
 
   afterEach(() => {
@@ -552,6 +568,16 @@ describe('ExpenseBotAgent', () => {
       const systemContent = opts.messages[0]?.content as string;
       expect(systemContent).toContain('update_group_setting');
       expect(systemContent).toContain('never tell the user to open /settings');
+    });
+
+    it('system prompt forbids HTML list tags and asks for • lines (#165)', async () => {
+      mockStreamReturn();
+
+      await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
+
+      const systemContent = getLastCallOpts().messages[0]?.content as string;
+      expect(systemContent).toContain('Do NOT use list tags (<ul>, <ol>, <li>)');
+      expect(systemContent).toContain('starting with "• "');
     });
   });
 
@@ -1093,12 +1119,20 @@ describe('ExpenseBotAgent', () => {
 
   // Prod incident 2026-10-12: a model without parallel tool calls spent every round on one
   // `calculate` each, hit the round cap and finished with empty text — the user got either
-  // silence (non-mention → treated as [SKIP]) or a message made only of ✅ tool lines.
-  describe('run() -- tool round cap and empty answers', () => {
-    /** Every round that offers tools gets another distinct calculate call back. */
+  // silence (non-mention → treated as [SKIP]) or a message made only of ✅ tool lines. Since
+  // HYP-1716 such a run is nudged, handed off twice and then forced to answer.
+  describe('run() -- forced final round and empty answers', () => {
+    /**
+     * Every round that offers tools gets another distinct calculate call back, answered by the
+     * first provider the round did not exclude. Returns the providers that answered, per round.
+     */
     function mockEndlessToolCalls(finalText: string) {
+      const answeredBy: Array<{ provider: string; excluded: readonly string[] }> = [];
       let n = 0;
       mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        const excluded = opts.excludeProviders ?? [];
+        const provider = firstAvailable(excluded) ?? 'none';
+        answeredBy.push({ provider, excluded });
         if (opts.toolChoice !== 'none') {
           n++;
           const args = JSON.stringify({ expression: `${n} RSD`, target_currency: 'EUR' });
@@ -1118,12 +1152,13 @@ describe('ExpenseBotAgent', () => {
                 },
               ],
             },
-            providerUsed: 'mock',
+            providerUsed: provider,
           } satisfies StreamRoundResult;
         }
         if (finalText) callbacks.onTextDelta?.(finalText);
-        return makeTextResult(finalText);
+        return { ...makeTextResult(finalText), providerUsed: provider };
       });
+      return answeredBy;
     }
 
     function lastEditedText(): string {
@@ -1141,9 +1176,9 @@ describe('ExpenseBotAgent', () => {
       ).mockResolvedValue(undefined);
     });
 
-    it('forces one final round with tool calls forbidden when the round cap is hit, and returns its text', async () => {
+    it('forces one final round with tool calls forbidden once the stall ladder runs out, and returns its text', async () => {
       const mentionAgent = new ExpenseBotAgent('key', makeCtx({ isMention: true }));
-      mockEndlessToolCalls('Итого: 1 000 EUR');
+      const answeredBy = mockEndlessToolCalls('Итого: 1 000 EUR');
 
       const result = await mentionAgent.run(
         'Сумма по категориям в евро',
@@ -1158,8 +1193,16 @@ describe('ExpenseBotAgent', () => {
       expect(lastOpts.tools).toBe(TOOL_DEFINITIONS);
       // The forced round tells the model to answer now from what it already gathered.
       expect(JSON.stringify(lastOpts.messages.at(-1))).toContain('[SYSTEM]');
-      expect(mockAiStreamRound).toHaveBeenCalledTimes(11);
+      // The mocked tool returns the same result every time: nudge after round 4 (calculate
+      // streak), round 5 ignores it → handoff; then every 3 rounds of nothing new — handoff
+      // after 8, finalize after 11.
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(12);
       expect(logMock.warn).toHaveBeenCalled();
+      // Each handoff really changed the model: no round was answered by an excluded provider.
+      expect(answeredBy.every(({ provider, excluded }) => !excluded.includes(provider))).toBe(true);
+      expect(new Set(answeredBy.map(({ provider }) => provider))).toEqual(
+        new Set(CHAIN.slice(0, 3)),
+      );
     });
 
     it('never runs a tool call the forced final round returns despite tool_choice none, and logs it', async () => {
@@ -1181,7 +1224,7 @@ describe('ExpenseBotAgent', () => {
 
       expect(result).toBe('Итого: 2001 EUR');
       expect(mockExecuteTool.mock.calls.map((c) => c[0])).not.toContain('add_expense');
-      expect(mockExecuteTool).toHaveBeenCalledTimes(10);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(11);
       expect(logMock.warn).toHaveBeenCalledWith(
         expect.objectContaining({ toolCalls: ['add_expense'] }),
         expect.stringContaining('ignored'),
@@ -1391,6 +1434,11 @@ describe('ExpenseBotAgent', () => {
 
     it('a failed forced final round shows the failure message instead of redoing every tool', async () => {
       mockIsRetryableError.mockReturnValue(true);
+      // Each add_expense adds a new row (new result), so nothing stalls and the 40-round cap ends the run.
+      mockExecuteTool.mockImplementation(async (_name, input) => ({
+        success: true,
+        output: `added ${JSON.stringify(input)}`,
+      }));
       let n = 0;
       mockAiStreamRound.mockImplementation(async (opts) => {
         if (opts.toolChoice === 'none')
@@ -1405,7 +1453,7 @@ describe('ExpenseBotAgent', () => {
       const result = await agent.run('добавь всё', [], mockBot as unknown as Bot);
 
       expect(result).toBe(NO_ANSWER_MESSAGE);
-      expect(mockExecuteTool).toHaveBeenCalledTimes(10);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(40);
       expect(logMock.warn).toHaveBeenCalled();
     });
 
@@ -1414,12 +1462,12 @@ describe('ExpenseBotAgent', () => {
       // The round can also end with a provider error right as the deadline fires.
       ['a retryable 503', () => Object.assign(new Error('unavailable'), { status: 503 })],
     ])('a run-deadline abort during the forced final round ending in %s surfaces the timeout without a replay', async (_label, roundError) => {
-      // Capture the run-deadline timer (AGENT_TIMEOUT_MS, 180 s) so the test can fire it mid-round.
+      // Capture the run-deadline timer (RUN_DEADLINE_MS, 240 s) so the test can fire it mid-round.
       const deadlineHandlers: Array<() => void> = [];
       const realSetTimeout = globalThis.setTimeout;
       // Bun types setTimeout with overloads and __promisify__, which a plain function can't satisfy.
       const capturingSetTimeout = ((handler: () => void, ms?: number) => {
-        if (ms === 180_000) deadlineHandlers.push(handler);
+        if (ms === 240_000) deadlineHandlers.push(handler);
         return realSetTimeout(handler, ms);
       }) as typeof setTimeout;
       spyOn(globalThis, 'setTimeout').mockImplementation(capturingSetTimeout);
@@ -1429,6 +1477,10 @@ describe('ExpenseBotAgent', () => {
           ? { kind: 'timeout', userMessage: '⏳ Время ожидания истекло. Попробуй ещё раз.' }
           : { kind: 'generic', userMessage: '❌ Ошибка AI. Попробуй позже.' },
       );
+      mockExecuteTool.mockImplementation(async (_name, input) => ({
+        success: true,
+        output: `added ${JSON.stringify(input)}`,
+      }));
       let n = 0;
       mockAiStreamRound.mockImplementation(async (opts) => {
         if (opts.toolChoice === 'none') {
@@ -1447,13 +1499,943 @@ describe('ExpenseBotAgent', () => {
 
       expect(error).toBeInstanceOf(AgentError);
       expect((error as InstanceType<typeof AgentError>).userMessage).toContain('ожидания');
-      // No replay: 10 tool rounds + the forced round, every add_expense ran once.
-      expect(mockAiStreamRound).toHaveBeenCalledTimes(11);
-      expect(mockExecuteTool).toHaveBeenCalledTimes(10);
+      // No replay: 40 tool rounds + the forced round, every add_expense ran once.
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(41);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(40);
       expect(logMock.warn).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'timeout' }),
         expect.stringContaining('AI run failed'),
       );
+    });
+  });
+
+  describe('run() -- stall guard: nudge, handoff, forced answer, trajectory (HYP-1716)', () => {
+    /**
+     * Every tool round asks for one more distinct conversion (the 2026-10-12 pattern); the provider
+     * that answers is the first one of CHAIN the round did not exclude, like the real chain.
+     * Returns, per call, the history's last message and tool-result count as that call saw them
+     * (the agent keeps appending to the same messages array).
+     */
+    function mockOneConversionPerRound(finalText: string) {
+      const seen: Array<{ lastMessage: string; toolResults: number }> = [];
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        seen.push({
+          lastMessage: JSON.stringify(opts.messages.at(-1)),
+          toolResults: opts.messages.filter((m) => m.role === 'tool').length,
+        });
+        const provider = firstAvailable(opts.excludeProviders) ?? 'none';
+        if (opts.toolChoice === 'none') {
+          callbacks.onTextDelta?.(finalText);
+          return { ...makeTextResult(finalText), providerUsed: provider };
+        }
+        n++;
+        const args = JSON.stringify({ expression: `${n} RSD`, target_currency: 'EUR' });
+        return {
+          ...makeToolCallResult('calculate'),
+          toolCalls: [{ id: `c${n}`, name: 'calculate', arguments: args }],
+          providerUsed: provider,
+        };
+      });
+      mockExecuteTool.mockImplementation(async (_name, input) => ({
+        success: true,
+        output: `= ${JSON.stringify(input)}`,
+      }));
+      return seen;
+    }
+
+    const streamCalls = () => mockAiStreamRound.mock.calls.map(([opts]) => opts);
+    const shownTexts = () => JSON.stringify(mockBot.api.editMessageText.mock.calls);
+
+    interface TrajectoryRow {
+      id: number;
+      outcome: string;
+      error_kind: string | null;
+      is_mention: number;
+      tool_rounds: number;
+      tool_calls: number;
+      nudges: number;
+      handoffs: number;
+      providers: string;
+      answer_provider: string | null;
+      finalize_reason: string | null;
+      follow_up_after_ms: number | null;
+    }
+    interface TrajectoryRoundRow {
+      round: number;
+      provider: string;
+      calls: string;
+      decision: string;
+      reason: string | null;
+    }
+    const trajectories = () =>
+      database.queryAll<TrajectoryRow>('SELECT * FROM agent_trajectories ORDER BY id');
+    const trajectoryRounds = (id: number) =>
+      database.queryAll<TrajectoryRoundRow>(
+        'SELECT round, provider, calls, decision, reason FROM agent_trajectory_rounds WHERE trajectory_id = ? ORDER BY round',
+        id,
+      );
+
+    beforeEach(() => {
+      mockAiStreamRound.mockReset();
+      logMock.warn.mockClear();
+      logMock.error.mockClear();
+    });
+
+    it('nudges after 4 one-at-a-time conversions, hands off twice, then forces the answer', async () => {
+      const mentionAgent = new ExpenseBotAgent('key', makeCtx({ isMention: true }));
+      const seen = mockOneConversionPerRound('Итого: 1 639 EUR');
+
+      const result = await mentionAgent.run('Сумма в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Итого: 1 639 EUR');
+      const calls = streamCalls();
+      expect(calls).toHaveLength(14);
+      // Nudge after round 4: same provider, a [SYSTEM] note after the tool result.
+      expect(calls[4]?.excludeProviders).toEqual([]);
+      expect(seen[4]?.lastMessage).toContain('going in circles');
+      // Round 5 ignores the nudge → handoff: Groq is out for the rest of the run, history stays.
+      expect(calls[5]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)']);
+      expect(seen[5]?.lastMessage).toContain('taking over');
+      expect(seen[5]?.toolResults).toBe(5);
+      // The new model starts clean: second handoff after 4 more such rounds (round 9).
+      expect(calls[9]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)']);
+      // After round 13 the ladder is spent: the forced round runs without the stalled providers.
+      expect(calls[13]?.toolChoice).toBe('none');
+      expect(calls[13]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)']);
+      expect(shownTexts()).toContain('🔄 Передаю задачу z.ai (glm-5.1)…');
+      expect(shownTexts()).toContain('🔄 Передаю задачу Claude (sonnet)…');
+      expect(logMock.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: 'cheap_tool_streak', from: 'Groq (gpt-oss-120b)' }),
+        expect.stringContaining('handing'),
+      );
+
+      const [run] = trajectories();
+      expect(run).toMatchObject({
+        outcome: 'answered',
+        is_mention: 1,
+        tool_rounds: 13,
+        tool_calls: 13,
+        nudges: 1,
+        handoffs: 2,
+        providers: JSON.stringify(CHAIN.slice(0, 3)),
+        answer_provider: 'Claude (sonnet)',
+        finalize_reason: 'cheap_tool_streak',
+      });
+      const decisions = trajectoryRounds(run?.id ?? 0).map((r) => `${r.round}:${r.decision}`);
+      expect(decisions.filter((d) => !d.endsWith(':continue'))).toEqual([
+        '4:nudge',
+        '5:handoff',
+        '9:handoff',
+        '13:finalize',
+      ]);
+    });
+
+    it('forces the answer instead of handing off when no other provider is left', async () => {
+      mockOneConversionPerRound('Итого');
+      mockNextProvider.mockReturnValue(null);
+
+      const result = await agent.run('Сумма в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Итого');
+      const calls = streamCalls();
+      // Nudge after round 4; round 5 ignores it and, with no provider left, the forced round runs.
+      expect(calls).toHaveLength(6);
+      expect(calls[5]?.toolChoice).toBe('none');
+      expect(calls[5]?.excludeProviders).toEqual([]);
+      expect(shownTexts()).not.toContain('Передаю задачу');
+      expect(trajectories()[0]).toMatchObject({
+        handoffs: 0,
+        finalize_reason: 'cheap_tool_streak',
+      });
+    });
+
+    it('stops a run that never stalls at 40 tool rounds with the forced answer', async () => {
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (opts.toolChoice === 'none') {
+          callbacks.onTextDelta?.('Добавил 40');
+          return makeTextResult('Добавил 40');
+        }
+        n++;
+        return {
+          ...makeToolCallResult('add_expense'),
+          toolCalls: [{ id: `c${n}`, name: 'add_expense', arguments: `{"n":${n}}` }],
+        };
+      });
+      mockExecuteTool.mockImplementation(async (_name, input) => ({
+        success: true,
+        output: `added ${JSON.stringify(input)}`,
+      }));
+
+      const result = await agent.run('добавь всё', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Добавил 40');
+      expect(mockExecuteTool).toHaveBeenCalledTimes(40);
+      expect(streamCalls()).toHaveLength(41);
+      expect(getLastCallOpts().toolChoice).toBe('none');
+      expect(trajectories()[0]).toMatchObject({
+        tool_rounds: 40,
+        nudges: 0,
+        finalize_reason: 'round_cap',
+      });
+    });
+
+    it('forces the answer once only the final-round reserve is left of the 240 s deadline', async () => {
+      let clock = 1_000_000;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      const timerDelays: Array<number | undefined> = [];
+      const realSetTimeout = globalThis.setTimeout;
+      spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) => {
+        timerDelays.push(ms);
+        return realSetTimeout(handler, ms);
+      }) as typeof setTimeout);
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (opts.toolChoice === 'none') {
+          callbacks.onTextDelta?.('Что успел собрать');
+          return makeTextResult('Что успел собрать');
+        }
+        n++;
+        clock += 100_000;
+        return {
+          ...makeToolCallResult('get_expenses'),
+          toolCalls: [{ id: `c${n}`, name: 'get_expenses', arguments: `{"page":${n}}` }],
+        };
+      });
+      mockExecuteTool.mockImplementation(async (_name, input) => ({
+        success: true,
+        output: JSON.stringify(input),
+      }));
+
+      const result = await agent.run('все траты', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Что успел собрать');
+      // Round 1 ends at 100 s, round 2 at 200 s — past 240 − 45 s, so the forced round follows.
+      expect(streamCalls()).toHaveLength(3);
+      expect(getLastCallOpts().toolChoice).toBe('none');
+      expect(timerDelays).toContain(240_000);
+      expect(trajectories()[0]?.finalize_reason).toBe('time_budget');
+    });
+
+    it('records an answered run with hashed tool features and no text at all', async () => {
+      mockToolCallRound('get_expenses', '{"period":"2026-10","summary_only":true}');
+      mockStreamReturn(['Октябрь: 1 639 EUR']);
+
+      await agent.run('Сколько потратили в октябре?', [], mockBot as unknown as Bot);
+
+      const [run] = trajectories();
+      expect(run).toMatchObject({
+        outcome: 'answered',
+        error_kind: null,
+        is_mention: 0,
+        tool_rounds: 1,
+        tool_calls: 1,
+        nudges: 0,
+        handoffs: 0,
+        providers: '["mock"]',
+        answer_provider: 'mock',
+        finalize_reason: null,
+        follow_up_after_ms: null,
+      });
+      const rounds = trajectoryRounds(run?.id ?? 0);
+      expect(rounds).toHaveLength(1);
+      expect(rounds[0]).toMatchObject({
+        round: 1,
+        provider: 'mock',
+        decision: 'continue',
+        reason: null,
+      });
+      expect(JSON.parse(rounds[0]?.calls ?? '[]')).toEqual([
+        {
+          tool: 'get_expenses',
+          argsHash: expect.any(String),
+          resultHash: expect.any(String),
+          isError: false,
+        },
+      ]);
+      const stored = JSON.stringify([run, rounds]);
+      for (const text of ['Сколько', '2026-10', 'summary_only', 'Октябрь', 'done']) {
+        expect(stored).not.toContain(text);
+      }
+      expect(logMock.error).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'silent',
+        () => mockStreamReturn(['[SKIP]']),
+        { outcome: 'silent', error_kind: null, answer_provider: 'mock' },
+      ],
+      [
+        'no_answer',
+        () => {
+          mockToolCallRound('get_expenses', '{"period":"2026-10"}');
+          mockStreamReturn([]);
+        },
+        { outcome: 'no_answer', error_kind: null, answer_provider: 'mock' },
+      ],
+      [
+        'error',
+        () =>
+          mockAiStreamRound.mockRejectedValue(Object.assign(new Error('down'), { status: 500 })),
+        { outcome: 'error', error_kind: 'generic', answer_provider: null },
+      ],
+    ])('records the %s outcome', async (_label, arrange, expected) => {
+      arrange();
+      await agent.run('ну мы и потратили', [], mockBot as unknown as Bot).catch(() => undefined);
+      expect(trajectories()).toEqual([expect.objectContaining(expected)]);
+    });
+
+    it('marks the previous run of the group as followed up when the next one starts within 5 minutes', async () => {
+      let clock = 5_000_000;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      mockStreamReturn(['первый ответ']);
+      await agent.run('вопрос', [], mockBot as unknown as Bot);
+      clock += 90_000;
+      mockStreamReturn(['второй ответ']);
+      await agent.run('ты завис?', [], mockBot as unknown as Bot);
+
+      const [first, second] = trajectories();
+      expect(first?.follow_up_after_ms).toBe(90_000);
+      expect(second?.follow_up_after_ms).toBeNull();
+    });
+
+    it('a failed trajectory write never changes the answer', async () => {
+      spyOn(database.agentTrajectories, 'create').mockImplementation(() => {
+        throw new Error('database is locked');
+      });
+      mockStreamReturn(['ответ']);
+
+      const result = await agent.run('вопрос', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('ответ');
+      expect(logMock.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        expect.stringContaining('trajectory'),
+      );
+    });
+
+    it('a retried attempt keeps the handed-off provider excluded', async () => {
+      mockIsRetryableError.mockReturnValue(true);
+      spyOn(
+        agent as unknown as { sleep: (ms: number) => Promise<void> },
+        'sleep',
+      ).mockResolvedValue(undefined);
+      let n = 0;
+      let failed = false;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        const provider = firstAvailable(opts.excludeProviders) ?? 'none';
+        if (n === 8 && !failed) {
+          failed = true;
+          throw Object.assign(new Error('unavailable'), { status: 503 });
+        }
+        if (n === 8) {
+          callbacks.onTextDelta?.('Итого');
+          return { ...makeTextResult('Итого'), providerUsed: provider };
+        }
+        n++;
+        return {
+          ...makeToolCallResult('calculate'),
+          toolCalls: [{ id: `c${n}`, name: 'calculate', arguments: `{"expression":"${n} RSD"}` }],
+          providerUsed: provider,
+        };
+      });
+      mockExecuteTool.mockImplementation(async (_name, input) => ({
+        success: true,
+        output: `= ${JSON.stringify(input)}`,
+      }));
+
+      const result = await agent.run('Сумма в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Итого');
+      // Handoff after round 8, then a 503 and a retry: the retry still skips Groq.
+      expect(getLastCallOpts().excludeProviders).toEqual(['Groq (gpt-oss-120b)']);
+      expect(logMock.warn).toHaveBeenCalledWith(expect.stringContaining('retrying'));
+    });
+
+    it('a forced answer stays an answer when the validator re-run then chooses [SKIP]', async () => {
+      // Malformed arguments are not grounded tool use, so the forced answer still goes to the
+      // validator; its re-run must not turn the forced run into silence.
+      mockNextProvider.mockReturnValue(null);
+      let rerun = false;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (rerun) {
+          callbacks.onTextDelta?.('[SKIP]');
+          return makeTextResult('[SKIP]');
+        }
+        if (opts.toolChoice === 'none') {
+          rerun = true;
+          callbacks.onTextDelta?.('Не знаю');
+          return makeTextResult('Не знаю');
+        }
+        return {
+          ...makeToolCallResult('calculate'),
+          toolCalls: [{ id: 'c', name: 'calculate', arguments: '{"expression":' }],
+        };
+      });
+      mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+
+      const result = await agent.run('сумма в евро', [], mockBot as unknown as Bot);
+
+      expect(result).toBe(NO_ANSWER_MESSAGE);
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+      // Nudge after the 3rd identical malformed call, the 4th ends the tool rounds (no provider
+      // left); every malformed call counts as a tool call of its round.
+      expect(trajectories()).toEqual([
+        expect.objectContaining({
+          outcome: 'no_answer',
+          finalize_reason: 'repeated_call',
+          tool_rounds: 4,
+          tool_calls: 4,
+        }),
+      ]);
+      expect(logMock.error).toHaveBeenCalledWith(expect.stringContaining('Malformed'));
+    });
+
+    it('cuts a tool round that runs into the final-round reserve and forces the answer in time', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      let n = 0;
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (opts.toolChoice === 'none') {
+          callbacks.onTextDelta?.('Что успел собрать');
+          return makeTextResult('Что успел собрать');
+        }
+        n++;
+        if (n === 1) {
+          clock = 194_950; // round 1 ends 50 ms before the reserve starts
+          return {
+            ...makeToolCallResult('get_expenses'),
+            toolCalls: [{ id: 'c1', name: 'get_expenses', arguments: '{"page":1}' }],
+          };
+        }
+        // Round 2: a slow provider that would run into the reserve hangs until its signal fires.
+        return new Promise<StreamRoundResult>((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        });
+      });
+
+      const result = await agent.run('все траты', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Что успел собрать');
+      expect(streamCalls()).toHaveLength(3);
+      expect(getLastCallOpts().toolChoice).toBe('none');
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      expect(trajectories()[0]).toMatchObject({ finalize_reason: 'time_budget', tool_rounds: 1 });
+    });
+
+    // HYP-1717: the tool-round time limit also bounds tool execution, not only the model call.
+    it('skips the remaining tool calls of a round once the final-round reserve is reached', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      const seen: string[] = [];
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (opts.toolChoice === 'none') {
+          seen.push(JSON.stringify(opts.messages.filter((m) => m.role === 'tool')));
+          callbacks.onTextDelta?.('Добавил одну');
+          return makeTextResult('Добавил одну');
+        }
+        const calls = [
+          { id: 'a1', name: 'add_expense', arguments: '{"n":1}' },
+          { id: 'a2', name: 'add_expense', arguments: '{"n":2}' },
+        ];
+        return {
+          text: '',
+          toolCalls: calls,
+          finishReason: 'tool_calls',
+          assistantMessage: {
+            role: 'assistant',
+            content: null,
+            tool_calls: calls.map((c) => ({
+              id: c.id,
+              type: 'function' as const,
+              function: { name: c.name, arguments: c.arguments },
+            })),
+          },
+          providerUsed: 'mock',
+        } satisfies StreamRoundResult;
+      });
+      mockExecuteTool.mockImplementation(async (_name, input) => {
+        clock = 196_000; // the first, slow write ends inside the reserve
+        return { success: true, output: `added ${JSON.stringify(input)}` };
+      });
+
+      const result = await agent.run('добавь две', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Добавил одну');
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      // The skipped call still gets a tool message (every tool_call id needs one), saying why.
+      expect(seen[0]).toContain('added {\\"n\\":1}');
+      expect(seen[0]).toContain('Not run: no time left');
+      // Every tool_call id of the assistant message has exactly one tool reply.
+      const history = getLastCallOpts().messages;
+      const replyIds = history.flatMap((m) => (m.role === 'tool' ? [m.tool_call_id] : []));
+      expect(replyIds).toEqual(['a1', 'a2']);
+      expect(getLastCallOpts().toolChoice).toBe('none');
+      expect(streamCalls()).toHaveLength(2);
+      expect(trajectories()[0]).toMatchObject({ finalize_reason: 'time_budget', tool_calls: 2 });
+    });
+
+    it('does not start a tool whose Telegram status update waited past the reserve', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      // The status edit before the tool runs waits out a Telegram 429 until 199 s.
+      mockBot.api.editMessageText.mockImplementation(async () => {
+        clock = 199_000;
+        return { message_id: 1, chat: { id: 1 }, date: 0, text: '' };
+      });
+      mockToolCallRound('add_expense', '{"amount":5}');
+      mockAiStreamRound.mockImplementationOnce(async (opts, callbacks) => {
+        callbacks.onTextDelta?.('Не успел');
+        return makeTextResult(opts.toolChoice === 'none' ? 'Не успел' : 'unexpected');
+      });
+
+      const result = await agent.run('добавь', [], mockBot as unknown as Bot);
+
+      expect(mockExecuteTool).not.toHaveBeenCalled();
+      expect(result).toBe('Не успел');
+      expect(getLastCallOpts().toolChoice).toBe('none');
+    });
+
+    it('the validator re-run gets only what is left of the run deadline, not a fresh 240 s', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      const timerDelays: Array<number | undefined> = [];
+      const realSetTimeout = globalThis.setTimeout;
+      spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) => {
+        timerDelays.push(ms);
+        return realSetTimeout(handler, ms);
+      }) as typeof setTimeout);
+      mockStreamReturn(['ответ без инструментов']);
+      mockStreamReturn(['ответ после проверки']);
+      mockValidateResponse.mockImplementationOnce(async () => {
+        clock = 150_000; // a slow first answer plus the validator took 150 s
+        return { approved: false, reason: 'no tools' };
+      });
+
+      const result = await agent.run('сколько потратили', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('ответ после проверки');
+      expect(timerDelays.filter((ms) => ms === 240_000)).toHaveLength(1);
+      expect(timerDelays).toContain(90_000);
+    });
+
+    // Stage QA of PR #170 (b), 2026-10-15 05:10 UTC: Groq gpt-oss-120b wrote its own notes about
+    // the conversation into the answer, between a cut-off list and the real one.
+    describe('PR #170: model reasoning inside the answer', () => {
+      const LEAKED =
+        "• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Эда</b>: <b>625.\n\nWe have a conversation where the user repeatedly asks for totals per category. The assistant finally called get_expenses with summary_only true and got the data. However the final answer is incomplete. Need to correct.\n\nLet's produce final answer.• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Еда</b>: <b>625.68 EUR</b>";
+      const CLEAN = '• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Еда</b>: <b>625.68 EUR</b>';
+
+      it('re-runs once without the leaked text and returns the clean answer', async () => {
+        mockToolCallRound(
+          'get_expenses',
+          '{"period":"2026-05","summary_only":true,"currency":"EUR"}',
+        );
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([CLEAN]);
+
+        const result = await agent.run(
+          'mxtnr: сколько в евро потрачено в мае 2026 по каждой категории',
+          [],
+          mockBot as unknown as Bot,
+        );
+
+        expect(result).toBe(CLEAN);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+        const rerun = getLastCallOpts().messages;
+        expect(String(rerun.at(-1)?.content)).toContain('internal notes');
+        // The leaked reasoning is not fed back to the model.
+        expect(JSON.stringify(rerun)).not.toContain('We have a conversation');
+        // The tool results stay, so the re-run can answer without calling tools again.
+        expect(rerun.filter((m) => m.role === 'tool')).toHaveLength(1);
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ leak: expect.stringContaining('The assistant') }),
+          expect.stringContaining('reasoning'),
+        );
+        expect(mockValidateResponse).not.toHaveBeenCalled();
+      });
+
+      it('takes the leaked text off the screen before the re-run streams', async () => {
+        let shownDuringRerun = '';
+        mockStreamReturn([LEAKED]);
+        mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
+          const edits = mockBot.api.editMessageText.mock.calls as unknown as Array<
+            [{ text: string }]
+          >;
+          shownDuringRerun = edits.at(-1)?.[0].text ?? '';
+          callbacks.onTextDelta?.(CLEAN);
+          return makeTextResult(CLEAN);
+        });
+
+        await agent.run('mxtnr: а сколько на еду?', [], mockBot as unknown as Bot);
+
+        expect(shownDuringRerun).not.toContain('We have a conversation');
+        expect(shownDuringRerun).toContain('⏳');
+      });
+
+      it('a tool-free re-run answer still goes through the validator', async () => {
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([CLEAN]);
+
+        const result = await agent.run('mxtnr: а сколько на еду?', [], mockBot as unknown as Bot);
+
+        expect(result).toBe(CLEAN);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+        // The leaked first answer is never validated; the clean re-run is, like any tool-free answer.
+        expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+        expect(mockValidateResponse.mock.calls[0]?.[0].response).toBe(CLEAN);
+      });
+
+      it('a validator re-run that leaks reasoning gets the leak re-run too', async () => {
+        mockStreamReturn(['Итого: 100 EUR']);
+        mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+        mockToolCallRound('get_expenses', '{"period":"2026-05","summary_only":true}');
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([CLEAN]);
+
+        const result = await agent.run('mxtnr: сколько на еду?', [], mockBot as unknown as Bot);
+
+        expect(result).toBe(CLEAN);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(4);
+        expect(String(getLastCallOpts().messages.at(-1)?.content)).toContain('internal notes');
+      });
+
+      it('a leak after a write is re-run without tools, so the write never runs twice', async () => {
+        mockToolCallRound('add_expense', '{"amount":5,"currency":"EUR","category":"Еда"}');
+        mockStreamReturn([LEAKED]);
+        // A tool-allowed re-run would repeat the write here.
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          if (opts.toolChoice === 'none') {
+            callbacks.onTextDelta?.('Записал 5 EUR в Еду.');
+            return makeTextResult('Записал 5 EUR в Еду.');
+          }
+          return {
+            ...makeToolCallResult('add_expense'),
+            toolCalls: [{ id: 'again', name: 'add_expense', arguments: '{"amount":5}' }],
+          };
+        });
+
+        const result = await agent.run('mxtnr: 5 евро еда', [], mockBot as unknown as Bot);
+
+        expect(result).toBe('Записал 5 EUR в Еду.');
+        expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+        expect(getLastCallOpts().toolChoice).toBe('none');
+      });
+
+      it('after a forced answer the re-run stays tool-free', async () => {
+        // Stall ladder spent (no provider left): the forced answer leaks reasoning.
+        mockNextProvider.mockReturnValue(null);
+        let forced = 0;
+        let n = 0;
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          if (opts.toolChoice === 'none') {
+            forced++;
+            const text = forced === 1 ? LEAKED : CLEAN;
+            callbacks.onTextDelta?.(text);
+            return makeTextResult(text);
+          }
+          n++;
+          return {
+            ...makeToolCallResult('calculate'),
+            toolCalls: [{ id: `c${n}`, name: 'calculate', arguments: `{"expression":"${n}"}` }],
+          };
+        });
+
+        const result = await agent.run('mxtnr: сумма в евро', [], mockBot as unknown as Bot);
+
+        expect(result).toBe(CLEAN);
+        // The re-run goes straight to a forced round: no new tool rounds after the guard stopped them.
+        const calls = mockAiStreamRound.mock.calls.map(([opts]) => opts.toolChoice);
+        expect(calls.slice(-2)).toEqual(['none', 'none']);
+        expect(mockExecuteTool).toHaveBeenCalledTimes(n);
+        expect(n).toBe(5);
+      });
+
+      it('re-runs only once: a second leak is surfaced and logged', async () => {
+        mockToolCallRound('get_expenses', '{"period":"2026-05","summary_only":true}');
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([LEAKED]);
+
+        const result = await agent.run(
+          'mxtnr: сколько по категориям?',
+          [],
+          mockBot as unknown as Bot,
+        );
+
+        expect(result).toBe(LEAKED);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('still contains'),
+        );
+      });
+
+      it('a clean Russian answer is not re-run', async () => {
+        mockToolCallRound('get_expenses', '{"period":"2026-05","summary_only":true}');
+        mockStreamReturn([CLEAN]);
+
+        await agent.run('mxtnr: сколько по категориям?', [], mockBot as unknown as Bot);
+
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+        expect(logMock.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('reasoning'),
+        );
+      });
+    });
+
+    // Stage QA of PR #170 (2026-10-15): «посчитай отдельно через calculate каждую трату мая 2026
+    // в евро и сложи». The model read get_expenses page 1 of 8 (page_size 8), made 4 calculate
+    // calls, was nudged, made one more and answered the partial sum as the May total.
+    describe('PR #170: partial page summed as the total', () => {
+      // The detail header get_expenses now produces (tool-executor.test.ts pins the real format).
+      const PAGE_1_OF_8 = [
+        'Period: 2026-05-01 to 2026-05-31',
+        'Showing 1–8 of 63 expenses (page 1 of 8)',
+        'Total for all 63 expenses: 8561.59 EUR',
+        'More pages: 2–8 are not shown. For totals use the "Total for all" line above (or get_expenses with summary_only: true) — never add up the rows of one page as the total. For the individual rows call get_expenses again with page=2 … page=8 with page_size=8 and the same filters.',
+        '',
+        '[id:1] 2026-05-31 | Еда | 105.00 RSD (EUR 0.89 EUR) | (no comment)',
+      ].join('\n');
+
+      function mockQaRun(nextProviderAvailable = true) {
+        const seen: Array<{ provider: string; lastMessage: string; toolMessages: string }> = [];
+        if (!nextProviderAvailable) mockNextProvider.mockReturnValue(null);
+        let toolRounds = 0;
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          const provider = firstAvailable(opts.excludeProviders) ?? 'none';
+          seen.push({
+            provider,
+            lastMessage: String(opts.messages.at(-1)?.content),
+            toolMessages: JSON.stringify(opts.messages.filter((m) => m.role === 'tool')),
+          });
+          if (opts.toolChoice === 'none' || !provider.startsWith('Groq')) {
+            callbacks.onTextDelta?.('Итого за май: 8561.59 EUR');
+            return { ...makeTextResult('Итого за май: 8561.59 EUR'), providerUsed: provider };
+          }
+          toolRounds++;
+          const [name, args] =
+            toolRounds === 1
+              ? ['get_expenses', '{"period":"2026-05","page":1,"page_size":8}']
+              : ['calculate', `{"expression":"${toolRounds * 100} RSD","target_currency":"EUR"}`];
+          return {
+            text: '',
+            toolCalls: [{ id: `c${toolRounds}`, name, arguments: args }],
+            finishReason: 'tool_calls',
+            assistantMessage: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                { id: `c${toolRounds}`, type: 'function', function: { name, arguments: args } },
+              ],
+            },
+            providerUsed: provider,
+          } satisfies StreamRoundResult;
+        });
+        mockExecuteTool.mockImplementation(async (name, input) => ({
+          success: true,
+          output: name === 'get_expenses' ? PAGE_1_OF_8 : `= ${JSON.stringify(input)}`,
+        }));
+        return seen;
+      }
+
+      it('the nudge after page 1 + 4 calculate points at the all-pages total, and the ignored nudge hands off', async () => {
+        const seen = mockQaRun();
+
+        await agent.run('посчитай каждую трату мая в евро и сложи', [], mockBot as unknown as Bot);
+
+        // Round 5 (4th calculate) → nudge; round 6 (5th calculate) ignores it → handoff.
+        const afterNudge = seen[5];
+        expect(afterNudge?.lastMessage).toContain('going in circles');
+        expect(afterNudge?.lastMessage).toContain('summary_only and currency');
+        expect(afterNudge?.lastMessage).toContain('read all the pages');
+        expect(afterNudge?.lastMessage).toContain(
+          'never present a sum of part of the data as the total',
+        );
+        expect(afterNudge?.lastMessage).toContain('"Total for all"');
+        // The authoritative total is in the tool results the nudged model sees.
+        expect(afterNudge?.toolMessages).toContain('Total for all 63 expenses: 8561.59 EUR');
+        const afterHandoff = seen[6];
+        expect(afterHandoff?.provider).toBe('z.ai (glm-5.1)');
+        expect(afterHandoff?.lastMessage).toContain('taking over');
+        expect(afterHandoff?.lastMessage).toContain('"Total for all"');
+        expect(afterHandoff?.toolMessages).toContain('Total for all 63 expenses: 8561.59 EUR');
+        const decisions = trajectoryRounds(trajectories()[0]?.id ?? 0).map(
+          (r) => `${r.round}:${r.decision}:${r.reason}`,
+        );
+        expect(decisions.filter((d) => !d.includes(':continue:'))).toEqual([
+          '5:nudge:cheap_tool_streak',
+          '6:handoff:cheap_tool_streak',
+        ]);
+      });
+
+      it('the forced final round tells the model not to present a partial sum as the total', async () => {
+        const seen = mockQaRun(false);
+
+        await agent.run('посчитай каждую трату мая в евро и сложи', [], mockBot as unknown as Bot);
+
+        const forced = seen.at(-1);
+        expect(forced?.lastMessage).toContain('tool-call limit');
+        expect(forced?.lastMessage).toContain('"More pages"');
+        expect(forced?.lastMessage).toContain('"Total for all"');
+        expect(forced?.lastMessage).toContain(
+          'never present a sum of part of the data as the total',
+        );
+        expect(forced?.toolMessages).toContain('Total for all 63 expenses: 8561.59 EUR');
+      });
+    });
+
+    // #166, stage QA 2026-10-15 01:41 UTC: Groq called calculate {"expression":"1 USD",
+    // "target_currency":"EUR"} 7 times in a row after get_expenses (all RSD), hit the old cap, and
+    // the forced answer invented USD amounts.
+    describe('#166: identical calculate repeats and invented amounts', () => {
+      const RSD_EXPENSES =
+        '[id:1] 2026-05-01 | Еда | 1200.00 RSD\n[id:2] 2026-05-02 | Дом | 8000.00 RSD';
+
+      function mockStageRun(finalText: string, nextProviderAvailable = true) {
+        const seen: Array<{
+          provider: string;
+          lastMessage: string;
+          toolChoice: string | undefined;
+        }> = [];
+        if (!nextProviderAvailable) mockNextProvider.mockReturnValue(null);
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          const provider = firstAvailable(opts.excludeProviders) ?? 'none';
+          seen.push({
+            provider,
+            lastMessage: JSON.stringify(opts.messages.at(-1)),
+            toolChoice: opts.toolChoice,
+          });
+          const toolRounds = seen.filter((s) => s.toolChoice !== 'none').length;
+          if (opts.toolChoice === 'none' || !provider.startsWith('Groq')) {
+            callbacks.onTextDelta?.(finalText);
+            return { ...makeTextResult(finalText), providerUsed: provider };
+          }
+          const [name, args] =
+            toolRounds === 1
+              ? ['get_expenses', '{"period":"2026-05"}']
+              : ['calculate', '{"expression":"1 USD","target_currency":"EUR"}'];
+          return {
+            text: '',
+            toolCalls: [{ id: `c${toolRounds}`, name, arguments: args }],
+            finishReason: 'tool_calls',
+            assistantMessage: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                { id: `c${toolRounds}`, type: 'function', function: { name, arguments: args } },
+              ],
+            },
+            providerUsed: provider,
+          } satisfies StreamRoundResult;
+        });
+        mockExecuteTool.mockImplementation(async (name) => ({
+          success: true,
+          output: name === 'get_expenses' ? RSD_EXPENSES : '0.89 EUR',
+        }));
+        return seen;
+      }
+
+      it('nudges at round 4 and hands the run to the next model when round 5 repeats again', async () => {
+        const seen = mockStageRun('Итого: 9200 RSD');
+
+        const result = await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(result).toBe('Итого: 9200 RSD');
+        // get_expenses + 3 identical calculate → nudge; the 4th ignores it → handoff; z.ai answers.
+        expect(seen).toHaveLength(6);
+        expect(seen[4]?.lastMessage).toContain('going in circles');
+        expect(seen[5]?.lastMessage).toContain('taking over');
+        expect(seen[5]?.provider).toBe('z.ai (glm-5.1)');
+        // The repeats come from the cache: the conversion ran once.
+        expect(mockExecuteTool.mock.calls.map((c) => c[0])).toEqual(['get_expenses', 'calculate']);
+        const decisions = trajectoryRounds(trajectories()[0]?.id ?? 0).map(
+          (r) => `${r.round}:${r.decision}:${r.reason}`,
+        );
+        expect(decisions.filter((d) => !d.includes(':continue:'))).toEqual([
+          '4:nudge:repeated_call',
+          '5:handoff:repeated_call',
+        ]);
+      });
+
+      it('the forced final round forbids amounts that are not in the tool results and allows summing those that are', async () => {
+        const seen = mockStageRun('Итого: 9200 RSD', false);
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        const forced = seen.find((s) => s.toolChoice === 'none');
+        expect(forced?.lastMessage).toContain(
+          'Never write an amount or a currency that is not in the tool results',
+        );
+        expect(forced?.lastMessage).toContain(
+          'Adding up amounts that ARE in the tool results is allowed here',
+        );
+      });
+
+      it.each([
+        '1 USD → 0.89 EUR, 700 USD → 623 EUR',
+        '700\u00a0USD = 623 EUR',
+        'USD\u202f700 = 623 EUR',
+        '700  USD = 623 EUR',
+        'USD 700 = 623 EUR',
+        '$700 = 623 EUR',
+        'USD -700 = EUR -623',
+      ])('warns when the forced answer names a currency no tool result had: %s', async (answer) => {
+        mockStageRun(answer, false);
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ currencies: ['USD'] }),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+
+      it('an amount with a currency symbol in a tool result counts as evidence', async () => {
+        mockStageRun('Подписка: $10', false);
+        mockExecuteTool.mockImplementation(async (name) => ({
+          success: true,
+          output: name === 'get_expenses' ? RSD_EXPENSES : 'Netflix: 10.00 $ / month',
+        }));
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+
+      it('an error result listing every currency is no evidence for an invented amount', async () => {
+        mockStageRun('700 USD', false);
+        mockExecuteTool.mockImplementation(async (name) =>
+          name === 'get_expenses'
+            ? { success: false, error: 'Unknown currency "US". Supported: USD, EUR, RSD, RUB' }
+            : { success: true, output: '0.89 EUR' },
+        );
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ currencies: ['USD'] }),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+
+      it('does not warn when every currency of the forced answer came from a tool result', async () => {
+        mockStageRun('Итого: 9200 RSD (0.89 EUR за доллар)', false);
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
     });
   });
 });

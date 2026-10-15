@@ -79,6 +79,7 @@ mock.module('../../services/ai/streaming', () => ({
   isRetryableError: mock(() => false),
   getBackoffDelay: mock(() => 0),
   classifyAiError: mock(() => null),
+  nextProvider: mock(() => null),
 }));
 
 // ── StatusWriter ────────────────────────────────────────────────────────

@@ -63,6 +63,240 @@ describe('closeUnmatchedTags', () => {
 // ── sanitizeHtmlForTelegram ─────────────────────────────────────────
 
 describe('sanitizeHtmlForTelegram', () => {
+  // #165: Telegram HTML has no list tags; models (gpt-oss) still answer with them.
+  describe('HTML lists become plain lines', () => {
+    test('the stage answer: a <ul> of categories turns into • lines, no visible tags', () => {
+      const answer =
+        'Траты за октябрь:\n<ul>\n  <li><b>Путешествия</b>: <b>2798.61 EUR</b></li>\n  <li><b>Еда</b>: <b>420.00 EUR</b></li>\n</ul>\nИтого: <b>3218.61 EUR</b>';
+      expect(sanitizeHtmlForTelegram(answer)).toBe(
+        'Траты за октябрь:\n• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Еда</b>: <b>420.00 EUR</b>\nИтого: <b>3218.61 EUR</b>',
+      );
+    });
+
+    test('issue acceptance: <ul><li>a</li><li><b>b</b></li></ul>', () => {
+      const result = sanitizeHtmlForTelegram('<ul><li>a</li><li><b>b</b></li></ul>');
+      expect(result).toBe('• a\n• <b>b</b>');
+      expect(result).not.toContain('&lt;ul');
+      expect(result).not.toContain('&lt;li');
+    });
+
+    test('an <ol> is numbered, a nested list is indented', () => {
+      expect(
+        sanitizeHtmlForTelegram('<ol><li>Еда<ul><li>кафе</li></ul></li><li>Дом</li></ol>'),
+      ).toBe('1. Еда\n  • кафе\n2. Дом');
+    });
+
+    test('is idempotent', () => {
+      const once = sanitizeHtmlForTelegram('<ul><li><b>a</b> &amp; b</li></ul>');
+      expect(sanitizeHtmlForTelegram(once)).toBe(once);
+    });
+
+    test('list-like text inside an attribute value is left alone', () => {
+      const html = '<a href="https://example.com/?q=&lt;ul&gt;">Open</a><ul><li>x</li></ul>';
+      const result = sanitizeHtmlForTelegram(html);
+      expect(result).toContain('Open</a>');
+      expect(result).not.toContain('q=\n');
+      expect(result).toContain('\n• x');
+    });
+
+    test('a tag that only starts with li is not a list item', () => {
+      const result = sanitizeHtmlForTelegram('<ul><li>a</li></ul><li-custom>keep</li-custom>');
+      expect(result).toBe('• a\n&lt;li-custom&gt;keep&lt;/li-custom&gt;');
+    });
+
+    test.each([
+      ['code', '<code>&lt;ul&gt;&lt;li&gt;a&lt;/li&gt;&lt;/ul&gt;</code>'],
+      ['pre', '<pre>&lt;ul&gt;&lt;li&gt;example&lt;/li&gt;&lt;/ul&gt;</pre>'],
+      [
+        'code with a closing-tag look-alike inside',
+        '<code>&lt;/code-example&gt;&lt;ol&gt;&lt;li&gt;a&lt;/li&gt;&lt;/ol&gt;</code>',
+      ],
+    ])('list markup inside <%s> stays literal', (_tag, html) => {
+      expect(sanitizeHtmlForTelegram(html)).toBe(html);
+    });
+
+    test.each(['<li-custom>', '<li_custom>', '<li:x>'])('%s is not a list item', (tag) => {
+      const close = `</${tag.slice(1)}`;
+      const result = sanitizeHtmlForTelegram(`<ul><li>a</li></ul>${tag}keep${close}`);
+      expect(result.startsWith('• a\n&lt;')).toBe(true);
+      expect(result).not.toContain('• keep');
+    });
+
+    test('explicit numbering is kept: <ol start> and <li value>', () => {
+      expect(
+        sanitizeHtmlForTelegram(
+          '<ol start="5"><li>пятый</li><li>шестой</li><li value="9">девятый</li><li>десятый</li></ol>',
+        ),
+      ).toBe('5. пятый\n6. шестой\n9. девятый\n10. десятый');
+    });
+
+    test.each([
+      ['<ol start="-2"><li>a</li><li>b</li></ol>', '-2. a\n-1. b'],
+      ['<ol start="1000000"><li>a</li></ol>', '1000000. a'],
+      ['<ol title="example start=9"><li>a</li></ol>', '1. a'],
+      ['<ol data-v2="example start=9"><li>a</li><li>b</li></ol>', '1. a\n2. b'],
+      ['<ol data_note="example start=9"><li>a</li></ol>', '1. a'],
+      ['<ol reversed start="5"><li>a</li><li>b</li></ol>', '5. a\n4. b'],
+      ['<ol start=\'3\'><li value="-1">a</li><li>b</li></ol>', '-1. a\n0. b'],
+      ['<ol reversed><li>a</li><li>b</li></ol>', '• a\n• b'],
+    ])('numbering attributes are read exactly: %s', (html, expected) => {
+      expect(sanitizeHtmlForTelegram(html)).toBe(expected);
+    });
+
+    test('a self-closing <ul/> opens no list', () => {
+      expect(sanitizeHtmlForTelegram('<ul/><ol><li>a</li></ol>')).toBe('1. a');
+    });
+
+    test('a stray </ul> inside an <ol> keeps the numbering', () => {
+      expect(sanitizeHtmlForTelegram('<ol><li>a</ul><li>b</li></ol>')).toBe('1. a\n2. b');
+    });
+    test('a self-closing <code/> is not a code block', () => {
+      expect(sanitizeHtmlForTelegram('<code/>text<ul><li>real</li></ul>')).toBe(
+        '&lt;code/&gt;text\n• real',
+      );
+    });
+
+    test('list markup in a quoted attribute of a long custom tag stays out of the list', () => {
+      const tag = `x-${'a'.repeat(40)}`;
+      const result = sanitizeHtmlForTelegram(
+        `<${tag} title="<ul><li>example</li></ul>">t</${tag}>`,
+      );
+      expect(result).not.toContain('• example');
+    });
+
+    test.each([
+      'x_custom',
+      'x:y',
+    ])('list markup in a quoted attribute of <%s> stays out of the list', (tag) => {
+      const result = sanitizeHtmlForTelegram(
+        `<${tag} title="<ul><li>example</li></ul>">keep</${tag}>`,
+      );
+      expect(result).not.toContain('• example');
+    });
+
+    // Stage QA of PR #170 (b): the model wrote its own bullet inside <li>, and the conversion
+    // added a second one: "• • Путешествия: 2798.61 EUR".
+    test.each([
+      [
+        'the stage shape',
+        '<ul><li>• Путешествия: <b>2798.61 EUR</b></li><li>• Еда: <b>420.00 EUR</b></li></ul>',
+        '• Путешествия: <b>2798.61 EUR</b>\n• Еда: <b>420.00 EUR</b>',
+      ],
+      [
+        'the bullet inside <b>',
+        '<ul><li><b>• Путешествия</b>: 2798.61 EUR</li></ul>',
+        '• <b>Путешествия</b>: 2798.61 EUR',
+      ],
+      [
+        'dashes, asterisks and middle dots become •',
+        '<ul><li>- a</li><li>– b</li><li>— c</li><li>* d</li><li>· e</li></ul>',
+        '• a\n• b\n• c\n• d\n• e',
+      ],
+      [
+        'a numbered item keeps the model number, no extra marker',
+        '<ul><li>1. Еда</li><li>2) Дом</li></ul>',
+        '1. Еда\n2) Дом',
+      ],
+      [
+        'an <ol> item with its own number is not numbered twice',
+        '<ol><li>1. Еда</li><li>2. Дом</li></ol>',
+        '1. Еда\n2. Дом',
+      ],
+      [
+        'a negative amount or a decimal is not a marker',
+        '<ul><li>-5 EUR</li><li>1.5 kg</li></ul>',
+        '• -5 EUR\n• 1.5 kg',
+      ],
+      [
+        'a nested item keeps its indent',
+        '<ul><li>Еда<ul><li>• кафе</li></ul></li></ul>',
+        '• Еда\n  • кафе',
+      ],
+      ['a bullet in its own <b>', '<ul><li><b>•</b> Еда</li></ul>', '• <b></b>Еда'],
+      [
+        'an inline tag with a "<" in a quoted attribute (the sanitizer drops the attribute)',
+        '<ul><li><b title="<">• item</b></li></ul>',
+        '• <b>item</b>',
+      ],
+      [
+        'numbering continues from the number the model wrote',
+        '<ol><li>2. A</li><li>B</li></ol>',
+        '2. A\n3. B',
+      ],
+      ['a newline after the bullet', '<ul><li>•\nЕда</li><li>•\r\nДом</li></ul>', '• Еда\n• Дом'],
+      ['a bullet alone before </li> is not a marker', '<ul><li>•</li> <li>B</li></ul>', '• •\n• B'],
+      [
+        'a non-formatting tag ends the look-ahead',
+        '<ul><li><custom>• item</custom></li></ul>',
+        '• &lt;custom&gt;• item&lt;/custom&gt;',
+      ],
+      [
+        'an empty formatting wrapper before the bullet',
+        '<ul><li><b></b>• item</li></ul>',
+        '• <b></b>item',
+      ],
+      [
+        'five-digit numbers the model wrote',
+        '<ol start="9999"><li>9999. A</li><li>10000. B</li></ol>',
+        '9999. A\n10000. B',
+      ],
+      [
+        'an empty wrapper after the bullet',
+        '<ul><li><b>•</b><i></i> item</li></ul>',
+        '• <b></b><i></i>item',
+      ],
+      [
+        'a newline inside the wrapper before the bullet',
+        '<ul><li><b>\n  • item</b></li><li>next</li></ul>',
+        '• <b>item</b>\n• next',
+      ],
+    ])('a marker the model already wrote is not doubled: %s', (_label, html, expected) => {
+      expect(sanitizeHtmlForTelegram(html)).toBe(expected);
+    });
+
+    test('text after a closed item starts its own line', () => {
+      expect(sanitizeHtmlForTelegram('<ul><li>Еда: 10 EUR</li> Итого: 10 EUR</ul>')).toBe(
+        '• Еда: 10 EUR\nИтого: 10 EUR',
+      );
+    });
+
+    test('broken quoted tags after a list stay text', () => {
+      const html = `<ul><li>a</li></ul><a title="${'<a '.repeat(50)}" <b " <`;
+      const result = sanitizeHtmlForTelegram(html);
+      expect(result.startsWith('• a\n&lt;a title=')).toBe(true);
+    });
+
+    test('a closing-tag look-alike with a space does not end a code example', () => {
+      const html = '<code>&lt;/code &gt;&lt;ul&gt;&lt;li&gt;x&lt;/li&gt;&lt;/ul&gt;</code>';
+      expect(sanitizeHtmlForTelegram(html)).toBe(html);
+    });
+
+    test('an unclosed <pre> (still streaming) keeps its list markup literal', () => {
+      expect(sanitizeHtmlForTelegram('<pre>&lt;ul&gt;&lt;li&gt;a')).toBe(
+        '<pre>&lt;ul&gt;&lt;li&gt;a</pre>',
+      );
+    });
+
+    test('a list after a code block is converted, whatever text came before', () => {
+      expect(
+        sanitizeHtmlForTelegram(`${'İ'.repeat(10)}<code>x</code><ol><li>a</li><li>b</li></ol>`),
+      ).toBe(`${'İ'.repeat(10)}<code>x</code>\n1. a\n2. b`);
+    });
+
+    test('deep nesting does not blow up the output (indent is capped)', () => {
+      const depth = 4000;
+      const html = `${'<ul><li>'.repeat(depth)}x${'</li></ul>'.repeat(depth)}`;
+      const result = sanitizeHtmlForTelegram(html);
+      expect(result.length).toBeLessThan(html.length);
+      expect(result).toContain('x');
+    });
+
+    test('a long run of spaces after a list is dropped only where it surrounds list tags', () => {
+      const html = `<ul><li>a</li></ul>x${' '.repeat(40_000)}x`;
+      expect(sanitizeHtmlForTelegram(html)).toBe(`• a\nx${' '.repeat(40_000)}x`);
+    });
+  });
+
   // Basic functionality
   test('preserves allowed tags', () => {
     const html = '<b>bold</b> <i>italic</i> <code>code</code>';

@@ -1402,6 +1402,54 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Scoped chat history by Telegram topic');
       },
     },
+    {
+      // Phase 0 of the agent stall guard (docs/specs/2026-10-13-agent-stall-guard.md): per-run and
+      // per-tool-round features for training the stall classifier. No message text, arguments or
+      // results — only tool names, per-run-seeded hashes, providers, timings and decisions.
+      name: '052_create_agent_trajectories',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS agent_trajectories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN ('answered', 'no_answer', 'silent', 'error')),
+            error_kind TEXT,
+            is_mention INTEGER NOT NULL,
+            tool_rounds INTEGER NOT NULL,
+            tool_calls INTEGER NOT NULL,
+            nudges INTEGER NOT NULL,
+            handoffs INTEGER NOT NULL,
+            providers TEXT NOT NULL,
+            answer_provider TEXT,
+            finalize_reason TEXT,
+            follow_up_after_ms INTEGER
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_agent_trajectories_group_finished
+          ON agent_trajectories(group_id, finished_at)
+        `);
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS agent_trajectory_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trajectory_id INTEGER NOT NULL REFERENCES agent_trajectories(id) ON DELETE CASCADE,
+            round INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            elapsed_ms INTEGER NOT NULL,
+            calls TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_agent_trajectory_rounds_trajectory
+          ON agent_trajectory_rounds(trajectory_id)
+        `);
+        logger.info('✓ Created agent trajectory tables');
+      },
+    },
   ];
 
   // Check and run migrations

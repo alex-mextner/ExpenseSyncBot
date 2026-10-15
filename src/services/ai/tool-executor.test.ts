@@ -477,7 +477,7 @@ describe('executeGetExpenses', () => {
     expect(result.output).toContain('Food');
     expect(result.output).toContain('[id:2]');
     expect(result.output).toContain('Transport');
-    expect(result.output).toContain('Total: 2 expenses | Grand total:');
+    expect(result.output).toContain('Total for all 2 expenses:');
   });
 
   test('expense with no comment shows (no comment) in output', async () => {
@@ -558,7 +558,7 @@ describe('executeGetExpenses', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('Food');
     expect(result.output).not.toContain('Transport');
-    expect(result.output).toContain('Total: 1 expenses | Grand total:');
+    expect(result.output).toContain('Total for all 1 expenses:');
   });
 
   test('respects date range via period filter', async () => {
@@ -584,14 +584,14 @@ describe('executeGetExpenses', () => {
 
     const page1 = await executeTool('get_expenses', { page: 1 }, ctx);
     expect(page1.success).toBe(true);
-    expect(page1.output).toContain('Total: 150 expenses | Grand total:');
+    expect(page1.output).toContain('Total for all 150 expenses:');
     expect(page1.output).toContain('[id:1]');
     expect(page1.output).toContain('[id:100]');
     expect(page1.output).not.toContain('[id:101]');
 
     const page2 = await executeTool('get_expenses', { page: 2 }, ctx);
     expect(page2.success).toBe(true);
-    expect(page2.output).toContain('Total: 150 expenses | Grand total:');
+    expect(page2.output).toContain('Total for all 150 expenses:');
     expect(page2.output).toContain('[id:101]');
     expect(page2.output).toContain('[id:150]');
     expect(page2.output).not.toContain('[id:1]');
@@ -612,9 +612,94 @@ describe('executeGetExpenses', () => {
 
     const result = await executeTool('get_expenses', { page: 1, page_size: 10 }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Total: 30 expenses | Grand total:');
+    expect(result.output).toContain('Total for all 30 expenses:');
     expect(result.output).toContain('[id:10]');
     expect(result.output).not.toContain('[id:11]');
+  });
+
+  // Stage QA 2026-10-15 (PR #170, HYP-1716 / #166): with page_size 8 the model read page 1 of 8,
+  // summed those rows and called it the total for May. Every page now says what it shows, the
+  // authoritative total for the whole filtered set, and how to get the rest.
+  describe('paginated detail output carries the whole-set total', () => {
+    const sixtyThree = () =>
+      Array.from({ length: 63 }, (_, i) =>
+        makeExpense({ id: i + 1, date: '2026-05-01', amount: 10, eur_amount: 10 }),
+      );
+
+    test('page 1 of 8: what it shows, the total for all 63, and how to read the rest', async () => {
+      mockExpenses.findByDateRange.mockReturnValue(sixtyThree());
+
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-05', page: 1, page_size: 8 },
+        ctx,
+      );
+
+      const out = result.output ?? '';
+      expect(out).toContain('Showing 1–8 of 63 expenses (page 1 of 8)');
+      expect(out).toContain(`Total for all 63 expenses: ${formatAmount(630, 'EUR', true)}`);
+      expect(out).toContain('More pages: 2–8 are not shown');
+      expect(out).toContain('page=2 … page=8 with page_size=8');
+    });
+
+    test('fractional page numbers from the model are read as whole numbers', async () => {
+      mockExpenses.findByDateRange.mockReturnValue(sixtyThree());
+
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-05', page: 1.5, page_size: 8.7 },
+        ctx,
+      );
+
+      expect(result.output).toContain('Showing 1–8 of 63 expenses (page 1 of 8)');
+      expect(result.output).toContain('page=2 … page=8 with page_size=8');
+    });
+
+    test('page 1 of 8 warns against summing one page', async () => {
+      mockExpenses.findByDateRange.mockReturnValue(sixtyThree());
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-05', page: 1, page_size: 8 },
+        ctx,
+      );
+      const out = result.output ?? '';
+      expect(out).toContain('never add up the rows of one page as the total');
+      // The whole-set total comes before the rows, the page's own stats are labelled as such.
+      expect(out.indexOf('Total for all 63')).toBeLessThan(out.indexOf('[id:'));
+      expect(out).toContain('=== Stats (this page only, not the total) ===');
+      expect(out).not.toContain('Grand total:');
+    });
+
+    test('the last page has no "more pages" line', async () => {
+      mockExpenses.findByDateRange.mockReturnValue(sixtyThree());
+
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-05', page: 8, page_size: 8 },
+        ctx,
+      );
+
+      expect(result.output).toContain('Showing 57–63 of 63 expenses (page 8 of 8)');
+      expect(result.output).toContain('Total for all 63 expenses:');
+      expect(result.output).not.toContain('More pages');
+    });
+
+    test('a requested currency shows the total in it and in the group default', async () => {
+      const group = mockGroups.findById();
+      mockGroups.findById.mockReturnValue(group && { ...group, default_currency: 'RSD' });
+      mockExpenses.findByDateRange.mockReturnValue(sixtyThree());
+
+      const result = await executeTool(
+        'get_expenses',
+        { period: '2026-05', page: 1, page_size: 8, currency: 'EUR' },
+        ctx,
+      );
+
+      const rsd = formatAmount(convertCurrency(630, 'EUR', 'RSD'), 'RSD', true);
+      expect(result.output).toContain(
+        `Total for all 63 expenses: ${formatAmount(630, 'EUR', true)} (= ${rsd})`,
+      );
+    });
   });
 });
 
