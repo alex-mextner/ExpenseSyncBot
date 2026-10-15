@@ -177,7 +177,7 @@ these hostnames to `http://localhost:80` with the original Host header:
 
 | Hostname | Caddy site | Serves |
 |---|---|---|
-| `finbot.mextner.com` | prod bot | landing, `/privacy`, `/terms`, `/callback`, `/health`, `/api`, `/temp-images` |
+| `finbot.mextner.com` | prod bot | landing, `/privacy`, `/terms`, `/callback`, `/health`, `/api` |
 | `finbot-app.mextner.com` | prod Mini App | `miniapp/dist`, `/api` |
 | `finbot-stage.mextner.com` | stage bot | `/callback`, `/health`, `/api` |
 | `finbot-stage-app.mextner.com` | stage Mini App | `miniapp/dist`, `/api` |

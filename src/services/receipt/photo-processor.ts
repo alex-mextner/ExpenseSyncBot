@@ -8,6 +8,7 @@ import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { sendMessage, withChatContext } from '../bank/telegram-sender';
 import type { AIExtractionResult, AIReceiptItem } from './ai-extractor';
+import { extractTextFromImageBuffer } from './ocr-extractor';
 import { scanQRFromImage } from './qr-scanner';
 import { fetchReceiptData } from './receipt-fetcher';
 import { parseReceipt } from './receipt-parser';
@@ -165,8 +166,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       );
 
       try {
-        const { extractTextFromImage } = await import('./ocr-extractor');
-        receiptData = await extractTextFromImage(photoBuffer);
+        receiptData = await extractTextFromImageBuffer(photoBuffer);
         logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
       } catch (ocrError) {
         logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
@@ -206,8 +206,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
 
         // Try OCR as fallback when QR fetch fails
         try {
-          const { extractTextFromImage } = await import('./ocr-extractor');
-          receiptData = await extractTextFromImage(photoBuffer);
+          receiptData = await extractTextFromImageBuffer(photoBuffer);
           logger.info(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
         } catch (ocrError) {
           // Both QR fetch and OCR failed

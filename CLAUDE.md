@@ -94,7 +94,7 @@ sqlite3 ./data/expenses.db
 ```plain
 index.ts (entry point)
 ├── src/database/ (initializes on import)
-├── src/web/ (HTTP server: OAuth callback, Mini App API, SSE, temp images)
+├── src/web/ (HTTP server: OAuth callback, Mini App API, SSE)
 ├── src/services/bank/sync-service.ts (bank sync cron every 30 min)
 ├── src/services/receipt/photo-processor.ts (receipt photo background worker)
 ├── src/bot/cron.ts (scheduled tasks: exchange rates, budget tab cloning)
@@ -148,7 +148,6 @@ Access via singleton: `database.users`, `database.expenses`, `database.bankConne
 - [src/web/oauth-callback.ts](src/web/oauth-callback.ts) - HTTP server for OAuth callback
 - [src/web/miniapp-api.ts](src/web/miniapp-api.ts) - Mini App REST API endpoints
 - [src/web/sse-emitter.ts](src/web/sse-emitter.ts) - Server-Sent Events for real-time updates
-- [src/web/temp-image.handler.ts](src/web/temp-image.handler.ts) - Temporary image serving (rendered tables)
 
 #### 3. Expense Parsing & Multi-Currency Support
 
@@ -240,7 +239,7 @@ Photo-based receipt recognition: QR scanning, OCR, and AI extraction.
 
 - [photo-processor.ts](src/services/receipt/photo-processor.ts) - Background worker that dequeues photos from `photo_queue`, runs QR scan + OCR + AI extraction, sends parsed results as confirmation cards
 - [qr-scanner.ts](src/services/receipt/qr-scanner.ts) - QR code scanning from receipt images
-- [ocr-extractor.ts](src/services/receipt/ocr-extractor.ts) - OCR text extraction from images
+- [ocr-extractor.ts](src/services/receipt/ocr-extractor.ts) - OCR text extraction from images; the photo goes to the vision model in the request as a base64 data URL — no public image URL, so OCR never depends on Caddy/the tunnel serving a file (#164)
 - [ai-extractor.ts](src/services/receipt/ai-extractor.ts) - AI-powered extraction of structured expense data from receipt text
 - [receipt-summarizer.ts](src/services/receipt/receipt-summarizer.ts) - Summarizes parsed receipt data
 - [receipt-fetcher.ts](src/services/receipt/receipt-fetcher.ts) - Fetches receipt data from URLs

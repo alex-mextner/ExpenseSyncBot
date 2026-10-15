@@ -1,8 +1,7 @@
-// Tests for ocr-extractor.ts — temp cleanup logic and error handling
+// Tests for ocr-extractor.ts — data-URL request shape, sanitization and error handling
 // Mocks aiStreamRound() from the shared streaming utility.
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import path from 'node:path';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -30,33 +29,7 @@ mock.module('../ai/streaming', () => ({
   stripThinkingTags: (t: string) => t,
 }));
 
-import {
-  extractTextFromImage,
-  extractTextFromImageBuffer,
-  startTempImageCleanup,
-} from './ocr-extractor';
-
-describe('startTempImageCleanup', () => {
-  it('is a function', () => {
-    expect(typeof startTempImageCleanup).toBe('function');
-  });
-
-  it('does not throw when called', () => {
-    expect(() => startTempImageCleanup()).not.toThrow();
-  });
-
-  it('returns void (undefined)', () => {
-    const result = startTempImageCleanup();
-    expect(result).toBeUndefined();
-  });
-
-  it('can be called multiple times without throwing', () => {
-    expect(() => {
-      startTempImageCleanup();
-      startTempImageCleanup();
-    }).not.toThrow();
-  });
-});
+import { extractTextFromImageBuffer } from './ocr-extractor';
 
 describe('extractTextFromImageBuffer', () => {
   afterEach(() => {
@@ -92,86 +65,15 @@ describe('extractTextFromImageBuffer', () => {
     )[0];
     const imageBlock = opts.messages[0]?.content[0];
     expect(imageBlock?.type).toBe('image_url');
-    expect(imageBlock?.image_url?.url).toContain('data:image/jpeg;base64,');
+    expect(imageBlock?.image_url?.url).toBe(
+      `data:image/jpeg;base64,${Buffer.from('test-data').toString('base64')}`,
+    );
   });
 
   it('throws when aiStreamRound fails', async () => {
     mockAiStreamRound.mockRejectedValueOnce(new Error('All providers in ocr chain failed'));
 
     await expect(extractTextFromImageBuffer(Buffer.from('fake'))).rejects.toThrow();
-  });
-});
-
-describe('extractTextFromImage', () => {
-  afterEach(async () => {
-    mockAiStreamRound.mockClear();
-    const fs = await import('node:fs/promises');
-    const tempDir = path.join(process.cwd(), 'temp-images');
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-  });
-
-  it('is a function', () => {
-    expect(typeof extractTextFromImage).toBe('function');
-  });
-
-  it('returns text on success', async () => {
-    mockAiStreamRound.mockResolvedValueOnce(streamResult('Store: Test\nTotal: 500 RSD'));
-
-    const result = await extractTextFromImage(Buffer.from('fake-image'));
-    expect(result).toBe('Store: Test\nTotal: 500 RSD');
-  });
-
-  it('throws descriptive error when aiStreamRound fails', async () => {
-    mockAiStreamRound.mockRejectedValueOnce(new Error('All providers in ocr chain failed'));
-
-    try {
-      await extractTextFromImage(Buffer.from('fake'));
-      throw new Error('should have thrown');
-    } catch (err) {
-      expect(err instanceof Error).toBe(true);
-      if (err instanceof Error) {
-        expect(err.message).toContain('OCR extraction failed');
-      }
-    }
-  });
-});
-
-describe('temp image file lifecycle', () => {
-  const fs = require('node:fs/promises') as typeof import('node:fs/promises');
-  const tempDir = path.join(process.cwd(), 'temp-images');
-
-  afterEach(async () => {
-    try {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    } catch {
-      // Directory may not exist
-    }
-  });
-
-  it('temp-images directory path is under cwd', () => {
-    expect(tempDir).toContain('temp-images');
-    expect(path.isAbsolute(tempDir)).toBe(true);
-  });
-
-  it('can create and delete temp directory', async () => {
-    await fs.mkdir(tempDir, { recursive: true });
-    const stat = await fs.stat(tempDir);
-    expect(stat.isDirectory()).toBe(true);
-
-    await fs.rm(tempDir, { recursive: true });
-    await expect(fs.access(tempDir)).rejects.toThrow();
-  });
-
-  it('can write and read a temp image file', async () => {
-    await fs.mkdir(tempDir, { recursive: true });
-    const filepath = path.join(tempDir, 'test-ocr.jpg');
-    const buffer = Buffer.from('fake-image-bytes');
-
-    await fs.writeFile(filepath, buffer);
-    const read = await fs.readFile(filepath);
-    expect(read).toEqual(buffer);
-
-    await fs.unlink(filepath);
   });
 });
 
@@ -299,84 +201,5 @@ describe('extractTextFromImageBuffer — sanitization & edge cases', () => {
     const textBlock = opts.messages[0]?.content[1];
     expect(textBlock?.type).toBe('text');
     expect(textBlock?.text).toContain('OCR');
-  });
-});
-
-describe('extractTextFromImage — temp-file variant', () => {
-  afterEach(async () => {
-    mockAiStreamRound.mockClear();
-    const fs = await import('node:fs/promises');
-    const tempDir = path.join(process.cwd(), 'temp-images');
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-  });
-
-  it('sanitizes runaway-repetition output to empty string', async () => {
-    const pattern = 'LOOP_BLOCK'.padEnd(100, 'y');
-    const text = pattern.repeat(20);
-    mockAiStreamRound.mockResolvedValueOnce(streamResult(text));
-
-    const result = await extractTextFromImage(Buffer.from('fake'));
-    expect(result).toBe('');
-  });
-
-  it('truncates excessively long output to 8000 chars', async () => {
-    let seed = 54321;
-    const text = Array.from({ length: 9500 }, () => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return String.fromCharCode(33 + (seed % 90));
-    }).join('');
-    mockAiStreamRound.mockResolvedValueOnce(streamResult(text));
-
-    const result = await extractTextFromImage(Buffer.from('fake'));
-    expect(result.length).toBe(8000);
-  });
-
-  it('writes image to temp-images directory', async () => {
-    mockAiStreamRound.mockResolvedValueOnce(streamResult('ocr'));
-
-    await extractTextFromImage(Buffer.from('fake-image-bytes'));
-
-    const fs = await import('node:fs/promises');
-    const tempDir = path.join(process.cwd(), 'temp-images');
-    const files = await fs.readdir(tempDir);
-    const ocrFile = files.find((f) => f.startsWith('ocr-') && f.endsWith('.jpg'));
-    expect(ocrFile).toBeDefined();
-  });
-
-  it('passes a URL-style image_url to the model (not data URL)', async () => {
-    mockAiStreamRound.mockResolvedValueOnce(streamResult('ocr'));
-
-    await extractTextFromImage(Buffer.from('fake'));
-
-    const opts = mockAiStreamRound.mock.calls[0]?.[0] as {
-      messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
-    };
-    const url = opts.messages[0]?.content[0]?.image_url?.url ?? '';
-    expect(url).toContain('/temp-images/ocr-');
-    expect(url).not.toContain('data:image/jpeg;base64');
-  });
-
-  it('propagates a non-Error throw from aiStreamRound with "Unknown error" fallback', async () => {
-    mockAiStreamRound.mockImplementationOnce(async () => {
-      // eslint-disable-next-line no-throw-literal
-      throw 'plain string rejection' as unknown as Error;
-    });
-
-    try {
-      await extractTextFromImage(Buffer.from('fake'));
-      throw new Error('should have thrown');
-    } catch (err) {
-      expect(err instanceof Error).toBe(true);
-      if (err instanceof Error) {
-        expect(err.message).toContain('Unknown error');
-      }
-    }
-  });
-
-  it('returns NO_TEXT marker unchanged for blank images', async () => {
-    mockAiStreamRound.mockResolvedValueOnce(streamResult('NO_TEXT'));
-
-    const result = await extractTextFromImage(Buffer.from('blank'));
-    expect(result).toBe('NO_TEXT');
   });
 });

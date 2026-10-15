@@ -47,9 +47,13 @@ mock.module('./qr-scanner', () => ({ scanQRFromImage: mockScanQRFromImage }));
 const mockFetchReceiptData = mock<(qr: string) => Promise<string>>(async () => 'fetched-data');
 mock.module('./receipt-fetcher', () => ({ fetchReceiptData: mockFetchReceiptData }));
 
-// Dynamic import inside photo-processor — mocked at module path
-const mockExtractTextFromImage = mock<(buf: Buffer) => Promise<string>>(async () => 'ocr-text');
-mock.module('./ocr-extractor', () => ({ extractTextFromImage: mockExtractTextFromImage }));
+// OCR runs on a vision model — stubbed at module path
+const mockExtractTextFromImageBuffer = mock<(buf: Buffer) => Promise<string>>(
+  async () => 'ocr-text',
+);
+mock.module('./ocr-extractor', () => ({
+  extractTextFromImageBuffer: mockExtractTextFromImageBuffer,
+}));
 
 type MockParseResult = {
   items: Array<{
@@ -349,7 +353,7 @@ function resetAll(): void {
 
   mockScanQRFromImage.mockReset();
   mockFetchReceiptData.mockReset();
-  mockExtractTextFromImage.mockReset();
+  mockExtractTextFromImageBuffer.mockReset();
   mockParseReceipt.mockReset();
   mockSendMessage.mockClear();
   mockWithChatContext.mockClear();
@@ -371,7 +375,7 @@ function resetAll(): void {
   // Restore sensible defaults
   mockScanQRFromImage.mockImplementation(async () => null);
   mockFetchReceiptData.mockImplementation(async () => '<html>receipt</html>');
-  mockExtractTextFromImage.mockImplementation(async () => 'ocr text of receipt');
+  mockExtractTextFromImageBuffer.mockImplementation(async () => 'ocr text of receipt');
   mockParseReceipt.mockImplementation(async () => defaultParseResult());
 }
 
@@ -419,7 +423,7 @@ describe('photo-processor: QR happy path', () => {
     // QR path was taken
     expect(mockScanQRFromImage).toHaveBeenCalledTimes(1);
     expect(mockFetchReceiptData).toHaveBeenCalledWith('https://fiscal.qr/xyz');
-    expect(mockExtractTextFromImage).not.toHaveBeenCalled();
+    expect(mockExtractTextFromImageBuffer).not.toHaveBeenCalled();
 
     // Status message was created and closed after successful parse
     expect(mockStatusClose).toHaveBeenCalled();
@@ -450,7 +454,7 @@ describe('photo-processor: QR fallback to OCR', () => {
   it('when QR returns nothing, OCR extracts text and parser runs', async () => {
     seedQueueItem({ id: 2 });
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(
+    mockExtractTextFromImageBuffer.mockImplementation(
       async () => 'Receipt text from OCR — long enough to parse',
     );
 
@@ -459,7 +463,9 @@ describe('photo-processor: QR fallback to OCR', () => {
 
     expect(mockScanQRFromImage).toHaveBeenCalledTimes(1);
     expect(mockFetchReceiptData).not.toHaveBeenCalled();
-    expect(mockExtractTextFromImage).toHaveBeenCalledTimes(1);
+    // OCR gets the downloaded photo bytes in memory — no public temp-image URL (#164)
+    expect(mockExtractTextFromImageBuffer).toHaveBeenCalledTimes(1);
+    expect(mockExtractTextFromImageBuffer.mock.calls[0]?.[0]).toEqual(Buffer.from([1, 2, 3]));
     expect(mockParseReceipt).toHaveBeenCalled();
     expect(mockReceiptItems.create).toHaveBeenCalled();
     expect(receiptsStore).toHaveLength(1);
@@ -471,12 +477,12 @@ describe('photo-processor: QR fallback to OCR', () => {
     mockFetchReceiptData.mockImplementation(async () => {
       throw new Error('fetch boom');
     });
-    mockExtractTextFromImage.mockImplementation(async () => 'OCR salvage text with items');
+    mockExtractTextFromImageBuffer.mockImplementation(async () => 'OCR salvage text with items');
 
     const bot = makeBot();
     await runOneQueuePass(bot);
 
-    expect(mockExtractTextFromImage).toHaveBeenCalledTimes(1);
+    expect(mockExtractTextFromImageBuffer).toHaveBeenCalledTimes(1);
     expect(mockParseReceipt).toHaveBeenCalled();
     expect(receiptItemsStore).toHaveLength(1);
   });
@@ -486,8 +492,8 @@ describe('photo-processor: all extraction methods fail', () => {
   it('no QR + OCR throws → queue marked done + 🤷 reaction, no user message', async () => {
     seedQueueItem({ id: 4 });
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(async () => {
-      throw new Error('tesseract crashed');
+    mockExtractTextFromImageBuffer.mockImplementation(async () => {
+      throw new Error('vision OCR failed');
     });
 
     const bot = makeBot();
@@ -516,7 +522,7 @@ describe('photo-processor: all extraction methods fail', () => {
   it('parser returns empty items array → status=error + notify user', async () => {
     seedQueueItem({ id: 5 });
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(async () => 'some OCR text');
+    mockExtractTextFromImageBuffer.mockImplementation(async () => 'some OCR text');
     mockParseReceipt.mockImplementation(async () => ({
       ...defaultParseResult(),
       items: [],
@@ -539,7 +545,7 @@ describe('photo-processor: all extraction methods fail', () => {
   it('parser throws → status writer finalized with error, queue marked error', async () => {
     seedQueueItem({ id: 6 });
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(async () => 'text');
+    mockExtractTextFromImageBuffer.mockImplementation(async () => 'text');
     mockParseReceipt.mockImplementation(async () => {
       throw new Error('AI down');
     });
@@ -563,7 +569,7 @@ describe('photo-processor: status updates', () => {
   it('status writer receives onProgress deltas and closes on success', async () => {
     seedQueueItem({ id: 7 });
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(async () => 'receipt text');
+    mockExtractTextFromImageBuffer.mockImplementation(async () => 'receipt text');
     mockParseReceipt.mockImplementation(async (_t, _cats, _ex, onProgress) => {
       onProgress?.('chunk-a');
       onProgress?.('chunk-b');
@@ -582,7 +588,7 @@ describe('photo-processor: status updates', () => {
   it('processing status is set before any parse work', async () => {
     seedQueueItem({ id: 8 });
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(async () => 'text');
+    mockExtractTextFromImageBuffer.mockImplementation(async () => 'text');
 
     const bot = makeBot();
     await runOneQueuePass(bot);
@@ -602,7 +608,7 @@ describe('photo-processor: error resilience across items', () => {
     // Second item: happy path via OCR
     let call = 0;
     mockScanQRFromImage.mockImplementation(async () => null);
-    mockExtractTextFromImage.mockImplementation(async () => {
+    mockExtractTextFromImageBuffer.mockImplementation(async () => {
       call++;
       if (call === 1) throw new Error('ocr boom');
       return 'valid OCR text';
@@ -613,7 +619,7 @@ describe('photo-processor: error resilience across items', () => {
 
     // Both items visited
     expect(mockPhotoQueue.findById).toHaveBeenCalled();
-    expect(mockExtractTextFromImage).toHaveBeenCalledTimes(2);
+    expect(mockExtractTextFromImageBuffer).toHaveBeenCalledTimes(2);
 
     // Second item produced receipt items
     expect(mockReceiptItems.create).toHaveBeenCalled();

@@ -31,12 +31,6 @@ http://finbot.mextner.com {
 		}
 	}
 
-	# Temporary images for OCR processing
-	handle /temp-images/* {
-		root * /var/www/ExpenseSyncBot
-		file_server
-	}
-
 	# Everything else
 	handle {
 		respond "Not Found" 404
