@@ -116,7 +116,7 @@ describe('sanitizeHtmlForTelegram', () => {
     });
 
     test.each(['<li-custom>', '<li_custom>', '<li:x>'])('%s is not a list item', (tag) => {
-      const close = tag.replace('<', '</');
+      const close = `</${tag.slice(1)}`;
       const result = sanitizeHtmlForTelegram(`<ul><li>a</li></ul>${tag}keep${close}`);
       expect(result.startsWith('• a\n&lt;')).toBe(true);
       expect(result).not.toContain('• keep');
