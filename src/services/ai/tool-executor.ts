@@ -132,8 +132,9 @@ async function executeGetExpenses(
 ): Promise<ToolResult> {
   const periods = normalizeArrayParam(input['period'], 'current_month');
   const categories = normalizeArrayParam(input['category']);
-  const pageSize = Math.min(Math.max((input['page_size'] as number) || 100, 1), 500);
-  const page = Math.max((input['page'] as number) || 1, 1);
+  // Whole numbers only: the schema says number, and a model may send 1.5.
+  const pageSize = Math.floor(Math.min(Math.max((input['page_size'] as number) || 100, 1), 500));
+  const page = Math.floor(Math.max((input['page'] as number) || 1, 1));
   const summaryOnly = (input['summary_only'] as boolean) || false;
 
   const group = database.groups.findById(ctx.groupId);
@@ -176,7 +177,15 @@ async function executeGetExpenses(
     return buildSummaryOutput(periodData, allExpenses, displayCurrency, isBatch);
   }
 
-  return buildDetailOutput(periodData, allExpenses, displayCurrency, isBatch, page, pageSize);
+  return buildDetailOutput(
+    periodData,
+    allExpenses,
+    displayCurrency,
+    group?.default_currency ?? BASE_CURRENCY,
+    isBatch,
+    page,
+    pageSize,
+  );
 }
 
 function buildSummaryOutput(
@@ -289,6 +298,7 @@ function buildDetailOutput(
   periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
   allExpenses: Expense[],
   displayCurrency: CurrencyCode,
+  defaultCurrency: CurrencyCode,
   isBatch: boolean,
   page: number,
   pageSize: number,
@@ -302,6 +312,12 @@ function buildDetailOutput(
 
   const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
   const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+  // A requested currency other than the group's also gets the total in the group currency, so
+  // the model never has to convert the authoritative total itself.
+  const totalInDefault =
+    displayCurrency === defaultCurrency
+      ? ''
+      : ` (= ${formatAmount(convertCurrency(totalEur, BASE_CURRENCY, defaultCurrency), defaultCurrency, true)})`;
 
   const firstPeriod = periodData[0];
   const lastPeriod = periodData[periodData.length - 1];
@@ -310,11 +326,21 @@ function buildDetailOutput(
       ? `${firstPeriod.startDate} to ${lastPeriod.endDate}`
       : `${firstPeriod?.startDate ?? '?'} to ${firstPeriod?.endDate ?? '?'}`;
 
+  // Stage QA 2026-10-15: a model summed page 1 of 8 and called it the total. Every page says what
+  // it shows, the total for the whole filtered set (authoritative), and how to get the rest.
   const lines = [
     `Period: ${dateRange}`,
-    `Total: ${allExpenses.length} expenses | Grand total: ${formatAmount(totalDisplay, displayCurrency, true)} | Page ${page}/${totalPages}`,
-    '',
+    pageItems.length > 0
+      ? `Showing ${offset + 1}–${offset + pageItems.length} of ${allExpenses.length} expenses (page ${page} of ${totalPages})`
+      : `Showing none of ${allExpenses.length} expenses (page ${page} of ${totalPages})`,
+    `Total for all ${allExpenses.length} expenses: ${formatAmount(totalDisplay, displayCurrency, true)}${totalInDefault}`,
   ];
+  if (page < totalPages) {
+    lines.push(
+      `More pages: ${page + 1}–${totalPages} are not shown. For totals use the "Total for all" line above (or get_expenses with summary_only: true) — never add up the rows of one page as the total. For the individual rows call get_expenses again with page=${page + 1} … page=${totalPages} with page_size=${pageSize} and the same filters.`,
+    );
+  }
+  lines.push('');
 
   // Stats for ALL expenses (not just page)
   const allStats = computeExpenseStats(allExpenses, displayCurrency);
@@ -325,7 +351,7 @@ function buildDetailOutput(
   // Stats for current page
   if (totalPages > 1) {
     const pageStats = computeExpenseStats(pageItems, displayCurrency);
-    lines.push(`=== Stats (page ${page}) ===`);
+    lines.push('=== Stats (this page only, not the total) ===');
     lines.push(formatStats(pageStats, displayCurrency));
     lines.push('');
   }
