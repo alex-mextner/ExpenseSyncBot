@@ -43,8 +43,7 @@ data/*
 *.db-shm
 *.db-wal
 
-# Temporary images (OCR processing)
-temp-images/
+# Receipt photos for local OCR scripts (scripts/test-ocr-pipeline.ts)
 debug-images/
 
 # Other

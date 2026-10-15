@@ -4,7 +4,6 @@ import { database } from './src/database';
 import { startSyncService } from './src/services/bank/sync-service';
 import { scheduleNewsBroadcast } from './src/services/broadcast';
 import { updateExchangeRates } from './src/services/currency/converter';
-import { startTempImageCleanup } from './src/services/receipt/ocr-extractor';
 import { createLogger } from './src/utils/logger';
 import { startOAuthServer } from './src/web/oauth-callback';
 
@@ -30,9 +29,6 @@ async function main() {
 
     logger.info('Starting OAuth server...');
     startOAuthServer();
-
-    logger.info('Starting temp image cleanup...');
-    startTempImageCleanup();
 
     logger.info('Starting Telegram bot...');
     const bot = await startBot();

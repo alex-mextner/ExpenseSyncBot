@@ -7,6 +7,8 @@
 // without modifying it.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as reconnectModule from '../bot/commands/reconnect.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
@@ -347,5 +349,19 @@ describe('other routes do not interfere', () => {
   test('unknown path → 404', async () => {
     const res = await fetch(`${BASE_URL}/does-not-exist`);
     expect(res.status).toBe(404);
+  });
+
+  test('/temp-images/* is not served — receipt photos go to OCR in memory (#164)', async () => {
+    const dir = path.join(process.cwd(), 'temp-images');
+    const file = path.join(dir, 'oauth-callback-route-probe.jpg');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+      const res = await fetch(`${BASE_URL}/temp-images/oauth-callback-route-probe.jpg`);
+      expect(res.status).toBe(404);
+    } finally {
+      // Only the probe file: the empty dir is invisible to git and may hold someone else's files
+      fs.rmSync(file, { force: true });
+    }
   });
 });
