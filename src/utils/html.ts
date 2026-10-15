@@ -42,6 +42,20 @@ const ALLOWED_TAGS = [
   'span',
 ];
 
+/** Inline formatting tags the sanitizer keeps; a model's list marker may sit inside them. */
+const INLINE_FORMAT_TAGS = ALLOWED_TAGS.filter(
+  (tag) => !['code', 'pre', 'blockquote', 'tg-emoji'].includes(tag),
+);
+/**
+ * A model-written list marker at a given index (sticky): a bullet or `1.`/`1)`, then any inline
+ * formatting tags (closing ones, or empty wrappers like `<i></i>`), then whitespace. Groups:
+ * 1 bullet, 2 number, 3 the tags (kept in the output).
+ */
+const LIST_ITEM_MARKER = new RegExp(
+  `(?:([•\\-–—*·])|(\\d{1,9})[.)])((?:</?(?:${INLINE_FORMAT_TAGS.join('|')})>)*)\\s+`,
+  'iy',
+);
+
 /**
  * Restore only safe attributes for allowed tags. Everything else is stripped.
  */
@@ -162,6 +176,12 @@ function convertHtmlLists(text: string): string {
   let lastIsText = false;
   let skipLeadingSpace = false;
   let lineBreakDue = false;
+  // The model's own bullet right after an <li> ("<li>• Еда", "<li><b>•</b> Еда"): replaced, since
+  // the item gets its own marker. text[dropFrom, dropTo) is pushed as `dropKeep` (the closing tags
+  // that sat between the bullet and the item text); dropFrom is -1 when none is pending.
+  let dropFrom = -1;
+  let dropTo = -1;
+  let dropKeep = '';
 
   const endsWithNewline = () => out.at(-1)?.endsWith('\n') ?? true;
   const pushText = (raw: string) => {
@@ -173,6 +193,49 @@ function convertHtmlLists(text: string): string {
     lastIsText = true;
     skipLeadingSpace = false;
     lineBreakDue = false;
+  };
+  /** Push text[from, to), with the pending model bullet replaced if it lies there. */
+  const pushRange = (from: number, to: number) => {
+    if (dropFrom >= from && dropFrom < to) {
+      pushText(text.slice(from, dropFrom) + dropKeep + text.slice(dropTo, to));
+      dropFrom = -1;
+    } else {
+      pushText(text.slice(from, to));
+    }
+  };
+  /**
+   * The marker the model wrote at the start of the item whose `<li>` ends at `liEnd`, past
+   * whitespace and inline opening tags (`<b>`, read with the same quote-aware scanner): a bullet
+   * ('•', '-', '–', '—', '*', '·') or a number ('1.', '1)'), followed — after any closing tags — by
+   * whitespace, so "-5 EUR" and "1.5 kg" are not markers.
+   */
+  const leadingMarker = (liEnd: number) => {
+    let p = liEnd + 1;
+    let spaceFrom = p;
+    for (;;) {
+      spaceFrom = p;
+      while (p < text.length && /\s/.test(text[p] ?? '')) p++;
+      if (text[p] !== '<') break;
+      // Opening and closing inline formatting tags are skipped (`<b></b>• item`).
+      const opening = /<\/?([a-z][^\s/>"'=<]*)(?=[\s/>])/iy;
+      opening.lastIndex = p;
+      const tag = opening.exec(text)?.[1]?.toLowerCase();
+      if (!tag || !INLINE_FORMAT_TAGS.includes(tag)) return null;
+      const scanned = scanTag(text, p);
+      if (!scanned || !('end' in scanned)) return null;
+      p = scanned.end + 1;
+    }
+    LIST_ITEM_MARKER.lastIndex = p;
+    const m = LIST_ITEM_MARKER.exec(text);
+    if (!m) return null;
+    return {
+      number: m[2] === undefined ? null : Number.parseInt(m[2], 10),
+      // The whitespace right before the marker goes with it (`<b>\n  • item</b>`), so the item
+      // text stays on the marker's line.
+      from: spaceFrom,
+      to: LIST_ITEM_MARKER.lastIndex,
+      closingTags: m[3] ?? '',
+    };
   };
   const trimTrailingSpace = () => {
     while (lastIsText && out.length > 0) {
@@ -229,10 +292,10 @@ function convertHtmlLists(text: string): string {
     }
     // A self-closing list tag (`<ul/>`) opens nothing; it is dropped like any other list tag.
     if ((name === 'ul' || name === 'ol') && selfClosing) {
-      pushText(text.slice(textStart, i));
+      pushRange(textStart, i);
       textStart = end + 1;
     } else if (name === 'ul' || name === 'ol' || name === 'li') {
-      pushText(text.slice(textStart, i));
+      pushRange(textStart, i);
       // Numbering attributes (<ol start="5" reversed>, <li value="3">) are kept: steps are referred
       // to by number. Attributes are tokenized with quoted values consumed whole, so text inside
       // another attribute (`title="start=9"`) is never read as one.
@@ -254,7 +317,18 @@ function convertHtmlLists(text: string): string {
         const value = numberAttr('value');
         if (list) list.count = value ?? list.count + list.step;
         const level = Math.min(Math.max(lists.length - 1, 0), MAX_LIST_INDENT_LEVELS);
-        out.push(`${'  '.repeat(level)}${list?.ordered ? `${list.count}. ` : '• '}`);
+        // The model may have written its own marker inside the item (stage QA of PR #170: "• •").
+        // A number it wrote is kept as the marker and the counter follows it; a bullet is replaced
+        // by ours.
+        const own = leadingMarker(end);
+        if (own && own.number === null) {
+          dropFrom = own.from;
+          dropTo = own.to;
+          dropKeep = own.closingTags;
+        }
+        if (own?.number != null && list?.ordered) list.count = own.number;
+        const marker = own?.number != null ? '' : list?.ordered ? `${list.count}. ` : '• ';
+        out.push(`${'  '.repeat(level)}${marker}`);
         lineBreakDue = false;
       } else if (name === 'li') {
         // Text after a closed item (`</li> Итого: …`) starts its own line.
@@ -288,7 +362,7 @@ function convertHtmlLists(text: string): string {
     }
     i = text.indexOf('<', end + 1);
   }
-  pushText(text.slice(textStart));
+  pushRange(textStart, text.length);
   return out.join('');
 }
 

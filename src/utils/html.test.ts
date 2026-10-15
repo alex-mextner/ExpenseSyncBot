@@ -174,6 +174,86 @@ describe('sanitizeHtmlForTelegram', () => {
       expect(result).not.toContain('• example');
     });
 
+    // Stage QA of PR #170 (b): the model wrote its own bullet inside <li>, and the conversion
+    // added a second one: "• • Путешествия: 2798.61 EUR".
+    test.each([
+      [
+        'the stage shape',
+        '<ul><li>• Путешествия: <b>2798.61 EUR</b></li><li>• Еда: <b>420.00 EUR</b></li></ul>',
+        '• Путешествия: <b>2798.61 EUR</b>\n• Еда: <b>420.00 EUR</b>',
+      ],
+      [
+        'the bullet inside <b>',
+        '<ul><li><b>• Путешествия</b>: 2798.61 EUR</li></ul>',
+        '• <b>Путешествия</b>: 2798.61 EUR',
+      ],
+      [
+        'dashes, asterisks and middle dots become •',
+        '<ul><li>- a</li><li>– b</li><li>— c</li><li>* d</li><li>· e</li></ul>',
+        '• a\n• b\n• c\n• d\n• e',
+      ],
+      [
+        'a numbered item keeps the model number, no extra marker',
+        '<ul><li>1. Еда</li><li>2) Дом</li></ul>',
+        '1. Еда\n2) Дом',
+      ],
+      [
+        'an <ol> item with its own number is not numbered twice',
+        '<ol><li>1. Еда</li><li>2. Дом</li></ol>',
+        '1. Еда\n2. Дом',
+      ],
+      [
+        'a negative amount or a decimal is not a marker',
+        '<ul><li>-5 EUR</li><li>1.5 kg</li></ul>',
+        '• -5 EUR\n• 1.5 kg',
+      ],
+      [
+        'a nested item keeps its indent',
+        '<ul><li>Еда<ul><li>• кафе</li></ul></li></ul>',
+        '• Еда\n  • кафе',
+      ],
+      ['a bullet in its own <b>', '<ul><li><b>•</b> Еда</li></ul>', '• <b></b>Еда'],
+      [
+        'an inline tag with a "<" in a quoted attribute (the sanitizer drops the attribute)',
+        '<ul><li><b title="<">• item</b></li></ul>',
+        '• <b>item</b>',
+      ],
+      [
+        'numbering continues from the number the model wrote',
+        '<ol><li>2. A</li><li>B</li></ol>',
+        '2. A\n3. B',
+      ],
+      ['a newline after the bullet', '<ul><li>•\nЕда</li><li>•\r\nДом</li></ul>', '• Еда\n• Дом'],
+      ['a bullet alone before </li> is not a marker', '<ul><li>•</li> <li>B</li></ul>', '• •\n• B'],
+      [
+        'a non-formatting tag ends the look-ahead',
+        '<ul><li><custom>• item</custom></li></ul>',
+        '• &lt;custom&gt;• item&lt;/custom&gt;',
+      ],
+      [
+        'an empty formatting wrapper before the bullet',
+        '<ul><li><b></b>• item</li></ul>',
+        '• <b></b>item',
+      ],
+      [
+        'five-digit numbers the model wrote',
+        '<ol start="9999"><li>9999. A</li><li>10000. B</li></ol>',
+        '9999. A\n10000. B',
+      ],
+      [
+        'an empty wrapper after the bullet',
+        '<ul><li><b>•</b><i></i> item</li></ul>',
+        '• <b></b><i></i>item',
+      ],
+      [
+        'a newline inside the wrapper before the bullet',
+        '<ul><li><b>\n  • item</b></li><li>next</li></ul>',
+        '• <b>item</b>\n• next',
+      ],
+    ])('a marker the model already wrote is not doubled: %s', (_label, html, expected) => {
+      expect(sanitizeHtmlForTelegram(html)).toBe(expected);
+    });
+
     test('text after a closed item starts its own line', () => {
       expect(sanitizeHtmlForTelegram('<ul><li>Еда: 10 EUR</li> Итого: 10 EUR</ul>')).toBe(
         '• Еда: 10 EUR\nИтого: 10 EUR',
