@@ -15,10 +15,12 @@ const REPO = 'alex-mextner/ExpenseSyncBot';
 const BRANCH = 'feat/some-change';
 const HEAD_SHA = '1111111111111111111111111111111111111111';
 
-// Stand-in git: logs every call; `worktree add` creates the worktree directory (its path is
+// Stand-in git: logs every call (submodule calls also log the directory they ran in);
+// `worktree add` creates the worktree directory (its path is
 // the only absolute argument); `rev-parse`/`log` answer what the notification needs.
 const GIT_STUB = `#!/usr/bin/env bash
 echo "git $*" >> "$CALLS"
+[ "$1" = submodule ] && echo "git-cwd $PWD" >> "$CALLS"
 case "$1" in
   worktree) [ "$2" = add ] && for a in "$@"; do case "$a" in /*) mkdir -p "$a" ;; esac; done ;;
   rev-parse) echo "${HEAD_SHA}" ;;
@@ -153,6 +155,9 @@ async function runDeploy({
   return {
     status: result.status,
     stderr: result.stderr,
+    worktree,
+    mainDir,
+    log,
     git: log.filter((l) => l.startsWith('git ')),
     pm2: log.filter((l) => l.startsWith('pm2 ')),
     pm2Tracked: existsSync(`${calls}.tracked`)
@@ -213,5 +218,23 @@ describe('stage-bot deploy step', () => {
     expect(r.status).toBe(0);
     expect(r.pm2.some((call) => call.startsWith('pm2 start'))).toBe(true);
     expect(r.pm2Tracked).toEqual([]);
+  });
+
+  // A fresh `git worktree add` leaves submodules empty: until 2026-10-15 every PR stage bot
+  // ran without ZenPlugins, so bank sync logged "Unknown bank in registry" for every
+  // connection. The stage checkout must get the submodule and its deps, as prod's deploy does.
+  test.each([
+    ['PR opened', false, 'opened', 'worktree'],
+    ['PR updated', true, 'synchronize', 'worktree'],
+    ['PR closed, stage back on main', false, 'closed', 'mainDir'],
+  ] as const)('%s: the stage checkout has ZenPlugins checked out and installed', async (_name, worktreeExists, action, checkout) => {
+    const r = await runDeploy({ worktreeExists, action });
+    expect(r.status).toBe(0);
+    const update = r.log.indexOf('git submodule update --init');
+    expect(update).toBeGreaterThanOrEqual(0);
+    expect(r.log[update + 1]).toBe(`git-cwd ${r[checkout]}`);
+    const install = r.log.indexOf('bun install --cwd src/services/bank/ZenPlugins');
+    expect(install).toBeGreaterThan(update);
+    expect(install).toBeLessThan(r.log.findIndex((l) => l.startsWith('pm2 start')));
   });
 });

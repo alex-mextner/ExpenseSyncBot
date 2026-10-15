@@ -837,9 +837,21 @@ async function executeSyncFromSheets(ctx: AgentContext): Promise<ToolResult> {
       };
     }
 
+    // Capped like the Telegram report: a sheet can skip thousands of rows (and any cell can be
+    // long), and the tool output goes into the model context.
+    const shownSkipped = result.skipped.length <= 12 ? result.skipped : result.skipped.slice(0, 10);
+    const moreSkipped = result.skipped.length - shownSkipped.length;
+    const skipped =
+      result.skipped.length > 0
+        ? `\nSkipped: ${result.skipped.length} sheet rows NOT written — their expense's author is missing in the DB:\n${shownSkipped
+            .map((e) =>
+              `${e.date} ${e.amount} ${e.currency} ${e.category} ${e.comment}`.slice(0, 150).trim(),
+            )
+            .join('\n')}${moreSkipped > 0 ? `\n…and ${moreSkipped} more` : ''}`
+        : '';
     return {
       success: true,
-      output: `Sync complete. Added: ${result.added.length}, Deleted: ${result.deleted.length}, Updated: ${result.updated.length}, Unchanged: ${result.unchanged}, New categories: ${result.createdCategories.length}`,
+      output: `Sync complete. Added: ${result.added.length}, Deleted: ${result.deleted.length}, Updated: ${result.updated.length}, Unchanged: ${result.unchanged}, New categories: ${result.createdCategories.length}${skipped}`,
     };
   } catch (err) {
     return {

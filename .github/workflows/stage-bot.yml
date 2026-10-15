@@ -97,6 +97,14 @@ jobs:
             PM2="env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2"
             BUN="/var/www/.bun/bin/bun"
 
+            # Run from the checkout the stage bot will use. `git worktree add` leaves submodules
+            # empty, and without ZenPlugins every bank connection is "Unknown bank in registry".
+            install_checkout() {
+              git submodule update --init
+              $BUN install
+              $BUN install --cwd src/services/bank/ZenPlugins
+            }
+
             # Merge prod .env + stage overrides into STAGE_CWD/.env, then
             # start bun with --no-env-file --env-file pointing at the merged
             # result. This avoids bun's auto-load from package.json directory.
@@ -201,7 +209,7 @@ jobs:
               cd "$MAIN_DIR"
               git fetch origin main
               git pull origin main || true
-              $BUN install
+              install_checkout
 
               start_stage_bot "$MAIN_DIR"
               send_startup_notification "$MAIN_DIR" "main"
@@ -225,7 +233,7 @@ jobs:
             fi
 
             cd "$WORKTREE"
-            $BUN install
+            install_checkout
 
             start_stage_bot "$WORKTREE"
             send_startup_notification "$WORKTREE" "pr"
