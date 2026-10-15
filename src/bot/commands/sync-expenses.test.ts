@@ -191,4 +191,16 @@ describe('sync reports name the skipped rows', () => {
     expect(result.output).not.toContain('row 10');
     expect(result.output).toContain('…and 5 more');
   });
+
+  test('the AI sync tool caps each skipped row, whatever cell is long', async () => {
+    const groupId = connectedGroup(); // no users → every new row is skipped
+    sheetRows = [{ ...sheetRow('c'), category: 'x'.repeat(5000) }];
+
+    const result = await executeTool('sync_from_sheets', {}, {
+      groupId,
+    } as unknown as AgentContext);
+
+    expect(result.output).toContain('Skipped: 1');
+    expect(result.output?.length).toBeLessThan(500);
+  });
 });
