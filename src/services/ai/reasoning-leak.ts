@@ -48,12 +48,7 @@ export function findReasoningLeak(answer: string, question: string): string | nu
   // gpt-oss's own channel tokens (harmony format) are never part of an answer.
   const channel = unquoted.indexOf('<|channel|>');
   if (channel !== -1) return unquoted.slice(channel);
-  // Tags go without a trace (a tag inside a word keeps the word whole); any '<' or '>' left after
-  // that (a malformed tag) becomes a space. This text is only counted, never shown or sent.
-  const prose = unquoted
-    .replace(/<[^<>]*>/g, '')
-    .replace(/[<>]/g, ' ')
-    .replace(/\s+/g, ' ');
+  const prose = withoutTags(unquoted).replace(/\s+/g, ' ');
 
   // One linear pass over the words: a passage is the English text between runs of 3+ Russian
   // words, so line breaks and a Russian category name inside reasoning do not split it.
@@ -110,4 +105,30 @@ function withoutQuotedBlocks(text: string): string {
     opening.lastIndex = from;
   }
   return out + text.slice(from);
+}
+
+/**
+ * `text` with every tag (`<` … the next `>`, no `<` between) removed without a trace, so a tag
+ * inside a word keeps the word whole; a `<` or `>` that is not part of a tag becomes a space.
+ * A single walk instead of a regex replace (CodeQL js/incomplete-multi-character-sanitization);
+ * the result is only counted, never shown or sent. Linear: each index search moves forward only.
+ */
+function withoutTags(text: string): string {
+  let out = '';
+  let from = 0;
+  let nextOpen = text.indexOf('<');
+  let nextClose = text.indexOf('>');
+  while (nextOpen !== -1) {
+    out += text.slice(from, nextOpen);
+    if (nextClose !== -1 && nextClose < nextOpen) nextClose = text.indexOf('>', nextOpen);
+    const following = text.indexOf('<', nextOpen + 1);
+    if (nextClose !== -1 && (following === -1 || nextClose < following)) {
+      from = nextClose + 1; // a tag: dropped
+    } else {
+      out += ' '; // a lone '<'
+      from = nextOpen + 1;
+    }
+    nextOpen = following;
+  }
+  return (out + text.slice(from)).replaceAll('>', ' ');
 }
