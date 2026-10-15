@@ -2021,5 +2021,154 @@ describe('ExpenseBotAgent', () => {
       expect(timerDelays.filter((ms) => ms === 240_000)).toHaveLength(1);
       expect(timerDelays).toContain(90_000);
     });
+
+    // #166, stage QA 2026-10-15 01:41 UTC: Groq called calculate {"expression":"1 USD",
+    // "target_currency":"EUR"} 7 times in a row after get_expenses (all RSD), hit the old cap, and
+    // the forced answer invented USD amounts.
+    describe('#166: identical calculate repeats and invented amounts', () => {
+      const RSD_EXPENSES =
+        '[id:1] 2026-05-01 | Еда | 1200.00 RSD\n[id:2] 2026-05-02 | Дом | 8000.00 RSD';
+
+      function mockStageRun(finalText: string, nextProviderAvailable = true) {
+        const seen: Array<{
+          provider: string;
+          lastMessage: string;
+          toolChoice: string | undefined;
+        }> = [];
+        if (!nextProviderAvailable) mockNextProvider.mockReturnValue(null);
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          const provider = firstAvailable(opts.excludeProviders) ?? 'none';
+          seen.push({
+            provider,
+            lastMessage: JSON.stringify(opts.messages.at(-1)),
+            toolChoice: opts.toolChoice,
+          });
+          const toolRounds = seen.filter((s) => s.toolChoice !== 'none').length;
+          if (opts.toolChoice === 'none' || !provider.startsWith('Groq')) {
+            callbacks.onTextDelta?.(finalText);
+            return { ...makeTextResult(finalText), providerUsed: provider };
+          }
+          const [name, args] =
+            toolRounds === 1
+              ? ['get_expenses', '{"period":"2026-05"}']
+              : ['calculate', '{"expression":"1 USD","target_currency":"EUR"}'];
+          return {
+            text: '',
+            toolCalls: [{ id: `c${toolRounds}`, name, arguments: args }],
+            finishReason: 'tool_calls',
+            assistantMessage: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                { id: `c${toolRounds}`, type: 'function', function: { name, arguments: args } },
+              ],
+            },
+            providerUsed: provider,
+          } satisfies StreamRoundResult;
+        });
+        mockExecuteTool.mockImplementation(async (name) => ({
+          success: true,
+          output: name === 'get_expenses' ? RSD_EXPENSES : '0.89 EUR',
+        }));
+        return seen;
+      }
+
+      it('nudges at round 4 and hands the run to the next model after round 7', async () => {
+        const seen = mockStageRun('Итого: 9200 RSD');
+
+        const result = await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(result).toBe('Итого: 9200 RSD');
+        // get_expenses + 3 identical calculate → nudge; 3 more → handoff; z.ai answers.
+        expect(seen).toHaveLength(8);
+        expect(seen[4]?.lastMessage).toContain('going in circles');
+        expect(seen[7]?.lastMessage).toContain('taking over');
+        expect(seen[7]?.provider).toBe('z.ai (glm-5.1)');
+        // The repeats come from the cache: the conversion ran once.
+        expect(mockExecuteTool.mock.calls.map((c) => c[0])).toEqual(['get_expenses', 'calculate']);
+        const decisions = trajectoryRounds(trajectories()[0]?.id ?? 0).map(
+          (r) => `${r.round}:${r.decision}:${r.reason}`,
+        );
+        expect(decisions.filter((d) => !d.includes(':continue:'))).toEqual([
+          '4:nudge:repeated_call',
+          '7:handoff:repeated_call',
+        ]);
+      });
+
+      it('the forced final round forbids amounts that are not in the tool results and allows summing those that are', async () => {
+        const seen = mockStageRun('Итого: 9200 RSD', false);
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        const forced = seen.find((s) => s.toolChoice === 'none');
+        expect(forced?.lastMessage).toContain(
+          'Never write an amount or a currency that is not in the tool results',
+        );
+        expect(forced?.lastMessage).toContain(
+          'Adding up amounts that ARE in the tool results is allowed here',
+        );
+      });
+
+      it.each([
+        '1 USD → 0.89 EUR, 700 USD → 623 EUR',
+        '700\u00a0USD = 623 EUR',
+        'USD\u202f700 = 623 EUR',
+        '700  USD = 623 EUR',
+        'USD 700 = 623 EUR',
+        '$700 = 623 EUR',
+        'USD -700 = EUR -623',
+      ])('warns when the forced answer names a currency no tool result had: %s', async (answer) => {
+        mockStageRun(answer, false);
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ currencies: ['USD'] }),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+
+      it('an amount with a currency symbol in a tool result counts as evidence', async () => {
+        mockStageRun('Подписка: $10', false);
+        mockExecuteTool.mockImplementation(async (name) => ({
+          success: true,
+          output: name === 'get_expenses' ? RSD_EXPENSES : 'Netflix: 10.00 $ / month',
+        }));
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+
+      it('an error result listing every currency is no evidence for an invented amount', async () => {
+        mockStageRun('700 USD', false);
+        mockExecuteTool.mockImplementation(async (name) =>
+          name === 'get_expenses'
+            ? { success: false, error: 'Unknown currency "US". Supported: USD, EUR, RSD, RUB' }
+            : { success: true, output: '0.89 EUR' },
+        );
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ currencies: ['USD'] }),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+
+      it('does not warn when every currency of the forced answer came from a tool result', async () => {
+        mockStageRun('Итого: 9200 RSD (0.89 EUR за доллар)', false);
+
+        await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
+
+        expect(logMock.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('not in any tool result'),
+        );
+      });
+    });
   });
 });

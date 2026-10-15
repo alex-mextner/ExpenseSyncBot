@@ -13,6 +13,7 @@ import { format } from 'date-fns';
 import type { Bot } from 'gramio';
 import type OpenAI from 'openai';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
+import { CURRENCY_ALIASES, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { AgentRunOutcome } from '../../database/repositories/agent-trajectory.repository';
@@ -57,7 +58,29 @@ export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
  * what it already gathered instead of ending with no text.
  */
 const FINAL_ANSWER_PROMPT =
-  '[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. If some numbers are missing, give what you have and say what is missing.';
+  '[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. Never write an amount or a currency that is not in the tool results — do not convert currencies yourself. Adding up amounts that ARE in the tool results is allowed here (no calculate call is possible now): show the amounts you add. If some numbers are missing, give what you have and say what is missing.';
+
+/**
+ * Currencies of the amounts in `text`, once each: a supported code or a currency symbol right
+ * before or after a digit ("700 USD", "USD 700", "$700", "700 €"). Used to spot a forced answer
+ * that names a currency no tool result had — the invented amounts of #166. Every pattern is a
+ * fixed-width match, so the scan stays linear on long digit runs.
+ */
+function amountCurrencies(text: string): string[] {
+  const codes = new Set<string>();
+  const add = (token: string | undefined) => {
+    const code = token && (CURRENCY_ALIASES[token] ?? token);
+    if (code && SUPPORTED_CURRENCIES.some((c) => c === code)) codes.add(code);
+  };
+  // Up to 3 spaces of any kind (non-breaking ones included) between amount and currency, and an
+  // optional sign before a prefixed amount ("USD -700", "USD −700").
+  for (const m of text.matchAll(
+    /\d[\s\u00a0\u202f]{0,3}([A-Z]{3}|[$€₽£])(?![A-Za-z])|(?<![A-Za-z])([A-Z]{3}|[$€₽£])[\s\u00a0\u202f]{0,3}[-−+]?\d/g,
+  )) {
+    add(m[1] ?? m[2]);
+  }
+  return [...codes];
+}
 /**
  * What the model was doing when the stall guard stepped in — quoted in the nudge (the first stall
  * of a run) and in the note for the model that takes the run over (later stalls).
@@ -123,6 +146,8 @@ export class ExpenseBotAgent {
    * (the data change stays). Such a run must answer; it never ends in silence.
    */
   private writeToolRan = false;
+  /** Currency codes seen in this run's tool results (see amountCurrencies). */
+  private readonly toolResultCurrencies = new Set<string>();
   /** Stall guard state and features of the current run (reset at the start of each run). */
   private trajectory: RunTrajectory = newTrajectory(0);
 
@@ -158,6 +183,7 @@ export class ExpenseBotAgent {
     const toolCallNames: string[] = [];
     this.readOnlyToolResults.clear();
     this.writeToolRan = false;
+    this.toolResultCurrencies.clear();
     this.trajectory = newTrajectory(this.now());
     try {
       database.agentTrajectories.markFollowUp(this.ctx.groupId, this.trajectory.startedAt);
@@ -621,6 +647,17 @@ export class ExpenseBotAgent {
               ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
               : tr.result.output || 'Success'
             : `Error: ${tr.result.error}`;
+          // Evidence for the forced-answer check: currencies a successful result names (an error
+          // listing every supported code is not data) — as whole-word codes (JSON fields like
+          // "currency":"RSD" carry no amount next to them) or as amounts with a symbol ("10.00 $").
+          if (tr.result.success) {
+            for (const code of SUPPORTED_CURRENCIES) {
+              if (new RegExp(`(?<![A-Za-z])${code}(?![A-Za-z])`).test(content)) {
+                this.toolResultCurrencies.add(code);
+              }
+            }
+            for (const code of amountCurrencies(content)) this.toolResultCurrencies.add(code);
+          }
           calls.push({
             tool: tr.tool,
             argsHash: hashFeature(tr.argsKey, seed),
@@ -678,6 +715,16 @@ export class ExpenseBotAgent {
           { onTextDelta: (text) => writer.appendText(text) },
         );
         this.logRoundProvider(round + 1, final, debugCtx);
+        const unseen = amountCurrencies(final.text).filter(
+          (code) => !this.toolResultCurrencies.has(code),
+        );
+        if (unseen.length > 0) {
+          // Not blocked: a log signal for review and the phase-1 dataset, not a verifier.
+          logger.warn(
+            { currencies: unseen, provider: final.providerUsed },
+            '[AGENT] Forced final answer names amounts in a currency not in any tool result — possibly invented',
+          );
+        }
         if (final.toolCalls.length > 0) {
           // The provider ignored tool_choice 'none'. Its calls never run: once the tool rounds are
           // over only the text counts (none of the providers did this in the 2026-10-12 smoke).
