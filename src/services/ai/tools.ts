@@ -99,7 +99,7 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
         page: {
           type: 'number',
           description:
-            'Page number (default: 1). Use to fetch subsequent pages when total_pages > 1.',
+            'Page number (default: 1). Every page already shows "Total for all N expenses"; fetch later pages (see the "More pages" line) only when you need their individual rows.',
         },
         page_size: {
           type: 'number',

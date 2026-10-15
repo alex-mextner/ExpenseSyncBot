@@ -123,30 +123,72 @@ describe('detectStall', () => {
 
 describe('StallGuard ladder', () => {
   it('nudges on the first signal, hands off on the next ones, then finalizes', () => {
-    // 16 one-at-a-time calculate rounds with distinct expressions
-    const decisions = replay(rounds(...Array.from({ length: 16 }, (_, i) => calc(`x${i}`))));
+    // 13 one-at-a-time calculate rounds with distinct expressions
+    const decisions = replay(rounds(...Array.from({ length: 13 }, (_, i) => calc(`x${i}`))));
 
     expect(decisions[3]).toEqual({ action: 'nudge', signal: 'cheap_tool_streak' });
-    expect(decisions[7]).toEqual({ action: 'handoff', signal: 'cheap_tool_streak' });
-    expect(decisions[11]).toEqual({ action: 'handoff', signal: 'cheap_tool_streak' });
-    expect(decisions[15]).toEqual({ action: 'finalize', reason: 'cheap_tool_streak' });
-    expect(roundsWith(decisions, 'continue')).toEqual([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15]);
+    // The round right after the nudge keeps the pattern: the nudge was ignored → handoff.
+    expect(decisions[4]).toEqual({ action: 'handoff', signal: 'cheap_tool_streak' });
+    // A model that took over starts clean: 4 more such rounds before the next step.
+    expect(decisions[8]).toEqual({ action: 'handoff', signal: 'cheap_tool_streak' });
+    expect(decisions[12]).toEqual({ action: 'finalize', reason: 'cheap_tool_streak' });
+    expect(roundsWith(decisions, 'continue')).toEqual([1, 2, 3, 6, 7, 8, 10, 11, 12]);
     expect(MAX_HANDOFFS).toBe(2);
   });
 
+  // Stage QA 2026-10-15 (PR #170): after the nudge the next round continued the same pattern and
+  // the guard counted it as a fresh start. A nudge no longer resets the segment; a handoff does.
+  it('escalates when the round after a nudge continues the calculate streak', () => {
+    const decisions = replay(
+      rounds(
+        [call('get_expenses', 'page1')],
+        calc('A'),
+        calc('B'),
+        calc('C'),
+        calc('D'),
+        calc('E'),
+      ),
+    );
+    expect(decisions[4]).toEqual({ action: 'nudge', signal: 'cheap_tool_streak' });
+    expect(decisions[5]).toEqual({ action: 'handoff', signal: 'cheap_tool_streak' });
+  });
+
+  it('escalates when the round after a nudge again brings nothing new', () => {
+    const page = (n: number) => [call('get_expenses', `p${n}`, 'same rows')];
+    const decisions = replay(rounds(page(1), page(2), page(3), page(4), page(5)));
+    expect(decisions[3]).toEqual({ action: 'nudge', signal: 'no_new_info' });
+    expect(decisions[4]).toEqual({ action: 'handoff', signal: 'no_new_info' });
+  });
+
+  it('a round after the nudge that changes course (reads the next page) continues', () => {
+    const decisions = replay(
+      rounds(
+        [call('get_expenses', 'page1')],
+        calc('A'),
+        calc('B'),
+        calc('C'),
+        calc('D'),
+        [call('get_expenses', 'page2')],
+        [call('get_expenses', 'page3')],
+      ),
+    );
+    expect(decisions[4]).toEqual({ action: 'nudge', signal: 'cheap_tool_streak' });
+    expect(roundsWith(decisions, 'continue')).toEqual([1, 2, 3, 4, 6, 7]);
+  });
+
   it('finalizes instead of handing off when no other provider is left', () => {
-    const decisions = replay(rounds(...Array.from({ length: 8 }, (_, i) => calc(`x${i}`))), false);
+    const decisions = replay(rounds(...Array.from({ length: 5 }, (_, i) => calc(`x${i}`))), false);
     expect(decisions[3]).toEqual({ action: 'nudge', signal: 'cheap_tool_streak' });
-    expect(decisions[7]).toEqual({ action: 'finalize', reason: 'cheap_tool_streak' });
+    expect(decisions[4]).toEqual({ action: 'finalize', reason: 'cheap_tool_streak' });
   });
 
   it('counts nudges and handoffs and keeps every round with its decision', () => {
     const guard = new StallGuard();
-    for (const r of rounds(...Array.from({ length: 8 }, (_, i) => calc(`x${i}`))))
+    for (const r of rounds(...Array.from({ length: 5 }, (_, i) => calc(`x${i}`))))
       guard.next(r, true);
     expect(guard.nudges).toBe(1);
     expect(guard.handoffs).toBe(1);
-    expect(guard.entries).toHaveLength(8);
+    expect(guard.entries).toHaveLength(5);
     expect(guard.entries[3]?.decision).toEqual({ action: 'nudge', signal: 'cheap_tool_streak' });
     expect(guard.entries[3]?.calls[0]?.argsHash).toBe('x3');
   });
@@ -192,14 +234,19 @@ describe('replays of the 2026-10-12 incident', () => {
       '11:53, nine distinct conversions',
       lenaRun('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'),
       5,
-      9,
+      [6, 10],
     ],
-    ['11:55, A four times then more', lenaRun('A', 'A', 'A', 'A', 'B', 'C', 'B', 'D', 'E'), 4, 8],
-    ['11:58, B repeated', lenaRun('A', 'B', 'B', 'B', 'C', 'B', 'X', 'D', 'E'), 5, 9],
-  ])('%s: nudge, then hand off before the old cap of 10', (_label, records, nudgeAt, handoffAt) => {
+    [
+      '11:55, A four times then more',
+      lenaRun('A', 'A', 'A', 'A', 'B', 'C', 'B', 'D', 'E'),
+      4,
+      [5, 9],
+    ],
+    ['11:58, B repeated', lenaRun('A', 'B', 'B', 'B', 'C', 'B', 'X', 'D', 'E'), 5, [6, 10]],
+  ])('%s: nudge, the ignored nudge hands off right away', (_label, records, nudgeAt, handoffsAt) => {
     const decisions = replay(records);
     expect(roundsWith(decisions, 'nudge')).toEqual([nudgeAt]);
-    expect(roundsWith(decisions, 'handoff')).toEqual([handoffAt]);
+    expect(roundsWith(decisions, 'handoff')).toEqual(handoffsAt);
     expect(roundsWith(decisions, 'finalize')).toEqual([]);
   });
 });

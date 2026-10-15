@@ -48,7 +48,7 @@ ToolCallRecord { tool, argsHash, resultHash, isError }
 
 ### 3.3 Signals (`src/services/ai/stall-guard.ts`, pure)
 
-Evaluated after each tool round over the current *segment* — the rounds since the last nudge or handoff, so a model that was just told (or a model that just took over) starts clean. Each signal fires on the latest round:
+Evaluated after each tool round over the current *segment* — the rounds since the last handoff, so a model that just took over starts clean. A nudge does not start a new segment: if the round right after it keeps the same pattern, the nudge was ignored and the run is handed off at once (stage QA of PR #170, 2026-10-15: a post-nudge `calculate` was counted as a fresh start). Each signal fires on the latest round:
 
 | signal | rule | value | justification |
 |---|---|---|---|
@@ -69,7 +69,7 @@ A round signature is its sorted `tool|args|result` call keys. Rounds with parall
 3. First signal of the run → `nudge` (once per run).
 4. Later signals → `handoff` while fewer than 2 handoffs happened and another provider is left; otherwise `finalize` with the signal as reason.
 
-Replayed incidents: 11:53 nudge after round 5, handoff after round 9; 11:55 nudge after 4, handoff after 8; 11:58 nudge after 5, handoff after 9. All 171 healthy prod runs: `continue` on every round.
+Replayed incidents: 11:53 nudge after round 5, handoffs after 6 and 10; 11:55 nudge after 4, handoffs after 5 and 9; 11:58 nudge after 5, handoffs after 6 and 10. All 171 healthy prod runs: `continue` on every round (no first signal, so the nudge change does not touch them).
 
 ### 3.5 Agent actions
 

@@ -685,7 +685,7 @@ describe('executeGetExpenses', () => {
     });
 
     test('a requested currency shows the total in it and in the group default', async () => {
-      const group = mockGroups.findById(1);
+      const group = mockGroups.findById();
       mockGroups.findById.mockReturnValue(group && { ...group, default_currency: 'RSD' });
       mockExpenses.findByDateRange.mockReturnValue(sixtyThree());
 

@@ -53,12 +53,17 @@ const logger = createLogger('agent');
 export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
 /**
+ * Stage QA of PR #170: after reading page 1 of 8 a model summed those rows and answered them as the
+ * month's total. Quoted in the nudge, the handoff note and the forced final round.
+ */
+const PARTIAL_DATA_RULE =
+  'If a get_expenses result says "More pages", the rows you saw are only part of the data: for totals use its "Total for all" line (it covers every page), or call get_expenses with summary_only and currency, or read all the pages first — never present a sum of part of the data as the total.';
+/**
  * Sent as the last message when the stall guard ends the tool rounds (a safety cap, or a stall
  * with no escalation left): the next round forbids tool calls, so the model has to answer from
  * what it already gathered instead of ending with no text.
  */
-const FINAL_ANSWER_PROMPT =
-  '[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. Never write an amount or a currency that is not in the tool results — do not convert currencies yourself. Adding up amounts that ARE in the tool results is allowed here (no calculate call is possible now): show the amounts you add. If some numbers are missing, give what you have and say what is missing.';
+const FINAL_ANSWER_PROMPT = `[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. Never write an amount or a currency that is not in the tool results — do not convert currencies yourself. Adding up amounts that ARE in the tool results is allowed here (no calculate call is possible now): show the amounts you add. ${PARTIAL_DATA_RULE} If some numbers are missing, give what you have and say what is missing.`;
 
 /**
  * Currencies of the amounts in `text`, once each: a supported code or a currency symbol right
@@ -803,7 +808,7 @@ export class ExpenseBotAgent {
         );
         messages.push({
           role: 'user',
-          content: `[SYSTEM] You are going in circles: ${STALL_DESCRIPTIONS[decision.signal]}. Do not repeat tool calls. If the tool results above already answer the question, answer now. Otherwise change approach: get_expenses with summary_only and currency returns converted per-category and grand totals in one call; one calculate call takes a whole expression.`,
+          content: `[SYSTEM] You are going in circles: ${STALL_DESCRIPTIONS[decision.signal]}. Do not repeat tool calls. If the tool results above already answer the question, answer now. Otherwise change approach: for totals call get_expenses with summary_only and currency (converted per-category and grand totals in one call), or read all the pages; one calculate call takes a whole expression. ${PARTIAL_DATA_RULE}`,
         });
         return;
       case 'handoff': {
@@ -817,7 +822,7 @@ export class ExpenseBotAgent {
         );
         messages.push({
           role: 'user',
-          content: `[SYSTEM] You are taking over this answer from another model that got stuck (${STALL_DESCRIPTIONS[decision.signal]}). The tool results above are real — reuse them and do not call the same tools again. Answer the user, calling only the tools that are still needed.`,
+          content: `[SYSTEM] You are taking over this answer from another model that got stuck (${STALL_DESCRIPTIONS[decision.signal]}). The tool results above are real — reuse them and do not call the same tools again. Answer the user, calling only the tools that are still needed. ${PARTIAL_DATA_RULE}`,
         });
         await writer.addWorkLogNote(`🔄 Передаю задачу ${next ?? 'другой модели'}…`);
         return;
@@ -909,7 +914,7 @@ When listing individual expenses, copy the exact amount, date, and comment from 
 If an expense has no comment in the tool result, show nothing — do NOT invent a comment.
 
 ## TOOL USAGE
-1. Expense questions → call get_expenses with the relevant period/category filter. Results are paginated (100/page). Check total_pages in the response — if > 1, fetch remaining pages.
+1. Expense questions → call get_expenses with the relevant period/category filter. The list is paginated (100/page): every page shows "Total for all N expenses" (the total of every page) and, when more pages exist, a "More pages" line. For totals use that line or summary_only: true; fetch the remaining pages only when you need the individual rows.
 2. Budget questions → call get_budgets.
 3. Adding an expense → call add_expense. NEVER say "done" without calling the tool.
 4. Deleting an expense → call get_expenses first (to find the ID), confirm with the user, then call delete_expense.

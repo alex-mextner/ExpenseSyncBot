@@ -1194,8 +1194,9 @@ describe('ExpenseBotAgent', () => {
       // The forced round tells the model to answer now from what it already gathered.
       expect(JSON.stringify(lastOpts.messages.at(-1))).toContain('[SYSTEM]');
       // The mocked tool returns the same result every time: nudge after round 4 (calculate
-      // streak), then every 3 rounds of nothing new — handoffs after 7 and 10, finalize after 13.
-      expect(mockAiStreamRound).toHaveBeenCalledTimes(14);
+      // streak), round 5 ignores it → handoff; then every 3 rounds of nothing new — handoff
+      // after 8, finalize after 11.
+      expect(mockAiStreamRound).toHaveBeenCalledTimes(12);
       expect(logMock.warn).toHaveBeenCalled();
       // Each handoff really changed the model: no round was answered by an excluded provider.
       expect(answeredBy.every(({ provider, excluded }) => !excluded.includes(provider))).toBe(true);
@@ -1223,7 +1224,7 @@ describe('ExpenseBotAgent', () => {
 
       expect(result).toBe('Итого: 2001 EUR');
       expect(mockExecuteTool.mock.calls.map((c) => c[0])).not.toContain('add_expense');
-      expect(mockExecuteTool).toHaveBeenCalledTimes(13);
+      expect(mockExecuteTool).toHaveBeenCalledTimes(11);
       expect(logMock.warn).toHaveBeenCalledWith(
         expect.objectContaining({ toolCalls: ['add_expense'] }),
         expect.stringContaining('ignored'),
@@ -1589,19 +1590,19 @@ describe('ExpenseBotAgent', () => {
 
       expect(result).toBe('Итого: 1 639 EUR');
       const calls = streamCalls();
-      expect(calls).toHaveLength(17);
+      expect(calls).toHaveLength(14);
       // Nudge after round 4: same provider, a [SYSTEM] note after the tool result.
       expect(calls[4]?.excludeProviders).toEqual([]);
       expect(seen[4]?.lastMessage).toContain('going in circles');
-      // Handoff after round 8: Groq is out for the rest of the run, the history stays.
-      expect(calls[8]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)']);
-      expect(seen[8]?.lastMessage).toContain('taking over');
-      expect(seen[8]?.toolResults).toBe(8);
-      // Second handoff after round 12.
-      expect(calls[12]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)']);
-      // After round 16 the ladder is spent: the forced round runs without the stalled providers.
-      expect(calls[16]?.toolChoice).toBe('none');
-      expect(calls[16]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)']);
+      // Round 5 ignores the nudge → handoff: Groq is out for the rest of the run, history stays.
+      expect(calls[5]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)']);
+      expect(seen[5]?.lastMessage).toContain('taking over');
+      expect(seen[5]?.toolResults).toBe(5);
+      // The new model starts clean: second handoff after 4 more such rounds (round 9).
+      expect(calls[9]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)']);
+      // After round 13 the ladder is spent: the forced round runs without the stalled providers.
+      expect(calls[13]?.toolChoice).toBe('none');
+      expect(calls[13]?.excludeProviders).toEqual(['Groq (gpt-oss-120b)', 'z.ai (glm-5.1)']);
       expect(shownTexts()).toContain('🔄 Передаю задачу z.ai (glm-5.1)…');
       expect(shownTexts()).toContain('🔄 Передаю задачу Claude (sonnet)…');
       expect(logMock.warn).toHaveBeenCalledWith(
@@ -1613,8 +1614,8 @@ describe('ExpenseBotAgent', () => {
       expect(run).toMatchObject({
         outcome: 'answered',
         is_mention: 1,
-        tool_rounds: 16,
-        tool_calls: 16,
+        tool_rounds: 13,
+        tool_calls: 13,
         nudges: 1,
         handoffs: 2,
         providers: JSON.stringify(CHAIN.slice(0, 3)),
@@ -1624,9 +1625,9 @@ describe('ExpenseBotAgent', () => {
       const decisions = trajectoryRounds(run?.id ?? 0).map((r) => `${r.round}:${r.decision}`);
       expect(decisions.filter((d) => !d.endsWith(':continue'))).toEqual([
         '4:nudge',
-        '8:handoff',
-        '12:handoff',
-        '16:finalize',
+        '5:handoff',
+        '9:handoff',
+        '13:finalize',
       ]);
     });
 
@@ -1638,10 +1639,10 @@ describe('ExpenseBotAgent', () => {
 
       expect(result).toBe('Итого');
       const calls = streamCalls();
-      // Nudge after round 4, then the next stall after round 8 ends in the forced round.
-      expect(calls).toHaveLength(9);
-      expect(calls[8]?.toolChoice).toBe('none');
-      expect(calls[8]?.excludeProviders).toEqual([]);
+      // Nudge after round 4; round 5 ignores it and, with no provider left, the forced round runs.
+      expect(calls).toHaveLength(6);
+      expect(calls[5]?.toolChoice).toBe('none');
+      expect(calls[5]?.excludeProviders).toEqual([]);
       expect(shownTexts()).not.toContain('Передаю задачу');
       expect(trajectories()[0]).toMatchObject({
         handoffs: 0,
@@ -1879,14 +1880,14 @@ describe('ExpenseBotAgent', () => {
 
       expect(result).toBe(NO_ANSWER_MESSAGE);
       expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
-      // Nudge after the 3rd identical malformed call, the 6th ends the tool rounds (no provider
+      // Nudge after the 3rd identical malformed call, the 4th ends the tool rounds (no provider
       // left); every malformed call counts as a tool call of its round.
       expect(trajectories()).toEqual([
         expect.objectContaining({
           outcome: 'no_answer',
           finalize_reason: 'repeated_call',
-          tool_rounds: 6,
-          tool_calls: 6,
+          tool_rounds: 4,
+          tool_calls: 4,
         }),
       ]);
       expect(logMock.error).toHaveBeenCalledWith(expect.stringContaining('Malformed'));
@@ -2022,6 +2023,107 @@ describe('ExpenseBotAgent', () => {
       expect(timerDelays).toContain(90_000);
     });
 
+    // Stage QA of PR #170 (2026-10-15): «посчитай отдельно через calculate каждую трату мая 2026
+    // в евро и сложи». The model read get_expenses page 1 of 8 (page_size 8), made 4 calculate
+    // calls, was nudged, made one more and answered the partial sum as the May total.
+    describe('PR #170: partial page summed as the total', () => {
+      // The detail header get_expenses now produces (tool-executor.test.ts pins the real format).
+      const PAGE_1_OF_8 = [
+        'Period: 2026-05-01 to 2026-05-31',
+        'Showing 1–8 of 63 expenses (page 1 of 8)',
+        'Total for all 63 expenses: 8561.59 EUR',
+        'More pages: 2–8 are not shown. For totals use the "Total for all" line above (or get_expenses with summary_only: true) — never add up the rows of one page as the total. For the individual rows call get_expenses again with page=2 … page=8 with page_size=8 and the same filters.',
+        '',
+        '[id:1] 2026-05-31 | Еда | 105.00 RSD (EUR 0.89 EUR) | (no comment)',
+      ].join('\n');
+
+      function mockQaRun(nextProviderAvailable = true) {
+        const seen: Array<{ provider: string; lastMessage: string; toolMessages: string }> = [];
+        if (!nextProviderAvailable) mockNextProvider.mockReturnValue(null);
+        let toolRounds = 0;
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          const provider = firstAvailable(opts.excludeProviders) ?? 'none';
+          seen.push({
+            provider,
+            lastMessage: String(opts.messages.at(-1)?.content),
+            toolMessages: JSON.stringify(opts.messages.filter((m) => m.role === 'tool')),
+          });
+          if (opts.toolChoice === 'none' || !provider.startsWith('Groq')) {
+            callbacks.onTextDelta?.('Итого за май: 8561.59 EUR');
+            return { ...makeTextResult('Итого за май: 8561.59 EUR'), providerUsed: provider };
+          }
+          toolRounds++;
+          const [name, args] =
+            toolRounds === 1
+              ? ['get_expenses', '{"period":"2026-05","page":1,"page_size":8}']
+              : ['calculate', `{"expression":"${toolRounds * 100} RSD","target_currency":"EUR"}`];
+          return {
+            text: '',
+            toolCalls: [{ id: `c${toolRounds}`, name, arguments: args }],
+            finishReason: 'tool_calls',
+            assistantMessage: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                { id: `c${toolRounds}`, type: 'function', function: { name, arguments: args } },
+              ],
+            },
+            providerUsed: provider,
+          } satisfies StreamRoundResult;
+        });
+        mockExecuteTool.mockImplementation(async (name, input) => ({
+          success: true,
+          output: name === 'get_expenses' ? PAGE_1_OF_8 : `= ${JSON.stringify(input)}`,
+        }));
+        return seen;
+      }
+
+      it('the nudge after page 1 + 4 calculate points at the all-pages total, and the ignored nudge hands off', async () => {
+        const seen = mockQaRun();
+
+        await agent.run('посчитай каждую трату мая в евро и сложи', [], mockBot as unknown as Bot);
+
+        // Round 5 (4th calculate) → nudge; round 6 (5th calculate) ignores it → handoff.
+        const afterNudge = seen[5];
+        expect(afterNudge?.lastMessage).toContain('going in circles');
+        expect(afterNudge?.lastMessage).toContain('summary_only and currency');
+        expect(afterNudge?.lastMessage).toContain('read all the pages');
+        expect(afterNudge?.lastMessage).toContain(
+          'never present a sum of part of the data as the total',
+        );
+        expect(afterNudge?.lastMessage).toContain('"Total for all"');
+        // The authoritative total is in the tool results the nudged model sees.
+        expect(afterNudge?.toolMessages).toContain('Total for all 63 expenses: 8561.59 EUR');
+        const afterHandoff = seen[6];
+        expect(afterHandoff?.provider).toBe('z.ai (glm-5.1)');
+        expect(afterHandoff?.lastMessage).toContain('taking over');
+        expect(afterHandoff?.lastMessage).toContain('"Total for all"');
+        expect(afterHandoff?.toolMessages).toContain('Total for all 63 expenses: 8561.59 EUR');
+        const decisions = trajectoryRounds(trajectories()[0]?.id ?? 0).map(
+          (r) => `${r.round}:${r.decision}:${r.reason}`,
+        );
+        expect(decisions.filter((d) => !d.includes(':continue:'))).toEqual([
+          '5:nudge:cheap_tool_streak',
+          '6:handoff:cheap_tool_streak',
+        ]);
+      });
+
+      it('the forced final round tells the model not to present a partial sum as the total', async () => {
+        const seen = mockQaRun(false);
+
+        await agent.run('посчитай каждую трату мая в евро и сложи', [], mockBot as unknown as Bot);
+
+        const forced = seen.at(-1);
+        expect(forced?.lastMessage).toContain('tool-call limit');
+        expect(forced?.lastMessage).toContain('"More pages"');
+        expect(forced?.lastMessage).toContain('"Total for all"');
+        expect(forced?.lastMessage).toContain(
+          'never present a sum of part of the data as the total',
+        );
+        expect(forced?.toolMessages).toContain('Total for all 63 expenses: 8561.59 EUR');
+      });
+    });
+
     // #166, stage QA 2026-10-15 01:41 UTC: Groq called calculate {"expression":"1 USD",
     // "target_currency":"EUR"} 7 times in a row after get_expenses (all RSD), hit the old cap, and
     // the forced answer invented USD amounts.
@@ -2073,17 +2175,17 @@ describe('ExpenseBotAgent', () => {
         return seen;
       }
 
-      it('nudges at round 4 and hands the run to the next model after round 7', async () => {
+      it('nudges at round 4 and hands the run to the next model when round 5 repeats again', async () => {
         const seen = mockStageRun('Итого: 9200 RSD');
 
         const result = await agent.run('сделай отдельный calculate', [], mockBot as unknown as Bot);
 
         expect(result).toBe('Итого: 9200 RSD');
-        // get_expenses + 3 identical calculate → nudge; 3 more → handoff; z.ai answers.
-        expect(seen).toHaveLength(8);
+        // get_expenses + 3 identical calculate → nudge; the 4th ignores it → handoff; z.ai answers.
+        expect(seen).toHaveLength(6);
         expect(seen[4]?.lastMessage).toContain('going in circles');
-        expect(seen[7]?.lastMessage).toContain('taking over');
-        expect(seen[7]?.provider).toBe('z.ai (glm-5.1)');
+        expect(seen[5]?.lastMessage).toContain('taking over');
+        expect(seen[5]?.provider).toBe('z.ai (glm-5.1)');
         // The repeats come from the cache: the conversion ran once.
         expect(mockExecuteTool.mock.calls.map((c) => c[0])).toEqual(['get_expenses', 'calculate']);
         const decisions = trajectoryRounds(trajectories()[0]?.id ?? 0).map(
@@ -2091,7 +2193,7 @@ describe('ExpenseBotAgent', () => {
         );
         expect(decisions.filter((d) => !d.includes(':continue:'))).toEqual([
           '4:nudge:repeated_call',
-          '7:handoff:repeated_call',
+          '5:handoff:repeated_call',
         ]);
       });
 

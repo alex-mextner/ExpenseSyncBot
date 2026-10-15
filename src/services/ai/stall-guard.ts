@@ -93,8 +93,8 @@ function trailingCount<T>(segment: readonly T[], test: (item: T) => boolean): nu
 
 /**
  * The stall signal raised by the latest round, or null. Streaks and repeats look only at the
- * segment (rounds from `segmentStart` on), so a model that was just nudged or just took over starts
- * clean; whether a result is new is judged against the whole run.
+ * segment (rounds from `segmentStart` on), so a model that just took over starts clean; whether a
+ * result is new is judged against the whole run.
  */
 export function detectStall(
   rounds: readonly RoundRecord[],
@@ -158,7 +158,9 @@ export function detectStall(
 /**
  * Per-run ladder over detectStall: the safety caps first, then the first signal of the run gets a
  * nudge, later ones a handoff while one is allowed and possible, else the run must answer.
- * Every decision other than `continue` starts a new segment.
+ * A handoff starts a new segment (the new model starts clean); a nudge does not: if the next round
+ * keeps the same pattern, the nudge was ignored and the run is handed off at once (stage QA
+ * 2026-10-15, PR #170).
  */
 export class StallGuard {
   private readonly recorded: GuardEntry[] = [];
@@ -171,7 +173,9 @@ export class StallGuard {
     const rounds: RoundRecord[] = [...this.recorded, round];
     const decision = this.decide(rounds, round, canHandoff);
     this.recorded.push({ ...round, decision });
-    if (decision.action !== 'continue') this.segmentStart = this.recorded.length;
+    if (decision.action === 'handoff' || decision.action === 'finalize') {
+      this.segmentStart = this.recorded.length;
+    }
     if (decision.action === 'nudge') this.nudgeCount++;
     if (decision.action === 'handoff') this.handoffCount++;
     return decision;
