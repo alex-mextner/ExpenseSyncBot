@@ -403,8 +403,13 @@ export class ExpenseBotAgent {
     writer.reset();
     toolCallNames.length = 0;
 
+    // The re-run shares the run's deadline: it gets only the time left since the run started, so
+    // the stall guard's time budget and this abort measure the same clock.
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), RUN_DEADLINE_MS);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      Math.max(0, RUN_DEADLINE_MS - (this.now() - this.trajectory.startedAt)),
+    );
 
     messages.push({ role: 'assistant', content: rejectedText });
     messages.push({
@@ -533,6 +538,21 @@ export class ExpenseBotAgent {
           logger.info(`[AGENT] Repeated tool call: ${tc.name} — reusing the earlier result`);
           repeatedCallIds.add(tc.id);
           toolResult = cached;
+        } else if (
+          // Checked right before the tool starts (after the awaited Telegram flush, which can wait
+          // out a 429): once the final-round reserve is reached a tool is not started — an earlier
+          // call may have been slow — so the forced answer keeps its time. A started tool is never
+          // aborted, so writes stay whole.
+          this.now() - this.trajectory.startedAt >=
+          RUN_DEADLINE_MS - FINAL_ROUND_RESERVE_MS
+        ) {
+          logger.warn(
+            `[AGENT] Tool call ${tc.name} skipped — no time left before the final answer`,
+          );
+          toolResult = {
+            success: false,
+            error: 'Not run: no time left for more tool calls in this answer.',
+          };
         } else {
           if (!isReadOnly) this.writeToolRan = true;
           toolResult = await executeTool(tc.name, input, this.ctx);

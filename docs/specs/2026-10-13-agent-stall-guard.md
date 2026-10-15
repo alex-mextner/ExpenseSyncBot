@@ -33,7 +33,7 @@ Healthy baseline: all 174 runs in the prod chat logs (2026-09…2026-10-12, hash
 | `RUN_DEADLINE_MS` | 240 000 | the AbortController deadline of one run (all rounds and retries), was 180 000 |
 | `FINAL_ROUND_RESERVE_MS` | 45 000 | equals `PER_PROVIDER_TIMEOUT_MS` (streaming.ts): tool rounds only get the time up to 195 s — the guard finalizes a round that ends past it, and a round still running at 195 s is cut (its own abort signal) — so the forced final round still gets one full provider attempt before the hard abort |
 
-Nothing else assumes the old 180 s: per-provider timeouts stay 45 s, the Telegram typing interval runs for as long as the writer lives, and edits have no time limit. The validator re-run keeps its own deadline of the same length (unchanged structure).
+Nothing else assumes the old 180 s: per-provider timeouts stay 45 s, the Telegram typing interval runs for as long as the writer lives, and edits have no time limit. Tool calls of a round are not started once 195 s have passed (they get a "Not run: no time left" tool message; a started tool is never aborted, so writes stay whole — `executeTool` takes no signal). The validator re-run shares the run deadline: its abort timer gets the time left since the run started, not a fresh 240 s.
 
 ### 3.2 Records
 

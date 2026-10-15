@@ -1915,5 +1915,101 @@ describe('ExpenseBotAgent', () => {
       expect(mockExecuteTool).toHaveBeenCalledTimes(1);
       expect(trajectories()[0]).toMatchObject({ finalize_reason: 'time_budget', tool_rounds: 1 });
     });
+
+    // HYP-1717: the tool-round time limit also bounds tool execution, not only the model call.
+    it('skips the remaining tool calls of a round once the final-round reserve is reached', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      const seen: string[] = [];
+      mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+        if (opts.toolChoice === 'none') {
+          seen.push(JSON.stringify(opts.messages.filter((m) => m.role === 'tool')));
+          callbacks.onTextDelta?.('Добавил одну');
+          return makeTextResult('Добавил одну');
+        }
+        const calls = [
+          { id: 'a1', name: 'add_expense', arguments: '{"n":1}' },
+          { id: 'a2', name: 'add_expense', arguments: '{"n":2}' },
+        ];
+        return {
+          text: '',
+          toolCalls: calls,
+          finishReason: 'tool_calls',
+          assistantMessage: {
+            role: 'assistant',
+            content: null,
+            tool_calls: calls.map((c) => ({
+              id: c.id,
+              type: 'function' as const,
+              function: { name: c.name, arguments: c.arguments },
+            })),
+          },
+          providerUsed: 'mock',
+        } satisfies StreamRoundResult;
+      });
+      mockExecuteTool.mockImplementation(async (_name, input) => {
+        clock = 196_000; // the first, slow write ends inside the reserve
+        return { success: true, output: `added ${JSON.stringify(input)}` };
+      });
+
+      const result = await agent.run('добавь две', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('Добавил одну');
+      expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+      // The skipped call still gets a tool message (every tool_call id needs one), saying why.
+      expect(seen[0]).toContain('added {\\"n\\":1}');
+      expect(seen[0]).toContain('Not run: no time left');
+      // Every tool_call id of the assistant message has exactly one tool reply.
+      const history = getLastCallOpts().messages;
+      const replyIds = history.flatMap((m) => (m.role === 'tool' ? [m.tool_call_id] : []));
+      expect(replyIds).toEqual(['a1', 'a2']);
+      expect(getLastCallOpts().toolChoice).toBe('none');
+      expect(streamCalls()).toHaveLength(2);
+      expect(trajectories()[0]).toMatchObject({ finalize_reason: 'time_budget', tool_calls: 2 });
+    });
+
+    it('does not start a tool whose Telegram status update waited past the reserve', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      // The status edit before the tool runs waits out a Telegram 429 until 199 s.
+      mockBot.api.editMessageText.mockImplementation(async () => {
+        clock = 199_000;
+        return { message_id: 1, chat: { id: 1 }, date: 0, text: '' };
+      });
+      mockToolCallRound('add_expense', '{"amount":5}');
+      mockAiStreamRound.mockImplementationOnce(async (opts, callbacks) => {
+        callbacks.onTextDelta?.('Не успел');
+        return makeTextResult(opts.toolChoice === 'none' ? 'Не успел' : 'unexpected');
+      });
+
+      const result = await agent.run('добавь', [], mockBot as unknown as Bot);
+
+      expect(mockExecuteTool).not.toHaveBeenCalled();
+      expect(result).toBe('Не успел');
+      expect(getLastCallOpts().toolChoice).toBe('none');
+    });
+
+    it('the validator re-run gets only what is left of the run deadline, not a fresh 240 s', async () => {
+      let clock = 0;
+      spyOn(agent as unknown as { now: () => number }, 'now').mockImplementation(() => clock);
+      const timerDelays: Array<number | undefined> = [];
+      const realSetTimeout = globalThis.setTimeout;
+      spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) => {
+        timerDelays.push(ms);
+        return realSetTimeout(handler, ms);
+      }) as typeof setTimeout);
+      mockStreamReturn(['ответ без инструментов']);
+      mockStreamReturn(['ответ после проверки']);
+      mockValidateResponse.mockImplementationOnce(async () => {
+        clock = 150_000; // a slow first answer plus the validator took 150 s
+        return { approved: false, reason: 'no tools' };
+      });
+
+      const result = await agent.run('сколько потратили', [], mockBot as unknown as Bot);
+
+      expect(result).toBe('ответ после проверки');
+      expect(timerDelays.filter((ms) => ms === 240_000)).toHaveLength(1);
+      expect(timerDelays).toContain(90_000);
+    });
   });
 });
