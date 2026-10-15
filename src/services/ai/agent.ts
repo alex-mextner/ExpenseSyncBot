@@ -22,6 +22,7 @@ import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { reportAiFailureToAdmin } from './error-reporter';
+import { findReasoningLeak } from './reasoning-leak';
 import { validateResponse } from './response-validator';
 import {
   FINAL_ROUND_RESERVE_MS,
@@ -64,6 +65,12 @@ const PARTIAL_DATA_RULE =
  * what it already gathered instead of ending with no text.
  */
 const FINAL_ANSWER_PROMPT = `[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. Never write an amount or a currency that is not in the tool results — do not convert currencies yourself. Adding up amounts that ARE in the tool results is allowed here (no calculate call is possible now): show the amounts you add. ${PARTIAL_DATA_RULE} If some numbers are missing, give what you have and say what is missing.`;
+/**
+ * Sent when the model wrote its own notes about the task into the answer (Groq gpt-oss-120b on
+ * stage, PR #170 QA). The leaked answer itself is not sent back.
+ */
+const REASONING_LEAK_NOTE =
+  "[SYSTEM] Your previous reply mixed your internal notes about the conversation into the answer, so it was not shown to the user. Answer the user's last message again: only the final answer, in the user's language, without any notes about the task, the conversation or what you are going to do. Do not call tools: answer from the tool results above.";
 
 /**
  * Currencies of the amounts in `text`, once each: a supported code or a currency symbol right
@@ -201,10 +208,47 @@ export class ExpenseBotAgent {
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
 
-      // --- Validation pass (runs only when no tools were called AND tools were available) ---
-      // If the model already called tools the data is real; if no tools existed there's nothing
-      // to validate against. An intentional [SKIP] is not an answer, so it is not validated.
-      if (toolCallNames.length === 0 && TOOL_DEFINITIONS.length > 0 && !isSkipSignal(finalText)) {
+      // --- Reasoning leak: the model wrote its own notes about the task into the answer (Groq
+      // gpt-oss-120b on stage, PR #170 QA). Checked on the first answer and again on a validator
+      // re-run's answer; at most one leak re-run per run. ---
+      let leakRerunDone = false;
+      const handleReasoningLeak = async (): Promise<void> => {
+        if (leakRerunDone || isSkipSignal(finalText)) return;
+        const leak = findReasoningLeak(finalText, userMessage);
+        if (!leak) return;
+        leakRerunDone = true;
+        logger.warn(
+          { leak: leak.slice(0, 200) },
+          '[AGENT] Answer contains the model reasoning — re-running once without it',
+        );
+        const retry = await this.rerunWithNote({
+          messages,
+          writer,
+          debugCtx,
+          toolCallNames,
+          rejectedText: null,
+          // Tool-free: the first answer's tool results are in the history, and a write tool that
+          // already ran (add_expense) must not run a second time.
+          note: REASONING_LEAK_NOTE,
+          toolFree: true,
+        });
+        const leakAgain = findReasoningLeak(retry.text, userMessage);
+        if (leakAgain) {
+          logger.warn(
+            { leak: leakAgain.slice(0, 200) },
+            '[AGENT] The re-run answer still contains the model reasoning — surfacing it',
+          );
+        }
+        finalText = retry.text;
+        totalToolCalls += retry.toolCount;
+      };
+      await handleReasoningLeak();
+
+      // --- Validation pass (runs only when no tools were called in the whole run AND tools were
+      // available) --- If the model called tools the data is real (a leak re-run reuses those
+      // results); if no tools existed there's nothing to validate against. An intentional [SKIP]
+      // is not an answer, so it is not validated.
+      if (totalToolCalls === 0 && TOOL_DEFINITIONS.length > 0 && !isSkipSignal(finalText)) {
         const validated = await this.finalizeWithValidation({
           userMessage,
           messages,
@@ -215,6 +259,7 @@ export class ExpenseBotAgent {
         });
         finalText = validated.text;
         totalToolCalls = validated.toolCount;
+        await handleReasoningLeak();
       }
 
       // Skip signal — bot chose to stay silent. The writer replaces a missing answer with the
@@ -390,13 +435,14 @@ export class ExpenseBotAgent {
     }
 
     logger.info(`[AGENT] Validation REJECTED: ${validation.reason} — re-running once`);
-    const retry = await this.rerunAfterRejection({
+    const retry = await this.rerunWithNote({
       messages,
       writer,
       debugCtx,
       toolCallNames,
       rejectedText: initial.text,
-      reason: validation.reason,
+      note: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${validation.reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
+      toolFree: false,
     });
 
     // Surface the re-run either way; the only difference is how we log it.
@@ -417,23 +463,24 @@ export class ExpenseBotAgent {
   }
 
   /**
-   * Re-run the agent loop after a validator rejection, prompting it to use tools this time.
+   * Re-run the agent loop once with a `[SYSTEM]` note after a rejected answer (validator reject,
+   * or the model's reasoning inside the answer). `rejectedText` goes back into the history as the
+   * assistant turn, or null to leave it out (leaked reasoning must not be fed back).
    * Intentionally a single attempt via `runAgentLoop` (not `runWithRetry`): the initial run
    * already spent its backoff budget, and capping the re-run at one attempt bounds total latency
    * — a transient error here propagates to the caller's catch instead of compounding the wait.
    */
-  private async rerunAfterRejection(args: {
+  private async rerunWithNote(args: {
     messages: OpenAI.ChatCompletionMessageParam[];
     writer: TelegramStreamWriter;
     debugCtx: AiDebugRunContext | null;
     toolCallNames: string[];
-    rejectedText: string;
-    reason: string;
+    rejectedText: string | null;
+    note: string;
+    /** Answer from the results already gathered: no tool rounds (writes must not run twice). */
+    toolFree: boolean;
   }): Promise<{ text: string; toolCount: number }> {
-    const { messages, writer, debugCtx, toolCallNames, rejectedText, reason } = args;
-    writer.reset();
-    toolCallNames.length = 0;
-
+    const { messages, writer, debugCtx, toolCallNames, rejectedText, note, toolFree } = args;
     // The re-run shares the run's deadline: it gets only the time left since the run started, so
     // the stall guard's time budget and this abort measure the same clock.
     const controller = new AbortController();
@@ -442,11 +489,20 @@ export class ExpenseBotAgent {
       Math.max(0, RUN_DEADLINE_MS - (this.now() - this.trajectory.startedAt)),
     );
 
-    messages.push({ role: 'assistant', content: rejectedText });
-    messages.push({
-      role: 'user',
-      content: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
-    });
+    writer.reset();
+    // The rejected answer is already on screen (the loop finalized it): replace it with the
+    // progress mark now, not when the re-run streams its first words. A Telegram 429 can make
+    // this edit wait; it never waits past the run deadline.
+    await Promise.race([
+      writer.flush(true),
+      new Promise<void>((resolve) =>
+        controller.signal.addEventListener('abort', () => resolve(), { once: true }),
+      ),
+    ]);
+    toolCallNames.length = 0;
+
+    if (rejectedText !== null) messages.push({ role: 'assistant', content: rejectedText });
+    messages.push({ role: 'user', content: note });
 
     try {
       const retry = await this.runAgentLoop(
@@ -455,6 +511,7 @@ export class ExpenseBotAgent {
         debugCtx,
         controller.signal,
         toolCallNames,
+        toolFree,
       );
       logger.info(
         `[AGENT] Retry response (${retry.text.length} chars): "${retry.text.substring(0, 200)}${retry.text.length > 200 ? '...' : ''}"`,
@@ -478,10 +535,14 @@ export class ExpenseBotAgent {
     debugCtx: AiDebugRunContext | null,
     signal: AbortSignal,
     toolCallNames: string[],
+    /** Skip the tool rounds: go straight to the forced, tool-free final round. */
+    toolFree = false,
   ): Promise<{ text: string; toolCount: number }> {
     let totalToolCalls = 0;
-    let continueLoop = true;
-    let mustAnswer = false;
+    // A tool-free re-run, or a run the stall guard already ended (a re-run after a forced answer),
+    // goes straight to the forced final round: tools do not open again.
+    let mustAnswer = toolFree || this.trajectory.finalizeReason !== null;
+    let continueLoop = !mustAnswer;
     let round = 0;
 
     // No fixed round cap here: the stall guard ends the tool rounds (40-round and time caps, or a
@@ -703,7 +764,8 @@ export class ExpenseBotAgent {
       // one call per round). The tools stay declared with tool_choice 'none': every smart-chain
       // provider accepted that live (2026-10-12), and without the tools Claude refused to add up
       // the grand total because rule 7 sends all arithmetic to calculate.
-      messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
+      // A tool-free re-run already ends with its own note asking for the answer.
+      if (!toolFree) messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
       debugCtx?.logRound(round + 1);
       try {
         const final = await aiStreamRound(

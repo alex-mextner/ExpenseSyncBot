@@ -2023,6 +2023,171 @@ describe('ExpenseBotAgent', () => {
       expect(timerDelays).toContain(90_000);
     });
 
+    // Stage QA of PR #170 (b), 2026-10-15 05:10 UTC: Groq gpt-oss-120b wrote its own notes about
+    // the conversation into the answer, between a cut-off list and the real one.
+    describe('PR #170: model reasoning inside the answer', () => {
+      const LEAKED =
+        "• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Эда</b>: <b>625.\n\nWe have a conversation where the user repeatedly asks for totals per category. The assistant finally called get_expenses with summary_only true and got the data. However the final answer is incomplete. Need to correct.\n\nLet's produce final answer.• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Еда</b>: <b>625.68 EUR</b>";
+      const CLEAN = '• <b>Путешествия</b>: <b>2798.61 EUR</b>\n• <b>Еда</b>: <b>625.68 EUR</b>';
+
+      it('re-runs once without the leaked text and returns the clean answer', async () => {
+        mockToolCallRound(
+          'get_expenses',
+          '{"period":"2026-05","summary_only":true,"currency":"EUR"}',
+        );
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([CLEAN]);
+
+        const result = await agent.run(
+          'mxtnr: сколько в евро потрачено в мае 2026 по каждой категории',
+          [],
+          mockBot as unknown as Bot,
+        );
+
+        expect(result).toBe(CLEAN);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+        const rerun = getLastCallOpts().messages;
+        expect(String(rerun.at(-1)?.content)).toContain('internal notes');
+        // The leaked reasoning is not fed back to the model.
+        expect(JSON.stringify(rerun)).not.toContain('We have a conversation');
+        // The tool results stay, so the re-run can answer without calling tools again.
+        expect(rerun.filter((m) => m.role === 'tool')).toHaveLength(1);
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ leak: expect.stringContaining('The assistant') }),
+          expect.stringContaining('reasoning'),
+        );
+        expect(mockValidateResponse).not.toHaveBeenCalled();
+      });
+
+      it('takes the leaked text off the screen before the re-run streams', async () => {
+        let shownDuringRerun = '';
+        mockStreamReturn([LEAKED]);
+        mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
+          const edits = mockBot.api.editMessageText.mock.calls as unknown as Array<
+            [{ text: string }]
+          >;
+          shownDuringRerun = edits.at(-1)?.[0].text ?? '';
+          callbacks.onTextDelta?.(CLEAN);
+          return makeTextResult(CLEAN);
+        });
+
+        await agent.run('mxtnr: а сколько на еду?', [], mockBot as unknown as Bot);
+
+        expect(shownDuringRerun).not.toContain('We have a conversation');
+        expect(shownDuringRerun).toContain('⏳');
+      });
+
+      it('a tool-free re-run answer still goes through the validator', async () => {
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([CLEAN]);
+
+        const result = await agent.run('mxtnr: а сколько на еду?', [], mockBot as unknown as Bot);
+
+        expect(result).toBe(CLEAN);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+        // The leaked first answer is never validated; the clean re-run is, like any tool-free answer.
+        expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+        expect(mockValidateResponse.mock.calls[0]?.[0].response).toBe(CLEAN);
+      });
+
+      it('a validator re-run that leaks reasoning gets the leak re-run too', async () => {
+        mockStreamReturn(['Итого: 100 EUR']);
+        mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'no tools' });
+        mockToolCallRound('get_expenses', '{"period":"2026-05","summary_only":true}');
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([CLEAN]);
+
+        const result = await agent.run('mxtnr: сколько на еду?', [], mockBot as unknown as Bot);
+
+        expect(result).toBe(CLEAN);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(4);
+        expect(String(getLastCallOpts().messages.at(-1)?.content)).toContain('internal notes');
+      });
+
+      it('a leak after a write is re-run without tools, so the write never runs twice', async () => {
+        mockToolCallRound('add_expense', '{"amount":5,"currency":"EUR","category":"Еда"}');
+        mockStreamReturn([LEAKED]);
+        // A tool-allowed re-run would repeat the write here.
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          if (opts.toolChoice === 'none') {
+            callbacks.onTextDelta?.('Записал 5 EUR в Еду.');
+            return makeTextResult('Записал 5 EUR в Еду.');
+          }
+          return {
+            ...makeToolCallResult('add_expense'),
+            toolCalls: [{ id: 'again', name: 'add_expense', arguments: '{"amount":5}' }],
+          };
+        });
+
+        const result = await agent.run('mxtnr: 5 евро еда', [], mockBot as unknown as Bot);
+
+        expect(result).toBe('Записал 5 EUR в Еду.');
+        expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+        expect(getLastCallOpts().toolChoice).toBe('none');
+      });
+
+      it('after a forced answer the re-run stays tool-free', async () => {
+        // Stall ladder spent (no provider left): the forced answer leaks reasoning.
+        mockNextProvider.mockReturnValue(null);
+        let forced = 0;
+        let n = 0;
+        mockAiStreamRound.mockImplementation(async (opts, callbacks) => {
+          if (opts.toolChoice === 'none') {
+            forced++;
+            const text = forced === 1 ? LEAKED : CLEAN;
+            callbacks.onTextDelta?.(text);
+            return makeTextResult(text);
+          }
+          n++;
+          return {
+            ...makeToolCallResult('calculate'),
+            toolCalls: [{ id: `c${n}`, name: 'calculate', arguments: `{"expression":"${n}"}` }],
+          };
+        });
+
+        const result = await agent.run('mxtnr: сумма в евро', [], mockBot as unknown as Bot);
+
+        expect(result).toBe(CLEAN);
+        // The re-run goes straight to a forced round: no new tool rounds after the guard stopped them.
+        const calls = mockAiStreamRound.mock.calls.map(([opts]) => opts.toolChoice);
+        expect(calls.slice(-2)).toEqual(['none', 'none']);
+        expect(mockExecuteTool).toHaveBeenCalledTimes(n);
+        expect(n).toBe(5);
+      });
+
+      it('re-runs only once: a second leak is surfaced and logged', async () => {
+        mockToolCallRound('get_expenses', '{"period":"2026-05","summary_only":true}');
+        mockStreamReturn([LEAKED]);
+        mockStreamReturn([LEAKED]);
+
+        const result = await agent.run(
+          'mxtnr: сколько по категориям?',
+          [],
+          mockBot as unknown as Bot,
+        );
+
+        expect(result).toBe(LEAKED);
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+        expect(logMock.warn).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('still contains'),
+        );
+      });
+
+      it('a clean Russian answer is not re-run', async () => {
+        mockToolCallRound('get_expenses', '{"period":"2026-05","summary_only":true}');
+        mockStreamReturn([CLEAN]);
+
+        await agent.run('mxtnr: сколько по категориям?', [], mockBot as unknown as Bot);
+
+        expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+        expect(logMock.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('reasoning'),
+        );
+      });
+    });
+
     // Stage QA of PR #170 (2026-10-15): «посчитай отдельно через calculate каждую трату мая 2026
     // в евро и сложи». The model read get_expenses page 1 of 8 (page_size 8), made 4 calculate
     // calls, was nudged, made one more and answered the partial sum as the May total.
