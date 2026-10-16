@@ -291,7 +291,7 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
     expect(r.telegram[0]).toContain(`started them: ${RUNNER}`);
     // #172: one hint for the whole alert, not one per section.
-    expect(r.telegram[0].split('journalctl -b -u odroid-disk-recover')).toHaveLength(2);
+    expect(r.telegram[0]?.split('journalctl -b -u odroid-disk-recover')).toHaveLength(2);
   });
 
   test('storage swap left down: started on its own, WD500 untouched', () => {
