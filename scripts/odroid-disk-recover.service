@@ -1,0 +1,16 @@
+# Installed on odroidn2 as /etc/systemd/system/odroid-disk-recover.service, next to
+# /usr/local/sbin/odroid-disk-recover (scripts/odroid-disk-recover.sh). DEPLOY.md,
+# "Late USB disk at boot".
+#
+# No dependency on the disks or their mounts: the run matters exactly when they failed.
+# Type=exec so boot does not wait for the up-to-15-minute watch.
+[Unit]
+Description=Start USB-disk-backed units when a disk shows up late at boot; alert if one never does
+Documentation=https://github.com/alex-mextner/ExpenseSyncBot/blob/main/DEPLOY.md
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/odroid-disk-recover
+
+[Install]
+WantedBy=multi-user.target

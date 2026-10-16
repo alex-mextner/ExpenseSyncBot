@@ -147,18 +147,19 @@ UUID `83c5bd3c-2cfa-494e-b0a5-17d3c92d0925`) and are bind-mounted back to their 
 
 - fstab block `# >>> expensesyncbot-www` (`bind,nofail,x-systemd.requires-mounts-for=/mnt/wd500`),
   next to the host's own `# >>> wd500-runtime` block (docker, containerd, `/home/ultra`).
-- `pm2-www-data.service` and the runner service have `RequiresMountsFor=` drop-ins
+- `pm2-www-data.service`, the runner service and `caddy.service` have `RequiresMountsFor=` drop-ins
   (`/etc/systemd/system/<unit>.d/10-wd500.conf`): without the HDD they don't start, rather than
-  starting on empty SD directories.
+  starting on empty SD directories (caddy: `/etc/caddy/Caddyfile` is a symlink to the repo
+  `Caddyfile` on the HDD, so without the drop-in it fails at once and is never retried).
 - Move script: `/usr/local/sbin/expensesyncbot-move-to-wd500` (final rsync + bind mount, ~16 s downtime;
   it renames the SD originals to `*.sd-old`, which were then deleted — see below).
 
 Check: `findmnt /var/www/ExpenseSyncBot` must show `<wd500 device>[/odroid-rt/www/ExpenseSyncBot]` (the `sdX` letter can change across boots).
 
-**Booted without the HDD** (pm2 and the runner stay down by design): reconnect the disk, then
+**Booted without the HDD** (everything on it stays down by design): reconnect the disk, then
 
 ```bash
-mount -a && systemctl start pm2-www-data actions.runner.alex-mextner-ExpenseSyncBot.odroid
+systemctl start odroid-disk-recover   # starts whatever the boot left down, see below
 ```
 
 **No SD fallback.** The pre-move SD copies (`/var/www/*.sd-old`) were deleted on 2026-10-10 after
@@ -166,6 +167,70 @@ verifying the HDD held everything. The WD500 is the only live copy of the code, 
 The daily DB backups in `data/backups/` sit on the same HDD, so they cover a broken database, not a
 dead disk: copy `data/backups/` off the box if the HDD itself becomes suspect. Code can always be
 redeployed from GitHub.
+
+#### Late USB disk at boot
+
+The fstab entries for `/mnt/wd500` and `/mnt/storage` are `nofail` with
+`x-systemd.device-timeout=300s`. If a disk is detected after that timeout, systemd fails its mount
+and every unit that needs it ("Dependency failed for …") and does **not** retry them when the disk
+shows up later.
+
+The 3 TB Toshiba behind `/mnt/storage` (UAS) hangs its first read for ~30 s on every boot
+(`uas_eh_abort_handler` … `uas_eh_device_reset_handler success` in `dmesg`), and the WD500's
+`/dev/disk/by-uuid` device only reaches systemd after that hang clears (~34–38 s after power-on),
+although the kernel attaches the WD500 itself at ~7 s. When the Toshiba enumerates during the
+initramfs, the initramfs waits the hang out and systemd starts with both disks already there; when
+it enumerates after the hand-over, systemd's device timeout runs while the hang is still on.
+
+**Incident 2026-10-16** (prod down ~85 min): the fstab then had `device-timeout=15s` (storage) and
+`30s` (wd500). In the three boots before, the Toshiba came up as `sda` inside the initramfs and
+systemd started only at 34–36 s. This time it came up as `sdb` at 6.4 s, after systemd had started
+at 4.3 s: the device jobs timed out at 20.7 s and 35.7 s, the Toshiba recovered at 38.0 s and both
+disks appeared at 38.5 s. Failed and never retried: all WD500 mounts and binds, containerd,
+docker, ha-compose, pm2-www-data, the ExpenseSyncBot runner, caddy (dangling Caddyfile symlink —
+`finbot*.mextner.com` answered 502) and the `/mnt/storage` swapfile. The `*/2` healthcheck lives
+under the `/var/www/ExpenseSyncBot` bind, so it could not run, let alone alert, until the binds
+were restored by hand. The timeouts were raised to 300 s right after the incident.
+
+**Guard:** `odroid-disk-recover.service` (enabled, `WantedBy=multi-user.target`, `Type=exec` so boot
+doesn't wait for it) runs `/usr/local/sbin/odroid-disk-recover` once per boot. Sources:
+[`scripts/odroid-disk-recover.sh`](scripts/odroid-disk-recover.sh) and
+[`scripts/odroid-disk-recover.service`](scripts/odroid-disk-recover.service).
+
+- Waits up to 15 min for each disk's `/dev/disk/by-uuid/<uuid>`, lets the boot transaction finish
+  (`systemctl is-system-running --wait`), then `systemctl start`s every unit on that disk that
+  isn't active: the WD500 mounts, caddy, pm2-www-data, the ExpenseSyncBot runner, containerd,
+  docker, ha-compose; for storage its mount and swapfile. On a normal boot all are active and the
+  run changes nothing (`… nothing to do` in `journalctl -u odroid-disk-recover -b`).
+- A unit it had to start: logged as a warning plus a Telegram note to the admin.
+- A disk that never appears or a unit that won't start: logged at err (`journalctl -p err`), sent
+  to the admin over Telegram, and the unit ends `failed` (`systemctl --failed`).
+- The Telegram credentials come from `/opt/hypercal/.env` (`BOT_TOKEN`, `BOT_ADMIN_ID`; same admin
+  chat as this bot's `BOT_ADMIN_CHAT_ID`): it sits on the SD card, so the alert still works when
+  the WD500 — and with it this bot's `.env` and healthcheck — is missing.
+
+Drills, safe on the live box:
+
+```bash
+odroid-disk-recover --dry-run        # what it would start/send right now; starts nothing
+odroid-disk-recover --test-alert     # one test message through the Telegram path
+# a disk that never appears, without waiting 15 min (err line + the alert it would send):
+systemd-run --wait --unit=odroid-disk-recover-drill -E WD500_UUID=00000000-dead-beef-0000-000000000000 \
+  -E WAIT_SEC=20 /usr/local/sbin/odroid-disk-recover --dry-run
+journalctl -u odroid-disk-recover-drill -p err; systemctl reset-failed odroid-disk-recover-drill
+```
+
+Install or update (as root on odroid, from a checkout):
+
+```bash
+install -m 755 scripts/odroid-disk-recover.sh /usr/local/sbin/odroid-disk-recover
+install -m 644 scripts/odroid-disk-recover.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/odroid-disk-recover.service
+systemctl daemon-reload && systemctl enable odroid-disk-recover
+```
+
+Not covered: a disk that appears more than 15 min after boot needs the `systemctl start
+odroid-disk-recover` above (the alert says so).
 
 ---
 
