@@ -126,18 +126,21 @@ send_alert() {
   payload=$(jq -cn --arg chat_id "$chat" --arg text "$text" '{chat_id: $chat_id, text: $text}')
   # The network may still be coming up when a disk is reported missing early. Only
   # Telegram's own `"ok": true` counts as delivered: a proxy or portal can answer 200 too.
-  local reason
+  # A description is not a verdict: Telegram answers {"ok": false, "description": ...}.
+  local body delivered reason
   for ((attempt = 1; attempt <= ALERT_ATTEMPTS; attempt++)); do
     response=$(printf '%s\n' "$config" |
       curl -K - -s -w '\n%{http_code}' --max-time 15 -X POST \
         -H 'Content-Type: application/json' -d "$payload")
     status=${response##*$'\n'}
-    reason=$(jq -r 'if .ok == true then "ok" else (.description // "no Telegram answer") end' \
-      <<<"${response%$'\n'*}" 2>/dev/null)
-    [[ -n "$reason" ]] || reason="no Telegram answer"
-    [[ "$status" == 200 && "$reason" == ok ]] && return 0
+    body=${response%$'\n'*}
+    # A string compare, not `jq -e`: that exits 0 on an empty body.
+    delivered=$(jq -r '.ok == true' <<<"$body" 2>/dev/null)
+    [[ "$status" == 200 && "$delivered" == true ]] && return 0
     ((attempt < ALERT_ATTEMPTS)) && sleep "$ALERT_RETRY_SEC"
   done
+  reason=$(jq -r '.description // empty' <<<"$body" 2>/dev/null)
+  [[ -n "$reason" ]] || reason="no Telegram answer"
   err "Telegram alert failed (HTTP $status, $reason, after $ALERT_ATTEMPTS attempts): $text"
   return 1
 }
@@ -204,7 +207,7 @@ recover() {
 }
 
 pending=(wd500 storage)
-waited=0 # seconds spent waiting: polls plus the settle wait
+waited=0 # seconds spent polling for a missing disk; the settle wait has its own SETTLE_SEC
 settled=false
 while :; do
   still=()
@@ -213,9 +216,7 @@ while :; do
       # At boot the chain's jobs may still be queued; wait for the boot transaction once
       # so they are judged by their outcome. Later jobs are joined in recover().
       if ! $settled; then
-        settle_start=$SECONDS
         timeout "$SETTLE_SEC" systemctl is-system-running --wait >/dev/null
-        waited=$((waited + SECONDS - settle_start))
         settled=true
       fi
       info "$disk is present (/dev/disk/by-uuid/${uuid_of[$disk]})"
@@ -252,7 +253,6 @@ fi
 if ((${#failed[@]} > 0)); then
   [[ -n "$msg" ]] && msg+=$'\n\n'
   msg+="🚨 $HOST: would not start after the disk appeared: ${failed[*]}"
-  msg+=$'\n'"journalctl -b -u odroid-disk-recover"
 fi
 if ((${#started[@]} > 0)); then
   [[ -n "$msg" ]] && msg+=$'\n\n'
@@ -260,8 +260,11 @@ if ((${#started[@]} > 0)); then
     msg+="⚠️ $HOST: down with nothing starting them, would start: ${started[*]}"
   else
     msg+="⚠️ $HOST: the disk's unit chain missed these, started them: ${started[*]}"
-    msg+=$'\n'"journalctl -b -u odroid-disk-recover"
   fi
+fi
+# One pointer for both sections above: the journal names every unit this run touched.
+if ((${#failed[@]} > 0)) || { ((${#started[@]} > 0)) && ! $DRY_RUN; }; then
+  msg+=$'\n'"journalctl -b -u odroid-disk-recover"
 fi
 alerted=true
 send_alert "$msg" || alerted=false

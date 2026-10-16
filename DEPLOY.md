@@ -205,7 +205,8 @@ boot doesn't wait for it) runs `/usr/local/sbin/odroid-disk-recover` once per bo
 [`scripts/odroid-disk-recover.service`](scripts/odroid-disk-recover.service).
 
 - Waits up to 15 min for each disk's `/dev/disk/by-uuid/<uuid>`, lets the boot transaction finish
-  (`systemctl is-system-running --wait`), then checks every unit of the chain; one the chain
+  (`systemctl is-system-running --wait`, up to 10 min of its own — a slow boot does not eat
+  into the disk wait), then checks every unit of the chain; one the chain
   missed (not active) is `systemctl start`ed (one still starting: it waits for that job's outcome).
   On a normal boot the chain did everything and the run logs `… nothing to do`
   (`journalctl -u odroid-disk-recover -b`).

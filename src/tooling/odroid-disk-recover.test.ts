@@ -22,7 +22,11 @@ const SWAP = 'mnt-storage-odroid\\x2drt-swapfile.swap';
 const SYSTEMCTL_STUB = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FIX/systemctl.log"
 case "$1" in
-  is-system-running) echo running ;;
+  is-system-running)
+    # SETTLE_DELAY: how long the boot transaction takes to finish, in real seconds. command -p
+    # bypasses the stub sleep: the settle must take real time, or the #172 test proves nothing.
+    if [ -n "\${SETTLE_DELAY:-}" ]; then command -p sleep "$SETTLE_DELAY"; fi
+    echo running ;;
   is-active)
     s=$(cat "$FIX/units/$2" 2>/dev/null || echo active)
     echo "$s"
@@ -77,6 +81,9 @@ interface Scenario {
   late?: { uuid: string; afterSleeps: number };
   args?: string[];
   waitSec?: number;
+  pollSec?: number;
+  /** Real seconds `systemctl is-system-running --wait` takes. */
+  settleDelay?: number;
   telegramStatus?: string;
   telegramBody?: string;
   alertEnv?: string;
@@ -110,7 +117,8 @@ function run(scenario: Scenario) {
       WD500_UUID: WD500,
       STORAGE_UUID: STORAGE,
       WAIT_SEC: String(scenario.waitSec ?? 20),
-      POLL_SEC: '5',
+      POLL_SEC: String(scenario.pollSec ?? 5),
+      SETTLE_DELAY: scenario.settleDelay ? String(scenario.settleDelay) : '',
       ALERT_ENV_FILE: alertEnv,
       TG_STATUS: scenario.telegramStatus ?? '200',
       TG_BODY: scenario.telegramBody ?? '',
@@ -197,6 +205,22 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.calls.filter((c) => c.startsWith('is-system-running'))).toHaveLength(1);
   });
 
+  // #172: the settle wait used to be charged to WAIT_SEC, so a slow boot transaction cut
+  // the second disk's wait short and it was reported missing although it was on its way.
+  test('a slow boot transaction does not shorten the wait for the other disk', () => {
+    const r = run({
+      present: [STORAGE],
+      late: { uuid: WD500, afterSleeps: 2 },
+      waitSec: 2,
+      pollSec: 1,
+      settleDelay: 1,
+    });
+    expect(r.stderr).not.toContain('never appeared');
+    expect(r.telegram).toEqual([]);
+    expect(r.sleeps).toBe(2);
+    expect(r.status).toBe(0);
+  });
+
   test('a unit still activating: waits for that job, does not report it', () => {
     const r = run({ present: [WD500, STORAGE], units: { 'ha-compose.service': 'activating' } });
     expect(r.status).toBe(0);
@@ -266,6 +290,8 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
     expect(r.telegram[0]).toContain(`started them: ${RUNNER}`);
+    // #172: one hint for the whole alert, not one per section.
+    expect(r.telegram[0].split('journalctl -b -u odroid-disk-recover')).toHaveLength(2);
   });
 
   test('storage swap left down: started on its own, WD500 untouched', () => {
@@ -287,6 +313,8 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.stdout).toContain(`[dry-run] would start ${SWAP}`);
     expect(r.stdout).toContain('[dry-run] would alert: 🚨');
     expect(r.stdout).toContain(`wd500 (${WD500})`);
+    // Nothing was started, so there is no journal of it to point at.
+    expect(r.stdout).not.toContain('journalctl -b');
   });
 
   test('--dry-run with everything up: nothing to do, exit 0', () => {
@@ -329,6 +357,14 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.stderr).toContain(
       'ERROR: Telegram alert failed (HTTP 200, no Telegram answer, after 3 attempts)',
     );
+  });
+
+  // #172: a 200 whose body says ok:false is not a delivery, whatever its description says.
+  test('HTTP 200 with "ok": false is not a delivered alert, even with description "ok"', () => {
+    const r = run({ present: [STORAGE], telegramBody: '{"ok":false,"description":"ok"}' });
+    expect(r.status).toBe(1);
+    expect(r.telegram).toHaveLength(3);
+    expect(r.stderr).toContain('ERROR: Telegram alert failed (HTTP 200, ok, after 3 attempts)');
   });
 
   test('Telegram refuses the message: its reason is in the err line', () => {
