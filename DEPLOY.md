@@ -147,18 +147,19 @@ UUID `83c5bd3c-2cfa-494e-b0a5-17d3c92d0925`) and are bind-mounted back to their 
 
 - fstab block `# >>> expensesyncbot-www` (`bind,nofail,x-systemd.requires-mounts-for=/mnt/wd500`),
   next to the host's own `# >>> wd500-runtime` block (docker, containerd, `/home/ultra`).
-- `pm2-www-data.service` and the runner service have `RequiresMountsFor=` drop-ins
+- `pm2-www-data.service`, the runner service and `caddy.service` have `RequiresMountsFor=` drop-ins
   (`/etc/systemd/system/<unit>.d/10-wd500.conf`): without the HDD they don't start, rather than
-  starting on empty SD directories.
+  starting on empty SD directories (caddy: `/etc/caddy/Caddyfile` is a symlink to the repo
+  `Caddyfile` on the HDD, so without the drop-in it fails at once and is never retried).
 - Move script: `/usr/local/sbin/expensesyncbot-move-to-wd500` (final rsync + bind mount, ~16 s downtime;
   it renames the SD originals to `*.sd-old`, which were then deleted — see below).
 
 Check: `findmnt /var/www/ExpenseSyncBot` must show `<wd500 device>[/odroid-rt/www/ExpenseSyncBot]` (the `sdX` letter can change across boots).
 
-**Booted without the HDD** (pm2 and the runner stay down by design): reconnect the disk, then
+**Booted without the HDD** (everything on it stays down by design): reconnect the disk, then
 
 ```bash
-mount -a && systemctl start pm2-www-data actions.runner.alex-mextner-ExpenseSyncBot.odroid
+systemctl start odroid-disk-recover   # starts whatever the boot left down, see below
 ```
 
 **No SD fallback.** The pre-move SD copies (`/var/www/*.sd-old`) were deleted on 2026-10-10 after
@@ -166,6 +167,89 @@ verifying the HDD held everything. The WD500 is the only live copy of the code, 
 The daily DB backups in `data/backups/` sit on the same HDD, so they cover a broken database, not a
 dead disk: copy `data/backups/` off the box if the HDD itself becomes suspect. Code can always be
 redeployed from GitHub.
+
+#### USB disks at boot: event-driven chain
+
+Rule: a disk problem never blocks or fails boot, and nothing that depends on a disk fails for
+good — it waits for the disk, and everything else boots without it.
+
+**Root cause of the 2026-10-16 incident** (prod down ~85 min): the fstab had
+`x-systemd.device-timeout=15s` (storage) / `30s` (wd500). The 3 TB Toshiba behind `/mnt/storage`
+sits on a JMicron JMS578 UAS bridge whose first READ(16) hangs ~30 s on every boot
+(`uas_eh_abort_handler` … `uas_eh_device_reset_handler success` in `dmesg`), and the WD500's
+`/dev/disk/by-uuid` device only reached systemd after that hang cleared. That boot systemd started
+at 4.3 s, timed out the device jobs at 20.7 s / 35.7 s, both disks appeared at 38.5 s — but the
+mounts, binds, containerd, docker, ha-compose, pm2-www-data, the ExpenseSyncBot runner, caddy
+(`finbot*.mextner.com` answered 502) and the swapfile had already `dependency-failed`, and systemd
+never retries those. The `*/2` healthcheck lives under the `/var/www/ExpenseSyncBot` bind, so it
+could not alert either.
+
+**The chain (live on odroid):** disk-dependent units are pulled in by the disk's arrival instead of
+by `multi-user.target`, so there is no boot-time deadline to miss:
+
+- `/mnt/wd500` (fstab `noatime,x-systemd.device-timeout=300s,x-systemd.wanted-by=<WD500 .device>`):
+  the device appearing starts the mount, whenever that is.
+- The six binds (`/var/lib/containerd`, `/var/lib/docker`, `/home/ultra`, `/var/www/ExpenseSyncBot`,
+  `/var/www/ExpenseSyncBot-stage`, `/var/www/actions-runner`): `x-systemd.wanted-by=mnt-wd500.mount`
+  plus `x-systemd.requires-mounts-for=/mnt/wd500`.
+- Services hang off their bind via `/etc/systemd/system/<bind>.mount.wants/` symlinks and are
+  **disabled in `multi-user.target`**: `var-www-ExpenseSyncBot.mount` → caddy, pm2-www-data;
+  `var-www-actions\x2drunner.mount` → the ExpenseSyncBot runner; `var-lib-containerd.mount` →
+  containerd; `var-lib-docker.mount` → docker; `home-ultra.mount` → ha-compose.
+- `/mnt/storage` is `nofail,x-systemd.automount`; its swapfile is `noauto` and wanted by the storage
+  `.device` (`dev-disk-by\x2duuid-8da3f69e….device.wants/`).
+
+**Safety net:** `odroid-disk-recover.service` (enabled, `WantedBy=multi-user.target`, `Type=exec` so
+boot doesn't wait for it) runs `/usr/local/sbin/odroid-disk-recover` once per boot. Sources:
+[`scripts/odroid-disk-recover.sh`](scripts/odroid-disk-recover.sh) and
+[`scripts/odroid-disk-recover.service`](scripts/odroid-disk-recover.service).
+
+- Waits up to 15 min for each disk's `/dev/disk/by-uuid/<uuid>`, lets the boot transaction finish
+  (`systemctl is-system-running --wait`), then checks every unit of the chain; one the chain
+  missed (not active) is `systemctl start`ed (one still starting: it waits for that job's outcome).
+  On a normal boot the chain did everything and the run logs `… nothing to do`
+  (`journalctl -u odroid-disk-recover -b`).
+- A unit it had to start: logged as a warning plus a Telegram note to the admin.
+- A disk missing after 15 min or a unit that won't start: logged at err (`journalctl -p err`), sent
+  to the admin over Telegram, and the unit ends `failed` (`systemctl --failed`). An alert that
+  isn't confirmed by Telegram (`"ok": true`; 3 tries, 30 s apart) is logged at err and fails the
+  unit as well.
+- The Telegram credentials come from `/opt/hypercal/.env` (`BOT_TOKEN`, `BOT_ADMIN_ID`; same admin
+  chat as this bot's `BOT_ADMIN_CHAT_ID`): it sits on the SD card, so the alert still works when
+  the WD500 — and with it this bot's `.env` and healthcheck — is missing.
+
+Verify (safe on the live box):
+
+```bash
+systemctl list-dependencies mnt-wd500.mount           # 6 binds, each with its services below
+systemctl list-dependencies 'var-www-ExpenseSyncBot.mount'   # caddy, pm2-www-data
+systemctl --failed                                    # expect nothing
+```
+Drills:
+
+```bash
+odroid-disk-recover --dry-run        # what it would start/send right now; starts nothing
+odroid-disk-recover --test-alert     # one test message through the Telegram path
+# a disk that never appears, without waiting 15 min (err line + the alert it would send):
+systemd-run --wait --unit=odroid-disk-recover-drill -E WD500_UUID=00000000-dead-beef-0000-000000000000 \
+  -E WAIT_SEC=20 /usr/local/sbin/odroid-disk-recover --dry-run
+journalctl -u odroid-disk-recover-drill -p err; systemctl reset-failed odroid-disk-recover-drill
+```
+
+Install or update (as root on odroid, from a checkout):
+
+```bash
+install -m 755 scripts/odroid-disk-recover.sh /usr/local/sbin/odroid-disk-recover
+install -m 644 scripts/odroid-disk-recover.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/odroid-disk-recover.service
+systemctl daemon-reload && systemctl enable odroid-disk-recover
+```
+
+A disk that appears more than 15 min after boot is still picked up by the chain (the device starts
+its units); the guard has already alerted by then.
+
+Open follow-ups: an owner-approved reboot test of the chain; optionally the usb-storage quirk
+`152d:0578:u` (disable UAS on the JMS578) to drop the 30 s first-read hang.
 
 ---
 
