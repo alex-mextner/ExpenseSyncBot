@@ -22,8 +22,10 @@ import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { reportAiFailureToAdmin } from './error-reporter';
+import type { Role } from './model-presets';
 import { findReasoningLeak } from './reasoning-leak';
 import { validateResponse } from './response-validator';
+import { rolesRoutingAppliesTo } from './role-routing';
 import {
   FINAL_ROUND_RESERVE_MS,
   type FinalizeReason,
@@ -118,6 +120,8 @@ interface RunTrajectory {
   providers: string[];
   lastProvider: string | null;
   finalizeReason: FinalizeReason | null;
+  /** The stall guard intervened (nudge or handoff): later rounds run on the repair role. */
+  repairing: boolean;
 }
 
 function newTrajectory(startedAt: number): RunTrajectory {
@@ -129,6 +133,7 @@ function newTrajectory(startedAt: number): RunTrajectory {
     providers: [],
     lastProvider: null,
     finalizeReason: null,
+    repairing: false,
   };
 }
 
@@ -576,6 +581,7 @@ export class ExpenseBotAgent {
             maxTokens: 4096,
             temperature: 0.3,
             chain: 'smart',
+            role: this.routingRole(),
             purpose: 'agent',
             signal: AbortSignal.any([signal, toolTime]),
             excludeProviders: [...this.trajectory.excludedProviders],
@@ -749,8 +755,11 @@ export class ExpenseBotAgent {
             elapsedMs: this.now() - this.trajectory.startedAt,
             calls,
           },
-          nextProvider('smart', [...this.trajectory.excludedProviders, result.providerUsed]) !==
-            null,
+          nextProvider(
+            'smart',
+            [...this.trajectory.excludedProviders, result.providerUsed],
+            this.routingRole(),
+          ) !== null,
         );
         mustAnswer = decision.action === 'finalize';
         continueLoop = !mustAnswer;
@@ -778,6 +787,7 @@ export class ExpenseBotAgent {
             maxTokens: 4096,
             temperature: 0.3,
             chain: 'smart',
+            role: this.routingRole(),
             purpose: 'agent_final',
             signal,
             excludeProviders: [...this.trajectory.excludedProviders],
@@ -867,6 +877,7 @@ export class ExpenseBotAgent {
       case 'continue':
         return;
       case 'nudge':
+        this.trajectory.repairing = true;
         logger.warn(
           { signal: decision.signal, provider },
           '[AGENT] Stall detected — nudging the model to change course',
@@ -880,7 +891,8 @@ export class ExpenseBotAgent {
         // The stalled model stays out for the rest of the run (retries and the forced round too);
         // the next one gets the whole history, every tool result included.
         this.trajectory.excludedProviders.push(provider);
-        const next = nextProvider('smart', this.trajectory.excludedProviders);
+        this.trajectory.repairing = true;
+        const next = nextProvider('smart', this.trajectory.excludedProviders, this.routingRole());
         logger.warn(
           { signal: decision.signal, from: provider, to: next },
           '[AGENT] Stall detected — handing the run to the next provider',
@@ -896,6 +908,18 @@ export class ExpenseBotAgent {
         this.endToolRounds(decision.reason);
         return;
     }
+  }
+
+  /**
+   * Routing role of the next agent round (stage B3), or undefined for the legacy chain: roles
+   * routing must be on for this Telegram user, and a run the stall guard already stepped in on is
+   * repair, otherwise executor. Rounds already executed are never replayed — a round is one request.
+   */
+  private routingRole(): Role | undefined {
+    if (!rolesRoutingAppliesTo(env.AI_ROUTING, env.AI_ROUTING_USER_IDS, this.ctx.telegramUserId)) {
+      return undefined;
+    }
+    return this.trajectory.repairing ? 'repair' : 'executor';
   }
 
   /** No more tool rounds in this run: the forced final round answers from what was gathered. */

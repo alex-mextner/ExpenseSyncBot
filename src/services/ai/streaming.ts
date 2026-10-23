@@ -30,7 +30,13 @@ import type {
 } from '../../database/repositories/ai-usage-events.repository';
 import { createLogger } from '../../utils/logger';
 import { claudeClient, hfClient, openrouterClient, zaiClient } from './clients';
-import { isExcludedModel } from './model-presets';
+import {
+  isExcludedModel,
+  isQualifiedFor,
+  type ModelPreset,
+  presetRequestParams,
+  type Role,
+} from './model-presets';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -105,6 +111,11 @@ export interface StreamRoundOptions {
   temperature?: number;
   /** Which chain to run. Default: 'smart'. */
   chain?: ChainName;
+  /**
+   * Routing role of the round (stage B3). Takes effect only on the smart chain while
+   * AI_ROUTING=roles; the caller decides which users it applies to (rolesRoutingAppliesTo).
+   */
+  role?: Role | undefined;
   /** What this round is for; recorded with the usage events of every provider attempt. */
   purpose: AiPurpose;
   /** Overall caller deadline. When aborted, the fallback chain stops immediately. */
@@ -376,6 +387,8 @@ interface ProviderSlot {
   key: string;
   /** Model id the slot sends, e.g. "glm-5.1". */
   model: string;
+  /** Registry preset the slot runs (role-routed slots only). */
+  presetId?: string;
   stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<SlotOutput>;
 }
 
@@ -385,6 +398,14 @@ interface SlotOptions {
    * deprecated"); thinking and max_tokens come from claudeRequestParams(model, maxTokens).
    */
   anthropic?: boolean;
+  /**
+   * Role-routed slot: the preset's measured settings (reasoning effort, temperature, output
+   * ceiling) replace the caller defaults. Ignored on Anthropic slots, whose request shape is fixed
+   * by claudeRequestParams.
+   */
+  preset?: ModelPreset;
+  /** Provider id of the slot; picks the preset's per-provider settings. */
+  provider?: ProviderId;
 }
 
 /**
@@ -469,18 +490,26 @@ function streamingSlot(
     name,
     key,
     model,
+    ...(slotOptions.preset ? { presetId: slotOptions.preset.id } : {}),
     stream: async (opts, cbs) => {
       const params: OpenAI.ChatCompletionCreateParamsStreaming & Omit<ClaudeParams, 'max_tokens'> =
         {
           model,
           messages: opts.messages,
           stream: true,
-          ...chatRequestParams(
-            model,
-            opts.maxTokens,
-            opts.temperature ?? DEFAULT_TEMPERATURE,
-            slotOptions.anthropic ?? false,
-          ),
+          ...(slotOptions.preset && slotOptions.provider && !slotOptions.anthropic
+            ? presetRequestParams(
+                slotOptions.preset,
+                slotOptions.provider,
+                opts.temperature ?? DEFAULT_TEMPERATURE,
+                opts.maxTokens,
+              )
+            : chatRequestParams(
+                model,
+                opts.maxTokens,
+                opts.temperature ?? DEFAULT_TEMPERATURE,
+                slotOptions.anthropic ?? false,
+              )),
         };
       if (opts.tools && opts.tools.length > 0) {
         params.tools = opts.tools;
@@ -719,22 +748,77 @@ function buildTextChain(
   return slotsFor(chain.fallback, false);
 }
 
-function buildSmartChain(): ProviderSlot[] {
-  return buildTextChain('smart', env.AI_SMART_CHAIN, {
+function smartAvailability(): Record<ProviderId, ProviderAvailability> {
+  return {
     zai: { model: env.AI_MODEL, apiKey: env.ANTHROPIC_API_KEY },
     claude: { model: env.CLAUDE_MODEL, apiKey: env.CLAUDE_API_TOKEN },
     hf: { model: env.HF_MODEL, apiKey: env.HF_TOKEN },
     openrouter: { model: env.OPENROUTER_MODEL, apiKey: env.OPENROUTER_API_KEY },
-  });
+  };
 }
 
-function buildFastChain(): ProviderSlot[] {
-  return buildTextChain('fast', env.AI_FAST_CHAIN, {
+function fastAvailability(): Record<ProviderId, ProviderAvailability> {
+  return {
     zai: { model: env.AI_FAST_MODEL, apiKey: env.ANTHROPIC_API_KEY },
     claude: { model: env.CLAUDE_FAST_MODEL, apiKey: env.CLAUDE_API_TOKEN },
     hf: { model: env.HF_FAST_MODEL, apiKey: env.HF_TOKEN },
     openrouter: { model: env.OPENROUTER_FAST_MODEL, apiKey: env.OPENROUTER_API_KEY },
-  });
+  };
+}
+
+function buildSmartChain(): ProviderSlot[] {
+  return buildTextChain('smart', env.AI_SMART_CHAIN, smartAvailability());
+}
+
+function buildFastChain(): ProviderSlot[] {
+  return buildTextChain('fast', env.AI_FAST_CHAIN, fastAvailability());
+}
+
+/**
+ * The slots of a role's chain (AI_PLANNER_CHAIN / AI_EXECUTOR_CHAIN / AI_REPAIR_CHAIN), in order.
+ * A `provider:preset` entry loads only when the preset is qualified for the role; a bare provider
+ * entry uses the provider's own model (the fast model for the planner, the smart one otherwise).
+ * Anything unusable is skipped and logged once; an empty result makes the caller use the legacy chain.
+ */
+function buildRoleChain(role: Role): ProviderSlot[] {
+  const available = role === 'planner' ? fastAvailability() : smartAvailability();
+  const slots: ProviderSlot[] = [];
+  const skip = (provider: ProviderId, detail: string, why: string): void => {
+    const marker = `role:${role}:${provider}:${detail}:${why}`;
+    if (loggedSkips.has(marker)) return;
+    loggedSkips.add(marker);
+    logger.error({ role, provider, entry: detail }, `[AI_STREAM] Role chain entry skipped: ${why}`);
+  };
+  for (const { provider, preset } of env.AI_ROLE_CHAINS[role]) {
+    const { apiKey, model: ownModel } = available[provider];
+    const model = preset ? preset.models[provider] : ownModel;
+    const detail = preset ? `${provider}:${preset.id}` : provider;
+    if (!apiKey || !model) {
+      skip(provider, detail, 'no key or model configured');
+      continue;
+    }
+    if (isExcludedModel(model)) {
+      skip(provider, detail, 'model is on the excluded list');
+      continue;
+    }
+    if (preset && !isQualifiedFor(preset, role)) {
+      skip(provider, detail, `preset is not qualified for ${role}`);
+      continue;
+    }
+    slots.push(
+      streamingSlot(
+        `${TEXT_PROVIDER_LABELS[provider]} (${model})`,
+        provider,
+        TEXT_PROVIDER_CLIENTS[provider],
+        model,
+        {
+          ...(provider === 'claude' ? { anthropic: true } : {}),
+          ...(preset ? { preset, provider } : {}),
+        },
+      ),
+    );
+  }
+  return slots;
 }
 
 function buildOcrChain(): ProviderSlot[] {
@@ -754,10 +838,28 @@ function buildOcrChain(): ProviderSlot[] {
   return chain;
 }
 
-function buildChain(chain: ChainName): ProviderSlot[] {
+/**
+ * Role-routed rounds exist only on the smart chain and only while AI_ROUTING=roles: flipping the
+ * env back to `legacy` is the rollback for every caller at once. A role whose chain has nothing
+ * loadable runs the legacy chain instead of failing the round.
+ */
+function buildChain(chain: ChainName, role?: Role): ProviderSlot[] {
   switch (chain) {
-    case 'smart':
+    case 'smart': {
+      if (role && env.AI_ROUTING === 'roles') {
+        const roleSlots = buildRoleChain(role);
+        if (roleSlots.length > 0) return roleSlots;
+        const marker = `role:${role}:nothing-loadable`;
+        if (!loggedSkips.has(marker)) {
+          loggedSkips.add(marker);
+          logger.error(
+            { role },
+            '[AI_STREAM] Role chain has nothing loadable — using the legacy chain',
+          );
+        }
+      }
       return buildSmartChain();
+    }
     case 'fast':
       return buildFastChain();
     case 'ocr':
@@ -766,24 +868,33 @@ function buildChain(chain: ChainName): ProviderSlot[] {
 }
 
 /** The chain's slots minus the excluded names, in breaker order (demoted slots last). */
-function availableSlots(chain: ChainName, exclude: readonly string[], now: number): ProviderSlot[] {
+function availableSlots(
+  chain: ChainName,
+  exclude: readonly string[],
+  now: number,
+  role?: Role,
+): ProviderSlot[] {
   return orderByHealth(
-    buildChain(chain).filter((slot) => !exclude.includes(slot.name)),
+    buildChain(chain, role).filter((slot) => !exclude.includes(slot.name)),
     now,
   );
 }
 
 /** The chain's slots named in `exclude` — a round skips them without requesting. */
-function excludedSlots(chain: ChainName, exclude: readonly string[]): ProviderSlot[] {
-  return buildChain(chain).filter((slot) => exclude.includes(slot.name));
+function excludedSlots(chain: ChainName, exclude: readonly string[], role?: Role): ProviderSlot[] {
+  return buildChain(chain, role).filter((slot) => exclude.includes(slot.name));
 }
 
 /**
  * Name of the slot a round on `chain` would try first with `exclude` left out, or null when none
  * is left — the agent's handoff target.
  */
-export function nextProvider(chain: ChainName, exclude: readonly string[]): string | null {
-  return availableSlots(chain, exclude, Date.now())[0]?.name ?? null;
+export function nextProvider(
+  chain: ChainName,
+  exclude: readonly string[],
+  role?: Role,
+): string | null {
+  return availableSlots(chain, exclude, Date.now(), role)[0]?.name ?? null;
 }
 
 function numericStatus(error: unknown): number | undefined {
@@ -901,7 +1012,7 @@ export async function aiStreamRound(
   // is honored (the boundary check `demotedUntil <= now` must not use a stale anchor).
   const now = Date.now();
   const excludeProviders = options.excludeProviders ?? [];
-  const chain = availableSlots(chainName, excludeProviders, now);
+  const chain = availableSlots(chainName, excludeProviders, now, options.role);
   const round: UsageRound = {
     chain: chainName,
     purpose: options.purpose,
@@ -909,7 +1020,7 @@ export async function aiStreamRound(
   };
   if (excludeProviders.length > 0) {
     recordAiUsage(
-      excludedSlots(chainName, excludeProviders).map((slot) =>
+      excludedSlots(chainName, excludeProviders, options.role).map((slot) =>
         usageEvent(round, slot, now, SKIPPED_ATTEMPT),
       ),
     );

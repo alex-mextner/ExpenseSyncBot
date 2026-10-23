@@ -2,7 +2,15 @@
  * Environment variables configuration
  */
 
+import type { Role } from '../services/ai/model-presets';
 import { DEFAULT_PROVIDER_IDS, PROVIDER_IDS, type ProviderId } from '../services/ai/provider-ids';
+import {
+  parseRoleChain,
+  parseRoutingMode,
+  parseRoutingUserIds,
+  type RoleChainEntry,
+  type RoutingMode,
+} from '../services/ai/role-routing';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('env');
@@ -52,6 +60,14 @@ function parseChain(name: string, fallback: ProviderId[]): ChainOrder {
   return { order: parsed, fromEnv: true, fallback };
 }
 
+/** Parses one role chain, logging every dropped entry. */
+function parseRoleChainEnv(name: string): RoleChainEntry[] {
+  const { entries, problems } = parseRoleChain(process.env[name]);
+  for (const problem of problems)
+    logger.warn({ name, problem }, 'Bad role chain entry — dropping it');
+  return entries;
+}
+
 interface EnvConfig {
   BOT_TOKEN: string;
   BOT_USERNAME: string;
@@ -88,6 +104,12 @@ interface EnvConfig {
   HF_MODEL: string;
   HF_FAST_MODEL: string;
   HF_VISION_MODEL: string;
+
+  // Role routing (stage B3). `legacy` (default) keeps AI_SMART_CHAIN / AI_FAST_CHAIN for everything;
+  // `roles` runs agent rounds on the per-role chains, for the AI_ROUTING_USER_IDS canary if set.
+  AI_ROUTING: RoutingMode;
+  AI_ROUTING_USER_IDS: number[] | undefined;
+  AI_ROLE_CHAINS: Record<Role, RoleChainEntry[]>;
 
   // OpenRouter (optional; named in a chain order to be used, skipped without key and model).
   // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash`.
@@ -149,6 +171,14 @@ function validateEnv(): EnvConfig {
     HF_MODEL: getEnvVariable('HF_MODEL'),
     HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL'),
     HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL'),
+
+    AI_ROUTING: parseRoutingMode(process.env['AI_ROUTING']),
+    AI_ROUTING_USER_IDS: parseRoutingUserIds(process.env['AI_ROUTING_USER_IDS']),
+    AI_ROLE_CHAINS: {
+      planner: parseRoleChainEnv('AI_PLANNER_CHAIN'),
+      executor: parseRoleChainEnv('AI_EXECUTOR_CHAIN'),
+      repair: parseRoleChainEnv('AI_REPAIR_CHAIN'),
+    },
 
     OPENROUTER_API_KEY: getEnvVariable('OPENROUTER_API_KEY', false),
     OPENROUTER_BASE_URL:

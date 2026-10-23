@@ -35,6 +35,7 @@ const TEST_GROUP_ID = 1;
 const ctx: AgentContext = {
   groupId: TEST_GROUP_ID,
   userId: 1,
+  telegramUserId: 99,
   chatId: TEST_GROUP_ID,
   userName: 'test',
   userFullName: 'Test User',
