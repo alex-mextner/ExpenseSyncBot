@@ -77,6 +77,9 @@ const mockBudgetsRepo = {
     ): Array<{ category: string; limit_amount: number; currency: string }> => [],
   ),
 };
+const mockAiUsageEvents = {
+  pruneOlderThan: mock((_cutoffMs: number): number => 0),
+};
 
 mock.module('../database', () => ({
   database: {
@@ -84,6 +87,7 @@ mock.module('../database', () => ({
     groupSpreadsheets: mockGroupSpreadsheets,
     expenses: mockExpensesRepo,
     budgets: mockBudgetsRepo,
+    aiUsageEvents: mockAiUsageEvents,
   },
 }));
 
@@ -145,6 +149,7 @@ import { env } from '../config/env';
 const {
   backfillSortExpensesTabs,
   recoverPriorYearExpenses,
+  registerAiUsageRetentionCron,
   registerExchangeRateCron,
   registerMonthlyCron,
 } = await import('./cron');
@@ -733,5 +738,58 @@ describe('recoverPriorYearExpenses', () => {
     ]);
     await recoverPriorYearExpenses();
     expect(importExpensesFromSheetMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerAiUsageRetentionCron', () => {
+  const DAY_MS = 86_400_000;
+
+  beforeEach(() => {
+    mockAiUsageEvents.pruneOlderThan.mockReset();
+    mockAiUsageEvents.pruneOlderThan.mockReturnValue(0);
+  });
+
+  it('prunes rows older than 180 days on startup', () => {
+    const before = Date.now();
+    registerAiUsageRetentionCron();
+    const after = Date.now();
+
+    expect(mockAiUsageEvents.pruneOlderThan).toHaveBeenCalledTimes(1);
+    const cutoff = mockAiUsageEvents.pruneOlderThan.mock.calls[0]?.[0] ?? 0;
+    expect(cutoff).toBeGreaterThanOrEqual(before - 180 * DAY_MS);
+    expect(cutoff).toBeLessThanOrEqual(after - 180 * DAY_MS);
+  });
+
+  it('schedules the prune daily at 03:30 UTC and runs it again from the schedule', () => {
+    registerAiUsageRetentionCron();
+
+    expect(cronSpy).toHaveBeenCalledTimes(1);
+    expect(cronSpy.mock.calls[0]?.[0]).toBe('30 3 * * *');
+    const job = cronSpy.mock.calls[0]?.[1] as () => void;
+    job();
+    expect(mockAiUsageEvents.pruneOlderThan).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs how many rows were removed', () => {
+    mockAiUsageEvents.pruneOlderThan.mockReturnValue(42);
+
+    registerAiUsageRetentionCron();
+
+    const logged = logMock.info.mock.calls.some((call) =>
+      String(call[call.length - 1]).includes('42'),
+    );
+    expect(logged).toBe(true);
+  });
+
+  it('logs a storage failure and keeps the schedule', () => {
+    const failure = new Error('database is locked');
+    mockAiUsageEvents.pruneOlderThan.mockImplementation(() => {
+      throw failure;
+    });
+
+    expect(() => registerAiUsageRetentionCron()).not.toThrow();
+
+    expect(logMock.error).toHaveBeenCalledWith({ err: failure }, expect.any(String));
+    expect(cronSpy).toHaveBeenCalledTimes(1);
   });
 });

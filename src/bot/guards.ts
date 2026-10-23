@@ -1,5 +1,6 @@
 // Command guards — reusable wrappers that enforce pre-conditions before handlers run.
 
+import { env } from '../config/env';
 import { database } from '../database';
 import type { Group } from '../database/types';
 import { sendMessage } from '../services/bank/telegram-sender';
@@ -71,5 +72,21 @@ export function requireGoogle(handler: GoogleCommandHandler): GroupCommandHandle
     }
 
     return handler(ctx, group as GoogleConnectedGroup);
+  };
+}
+
+/** Handler that receives the admin's chat id (BOT_ADMIN_CHAT_ID) — where admin-only output belongs. */
+export type AdminCommandHandler = (ctx: Ctx['Command'], adminChatId: number) => Promise<void>;
+
+/**
+ * Admin-only commands. The sender must be BOT_ADMIN_CHAT_ID (a private chat's id is its user's id).
+ * Fails closed and silent: with no admin configured, an unknown sender or any other user the
+ * handler never runs and nothing is sent, so the command's existence is not revealed.
+ */
+export function requireAdmin(handler: AdminCommandHandler): (ctx: Ctx['Command']) => Promise<void> {
+  return async (ctx) => {
+    const adminChatId = env.BOT_ADMIN_CHAT_ID;
+    if (adminChatId === null || ctx.from?.id !== adminChatId) return;
+    return handler(ctx, adminChatId);
   };
 }

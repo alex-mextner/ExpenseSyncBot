@@ -1,8 +1,9 @@
-// Scheduled tasks: daily exchange rate update + monthly budget tab auto-clone
+// Scheduled tasks: daily exchange rate update, monthly budget tab auto-clone, AI usage retention
 
 import cron from 'node-cron';
 import { env } from '../config/env';
 import { database } from '../database';
+import { AI_USAGE_RETENTION_DAYS } from '../database/repositories/ai-usage-events.repository';
 import { sendDirect, sendMessage, withChatContext } from '../services/bank/telegram-sender';
 import { updateExchangeRates } from '../services/currency/converter';
 import { monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
@@ -69,6 +70,27 @@ export function registerExchangeRateCron(): void {
     );
   });
   logger.info('[CRON] Exchange rate cron registered (daily 01:00 UTC, fetch on startup)');
+}
+
+/** Drop ai_usage_events rows past the retention window. A storage failure is logged, never thrown. */
+function pruneAiUsageEvents(): void {
+  try {
+    const removed = database.aiUsageEvents.pruneOlderThan(
+      Date.now() - AI_USAGE_RETENTION_DAYS * 86_400_000,
+    );
+    logger.info(
+      `[CRON] AI usage retention: removed ${removed} rows older than ${AI_USAGE_RETENTION_DAYS} days`,
+    );
+  } catch (err) {
+    logger.error({ err }, '[CRON] AI usage retention prune failed');
+  }
+}
+
+/** Prune the AI usage events on startup and daily at 03:30 UTC. */
+export function registerAiUsageRetentionCron(): void {
+  pruneAiUsageEvents();
+  cron.schedule('30 3 * * *', pruneAiUsageEvents);
+  logger.info('[CRON] AI usage retention cron registered (daily 03:30 UTC, prune on startup)');
 }
 
 export function registerMonthlyCron(): void {
