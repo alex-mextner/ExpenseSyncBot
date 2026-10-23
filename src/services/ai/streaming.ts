@@ -251,6 +251,7 @@ export function classifyAttemptFailure(
       return failure(status === 429 ? 'rate_limit' : 'bad_request');
     }
     if (status === 401 || status === 403) return failure('auth');
+    if (status === 408) return failure('timeout');
     if (status >= 500) return failure('server');
     if (status >= 400) return failure('bad_request');
     return failure('other');
@@ -428,8 +429,9 @@ export function chatRequestParams(
 }
 
 /**
- * Endpoints (slot keys) that answered 400 to `stream_options`. They are asked without it from then
- * on; their usage rows carry NULL tokens. Module state, like the provider breaker.
+ * Endpoint+model pairs (`key:model`) that answered 400/422 to `stream_options`. They are asked
+ * without it from then on; their usage rows carry NULL tokens. Per model, not per endpoint: HF
+ * Router fronts different backends per model. Module state, like the provider breaker.
  */
 const providersWithoutStreamingUsage = new Set<string>();
 
@@ -492,12 +494,13 @@ function streamingSlot(
       // Ask for the final usage chunk; a provider that rejects the option is remembered and
       // retried at once without it (same attempt, one usage row — its tokens stay unknown).
       const openStream = async () => {
-        if (providersWithoutStreamingUsage.has(key)) return request(false);
+        const usageOptionKey = `${key}:${model}`;
+        if (providersWithoutStreamingUsage.has(usageOptionKey)) return request(false);
         try {
           return await request(true);
         } catch (error) {
           if (!rejectsUsageStreamOption(error)) throw error;
-          providersWithoutStreamingUsage.add(key);
+          providersWithoutStreamingUsage.add(usageOptionKey);
           logger.warn(
             { provider: key, model },
             '[AI_STREAM] Provider rejected streaming usage — retrying without usage telemetry',

@@ -60,7 +60,9 @@ const PLACEHOLDERS: Record<string, string> = {
   HF_VISION_MODEL: 'verify',
 };
 for (const [key, value] of Object.entries(PLACEHOLDERS)) {
-  process.env[key] ??= value;
+  // Forced, not `??=`: Bun auto-loads a cwd `.env`, whose real HF/z.ai values would let a failed
+  // Claude vision call fall through to a billed HF request.
+  process.env[key] = value;
 }
 // A Groq key in the environment would add a Groq slot; the chain is Claude-only either way
 // (excludeProviders below), but keep the rows free of surprises.
@@ -93,12 +95,16 @@ interface UsageRow {
   cached_tokens: number | null;
 }
 
+/** Rows written by this run only: a reused --db may hold rows from earlier runs. */
+const runStartedAt = Date.now();
+
 async function usageRows(): Promise<UsageRow[]> {
   await flushAiUsageRecording();
   return database.queryAll<UsageRow>(
     `SELECT provider, model, chain, purpose, outcome, error_class, http_status, duration_ms,
             prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens
-     FROM ai_usage_events ORDER BY id`,
+     FROM ai_usage_events WHERE at >= ? ORDER BY id`,
+    runStartedAt,
   );
 }
 
@@ -218,7 +224,7 @@ if (strangers.length > 0)
 say('');
 say(
   formatUsageText(
-    aggregateUsage(database.aiUsageEvents.listSince(0), { now: Date.now(), days: 1 }),
+    aggregateUsage(database.aiUsageEvents.listSince(runStartedAt), { now: Date.now(), days: 1 }),
   ),
 );
 

@@ -229,6 +229,7 @@ describe('classifyAttemptFailure', () => {
     ['422', apiError(422, 'unprocessable'), 'bad_request', 422],
     ['500', apiError(500, 'internal'), 'server', 500],
     ['503', apiError(503, 'unavailable'), 'server', 503],
+    ['408 request timeout', apiError(408, 'request timeout'), 'timeout', 408],
     ['529 overloaded', apiError(529, 'overloaded'), 'server', 529],
   ] as const)('%s', (_label, error, errorClass, httpStatus) => {
     expect(classifyAttemptFailure(error, idle)).toEqual({ errorClass, httpStatus });
@@ -727,6 +728,34 @@ describe('aiStreamRound streaming usage request', () => {
     expect(recorded.map((e) => [e.provider, e.outcome, e.errorClass])).toEqual([
       ['zai', 'error', 'bad_request'],
       ['hf', 'ok', null],
+    ]);
+  });
+
+  it('remembers the rejection per model: another model of the same endpoint is still asked', async () => {
+    mockEnv.GROQ_API_KEY = '';
+    const requests: Array<[string, boolean]> = [];
+    const restore = await useCreate(async (p) => {
+      requests.push([p.model, p.stream_options !== undefined]);
+      if (p.model === 'hf-test' && p.stream_options) {
+        throw apiError(400, "Unknown parameter: 'stream_options'.");
+      }
+      if (p.model === 'test-model' || p.model === 'test-fast') throw apiError(500, 'down');
+      return streamOf(textChunks('from hf'));
+    });
+    try {
+      await run({ chain: 'smart' });
+      await run({ chain: 'fast' });
+    } finally {
+      restore();
+    }
+
+    // The smart-chain HF model rejected the option; the fast-chain HF model is asked with it.
+    expect(requests).toEqual([
+      ['test-model', true],
+      ['hf-test', true],
+      ['hf-test', false],
+      ['test-fast', true],
+      ['hf-fast', true],
     ]);
   });
 });
