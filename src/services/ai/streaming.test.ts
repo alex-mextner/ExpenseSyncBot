@@ -34,6 +34,10 @@ const mockEnv = {
   HF_MODEL: 'hf-test',
   HF_FAST_MODEL: 'hf-fast',
   HF_VISION_MODEL: 'hf-vision',
+  OPENROUTER_API_KEY: '',
+  OPENROUTER_BASE_URL: 'https://test.openrouter/api/v1',
+  OPENROUTER_MODEL: 'or-smart',
+  OPENROUTER_FAST_MODEL: 'or-fast',
 };
 mock.module('../../config/env', () => ({ env: mockEnv }));
 
@@ -42,6 +46,7 @@ mock.module('./clients', () => ({
   zaiClient: () => ({}),
   claudeClient: () => ({}),
   hfClient: () => ({}),
+  openrouterClient: () => ({}),
 }));
 
 // Usage rows are covered in streaming.usage.test.ts; these tests do not touch the database.
@@ -251,6 +256,9 @@ describe('aiStreamRound fallback chain', () => {
     mockEnv.CLAUDE_MODEL = 'claude-smart';
     mockEnv.CLAUDE_FAST_MODEL = 'claude-fast';
     mockEnv.CLAUDE_VISION_MODEL = 'claude-vision';
+    mockEnv.OPENROUTER_API_KEY = '';
+    mockEnv.OPENROUTER_MODEL = 'or-smart';
+    mockEnv.OPENROUTER_FAST_MODEL = 'or-fast';
     // Re-import to get fresh module with mocked deps
     streamingModule = await import('./streaming');
   });
@@ -268,10 +276,11 @@ describe('aiStreamRound fallback chain', () => {
       throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
     });
     const clientsMod = await import('./clients');
-    const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
-      spyOn(clientsMod, fn).mockReturnValue({
-        chat: { completions: { create } },
-      } as unknown as OpenAI),
+    const spies = (['zaiClient', 'claudeClient', 'hfClient', 'openrouterClient'] as const).map(
+      (fn) =>
+        spyOn(clientsMod, fn).mockReturnValue({
+          chat: { completions: { create } },
+        } as unknown as OpenAI),
     );
     let message = '';
     try {
@@ -327,6 +336,41 @@ describe('aiStreamRound fallback chain', () => {
     expect(await chainModels('smart', ['z.ai (test-model)', 'Claude (claude-smart)'])).toEqual([
       'hf-test',
     ]);
+  });
+
+  it('openrouter is part of a chain only when the operator names it and its key and model are set', async () => {
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    // Not in the default order: a key alone changes nothing.
+    expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
+    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast', 'hf-fast']);
+    mockEnv.AI_SMART_CHAIN = {
+      ...DEFAULT_ORDER,
+      order: ['openrouter', 'claude', 'hf'],
+      fromEnv: true,
+    };
+    mockEnv.AI_FAST_CHAIN = { ...DEFAULT_ORDER, order: ['zai', 'openrouter'], fromEnv: true };
+    expect(await chainModels('smart')).toEqual(['or-smart', 'claude-smart', 'hf-test']);
+    expect(await chainModels('fast')).toEqual(['test-fast', 'or-fast']);
+    expect(await chainModels('ocr')).toEqual(['claude-vision', 'hf-vision']);
+  });
+
+  it('a named openrouter without key or model is skipped, the rest of the chain runs', async () => {
+    mockEnv.AI_SMART_CHAIN = {
+      ...DEFAULT_ORDER,
+      order: ['openrouter', 'claude', 'hf'],
+      fromEnv: true,
+    };
+    mockEnv.OPENROUTER_API_KEY = '';
+    expect(await chainModels('smart')).toEqual(['claude-smart', 'hf-test']);
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    mockEnv.OPENROUTER_MODEL = '';
+    expect(await chainModels('smart')).toEqual(['claude-smart', 'hf-test']);
+  });
+
+  it('an openrouter slot is labelled OpenRouter and keyed openrouter', () => {
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['openrouter'], fromEnv: true };
+    expect(streamingModule.nextProvider('smart', [])).toBe('OpenRouter (or-smart)');
   });
 
   it('nextProvider names the slot the chain would try first without the excluded ones', () => {

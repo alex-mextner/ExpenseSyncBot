@@ -29,7 +29,7 @@ import type {
   AiUsageEventInput,
 } from '../../database/repositories/ai-usage-events.repository';
 import { createLogger } from '../../utils/logger';
-import { claudeClient, hfClient, zaiClient } from './clients';
+import { claudeClient, hfClient, openrouterClient, zaiClient } from './clients';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -371,7 +371,7 @@ interface SlotOutput {
 interface ProviderSlot {
   /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.1)". */
   name: string;
-  /** Stable endpoint id shared across chains/models ('zai'/'claude'/'hf') — the breaker key. */
+  /** Stable endpoint id shared across chains/models ('zai'/'claude'/'hf'/'openrouter') — the breaker key. */
   key: string;
   /** Model id the slot sends, e.g. "glm-5.1". */
   model: string;
@@ -455,7 +455,7 @@ function rejectsUsageStreamOption(error: unknown): boolean {
 
 /**
  * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
- * (z.ai, Claude, HF) via the shared OpenAI SDK.
+ * (z.ai, Claude, HF, OpenRouter) via the shared OpenAI SDK.
  */
 function streamingSlot(
   name: string,
@@ -633,6 +633,7 @@ const TEXT_PROVIDER_LABELS: Record<ProviderId, string> = {
   zai: 'z.ai',
   claude: 'Claude',
   hf: 'HF',
+  openrouter: 'OpenRouter',
 };
 
 // Resolved at call time, not captured: tests replace the client factories after import.
@@ -640,6 +641,7 @@ const TEXT_PROVIDER_CLIENTS: Record<ProviderId, () => OpenAI> = {
   zai: () => zaiClient(),
   claude: () => claudeClient(),
   hf: () => hfClient(),
+  openrouter: () => openrouterClient(),
 };
 
 const loggedSkips = new Set<string>();
@@ -710,6 +712,7 @@ function buildSmartChain(): ProviderSlot[] {
     zai: { model: env.AI_MODEL, apiKey: env.ANTHROPIC_API_KEY },
     claude: { model: env.CLAUDE_MODEL, apiKey: env.CLAUDE_API_TOKEN },
     hf: { model: env.HF_MODEL, apiKey: env.HF_TOKEN },
+    openrouter: { model: env.OPENROUTER_MODEL, apiKey: env.OPENROUTER_API_KEY },
   });
 }
 
@@ -718,6 +721,7 @@ function buildFastChain(): ProviderSlot[] {
     zai: { model: env.AI_FAST_MODEL, apiKey: env.ANTHROPIC_API_KEY },
     claude: { model: env.CLAUDE_FAST_MODEL, apiKey: env.CLAUDE_API_TOKEN },
     hf: { model: env.HF_FAST_MODEL, apiKey: env.HF_TOKEN },
+    openrouter: { model: env.OPENROUTER_FAST_MODEL, apiKey: env.OPENROUTER_API_KEY },
   });
 }
 

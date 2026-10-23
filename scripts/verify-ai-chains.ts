@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
-import { claudeClient, hfClient, zaiClient } from '../src/services/ai/clients';
+import { claudeClient, hfClient, openrouterClient, zaiClient } from '../src/services/ai/clients';
 import { chatRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
@@ -57,6 +57,19 @@ const SLOTS: SlotSpec[] = [
     model: env.HF_MODEL,
     vision: false,
   },
+  ...(env.OPENROUTER_API_KEY &&
+  env.OPENROUTER_MODEL &&
+  env.AI_SMART_CHAIN.order.includes('openrouter')
+    ? [
+        {
+          chain: 'smart' as const,
+          name: `OpenRouter ${env.OPENROUTER_MODEL}`,
+          client: openrouterClient,
+          model: env.OPENROUTER_MODEL,
+          vision: false,
+        },
+      ]
+    : []),
   // FAST
   {
     chain: 'fast',
@@ -84,6 +97,19 @@ const SLOTS: SlotSpec[] = [
     model: env.HF_FAST_MODEL,
     vision: false,
   },
+  ...(env.OPENROUTER_API_KEY &&
+  env.OPENROUTER_FAST_MODEL &&
+  env.AI_FAST_CHAIN.order.includes('openrouter')
+    ? [
+        {
+          chain: 'fast' as const,
+          name: `OpenRouter ${env.OPENROUTER_FAST_MODEL}`,
+          client: openrouterClient,
+          model: env.OPENROUTER_FAST_MODEL,
+          vision: false,
+        },
+      ]
+    : []),
   // OCR
   ...(env.CLAUDE_API_TOKEN
     ? [

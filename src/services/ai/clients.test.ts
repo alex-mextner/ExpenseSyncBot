@@ -19,6 +19,8 @@ mock.module('../../config/env', () => ({
     CLAUDE_BASE_URL: 'https://claude.test/v1/',
     HF_TOKEN: 'hf-key',
     HF_BASE_URL: 'https://hf.test/v1',
+    OPENROUTER_API_KEY: 'or-key',
+    OPENROUTER_BASE_URL: 'https://or.test/api/v1',
   },
 }));
 
@@ -53,7 +55,9 @@ mock.module('openai', () => ({
   default: FakeOpenAI,
 }));
 
-const { zaiClient, claudeClient, hfClient, resetClients } = await import('./clients');
+const { zaiClient, claudeClient, hfClient, openrouterClient, resetClients } = await import(
+  './clients'
+);
 
 describe('client factories', () => {
   beforeEach(() => {
@@ -133,6 +137,23 @@ describe('client factories', () => {
       const a = hfClient();
       const b = hfClient();
       expect(a).toBe(b);
+    });
+  });
+
+  describe('openrouterClient', () => {
+    it('constructs OpenAI with OPENROUTER_API_KEY and OPENROUTER_BASE_URL', () => {
+      const c = openrouterClient() as unknown as FakeOpenAI;
+      expect(c.apiKey).toBe('or-key');
+      expect(c.baseURL).toBe('https://or.test/api/v1');
+      expect(c.maxRetries).toBe(0);
+      expect(c.timeout).toBe(60_000);
+    });
+
+    it('caches the instance (singleton) until resetClients', () => {
+      const a = openrouterClient();
+      expect(openrouterClient()).toBe(a);
+      resetClients();
+      expect(openrouterClient()).not.toBe(a);
     });
   });
 

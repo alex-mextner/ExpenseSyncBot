@@ -130,6 +130,16 @@ describe('aggregateUsage', () => {
     ]);
   });
 
+  test('verdicts: optional openrouter is listed only once it has traffic, after the default providers', () => {
+    const r = aggregateUsage([ev(), ev({ provider: 'openrouter', model: 'deepseek/x' })], opts);
+    expect(r.verdicts.map((v) => [v.provider, v.status])).toEqual([
+      ['zai', 'healthy'],
+      ['claude', 'no_traffic'],
+      ['hf', 'no_traffic'],
+      ['openrouter', 'healthy'],
+    ]);
+  });
+
   test('verdict statuses by success rate and skipped_only', () => {
     const many = (n: number, over: Partial<AiUsageEvent>) =>
       Array.from({ length: n }, () => ev(over));

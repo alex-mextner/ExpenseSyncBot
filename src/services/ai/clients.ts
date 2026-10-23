@@ -1,5 +1,5 @@
 /**
- * OpenAI SDK client factories for all AI providers (z.ai, Claude, HF).
+ * OpenAI SDK client factories for all AI providers (z.ai, Claude, HF, OpenRouter).
  * All providers share the same OpenAI SDK — only baseURL and apiKey differ.
  * Base URLs and keys are loaded from env — no hardcoded values.
  */
@@ -19,6 +19,7 @@ function makeFetchDelegate(): (
 let _zai: OpenAI | null = null;
 let _claude: OpenAI | null = null;
 let _hf: OpenAI | null = null;
+let _openrouter: OpenAI | null = null;
 
 export function zaiClient(): OpenAI {
   if (!_zai) {
@@ -59,9 +60,23 @@ export function hfClient(): OpenAI {
   return _hf;
 }
 
+export function openrouterClient(): OpenAI {
+  if (!_openrouter) {
+    _openrouter = new OpenAI({
+      apiKey: env.OPENROUTER_API_KEY,
+      baseURL: env.OPENROUTER_BASE_URL,
+      timeout: DEFAULT_TIMEOUT_MS,
+      maxRetries: 0,
+      fetch: makeFetchDelegate(),
+    });
+  }
+  return _openrouter;
+}
+
 /** Reset cached clients (for tests). */
 export function resetClients(): void {
   _zai = null;
   _claude = null;
   _hf = null;
+  _openrouter = null;
 }
