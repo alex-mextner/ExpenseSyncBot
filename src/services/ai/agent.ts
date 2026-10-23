@@ -346,6 +346,7 @@ export class ExpenseBotAgent {
         ],
         maxTokens: 1500,
         chain: 'smart',
+        purpose: 'agent_batch',
       },
       {
         onTextDelta: (delta) => {
@@ -575,6 +576,7 @@ export class ExpenseBotAgent {
             maxTokens: 4096,
             temperature: 0.3,
             chain: 'smart',
+            purpose: 'agent',
             signal: AbortSignal.any([signal, toolTime]),
             excludeProviders: [...this.trajectory.excludedProviders],
           },
@@ -776,6 +778,7 @@ export class ExpenseBotAgent {
             maxTokens: 4096,
             temperature: 0.3,
             chain: 'smart',
+            purpose: 'agent_final',
             signal,
             excludeProviders: [...this.trajectory.excludedProviders],
           },

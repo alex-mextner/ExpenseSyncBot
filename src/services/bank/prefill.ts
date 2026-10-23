@@ -103,6 +103,7 @@ ${txLines}
       messages: [{ role: 'user', content: prompt }],
       maxTokens: MAX_TOKENS,
       chain: 'fast',
+      purpose: 'prefill',
     });
 
     const cleaned = stripThinkingTags(text);

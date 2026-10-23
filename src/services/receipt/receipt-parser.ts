@@ -293,6 +293,7 @@ export async function parseReceipt(
         maxTokens: PARSE_MAX_TOKENS,
         temperature: 0.2,
         chain: 'smart',
+        purpose: 'receipt_parse',
         signal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
       },
       callbacks,

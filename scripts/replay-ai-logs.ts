@@ -397,6 +397,7 @@ async function replayAgentRuns(dir: string): Promise<void> {
         maxTokens: 4096,
         temperature: 0.3,
         chain: 'smart',
+        purpose: 'replay',
         signal: AbortSignal.timeout(90_000),
       }),
     );
@@ -447,6 +448,7 @@ async function replayAgentRuns(dir: string): Promise<void> {
           maxTokens: 4096,
           temperature: 0.3,
           chain: 'smart',
+          purpose: 'replay',
           signal: AbortSignal.timeout(90_000),
         }),
       );

@@ -24,6 +24,10 @@
 
 import OpenAI from 'openai';
 import { env } from '../../config/env';
+import type {
+  AiUsageErrorClass,
+  AiUsageEventInput,
+} from '../../database/repositories/ai-usage-events.repository';
 import { createLogger } from '../../utils/logger';
 import { claudeClient, groqClient, hfClient, zaiClient } from './clients';
 import {
@@ -33,6 +37,7 @@ import {
   recordProviderReachable,
   recordProviderResponded,
 } from './provider-breaker';
+import { recordAiUsage } from './usage-recorder';
 
 const logger = createLogger('ai-streaming');
 
@@ -51,6 +56,24 @@ const PER_PROVIDER_TIMEOUT_MS = 45_000;
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type ChainName = 'smart' | 'fast' | 'ocr';
+
+/** What a round is for — stored with every usage event so spend and failures can be told apart by feature. */
+export type AiPurpose =
+  | 'agent'
+  | 'agent_final'
+  | 'agent_batch'
+  | 'advice'
+  | 'validator'
+  | 'advice_validator'
+  | 'prefill'
+  | 'merchant'
+  | 'receipt_parse'
+  | 'receipt_summary'
+  | 'ocr'
+  | 'dev_agent'
+  | 'code_review'
+  | 'replay'
+  | 'probe';
 
 export interface StreamToolCall {
   id: string;
@@ -80,6 +103,8 @@ export interface StreamRoundOptions {
   temperature?: number;
   /** Which chain to run. Default: 'smart'. */
   chain?: ChainName;
+  /** What this round is for; recorded with the usage events of every provider attempt. */
+  purpose: AiPurpose;
   /** Overall caller deadline. When aborted, the fallback chain stops immediately. */
   signal?: AbortSignal;
   /**
@@ -125,6 +150,123 @@ function markProviderResponded(error: unknown, responded: boolean): void {
 
 function providerResponded(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && (error as RespondedTag)[PROVIDER_RESPONDED]);
+}
+
+// ── Token usage and attempt failure classes (stored in ai_usage_events) ─────
+
+/** Token counts of one attempt. NULL = the provider did not report it; a reported 0 stays 0. */
+export interface TokenUsage {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  reasoningTokens: number | null;
+  cachedTokens: number | null;
+}
+
+const UNKNOWN_USAGE: TokenUsage = {
+  promptTokens: null,
+  completionTokens: null,
+  reasoningTokens: null,
+  cachedTokens: null,
+};
+
+function reportedTokens(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** The OpenAI-compatible usage object of a stream's final chunk → nullable token counts. */
+export function normalizeUsage(usage: OpenAI.CompletionUsage | null | undefined): TokenUsage {
+  if (!usage) return UNKNOWN_USAGE;
+  return {
+    promptTokens: reportedTokens(usage.prompt_tokens),
+    completionTokens: reportedTokens(usage.completion_tokens),
+    reasoningTokens: reportedTokens(usage.completion_tokens_details?.reasoning_tokens),
+    cachedTokens: reportedTokens(usage.prompt_tokens_details?.cached_tokens),
+  };
+}
+
+// Internal tag: carries the tokens a provider reported before its attempt failed (an empty answer
+// still bills tokens) from the slot to the usage event of the failed attempt.
+const ATTEMPT_USAGE: unique symbol = Symbol('attemptUsage');
+interface AttemptUsageTag {
+  [ATTEMPT_USAGE]?: TokenUsage;
+}
+
+function tagAttemptUsage(error: unknown, usage: TokenUsage): void {
+  if (error && typeof error === 'object') (error as AttemptUsageTag)[ATTEMPT_USAGE] = usage;
+}
+
+function attemptUsage(error: unknown): TokenUsage {
+  const tag =
+    error && typeof error === 'object' ? (error as AttemptUsageTag)[ATTEMPT_USAGE] : undefined;
+  return tag ?? UNKNOWN_USAGE;
+}
+
+/** A provider answered 200 but produced no text and no tool call (z.ai reasoning-only replies, a refusal). */
+export class EmptyProviderResponseError extends Error {
+  constructor(slotName: string) {
+    super(
+      `Provider ${slotName} returned empty response (no text, no tool calls) — treating as failure`,
+    );
+    this.name = 'EmptyProviderResponseError';
+  }
+}
+
+/**
+ * An out-of-credits / exhausted-quota answer, as opposed to a plain per-minute rate limit. z.ai
+ * answers 429 "Weekly/Monthly Limit Exhausted. Your limit will reset at …" (live, 2026-10-23).
+ */
+const QUOTA_TEXT = /quota|credit|usage limit|limit exhausted|will reset/i;
+
+export interface AttemptFailure {
+  errorClass: AiUsageErrorClass;
+  /** HTTP status when the provider answered with one. */
+  httpStatus: number | null;
+}
+
+/**
+ * Failure class of one provider attempt, from the SDK error's status, code and name. Only the
+ * class and status are kept — never the provider's error body. `callerAborted` (the caller's
+ * overall deadline) and `providerTimedOut` (this slot's own timer) take precedence over the error
+ * shape: both surface as the same APIUserAbortError. A status-less connection failure is `server`
+ * (provider unreachable), matching classifyAiError's provider_down.
+ */
+export function classifyAttemptFailure(
+  error: unknown,
+  signals: { callerAborted: boolean; providerTimedOut: boolean },
+): AttemptFailure {
+  const status = numericStatus(error);
+  const failure = (errorClass: AiUsageErrorClass): AttemptFailure => ({
+    errorClass,
+    httpStatus: status ?? null,
+  });
+
+  if (signals.callerAborted) return failure('aborted');
+  if (signals.providerTimedOut) return failure('timeout');
+  if (error instanceof EmptyProviderResponseError) return failure('empty');
+
+  if (status !== undefined) {
+    if (status === 402) return failure('quota');
+    if (status === 429 || status === 400) {
+      if (QUOTA_TEXT.test(errorText(error))) return failure('quota');
+      return failure(status === 429 ? 'rate_limit' : 'bad_request');
+    }
+    if (status === 401 || status === 403) return failure('auth');
+    if (status === 408) return failure('timeout');
+    if (status >= 500) return failure('server');
+    if (status >= 400) return failure('bad_request');
+    return failure('other');
+  }
+
+  if (
+    error instanceof OpenAI.APIConnectionTimeoutError ||
+    errorCode(error) === 'ETIMEDOUT' ||
+    /timed out|timeout/i.test(errorText(error))
+  ) {
+    return failure('timeout');
+  }
+  if (isAbortLike(error)) return failure('aborted');
+  if (isConnectionLike(error)) return failure('server');
+  return failure('other');
 }
 
 /**
@@ -219,12 +361,20 @@ const CREDITS_EXHAUSTED_COOLDOWN_MS = 60 * 60_000;
 
 // ── Provider slots ──────────────────────────────────────────────────────────
 
+/** What a slot hands back: the caller-facing result plus the tokens the provider reported for it. */
+interface SlotOutput {
+  result: StreamRoundResult;
+  usage: TokenUsage;
+}
+
 interface ProviderSlot {
   /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.1)". */
   name: string;
   /** Stable endpoint id shared across chains/models ('zai'/'claude'/'hf') — the breaker key. */
   key: string;
-  stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<StreamRoundResult>;
+  /** Model id the slot sends, e.g. "glm-5.1". */
+  model: string;
+  stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<SlotOutput>;
 }
 
 interface SlotOptions {
@@ -279,6 +429,30 @@ export function chatRequestParams(
 }
 
 /**
+ * Endpoint+model pairs (`key:model`) that answered 400/422 to `stream_options`. They are asked
+ * without it from then on; their usage rows carry NULL tokens. Per model, not per endpoint: HF
+ * Router fronts different backends per model. Module state, like the provider breaker.
+ */
+const providersWithoutStreamingUsage = new Set<string>();
+
+/** Forget which endpoints rejected `stream_options` (tests). */
+export function resetStreamingUsageCompatibility(): void {
+  providersWithoutStreamingUsage.clear();
+}
+
+/**
+ * A 400/422 that names the streaming-usage option: the request itself is
+ * fine without it, so it is retried instead of failing over — the last fallback (HF Router) is
+ * one endpoint in front of many backends, and an unsupported option there must not cost the chain
+ * its only remaining slot.
+ */
+function rejectsUsageStreamOption(error: unknown): boolean {
+  const status = numericStatus(error);
+  if (status !== 400 && status !== 422) return false;
+  return /stream_options|include_usage/i.test(errorText(error));
+}
+
+/**
  * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
  * (z.ai, Groq, Claude, HF) via the shared OpenAI SDK.
  */
@@ -292,6 +466,7 @@ function streamingSlot(
   return {
     name,
     key,
+    model,
     stream: async (opts, cbs) => {
       const params: OpenAI.ChatCompletionCreateParamsStreaming & Omit<ClaudeParams, 'max_tokens'> =
         {
@@ -310,18 +485,41 @@ function streamingSlot(
         if (opts.toolChoice) params.tool_choice = opts.toolChoice;
       }
 
-      const stream = await getClient().chat.completions.create(
-        params,
-        opts.signal ? { signal: opts.signal } : undefined,
-      );
+      const client = getClient();
+      const request = (withUsage: boolean) =>
+        client.chat.completions.create(
+          withUsage ? { ...params, stream_options: { include_usage: true } } : params,
+          opts.signal ? { signal: opts.signal } : undefined,
+        );
+      // Ask for the final usage chunk; a provider that rejects the option is remembered and
+      // retried at once without it (same attempt, one usage row — its tokens stay unknown).
+      const openStream = async () => {
+        const usageOptionKey = `${key}:${model}`;
+        if (providersWithoutStreamingUsage.has(usageOptionKey)) return request(false);
+        try {
+          return await request(true);
+        } catch (error) {
+          if (!rejectsUsageStreamOption(error)) throw error;
+          providersWithoutStreamingUsage.add(usageOptionKey);
+          logger.warn(
+            { provider: key, model },
+            '[AI_STREAM] Provider rejected streaming usage — retrying without usage telemetry',
+          );
+          return request(false);
+        }
+      };
+      const stream = await openStream();
 
       let text = '';
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
       let lastToolCallKey = -1;
       let finishReason = 'stop';
+      let usage: OpenAI.CompletionUsage | null = null;
 
       try {
         for await (const chunk of stream) {
+          // The usage-only final chunk has no choices: capture it before the delta guard below.
+          if (chunk.usage) usage = chunk.usage;
           const delta = chunk.choices[0]?.delta;
           if (!delta) continue;
 
@@ -372,8 +570,10 @@ function streamingSlot(
         // received before the drop. The chain uses this so the breaker doesn't treat a late drop
         // after a real response as "provider unreachable".
         markProviderResponded(streamError, text.length > 0 || toolCalls.size > 0);
+        if (usage) tagAttemptUsage(streamError, normalizeUsage(usage));
         throw streamError;
       }
+      const tokenUsage = normalizeUsage(usage);
 
       const toolCallsArray: StreamToolCall[] = [...toolCalls.values()].map((tc) => ({
         id: tc.id,
@@ -386,9 +586,9 @@ function streamingSlot(
       // reasoning_content via the OpenAI SDK, so we treat this as a failure and
       // fall through to the next provider. Tool-calling responses are unaffected.
       if (!text && toolCallsArray.length === 0) {
-        throw new Error(
-          `Provider ${name} returned empty response (no text, no tool calls) — treating as failure`,
-        );
+        const empty = new EmptyProviderResponseError(name);
+        tagAttemptUsage(empty, tokenUsage);
+        throw empty;
       }
 
       const assistantMessage: OpenAI.ChatCompletionMessageParam = {
@@ -406,11 +606,14 @@ function streamingSlot(
       };
 
       return {
-        text,
-        toolCalls: toolCallsArray,
-        finishReason,
-        assistantMessage,
-        providerUsed: name,
+        result: {
+          text,
+          toolCalls: toolCallsArray,
+          finishReason,
+          assistantMessage,
+          providerUsed: name,
+        },
+        usage: tokenUsage,
       };
     },
   };
@@ -495,6 +698,11 @@ function availableSlots(chain: ChainName, exclude: readonly string[], now: numbe
   );
 }
 
+/** The chain's slots named in `exclude` — a round skips them without requesting. */
+function excludedSlots(chain: ChainName, exclude: readonly string[]): ProviderSlot[] {
+  return buildChain(chain).filter((slot) => exclude.includes(slot.name));
+}
+
 /**
  * Name of the slot a round on `chain` would try first with `exclude` left out, or null when none
  * is left — the agent's handoff target.
@@ -553,6 +761,51 @@ function isUnreachableFailure(error: unknown): boolean {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
+interface UsageRound {
+  chain: ChainName;
+  purpose: AiPurpose;
+  /** Shared by every attempt of one aiStreamRound call, so a failed attempt links to its fallback. */
+  requestId: string;
+}
+
+type AttemptResult = Pick<
+  AiUsageEventInput,
+  | 'outcome'
+  | 'errorClass'
+  | 'httpStatus'
+  | 'durationMs'
+  | 'promptTokens'
+  | 'completionTokens'
+  | 'reasoningTokens'
+  | 'cachedTokens'
+>;
+
+/** A slot the round never requested (excluded by an agent handoff). */
+const SKIPPED_ATTEMPT: AttemptResult = {
+  outcome: 'skipped',
+  errorClass: null,
+  httpStatus: null,
+  durationMs: null,
+  ...UNKNOWN_USAGE,
+};
+
+function usageEvent(
+  round: UsageRound,
+  slot: ProviderSlot,
+  at: number,
+  attempt: AttemptResult,
+): AiUsageEventInput {
+  return {
+    at,
+    provider: slot.key,
+    model: slot.model,
+    chain: round.chain,
+    purpose: round.purpose,
+    requestId: round.requestId,
+    ...attempt,
+  };
+}
+
 /**
  * Execute one AI round with automatic provider fallback.
  *
@@ -572,7 +825,20 @@ export async function aiStreamRound(
   // mutations below read a fresh `Date.now()` at failure time so a cooldown that expires mid-round
   // is honored (the boundary check `demotedUntil <= now` must not use a stale anchor).
   const now = Date.now();
-  const chain = availableSlots(chainName, options.excludeProviders ?? [], now);
+  const excludeProviders = options.excludeProviders ?? [];
+  const chain = availableSlots(chainName, excludeProviders, now);
+  const round: UsageRound = {
+    chain: chainName,
+    purpose: options.purpose,
+    requestId: crypto.randomUUID(),
+  };
+  if (excludeProviders.length > 0) {
+    recordAiUsage(
+      excludedSlots(chainName, excludeProviders).map((slot) =>
+        usageEvent(round, slot, now, SKIPPED_ATTEMPT),
+      ),
+    );
+  }
   let lastError: Error | null = null;
   // Once text reaches the user we cannot splice another model's output on a fallback. (Whether the
   // provider was reachable before a failure is read separately, off the thrown error's tag.)
@@ -609,10 +875,24 @@ export async function aiStreamRound(
       ? AbortSignal.any([options.signal, perProviderController.signal])
       : perProviderController.signal;
 
+    const attemptStartedAt = Date.now();
+    const attemptStartedPerf = performance.now();
     try {
       logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
-      const result = await slot.stream({ ...options, signal: combinedSignal }, wrappedCallbacks);
+      const { result, usage } = await slot.stream(
+        { ...options, signal: combinedSignal },
+        wrappedCallbacks,
+      );
       recordProviderReachable(slot.key); // a clean round rehabilitates a previously-demoted slot
+      recordAiUsage([
+        usageEvent(round, slot, attemptStartedAt, {
+          outcome: 'ok',
+          errorClass: null,
+          httpStatus: null,
+          durationMs: Math.round(performance.now() - attemptStartedPerf),
+          ...usage,
+        }),
+      ]);
       return result;
     } catch (error) {
       // A fresh read at FAILURE time — the round-start `now` (used only for orderByHealth) can
@@ -621,6 +901,18 @@ export async function aiStreamRound(
       const failedAt = Date.now();
       lastError = error instanceof Error ? error : new Error(String(error));
       providerErrors.push({ name: slot.name, error: lastError });
+      recordAiUsage([
+        usageEvent(round, slot, attemptStartedAt, {
+          outcome: 'error',
+          ...classifyAttemptFailure(lastError, {
+            callerAborted: options.signal?.aborted === true,
+            providerTimedOut: perProviderController.signal.aborted,
+          }),
+          durationMs: Math.round(performance.now() - attemptStartedPerf),
+          // The tag sits on the ORIGINAL thrown value, like the responded tag below.
+          ...attemptUsage(error),
+        }),
+      ]);
       logger.error({ err: lastError }, `[AI_STREAM] ${slot.name} failed: ${lastError.message}`);
 
       // Text already sent to user — can't splice another model's output. The provider proved it was

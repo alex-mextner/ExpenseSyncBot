@@ -129,6 +129,7 @@ All database operations go through repositories in `src/database/repositories/`:
 - `recurring-pattern.repository.ts` - Detected recurring expense patterns
 - `dev-task.repository.ts` - Dev pipeline task tracking
 - `agent-trajectory.repository.ts` - Per-run and per-tool-round agent features (stall-classifier dataset, no message text)
+- `ai-usage-events.repository.ts` - Append-only AI usage: one row per provider attempt (`ai_usage_events`), nullable token counts, no text or ids; 180-day retention
 
 Access via singleton: `database.users`, `database.expenses`, `database.bankConnections`, etc.
 
@@ -196,10 +197,13 @@ Bot has a full AI agent with tool calling, accessible by mentioning `@ExpenseSyn
 - When the stall guard ends the tool rounds, one forced final round runs with the tools still declared and `toolChoice: 'none'` (accepted by Groq, z.ai and Claude in the 2026-10-12 live check; dropping the tools made Claude refuse to sum, since rule 7 sends all arithmetic to `calculate`). Tool calls returned anyway are ignored. A mention, a run with a write tool, or a forced run never ends silently.
 - Empty or tools-only replies are never shipped (`TelegramStreamWriter.finalize`): silence is allowed only for non-mention chatter with no write tool and no forced answer — a blank/`...`/`[SKIP]` answer if no tools ran, only the bare `[SKIP]` marker after read-only tools; otherwise the user sees the no-answer message. The work log is always rendered as a collapsed `<blockquote expandable>` at the TOP of the reply.
 - Every `run()` writes one `agent_trajectories` row and one `agent_trajectory_rounds` row per tool round (dataset for the learned stall classifier, phases 1–3 of the spec): tool names, per-run-seeded arg/result hashes, providers, timings, decisions, outcome, and the gap to the group's next question if under 5 min. Never store message text, tool arguments or results there.
+- Every provider **attempt** of `aiStreamRound` writes one `ai_usage_events` row (migration 053; [usage-recorder.ts](src/services/ai/usage-recorder.ts)): `at`, `provider` (`groq`/`zai`/`claude`/`hf`), `model`, `chain` (`smart`/`fast`/`ocr`), `purpose` (required `purpose` option of `aiStreamRound`: `agent`, `agent_final`, `agent_batch`, `advice`, `validator`, `advice_validator`, `prefill`, `merchant`, `receipt_parse`, `receipt_summary`, `ocr`, `dev_agent`, `code_review`, `replay`, `probe`), `outcome` (`ok`/`error`/`skipped`), `error_class` + `http_status` for errors (`timeout`, `rate_limit`, `quota`, `auth`, `server`, `empty`, `aborted`, `bad_request`, `other`, derived from the SDK error's status/code/name — never its body), `duration_ms`, token counts and a per-round `request_id` that links a failed attempt to the fallback that answered. Token columns are **NULL when the provider did not report usage — never 0** (a reported 0 stays 0); every request carries `stream_options: { include_usage: true }`, and a provider that answers 400 to it is remembered and retried at once without it (one attempt, one row, tokens unknown). `skipped` rows are the slots a stall handoff excluded (`excludeProviders`); a slot whose key is absent is not in the chain and leaves no row. The insert runs on a later event-loop turn: a storage failure is `logger.warn`-ed and never reaches the answer. No prompts, completions, user ids or chat ids are stored. A daily cron (03:30 UTC, plus once at startup) prunes rows older than 180 days.
 
 **Configuration:** All providers go through the OpenAI SDK with a fallback chain in [streaming.ts](src/services/ai/streaming.ts): smart = Groq → z.ai GLM → Claude Sonnet → HF; fast (validators, bank prefill, merchant agent) = Groq → z.ai GLM fast → Claude Haiku → HF; OCR = Claude (`CLAUDE_VISION_MODEL`, default Sonnet) → HF vision. Groq and Claude slots are skipped when their key is absent — without `CLAUDE_API_TOKEN` OCR runs HF-only. Sonnet is the OCR default because on degraded receipt photos Haiku produced a wrong yet sum-verified receipt while Sonnet refused (2026-10-12, clean fixtures: equal accuracy, Haiku ~25% faster). Request budget fields come from `chatRequestParams()`, which delegates to `claudeRequestParams()` for Claude slots (also used by `scripts/verify-ai-chains.ts`): never `temperature` (400 on Claude 5.x); Sonnet/Opus keep thinking on at the model's own level (the OpenAI-compat endpoint ignores `reasoning_effort`, so none is sent) and get `CLAUDE_THINKING_RESERVE_TOKENS` (8192) added to `max_tokens`, because thinking spends the same budget as the answer (without the reserve Sonnet truncated a 200-token prefill answer in 3/6 calls); Haiku runs with `thinking: {type: 'disabled'}` — at small budgets it otherwise streams zero text. The OpenAI-compat endpoint rejects explicit adaptive thinking. After changing `CLAUDE_MODEL`/`CLAUDE_FAST_MODEL`/`CLAUDE_VISION_MODEL`, run `scripts/verify-ai-chains.ts` (plus `scripts/run-receipt-snapshots.ts` for the vision model); to validate a provider change on real traffic, run `scripts/replay-ai-logs.ts` against `logs/chats` and a DB copy.
 
 HF Router is the last fallback in every text chain and the only OCR fallback, and it runs on prepaid credits: on 2026-10-12 it returned HTTP 402 "no remaining credits", so a chain whose earlier slots fail has nothing left. A 402 demotes that provider in the breaker for an hour (like an exhausted quota: it moves to the back of the chain, is still tried there, and a clean answer after a top-up lifts the demotion). Check every slot with `bun run scripts/verify-ai-chains.ts` (per-provider status table, exit 1 if a chain has no working provider) before trusting a chain.
+
+Read the usage with `bun scripts/report-ai-usage.ts [--days N] [--json] [--db PATH]` (read-only; per `provider:model`: attempts, ok, errors by class, skipped, success rate, p50/p95 of ok attempts, tokens with a count of ok calls that reported none, last ok / last error, plus one verdict per provider — `no traffic` is stated explicitly, so Claude's zero is visible) or, as the admin (`BOT_ADMIN_CHAT_ID`), with `/ai_stats [days]` in Telegram (the reply goes to the admin's own chat; everyone else gets no reply). `bun scripts/verify-claude-usage.ts` (key in the environment, temp DB) sends three tiny requests through the bot's own code path with every other provider out of the chain and checks that each left an `ok` row for `claude` with tokens.
 
 #### 5. State Management for User Flows
 
@@ -346,6 +350,7 @@ Defined in [src/bot/index.ts](src/bot/index.ts):
 - `/help` - Help text
 - `/ping` - Health check
 - `/dev` - Dev pipeline management
+- `/ai_stats [days]` - Admin-only (sender = `BOT_ADMIN_CHAT_ID`, fails closed and silent for everyone else) AI usage report; not in `BOT_COMMANDS` / `/help`
 
 ### Group-Only Mode
 
@@ -554,6 +559,8 @@ ssh root@odroidn2 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
 # Состояние процессов:
 ssh root@odroidn2 'su - www-data -c "pm2 list"'
 ```
+
+AI-статистика по провайдерам (read-only, дёшево): `ssh root@odroidn2 'su - www-data -c "cd /var/www/ExpenseSyncBot && bun scripts/report-ai-usage.ts --days 7"'` (`DATABASE_PATH` берётся из окружения, иначе `./data/expenses.db`; на проде БД лежит в `/var/www/ExpenseSyncBot/data/expenses.db`).
 
 **Никаких тяжёлых проверок на odroid.** У odroidn2 ~1 GB свободной RAM, а 2 GB swap уже заняты: 2026-10-12 агент запустил там бенчмарк ONNX-эмбеддингов (модель 118 MB) — нехватка памяти и перезагрузка сервера с прод-ботом. Не загружай модели, не гоняй бенчмарки и браузерные проверки на odroid — меряй на Runpod (`runpod-run`). Любая проверка на самом устройстве — только в окне, согласованном с владельцем.
 

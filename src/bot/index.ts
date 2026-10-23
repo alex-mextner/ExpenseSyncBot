@@ -8,6 +8,7 @@ import { createExpenseSpreadsheet, googleConn } from '../services/google/sheets'
 import { startPhotoProcessor } from '../services/receipt/photo-processor';
 import { loadDigitEmojis, loadReactionEmojis } from '../utils/digit-emoji';
 import { createLogger } from '../utils/logger.ts';
+import { handleAiStatsCommand } from './commands/ai-stats';
 import { handleAdviceCommand, handleAskQuestion } from './commands/ask';
 import { handleBankCommand } from './commands/bank';
 import { handleBudgetCommand } from './commands/budget';
@@ -30,8 +31,12 @@ import { handleStatsCommand } from './commands/stats';
 import { handleSumCommand } from './commands/sum';
 import { handleSyncCommand } from './commands/sync';
 import { handleTopicCommand } from './commands/topic';
-import { registerExchangeRateCron, registerMonthlyCron } from './cron';
-import { requireGoogle, requireGroup } from './guards';
+import {
+  registerAiUsageRetentionCron,
+  registerExchangeRateCron,
+  registerMonthlyCron,
+} from './cron';
+import { requireAdmin, requireGoogle, requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { handleExpenseMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
@@ -98,6 +103,8 @@ export function createBot(): Bot {
   bot.command('connect', handleConnectCommand);
   bot.command('reconnect', handleReconnectCommand);
   bot.command('ping', handlePingCommand);
+  // Admin-only (BOT_ADMIN_CHAT_ID), deliberately absent from BOT_COMMANDS and /help
+  bot.command('ai_stats', requireAdmin(handleAiStatsCommand));
 
   // Commands — require configured group, no sync needed
   bot.command('spreadsheet', requireGroup(handleSpreadsheetCommand));
@@ -205,6 +212,9 @@ export function createBot(): Bot {
 
   // Register monthly budget tab cron
   registerMonthlyCron();
+
+  // Prune AI usage events past the retention window (startup + daily)
+  registerAiUsageRetentionCron();
 
   return bot;
 }

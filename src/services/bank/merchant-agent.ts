@@ -122,6 +122,7 @@ ${existingList || '(пусто)'}
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 1000,
       chain: 'fast',
+      purpose: 'merchant',
     });
 
     const cleaned = stripThinkingTags(text);

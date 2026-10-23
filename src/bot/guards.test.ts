@@ -1,10 +1,11 @@
-// Tests for command guards — requireGroup and requireGoogle wrappers
+// Tests for command guards — requireGroup, requireGoogle and requireAdmin wrappers
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { TelegramMessage } from '@gramio/types';
+import { env } from '../config/env';
 import { database } from '../database';
 import type { Group } from '../database/types';
 import * as senderModule from '../services/bank/telegram-sender';
-import { requireGoogle, requireGroup } from './guards';
+import { requireAdmin, requireGoogle, requireGroup } from './guards';
 
 const sent: string[] = [];
 const mockSendMessage = mock((text: string) => {
@@ -177,5 +178,72 @@ describe('requireGoogle', () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(ctx, group);
     expect(sent).toEqual([]);
+  });
+});
+
+describe('requireAdmin', () => {
+  const ADMIN_ID = 777001;
+  let savedAdminChatId: number | null;
+
+  beforeEach(() => {
+    sent.length = 0;
+    mockSendMessage.mockClear();
+    spyOn(senderModule, 'sendMessage').mockImplementation(mockSendMessage);
+    savedAdminChatId = env.BOT_ADMIN_CHAT_ID;
+    env.BOT_ADMIN_CHAT_ID = ADMIN_ID;
+  });
+
+  afterEach(() => {
+    env.BOT_ADMIN_CHAT_ID = savedAdminChatId;
+    mock.restore();
+  });
+
+  test('runs the handler for the admin and passes the admin chat id', async () => {
+    const handler = mock(() => Promise.resolve());
+    const ctx = { from: { id: ADMIN_ID }, chat: { id: -100, type: 'supergroup' } };
+
+    await requireAdmin(handler)(ctx as never);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(ctx, ADMIN_ID);
+  });
+
+  test('ignores anyone else without replying', async () => {
+    const handler = mock(() => Promise.resolve());
+    const ctx = { from: { id: ADMIN_ID + 1 }, chat: { id: -100, type: 'supergroup' } };
+
+    await requireAdmin(handler)(ctx as never);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  test('fails closed when no admin is configured', async () => {
+    env.BOT_ADMIN_CHAT_ID = null;
+    const handler = mock(() => Promise.resolve());
+    const ctx = { from: { id: ADMIN_ID }, chat: { id: ADMIN_ID, type: 'private' } };
+
+    await requireAdmin(handler)(ctx as never);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  test('fails closed when the sender is unknown', async () => {
+    const handler = mock(() => Promise.resolve());
+
+    await requireAdmin(handler)({ chat: { id: ADMIN_ID, type: 'private' } } as never);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('does not accept the admin chat id as a stand-in for the sender', async () => {
+    // A message from another user in the admin's chat must not pass: the check is on the sender.
+    const handler = mock(() => Promise.resolve());
+    const ctx = { from: { id: 1 }, chat: { id: ADMIN_ID, type: 'private' } };
+
+    await requireAdmin(handler)(ctx as never);
+
+    expect(handler).not.toHaveBeenCalled();
   });
 });

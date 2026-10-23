@@ -414,6 +414,7 @@ async function sendSmartAdvice(
             maxTokens: tierConfig.max_tokens,
             temperature: tierConfig.temperature,
             chain: 'smart',
+            purpose: 'advice',
             signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS[tier]),
           },
           { onTextDelta: (delta) => writer.append(delta) },
