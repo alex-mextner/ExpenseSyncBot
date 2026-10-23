@@ -40,6 +40,9 @@ mock.module('./clients', () => ({
   hfClient: () => ({}),
 }));
 
+// Usage rows are covered in streaming.usage.test.ts; these tests do not touch the database.
+mock.module('./usage-recorder', () => ({ recordAiUsage: () => {} }));
+
 import OpenAI from 'openai';
 import {
   isProviderDemoted,

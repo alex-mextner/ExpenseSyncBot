@@ -152,6 +152,7 @@ export class DevAgent {
             maxTokens: 8192,
             tools: DEV_TOOLS,
             chain: 'smart',
+            purpose: 'dev_agent',
             signal: controller.signal,
           });
         } catch (err: unknown) {
@@ -218,7 +219,12 @@ export class DevAgent {
       if (!finalText.trim() && round < MAX_ROUNDS) {
         logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
         messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
-        const nudge = await aiStreamRound({ messages, maxTokens: 8192, chain: 'smart' });
+        const nudge = await aiStreamRound({
+          messages,
+          maxTokens: 8192,
+          chain: 'smart',
+          purpose: 'dev_agent',
+        });
         finalText += nudge.text;
         logger.info(`[DEV-AGENT] Nudge result: textLen=${finalText.length}`);
       }

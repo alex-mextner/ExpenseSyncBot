@@ -32,6 +32,7 @@ try {
     maxTokens: 2000,
     temperature: 0.1,
     chain: 'ocr',
+    purpose: 'probe',
   });
 
   const elapsed = Date.now() - t0;

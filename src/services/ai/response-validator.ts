@@ -59,6 +59,7 @@ ${input.response.substring(0, 2000)}`;
       ],
       maxTokens: VALIDATION_MAX_TOKENS,
       chain: 'fast',
+      purpose: 'validator',
       signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
     });
 

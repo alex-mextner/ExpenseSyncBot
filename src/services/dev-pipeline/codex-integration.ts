@@ -40,6 +40,7 @@ ${truncatedDiff}
       ],
       maxTokens: 4096,
       chain: 'smart',
+      purpose: 'code_review',
     });
 
     const cleaned = stripThinkingTags(text);

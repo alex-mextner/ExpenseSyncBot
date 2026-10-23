@@ -73,6 +73,7 @@ export async function extractTextFromImageBuffer(imageBuffer: Buffer): Promise<s
     maxTokens: 2000,
     temperature: 0.1,
     chain: 'ocr',
+    purpose: 'ocr',
   });
 
   const sanitized = sanitizeOcrText(text, providerUsed);
