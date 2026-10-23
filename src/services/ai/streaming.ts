@@ -30,6 +30,7 @@ import type {
 } from '../../database/repositories/ai-usage-events.repository';
 import { createLogger } from '../../utils/logger';
 import { claudeClient, hfClient, openrouterClient, zaiClient } from './clients';
+import { isExcludedModel } from './model-presets';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -661,6 +662,17 @@ function buildTextChain(
     const slots: ProviderSlot[] = [];
     for (const provider of ids) {
       const { model, apiKey } = available[provider];
+      if (model && isExcludedModel(model)) {
+        const marker = `${kind}:${provider}:excluded:${model}`;
+        if (!loggedSkips.has(marker)) {
+          loggedSkips.add(marker);
+          logger.warn(
+            { chain: kind, provider, model },
+            '[AI_STREAM] Model is on the excluded list — skipping it',
+          );
+        }
+        continue;
+      }
       if (!model || !apiKey) {
         const marker = `${kind}:${provider}:${!!model}:${!!apiKey}`;
         if (!loggedSkips.has(marker)) {

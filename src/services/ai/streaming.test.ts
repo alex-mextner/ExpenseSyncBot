@@ -367,6 +367,19 @@ describe('aiStreamRound fallback chain', () => {
     expect(await chainModels('smart')).toEqual(['claude-smart', 'hf-test']);
   });
 
+  it('a retired model named in any provider env is never served: its slot is skipped', async () => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    mockEnv.HF_MODEL = 'openai/gpt-oss-120b';
+    mockEnv.HF_FAST_MODEL = 'qwen/qwen3.8-27b';
+    try {
+      expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart']);
+      expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast']);
+    } finally {
+      mockEnv.HF_MODEL = 'hf-test';
+      mockEnv.HF_FAST_MODEL = 'hf-fast';
+    }
+  });
+
   it('an openrouter slot is labelled OpenRouter and keyed openrouter', () => {
     mockEnv.OPENROUTER_API_KEY = 'or-key';
     mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['openrouter'], fromEnv: true };
