@@ -1,5 +1,5 @@
 /**
- * OpenAI SDK client factories for all AI providers (z.ai, Groq, Claude, HF).
+ * OpenAI SDK client factories for all AI providers (z.ai, Claude, HF).
  * All providers share the same OpenAI SDK — only baseURL and apiKey differ.
  * Base URLs and keys are loaded from env — no hardcoded values.
  */
@@ -17,7 +17,6 @@ function makeFetchDelegate(): (
 }
 
 let _zai: OpenAI | null = null;
-let _groq: OpenAI | null = null;
 let _claude: OpenAI | null = null;
 let _hf: OpenAI | null = null;
 
@@ -32,19 +31,6 @@ export function zaiClient(): OpenAI {
     });
   }
   return _zai;
-}
-
-export function groqClient(): OpenAI {
-  if (!_groq) {
-    _groq = new OpenAI({
-      apiKey: env.GROQ_API_KEY,
-      baseURL: env.GROQ_BASE_URL,
-      timeout: DEFAULT_TIMEOUT_MS,
-      maxRetries: 0,
-      fetch: makeFetchDelegate(),
-    });
-  }
-  return _groq;
 }
 
 export function claudeClient(): OpenAI {
@@ -76,7 +62,6 @@ export function hfClient(): OpenAI {
 /** Reset cached clients (for tests). */
 export function resetClients(): void {
   _zai = null;
-  _groq = null;
   _claude = null;
   _hf = null;
 }

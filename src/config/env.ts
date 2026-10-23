@@ -2,6 +2,56 @@
  * Environment variables configuration
  */
 
+import { PROVIDER_IDS, type ProviderId } from '../services/ai/provider-ids';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('env');
+
+/** Default order of the smart chain: z.ai → Claude → HF. Overridden by AI_SMART_CHAIN. */
+export const DEFAULT_SMART_CHAIN: ProviderId[] = ['zai', 'claude', 'hf'];
+/** Default order of the fast chain: z.ai → Claude → HF. Overridden by AI_FAST_CHAIN. */
+export const DEFAULT_FAST_CHAIN: ProviderId[] = ['zai', 'claude', 'hf'];
+
+/**
+ * A chain order together with where it came from. The source is carried rather than inferred,
+ * because the two cases warrant different noise: a provider the operator named and did not
+ * configure deserves a warning, while one that is merely absent from the default order is the
+ * documented minimal deployment.
+ */
+export interface ChainOrder {
+  readonly order: ProviderId[];
+  readonly fromEnv: boolean;
+  /** Where to fall back when nothing in `order` turns out to be configured. */
+  readonly fallback: ProviderId[];
+}
+
+function parseChain(name: string, fallback: ProviderId[]): ChainOrder {
+  const raw = process.env[name];
+  if (!raw) return { order: fallback, fromEnv: false, fallback };
+  const parsed: ProviderId[] = [];
+  for (const part of raw.split(',')) {
+    const id = part.trim();
+    if (!id) continue;
+    const known = PROVIDER_IDS.find((candidate): candidate is ProviderId => candidate === id);
+    if (!known) {
+      logger.warn(
+        { name, id, known: PROVIDER_IDS },
+        'Unknown provider in chain order — ignoring it',
+      );
+      continue;
+    }
+    if (!parsed.includes(known)) parsed.push(known);
+  }
+  if (parsed.length === 0) {
+    logger.warn(
+      { name, raw, fallback },
+      'Chain order named no known provider — using the default order',
+    );
+    return { order: fallback, fromEnv: false, fallback };
+  }
+  return { order: parsed, fromEnv: true, fallback };
+}
+
 interface EnvConfig {
   BOT_TOKEN: string;
   BOT_USERNAME: string;
@@ -14,19 +64,17 @@ interface EnvConfig {
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
 
-  // z.ai primary provider (kept ANTHROPIC_API_KEY name — it's the z.ai key)
+  // z.ai provider (kept ANTHROPIC_API_KEY name — it's the z.ai key); head of the default chains
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
   AI_FAST_MODEL: string;
 
-  // Groq (preferred low-latency text provider; optional key, safe fallbacks remain)
-  GROQ_API_KEY: string;
-  GROQ_BASE_URL: string;
-  GROQ_MODEL: string;
-  GROQ_FAST_MODEL: string;
+  // Provider order of the text chains (AI_SMART_CHAIN / AI_FAST_CHAIN: comma-separated provider ids).
+  AI_SMART_CHAIN: ChainOrder;
+  AI_FAST_CHAIN: ChainOrder;
 
-  // Anthropic Claude (OpenAI-compat endpoint; optional key — after z.ai in smart/fast, OCR primary).
+  // Anthropic Claude (OpenAI-compat endpoint; optional key — second in smart/fast, OCR primary).
   // Without the key every Claude slot is skipped and OCR runs on HF vision alone.
   CLAUDE_API_TOKEN: string;
   CLAUDE_BASE_URL: string;
@@ -79,10 +127,8 @@ function validateEnv(): EnvConfig {
     AI_MODEL: getEnvVariable('AI_MODEL'),
     AI_FAST_MODEL: getEnvVariable('AI_FAST_MODEL'),
 
-    GROQ_API_KEY: getEnvVariable('GROQ_API_KEY', false),
-    GROQ_BASE_URL: getEnvVariable('GROQ_BASE_URL', false) || 'https://api.groq.com/openai/v1',
-    GROQ_MODEL: getEnvVariable('GROQ_MODEL', false) || 'openai/gpt-oss-120b',
-    GROQ_FAST_MODEL: getEnvVariable('GROQ_FAST_MODEL', false) || 'openai/gpt-oss-20b',
+    AI_SMART_CHAIN: parseChain('AI_SMART_CHAIN', DEFAULT_SMART_CHAIN),
+    AI_FAST_CHAIN: parseChain('AI_FAST_CHAIN', DEFAULT_FAST_CHAIN),
 
     CLAUDE_API_TOKEN: getEnvVariable('CLAUDE_API_TOKEN', false),
     CLAUDE_BASE_URL: getEnvVariable('CLAUDE_BASE_URL', false) || 'https://api.anthropic.com/v1/',

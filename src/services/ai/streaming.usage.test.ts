@@ -2,6 +2,7 @@
 // stream_options retry and the one-event-per-provider-attempt contract
 
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import type { ChainOrder } from '../../config/env';
 import type { AiUsageEventInput } from '../../database/repositories/ai-usage-events.repository';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
@@ -12,15 +13,25 @@ mock.module('../../utils/logger', () => ({
   logger: logMock,
 }));
 
+const defaultOrder = (): ChainOrder => ({
+  order: ['zai', 'claude', 'hf'],
+  fromEnv: false,
+  fallback: ['zai', 'claude', 'hf'],
+});
+/** Puts HF at the head of both chains, to provoke a failing head provider (the order is an env setting). */
+const hfHead = (): ChainOrder => ({
+  order: ['hf', 'zai', 'claude'],
+  fromEnv: true,
+  fallback: ['zai', 'claude', 'hf'],
+});
+
 const mockEnv = {
   ANTHROPIC_API_KEY: 'test-key',
   AI_BASE_URL: 'https://test.ai/v1',
   AI_MODEL: 'test-model',
   AI_FAST_MODEL: 'test-fast',
-  GROQ_API_KEY: '',
-  GROQ_BASE_URL: 'https://test.groq/v1',
-  GROQ_MODEL: 'groq-smart',
-  GROQ_FAST_MODEL: 'groq-fast',
+  AI_SMART_CHAIN: defaultOrder(),
+  AI_FAST_CHAIN: defaultOrder(),
   CLAUDE_API_TOKEN: '',
   CLAUDE_BASE_URL: 'https://test.claude/v1/',
   CLAUDE_MODEL: 'claude-smart',
@@ -36,7 +47,6 @@ mock.module('../../config/env', () => ({ env: mockEnv }));
 
 mock.module('./clients', () => ({
   zaiClient: () => ({}),
-  groqClient: () => ({}),
   claudeClient: () => ({}),
   hfClient: () => ({}),
 }));
@@ -96,7 +106,7 @@ const FULL_USAGE: OpenAI.CompletionUsage = {
 /** Route every provider client to one fake `create`; returns the restore function. */
 async function useCreate(create: CreateFn): Promise<() => void> {
   const clientsMod = await import('./clients');
-  const spies = (['groqClient', 'zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
+  const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
     spyOn(clientsMod, fn).mockReturnValue({
       chat: { completions: { create } },
     } as unknown as OpenAI),
@@ -126,7 +136,8 @@ beforeEach(() => {
   recorded.length = 0;
   logMock.warn.mockClear();
   logMock.error.mockClear();
-  mockEnv.GROQ_API_KEY = '';
+  mockEnv.AI_SMART_CHAIN = defaultOrder();
+  mockEnv.AI_FAST_CHAIN = defaultOrder();
   mockEnv.CLAUDE_API_TOKEN = '';
 });
 
@@ -200,10 +211,10 @@ describe('classifyAttemptFailure', () => {
       429,
     ],
     [
-      '429 Groq per-minute limit that links to the billing page',
+      '429 per-minute token limit that links to the billing page',
       apiError(
         429,
-        'Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Used 7900. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing',
+        'Rate limit reached for model `m` on tokens per minute (TPM): Limit 8000, Used 7900. Need more tokens? Upgrade to Dev Tier today at https://console.example.com/settings/billing',
       ),
       'rate_limit',
       429,
@@ -249,7 +260,7 @@ describe('classifyAttemptFailure', () => {
   });
 
   it('classifies the empty-response error as empty', () => {
-    expect(classifyAttemptFailure(new EmptyProviderResponseError('Groq (x)'), idle)).toEqual({
+    expect(classifyAttemptFailure(new EmptyProviderResponseError('HF (x)'), idle)).toEqual({
       errorClass: 'empty',
       httpStatus: null,
     });
@@ -296,7 +307,8 @@ describe('classifyAttemptFailure', () => {
 
 describe('aiStreamRound usage events', () => {
   it('records an ok attempt with the tokens from the final usage chunk', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const restore = await useCreate(async () => streamOf(textChunks('hello', FULL_USAGE)));
     try {
       const result = await run();
@@ -308,8 +320,8 @@ describe('aiStreamRound usage events', () => {
     expect(recorded).toEqual([
       {
         at: expect.any(Number),
-        provider: 'groq',
-        model: 'groq-smart',
+        provider: 'hf',
+        model: 'hf-test',
         chain: 'smart',
         purpose: 'agent',
         outcome: 'ok',
@@ -326,7 +338,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('keeps tokens NULL when the provider reports no usage', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const restore = await useCreate(async () => streamOf(textChunks('hello')));
     try {
       await run();
@@ -345,7 +358,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('stores no prompt, completion or identifying data', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const restore = await useCreate(async () =>
       streamOf(textChunks('the model answer', FULL_USAGE)),
     );
@@ -377,10 +391,11 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('records one event per attempt and stops at the first success', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const restore = await useCreate(async (params) => {
-      if (params.model === 'groq-smart') throw apiError(429, 'Rate limit reached for model');
+      if (params.model === 'hf-test') throw apiError(429, 'Rate limit reached for model');
       return streamOf(textChunks('from z.ai', FULL_USAGE));
     });
     try {
@@ -393,7 +408,7 @@ describe('aiStreamRound usage events', () => {
     expect(
       recorded.map((e) => [e.provider, e.model, e.outcome, e.errorClass, e.httpStatus]),
     ).toEqual([
-      ['groq', 'groq-smart', 'error', 'rate_limit', 429],
+      ['hf', 'hf-test', 'error', 'rate_limit', 429],
       ['zai', 'test-model', 'ok', null, null],
     ]);
     // claude and hf were never reached: no row for them.
@@ -415,22 +430,19 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('records an error row per slot when the whole chain fails', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const restore = await useCreate(async (params) => {
-      if (params.model === 'groq-smart') throw apiError(401, 'bad key');
       if (params.model === 'test-model') throw apiError(500, 'down');
       if (params.model === 'claude-smart') throw apiError(400, 'invalid request');
       throw apiError(402, 'no remaining credits');
     });
     try {
-      await expect(run()).rejects.toThrow('All 4 providers in smart chain failed');
+      await expect(run()).rejects.toThrow('All 3 providers in smart chain failed');
     } finally {
       restore();
     }
 
     expect(recorded.map((e) => [e.provider, e.outcome, e.errorClass, e.httpStatus])).toEqual([
-      ['groq', 'error', 'auth', 401],
       ['zai', 'error', 'server', 500],
       ['claude', 'error', 'bad_request', 400],
       ['hf', 'error', 'quota', 402],
@@ -500,7 +512,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('records a caller deadline as aborted and stops the chain', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const controller = new AbortController();
     const restore = await useCreate((_params, opts) => {
       const hang = Promise.withResolvers<never>();
@@ -517,14 +530,15 @@ describe('aiStreamRound usage events', () => {
     }
 
     expect(recorded.map((e) => [e.provider, e.outcome, e.errorClass])).toEqual([
-      ['groq', 'error', 'aborted'],
+      ['hf', 'error', 'aborted'],
     ]);
   });
 
   it('records a per-provider timeout as timeout and falls through to the next provider', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const restore = await useCreate((params, opts) => {
-      if (params.model !== 'groq-smart') return Promise.resolve(streamOf(textChunks('from z.ai')));
+      if (params.model !== 'hf-test') return Promise.resolve(streamOf(textChunks('from z.ai')));
       const hang = Promise.withResolvers<never>();
       opts?.signal?.addEventListener('abort', () => hang.reject(new OpenAI.APIUserAbortError()));
       return hang.promise;
@@ -537,20 +551,21 @@ describe('aiStreamRound usage events', () => {
     }
 
     expect(recorded.map((e) => [e.provider, e.outcome, e.errorClass])).toEqual([
-      ['groq', 'error', 'timeout'],
+      ['hf', 'error', 'timeout'],
       ['zai', 'ok', null],
     ]);
   });
 
   it('records slots excluded by a handoff as skipped, without requesting them', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const requested: string[] = [];
     const restore = await useCreate(async (params) => {
       requested.push(params.model);
       return streamOf(textChunks('from z.ai'));
     });
     try {
-      await run({ excludeProviders: ['Groq (groq-smart)'] });
+      await run({ excludeProviders: ['HF (hf-test)'] });
     } finally {
       restore();
     }
@@ -559,7 +574,7 @@ describe('aiStreamRound usage events', () => {
     expect(
       recorded.map((e) => [e.provider, e.model, e.outcome, e.errorClass, e.durationMs]),
     ).toEqual([
-      ['groq', 'groq-smart', 'skipped', null, null],
+      ['hf', 'hf-test', 'skipped', null, null],
       ['zai', 'test-model', 'ok', null, expect.any(Number)],
     ]);
     expect(recorded[0]).toMatchObject({
@@ -573,11 +588,10 @@ describe('aiStreamRound usage events', () => {
   });
 
   it.each([
-    ['smart', 'agent', 'groq', 'groq-smart'],
-    ['fast', 'validator', 'groq', 'groq-fast'],
+    ['smart', 'agent', 'zai', 'test-model'],
+    ['fast', 'validator', 'zai', 'test-fast'],
     ['ocr', 'ocr', 'claude', 'claude-vision'],
   ] as const)('labels the %s chain event with its chain, purpose, provider and model', async (chain, purpose, provider, model) => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const restore = await useCreate(async () => streamOf(textChunks('ok', FULL_USAGE)));
     try {
@@ -593,7 +607,6 @@ describe('aiStreamRound usage events', () => {
 
 describe('aiStreamRound streaming usage request', () => {
   it('asks every provider for streaming usage', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const params: CreateParams[] = [];
     const restore = await useCreate(async (p) => {
@@ -601,17 +614,12 @@ describe('aiStreamRound streaming usage request', () => {
       throw apiError(500, 'down');
     });
     try {
-      await expect(run()).rejects.toThrow('All 4 providers');
+      await expect(run()).rejects.toThrow('All 3 providers');
     } finally {
       restore();
     }
 
-    expect(params.map((p) => p.model)).toEqual([
-      'groq-smart',
-      'test-model',
-      'claude-smart',
-      'hf-test',
-    ]);
+    expect(params.map((p) => p.model)).toEqual(['test-model', 'claude-smart', 'hf-test']);
     for (const p of params) expect(p.stream_options).toEqual({ include_usage: true });
   });
 
@@ -691,11 +699,12 @@ describe('aiStreamRound streaming usage request', () => {
   });
 
   it('remembers a provider that rejected stream_options and does not ask it again', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_FAST_CHAIN = hfHead();
     const calls: CreateParams[] = [];
     const restore = await useCreate(async (p) => {
       calls.push(p);
-      if (p.model === 'groq-smart' && p.stream_options) {
+      if (p.model === 'hf-test' && p.stream_options) {
         throw apiError(400, 'unknown parameter: stream_options');
       }
       return streamOf(textChunks('ok'));
@@ -732,7 +741,8 @@ describe('aiStreamRound streaming usage request', () => {
   });
 
   it('remembers the rejection per model: another model of the same endpoint is still asked', async () => {
-    mockEnv.GROQ_API_KEY = '';
+    mockEnv.AI_SMART_CHAIN = defaultOrder();
+    mockEnv.AI_FAST_CHAIN = defaultOrder();
     const requests: Array<[string, boolean]> = [];
     const restore = await useCreate(async (p) => {
       requests.push([p.model, p.stream_options !== undefined]);
