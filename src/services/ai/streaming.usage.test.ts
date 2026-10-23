@@ -49,6 +49,7 @@ mock.module('./clients', () => ({
   zaiClient: () => ({}),
   claudeClient: () => ({}),
   hfClient: () => ({}),
+  openrouterClient: () => ({}),
 }));
 
 const recorded: AiUsageEventInput[] = [];
@@ -106,7 +107,7 @@ const FULL_USAGE: OpenAI.CompletionUsage = {
 /** Route every provider client to one fake `create`; returns the restore function. */
 async function useCreate(create: CreateFn): Promise<() => void> {
   const clientsMod = await import('./clients');
-  const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
+  const spies = (['zaiClient', 'claudeClient', 'hfClient', 'openrouterClient'] as const).map((fn) =>
     spyOn(clientsMod, fn).mockReturnValue({
       chat: { completions: { create } },
     } as unknown as OpenAI),

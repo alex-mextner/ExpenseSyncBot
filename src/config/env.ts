@@ -2,15 +2,15 @@
  * Environment variables configuration
  */
 
-import { PROVIDER_IDS, type ProviderId } from '../services/ai/provider-ids';
+import { DEFAULT_PROVIDER_IDS, PROVIDER_IDS, type ProviderId } from '../services/ai/provider-ids';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('env');
 
 /** Default order of the smart chain: z.ai → Claude → HF. Overridden by AI_SMART_CHAIN. */
-export const DEFAULT_SMART_CHAIN: ProviderId[] = ['zai', 'claude', 'hf'];
+export const DEFAULT_SMART_CHAIN: ProviderId[] = [...DEFAULT_PROVIDER_IDS];
 /** Default order of the fast chain: z.ai → Claude → HF. Overridden by AI_FAST_CHAIN. */
-export const DEFAULT_FAST_CHAIN: ProviderId[] = ['zai', 'claude', 'hf'];
+export const DEFAULT_FAST_CHAIN: ProviderId[] = [...DEFAULT_PROVIDER_IDS];
 
 /**
  * A chain order together with where it came from. The source is carried rather than inferred,
@@ -89,6 +89,13 @@ interface EnvConfig {
   HF_FAST_MODEL: string;
   HF_VISION_MODEL: string;
 
+  // OpenRouter (optional; named in a chain order to be used, skipped without key and model).
+  // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash`.
+  OPENROUTER_API_KEY: string;
+  OPENROUTER_BASE_URL: string;
+  OPENROUTER_MODEL: string;
+  OPENROUTER_FAST_MODEL: string;
+
   GITHUB_TOKEN: string;
   BOT_ADMIN_CHAT_ID: number | null;
   LARGE_TX_THRESHOLD_EUR: number;
@@ -142,6 +149,12 @@ function validateEnv(): EnvConfig {
     HF_MODEL: getEnvVariable('HF_MODEL'),
     HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL'),
     HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL'),
+
+    OPENROUTER_API_KEY: getEnvVariable('OPENROUTER_API_KEY', false),
+    OPENROUTER_BASE_URL:
+      getEnvVariable('OPENROUTER_BASE_URL', false) || 'https://openrouter.ai/api/v1',
+    OPENROUTER_MODEL: getEnvVariable('OPENROUTER_MODEL', false),
+    OPENROUTER_FAST_MODEL: getEnvVariable('OPENROUTER_FAST_MODEL', false),
 
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']

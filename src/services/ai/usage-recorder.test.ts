@@ -47,6 +47,7 @@ mock.module('./clients', () => ({
   zaiClient: () => ({}),
   claudeClient: () => ({}),
   hfClient: () => ({}),
+  openrouterClient: () => ({}),
 }));
 
 const db = createTestDb();

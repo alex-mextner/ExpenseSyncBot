@@ -38,7 +38,7 @@ function loadEnv(vars: Record<string, string>): LoadResult {
   try {
     // The child reports the loaded config on stdout; the parent parses it.
     const script = `const { env } = await import(${JSON.stringify(ENV_MODULE)});
-process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
+process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
     const child = spawnSync(process.execPath, ['-e', script], {
       cwd,
       env: { PATH: process.env['PATH'] ?? '', ...vars },
@@ -59,6 +59,7 @@ interface ChainOrderJson {
 function loadedConfig(result: LoadResult): {
   keys: string[];
   claudeVisionModel: string;
+  openrouter: string[];
   smartChain: ChainOrderJson;
   fastChain: ChainOrderJson;
 } {
@@ -90,6 +91,35 @@ describe('env config loading', () => {
     expect(fastChain.order).toEqual(['claude']);
   });
 
+  it('openrouter is a valid provider id but stays out of the default order', () => {
+    const { smartChain, fastChain } = loadedConfig(
+      loadEnv({
+        ...REQUIRED_ENV,
+        AI_SMART_CHAIN: 'openrouter,claude',
+        AI_FAST_CHAIN: 'zai,openrouter',
+      }),
+    );
+    expect(smartChain.order).toEqual(['openrouter', 'claude']);
+    expect(fastChain.order).toEqual(['zai', 'openrouter']);
+  });
+
+  it('OpenRouter reads its base URL (default https://openrouter.ai/api/v1) and models from the environment', () => {
+    expect(loadedConfig(loadEnv(REQUIRED_ENV)).openrouter).toEqual([
+      'https://openrouter.ai/api/v1',
+      '',
+      '',
+    ]);
+    const { openrouter } = loadedConfig(
+      loadEnv({
+        ...REQUIRED_ENV,
+        OPENROUTER_BASE_URL: 'https://or.test/v1',
+        OPENROUTER_MODEL: 'a/b',
+        OPENROUTER_FAST_MODEL: 'c/d',
+      }),
+    );
+    expect(openrouter).toEqual(['https://or.test/v1', 'a/b', 'c/d']);
+  });
+
   it('a chain order naming no known provider falls back to the default order', () => {
     const { smartChain } = loadedConfig(
       loadEnv({ ...REQUIRED_ENV, AI_SMART_CHAIN: 'groq,gemini' }),
@@ -110,6 +140,7 @@ describe('env config loading', () => {
       'CLAUDE_API_TOKEN',
       'GITHUB_TOKEN',
       'HF_TOKEN',
+      'OPENROUTER_API_KEY',
     ]);
     // Claude stays optional: CLAUDE_API_TOKEN is exposed (empty) and its slots are skipped.
     // OCR defaults to Sonnet (measured: Haiku accepted a misread degraded receipt).

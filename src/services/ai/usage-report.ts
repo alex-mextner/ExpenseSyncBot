@@ -6,9 +6,7 @@ import type {
 } from '../../database/repositories/ai-usage-events.repository';
 import { escapeHtml } from '../../utils/html';
 import { pluralize } from '../../utils/pluralize';
-import { PROVIDER_IDS } from './provider-ids';
-
-export const KNOWN_PROVIDERS = PROVIDER_IDS;
+import { DEFAULT_PROVIDER_IDS, PROVIDER_IDS } from './provider-ids';
 
 const DAY_MS = 86_400_000;
 const TELEGRAM_MESSAGE_LIMIT = 4000;
@@ -95,8 +93,8 @@ function percentile(sorted: readonly number[], q: number): number | null {
 }
 
 function providerRank(provider: string): number {
-  const i = (KNOWN_PROVIDERS as readonly string[]).indexOf(provider);
-  return i === -1 ? KNOWN_PROVIDERS.length : i;
+  const i = (PROVIDER_IDS as readonly string[]).indexOf(provider);
+  return i === -1 ? PROVIDER_IDS.length : i;
 }
 
 function compareProviders(a: string, b: string): number {
@@ -214,7 +212,7 @@ export function aggregateUsage(
   );
 
   const byProvider = groupBy(inWindow, (e) => e.provider);
-  const providers = [...new Set<string>([...KNOWN_PROVIDERS, ...byProvider.keys()])].sort(
+  const providers = [...new Set<string>([...DEFAULT_PROVIDER_IDS, ...byProvider.keys()])].sort(
     compareProviders,
   );
   const verdicts = providers.map((provider): ProviderVerdict => {

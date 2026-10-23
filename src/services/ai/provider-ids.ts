@@ -6,8 +6,12 @@
  * Every text provider the bot can talk to. The chain order in the environment is validated against
  * this list, so a provider added here becomes nameable in AI_SMART_CHAIN / AI_FAST_CHAIN with no
  * second edit — and one that is not here cannot be named by accident. The ids are the same as in
- * HyperCalendarBot.
+ * HyperCalendarBot. `openrouter` is optional and never in a default order: it is used only when the
+ * operator names it in a chain and sets its key and model.
  */
-export const PROVIDER_IDS = ['zai', 'claude', 'hf'] as const;
+export const PROVIDER_IDS = ['zai', 'claude', 'hf', 'openrouter'] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+/** The providers of the default chain orders; `openrouter` is optional and in none of them. */
+export const DEFAULT_PROVIDER_IDS: readonly ProviderId[] = ['zai', 'claude', 'hf'];
