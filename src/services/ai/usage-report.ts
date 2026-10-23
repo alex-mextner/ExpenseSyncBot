@@ -17,6 +17,17 @@ export interface TokenTotals {
   rowsUnknown: number;
 }
 
+/**
+ * Cost in micro-USD over a set of rows. `sumMicroUsd` is null when no ok row had a known cost;
+ * `rowsUnknown` counts ok rows whose cost is unknown (no price for the route, or tokens not
+ * reported) — they are not in the sum, and unknown is never shown as zero.
+ */
+export interface CostTotals {
+  sumMicroUsd: number | null;
+  rowsWithValue: number;
+  rowsUnknown: number;
+}
+
 export interface LastError {
   errorClass: AiUsageErrorClass;
   at: number;
@@ -37,11 +48,26 @@ export interface ModelUsageStats {
     reasoning: TokenTotals;
     cached: TokenTotals;
   };
+  cost: CostTotals;
   p50DurationMs: number | null;
   p95DurationMs: number | null;
   firstOkAt: number | null;
   lastOkAt: number | null;
   lastError: LastError | null;
+}
+
+/** Usage of one routing role on one provider; `role` is `legacy` for rows with no role (legacy chain). */
+export interface RoleUsageStats {
+  role: string;
+  provider: string;
+  attempts: number;
+  ok: number;
+  errors: number;
+  successRate: number | null;
+  tokens: { prompt: TokenTotals; completion: TokenTotals };
+  cost: CostTotals;
+  p50DurationMs: number | null;
+  p95DurationMs: number | null;
 }
 
 export type ProviderStatus = 'no_traffic' | 'skipped_only' | 'healthy' | 'degraded' | 'failing';
@@ -63,6 +89,8 @@ export interface UsageReport {
   since: number;
   until: number;
   models: ModelUsageStats[];
+  /** Empty unless some row in the window carries a role. */
+  roles: RoleUsageStats[];
   verdicts: ProviderVerdict[];
 }
 
@@ -82,6 +110,21 @@ function tokenTotals(rows: readonly AiUsageEvent[], field: TokenField): TokenTot
     }
   }
   return { sum: rowsWithValue === 0 ? null : sum, rowsWithValue, rowsUnknown };
+}
+
+function costTotals(rows: readonly AiUsageEvent[]): CostTotals {
+  let sum = 0;
+  let rowsWithValue = 0;
+  let rowsUnknown = 0;
+  for (const row of rows) {
+    if (row.costMicroUsd !== null) {
+      sum += row.costMicroUsd;
+      rowsWithValue++;
+    } else if (row.outcome === 'ok') {
+      rowsUnknown++;
+    }
+  }
+  return { sumMicroUsd: rowsWithValue === 0 ? null : sum, rowsWithValue, rowsUnknown };
 }
 
 /** Nearest-rank percentile over an ascending-sorted series. */
@@ -150,6 +193,31 @@ function statusOf(c: Counts, successRate: number | null): ProviderStatus {
   return 'failing';
 }
 
+const LEGACY_ROLE = 'legacy';
+const ROLE_ORDER: readonly string[] = ['planner', 'executor', 'repair', LEGACY_ROLE];
+
+function roleStats(role: string, provider: string, rows: readonly AiUsageEvent[]): RoleUsageStats {
+  const c = tally(rows);
+  const durations = rows
+    .flatMap((r) => (r.outcome === 'ok' && r.durationMs !== null ? [r.durationMs] : []))
+    .sort((a, b) => a - b);
+  return {
+    role,
+    provider,
+    attempts: c.attempts,
+    ok: c.ok,
+    errors: c.errors,
+    successRate: c.attempts === 0 ? null : c.ok / c.attempts,
+    tokens: {
+      prompt: tokenTotals(rows, 'promptTokens'),
+      completion: tokenTotals(rows, 'completionTokens'),
+    },
+    cost: costTotals(rows),
+    p50DurationMs: percentile(durations, 0.5),
+    p95DurationMs: percentile(durations, 0.95),
+  };
+}
+
 function modelStats(
   provider: string,
   model: string,
@@ -181,6 +249,7 @@ function modelStats(
       reasoning: tokenTotals(rows, 'reasoningTokens'),
       cached: tokenTotals(rows, 'cachedTokens'),
     },
+    cost: costTotals(rows),
     p50DurationMs: percentile(durations, 0.5),
     p95DurationMs: percentile(durations, 0.95),
     firstOkAt:
@@ -211,6 +280,21 @@ export function aggregateUsage(
       a.model.localeCompare(b.model),
   );
 
+  // Roles exist only on rows written by role routing; without any, the legacy report is unchanged.
+  // Skipped rows are not attempts and carry no latency, so they stay out of the role view.
+  const roleRows = inWindow.filter((e) => e.outcome !== 'skipped');
+  const roles = roleRows.some((e) => e.role !== null)
+    ? [...groupBy(roleRows, (e) => `${e.role ?? LEGACY_ROLE}\u0000${e.provider}`).values()]
+        .flatMap((rows) =>
+          rows[0] ? [roleStats(rows[0].role ?? LEGACY_ROLE, rows[0].provider, rows)] : [],
+        )
+        .sort(
+          (a, b) =>
+            ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role) ||
+            compareProviders(a.provider, b.provider),
+        )
+    : [];
+
   const byProvider = groupBy(inWindow, (e) => e.provider);
   const providers = [...new Set<string>([...DEFAULT_PROVIDER_IDS, ...byProvider.keys()])].sort(
     compareProviders,
@@ -231,7 +315,7 @@ export function aggregateUsage(
     };
   });
 
-  return { windowDays: opts.days, since, until: opts.now, models, verdicts };
+  return { windowDays: opts.days, since, until: opts.now, models, roles, verdicts };
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
@@ -267,6 +351,18 @@ function errorClasses(m: ModelUsageStats): string {
 function tokenValue(t: TokenTotals): string {
   const base = t.sum === null ? 'n/a' : intFmt.format(t.sum);
   return t.rowsUnknown > 0 ? `${base} (?${t.rowsUnknown})` : base;
+}
+
+/** `$0.0003`, `<$0.0001` for a sub-0.1-milli-dollar sum, `n/a` when unknown, `(?N)` for N ok calls without a cost. */
+function costValue(c: CostTotals): string {
+  let base = 'n/a';
+  if (c.sumMicroUsd !== null) {
+    base =
+      c.sumMicroUsd > 0 && c.sumMicroUsd < 100
+        ? '<$0.0001'
+        : `$${(c.sumMicroUsd / 1e6).toFixed(4)}`;
+  }
+  return c.rowsUnknown > 0 ? `${base} (?${c.rowsUnknown})` : base;
 }
 
 function tokenSummary(m: ModelUsageStats, inLabel: string, outLabel: string): string {
@@ -308,13 +404,22 @@ export function formatUsageText(report: UsageReport): string {
     let tokens = `  tokens ${tokenSummary(m, 'in', 'out')}`;
     if (m.tokens.reasoning.sum !== null) tokens += ` / reasoning ${tokenValue(m.tokens.reasoning)}`;
     if (m.tokens.cached.sum !== null) tokens += ` / cached ${tokenValue(m.tokens.cached)}`;
-    lines.push(tokens);
+    lines.push(tokens, `  cost ${costValue(m.cost)}`);
     if (m.errors > 0) lines.push(`  errors by class: ${errorClasses(m)}`);
     lines.push(
       `  first ok ${m.firstOkAt === null ? 'n/a' : isoMinute(m.firstOkAt)}  last ok ${m.lastOkAt === null ? 'n/a' : isoMinute(m.lastOkAt)}`,
       `  last error ${m.lastError ? `${m.lastError.errorClass} @ ${isoMinute(m.lastError.at)}` : 'none'}`,
       '',
     );
+  }
+  if (report.roles.length > 0) {
+    lines.push('By role');
+    for (const r of report.roles) {
+      lines.push(
+        `  ${r.role} / ${r.provider}: ${r.ok}/${r.attempts} ok (${pct(r.successRate)}), p50 ${duration(r.p50DurationMs, 's', 'ms')}, p95 ${duration(r.p95DurationMs, 's', 'ms')}, tokens in ${tokenValue(r.tokens.prompt)} / out ${tokenValue(r.tokens.completion)}, cost ${costValue(r.cost)}`,
+      );
+    }
+    lines.push('');
   }
   lines.push('Verdicts');
   for (const v of report.verdicts) lines.push(`  ${verdictText(v, report.windowDays)}`);
@@ -324,6 +429,8 @@ export function formatUsageText(report: UsageReport): string {
     '  attempts = requests really sent (ok + err); skipped are not attempts. success = ok / attempts.',
     '  latency percentiles (nearest-rank) cover ok attempts only.',
     '  n/a = provider reported no usage; (?N) = N successful calls without usage, not counted in the sum.',
+    '  cost = tokens x list price of a priced route (a known upper bound); n/a = no price or no usage, never zero.',
+    '  legacy = attempts on the AI_SMART_CHAIN / AI_FAST_CHAIN chains, not role-routed.',
   );
   return lines.join('\n');
 }
@@ -363,6 +470,7 @@ function modelBlock(m: ModelUsageStats): string {
     counts,
     `успех ${pct(m.successRate)} · p50 ${duration(m.p50DurationMs, 'с', 'мс')} · p95 ${duration(m.p95DurationMs, 'с', 'мс')}`,
     tokenSummary(m, 'вх', 'исх'),
+    `стоимость ${costValue(m.cost)}`,
   ];
   if (m.tokens.reasoning.sum !== null || m.tokens.cached.sum !== null) {
     lines.push(`рассужд. ${tokenValue(m.tokens.reasoning)} · кэш ${tokenValue(m.tokens.cached)}`);
@@ -374,6 +482,14 @@ function modelBlock(m: ModelUsageStats): string {
   if (m.lastError)
     lines.push(`посл. ошибка: ${m.lastError.errorClass} ${isoMinute(m.lastError.at)}`);
   return `<b>${escapeHtml(m.provider)} · ${escapeHtml(m.model)}</b>\n<pre>${escapeHtml(lines.join('\n'))}</pre>`;
+}
+
+function rolesBlock(roles: readonly RoleUsageStats[]): string {
+  const lines = roles.map(
+    (r) =>
+      `${r.role} · ${r.provider}: ${r.ok}/${r.attempts} ок · p50 ${duration(r.p50DurationMs, 'с', 'мс')} · p95 ${duration(r.p95DurationMs, 'с', 'мс')} · ${costValue(r.cost)}`,
+  );
+  return `<b>По ролям</b>\n<pre>${escapeHtml(lines.join('\n'))}</pre>`;
 }
 
 export function formatUsageTelegram(report: UsageReport): string[] {
@@ -390,7 +506,9 @@ export function formatUsageTelegram(report: UsageReport): string[] {
 
   const messages: string[] = [];
   let current = header;
-  for (const block of report.models.map(modelBlock)) {
+  const blocks = report.models.map(modelBlock);
+  if (report.roles.length > 0) blocks.unshift(rolesBlock(report.roles));
+  for (const block of blocks) {
     if (current.length + 2 + block.length > TELEGRAM_MESSAGE_LIMIT) {
       messages.push(current);
       current = block;

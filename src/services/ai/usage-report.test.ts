@@ -24,6 +24,9 @@ function ev(over: Partial<AiUsageEvent> = {}): AiUsageEvent {
     reasoningTokens: null,
     cachedTokens: null,
     requestId: null,
+    role: null,
+    preset: null,
+    costMicroUsd: null,
     ...over,
   };
 }
@@ -284,5 +287,104 @@ describe('formatUsageTelegram', () => {
     const all = formatUsageTelegram(aggregateUsage([ev()], opts)).join('\n');
     expect(all).toContain('n/a');
     expect(all).not.toMatch(/вх 0/);
+  });
+});
+
+describe('cost and roles (stage B4)', () => {
+  const OR = { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' };
+
+  test('model cost sums the known rows and counts the unknown ones, like tokens', () => {
+    const r = aggregateUsage(
+      [
+        ev({ ...OR, costMicroUsd: 100 }),
+        ev({ ...OR, costMicroUsd: 200 }),
+        ev({ ...OR, costMicroUsd: null }),
+      ],
+      opts,
+    );
+    expect(r.models[0]?.cost).toEqual({ sumMicroUsd: 300, rowsWithValue: 2, rowsUnknown: 1 });
+  });
+
+  test('a model with no known cost is unknown (null), and a known zero stays 0', () => {
+    const unknown = aggregateUsage([ev({ costMicroUsd: null })], opts);
+    expect(unknown.models[0]?.cost).toEqual({
+      sumMicroUsd: null,
+      rowsWithValue: 0,
+      rowsUnknown: 1,
+    });
+    const zero = aggregateUsage([ev({ costMicroUsd: 0 })], opts);
+    expect(zero.models[0]?.cost).toEqual({ sumMicroUsd: 0, rowsWithValue: 1, rowsUnknown: 0 });
+  });
+
+  test('skipped and failed attempts do not count as unknown cost', () => {
+    const r = aggregateUsage(
+      [
+        ev({ costMicroUsd: 5 }),
+        ev({ outcome: 'skipped', durationMs: null }),
+        ev({ outcome: 'error', errorClass: 'server', httpStatus: 500 }),
+      ],
+      opts,
+    );
+    expect(r.models[0]?.cost).toEqual({ sumMicroUsd: 5, rowsWithValue: 1, rowsUnknown: 0 });
+  });
+
+  test('roles: one row per role and provider, p50/p95 over ok attempts, legacy last', () => {
+    const rows = [
+      ...[1000, 2000, 3000, 4000].map((durationMs) =>
+        ev({ ...OR, role: 'executor', preset: 'deepseek41-flash', durationMs, costMicroUsd: 10 }),
+      ),
+      ev({ ...OR, role: 'executor', outcome: 'error', errorClass: 'timeout', durationMs: 9000 }),
+      ev({ provider: 'claude', role: 'repair', durationMs: 700, costMicroUsd: null }),
+      ev({ provider: 'zai', role: null, durationMs: 500 }),
+    ];
+    const { roles } = aggregateUsage(rows, opts);
+    expect(roles.map((x) => [x.role, x.provider])).toEqual([
+      ['executor', 'openrouter'],
+      ['repair', 'claude'],
+      ['legacy', 'zai'],
+    ]);
+    const executor = roles[0];
+    expect(executor).toMatchObject({
+      attempts: 5,
+      ok: 4,
+      errors: 1,
+      p50DurationMs: 2000,
+      p95DurationMs: 4000,
+    });
+    expect(executor?.cost).toEqual({ sumMicroUsd: 40, rowsWithValue: 4, rowsUnknown: 0 });
+    expect(roles[1]?.cost).toEqual({ sumMicroUsd: null, rowsWithValue: 0, rowsUnknown: 1 });
+  });
+
+  test('text: cost per model and a By role section; unknown prints n/a, never $0', () => {
+    const text = formatUsageText(
+      aggregateUsage(
+        [
+          ev({ ...OR, role: 'executor', costMicroUsd: 300 }),
+          ev({ provider: 'claude', role: null, costMicroUsd: null }),
+        ],
+        opts,
+      ),
+    );
+    expect(text).toContain('cost $0.0003');
+    expect(text).toContain('cost n/a (?1)');
+    expect(text).toContain('By role');
+    expect(text).toContain('executor / openrouter');
+    expect(text).toContain('legacy / claude');
+    expect(text).not.toContain('$0.0000');
+  });
+
+  test('telegram: cost and the roles block, escaped', () => {
+    const all = formatUsageTelegram(
+      aggregateUsage([ev({ ...OR, role: 'executor', costMicroUsd: 300 })], opts),
+    ).join('\n');
+    expect(all).toContain('стоимость $0.0003');
+    expect(all).toContain('По ролям');
+    expect(all).toContain('executor · openrouter');
+  });
+
+  test('no roles block when nothing carries a role, so legacy-only reports stay as they were', () => {
+    const all = formatUsageTelegram(aggregateUsage([ev({ costMicroUsd: null })], opts)).join('\n');
+    expect(all).not.toContain('По ролям');
+    expect(formatUsageText(aggregateUsage([ev()], opts))).not.toContain('By role');
   });
 });

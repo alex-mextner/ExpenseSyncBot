@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import type { ChainOrder } from '../../config/env';
 import type { AiUsageEventInput } from '../../database/repositories/ai-usage-events.repository';
 import { createMockLogger } from '../../test-utils/mocks/logger';
+import type { ModelPreset, Role } from './model-presets';
+import type { RoleChainEntry } from './role-routing';
 
 const logMock = createMockLogger();
 
@@ -42,6 +44,11 @@ const mockEnv = {
   HF_MODEL: 'hf-test',
   HF_FAST_MODEL: 'hf-fast',
   HF_VISION_MODEL: 'hf-vision',
+  OPENROUTER_API_KEY: '',
+  OPENROUTER_MODEL: '',
+  OPENROUTER_FAST_MODEL: '',
+  AI_ROUTING: 'legacy' as 'legacy' | 'roles',
+  AI_ROLE_CHAINS: { planner: [], executor: [], repair: [] } as Record<Role, RoleChainEntry[]>,
 };
 mock.module('../../config/env', () => ({ env: mockEnv }));
 
@@ -140,6 +147,10 @@ beforeEach(() => {
   mockEnv.AI_SMART_CHAIN = defaultOrder();
   mockEnv.AI_FAST_CHAIN = defaultOrder();
   mockEnv.CLAUDE_API_TOKEN = '';
+  mockEnv.OPENROUTER_API_KEY = '';
+  mockEnv.OPENROUTER_MODEL = '';
+  mockEnv.AI_ROUTING = 'legacy';
+  mockEnv.AI_ROLE_CHAINS = { planner: [], executor: [], repair: [] };
 });
 
 describe('normalizeUsage', () => {
@@ -334,6 +345,9 @@ describe('aiStreamRound usage events', () => {
         reasoningTokens: 2,
         cachedTokens: 3,
         requestId: expect.any(String),
+        role: null,
+        preset: null,
+        costMicroUsd: null,
       },
     ]);
   });
@@ -375,16 +389,19 @@ describe('aiStreamRound usage events', () => {
       'cachedTokens',
       'chain',
       'completionTokens',
+      'costMicroUsd',
       'durationMs',
       'errorClass',
       'httpStatus',
       'model',
       'outcome',
+      'preset',
       'promptTokens',
       'provider',
       'purpose',
       'reasoningTokens',
       'requestId',
+      'role',
     ]);
     const serialized = JSON.stringify(recorded);
     expect(serialized).not.toContain('secret user prompt text');
@@ -603,6 +620,94 @@ describe('aiStreamRound usage events', () => {
 
     expect(recorded).toHaveLength(1);
     expect(recorded[0]).toMatchObject({ chain, purpose, provider, model, outcome: 'ok' });
+  });
+});
+
+describe('aiStreamRound usage events: role, preset and cost (stage B4)', () => {
+  const DEEPSEEK = 'deepseek/deepseek-v4.1-flash';
+  // 11 prompt + 5 completion tokens at $0.30 / $1.20 per million = 9.3 micro-USD → 9.
+  const DEEPSEEK_COST = 9;
+  const qualifiedPreset: ModelPreset = {
+    id: 'ds-fixture',
+    models: { openrouter: DEEPSEEK },
+    priceUsdPerMTok: null,
+    roles: ['executor'],
+    qualification: { sha: 'abc1234', rolePass: 0.97, historyPass: 1 },
+  };
+
+  async function runWith(
+    usage?: OpenAI.CompletionUsage,
+    overrides: Partial<StreamRoundOptions> = {},
+  ) {
+    const restore = await useCreate(async () => streamOf(textChunks('hello', usage)));
+    try {
+      await run(overrides);
+    } finally {
+      restore();
+    }
+    return recorded[0];
+  }
+
+  it('a legacy attempt carries no role or preset; a provider with no price has unknown cost', async () => {
+    const row = await runWith(FULL_USAGE);
+    expect(row).toMatchObject({ provider: 'zai', role: null, preset: null, costMicroUsd: null });
+  });
+
+  it('a legacy OpenRouter attempt is priced by its route, still without role or preset', async () => {
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    mockEnv.OPENROUTER_MODEL = DEEPSEEK;
+    mockEnv.AI_SMART_CHAIN = { ...defaultOrder(), order: ['openrouter'], fromEnv: true };
+    const row = await runWith(FULL_USAGE);
+    expect(row).toMatchObject({
+      provider: 'openrouter',
+      model: DEEPSEEK,
+      role: null,
+      preset: null,
+      costMicroUsd: DEEPSEEK_COST,
+    });
+  });
+
+  it('cost is NULL, not 0, when the provider reported no usage', async () => {
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    mockEnv.OPENROUTER_MODEL = DEEPSEEK;
+    mockEnv.AI_SMART_CHAIN = { ...defaultOrder(), order: ['openrouter'], fromEnv: true };
+    const row = await runWith(undefined);
+    expect(row).toMatchObject({ promptTokens: null, completionTokens: null, costMicroUsd: null });
+  });
+
+  it('a role-routed attempt records its role and preset', async () => {
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    mockEnv.AI_ROUTING = 'roles';
+    mockEnv.AI_ROLE_CHAINS = {
+      planner: [],
+      executor: [{ provider: 'openrouter', preset: qualifiedPreset }],
+      repair: [],
+    };
+    const row = await runWith(FULL_USAGE, { role: 'executor' });
+    expect(row).toMatchObject({
+      provider: 'openrouter',
+      model: DEEPSEEK,
+      role: 'executor',
+      preset: 'ds-fixture',
+      costMicroUsd: DEEPSEEK_COST,
+    });
+  });
+
+  it('a bare provider entry of a role chain records the role with no preset', async () => {
+    mockEnv.AI_ROUTING = 'roles';
+    mockEnv.AI_ROLE_CHAINS = {
+      planner: [],
+      executor: [{ provider: 'zai', preset: null }],
+      repair: [],
+    };
+    const row = await runWith(FULL_USAGE, { role: 'executor' });
+    expect(row).toMatchObject({ provider: 'zai', role: 'executor', preset: null });
+  });
+
+  it('a role chain that fell back to the legacy chain records no role', async () => {
+    mockEnv.AI_ROUTING = 'roles';
+    const row = await runWith(FULL_USAGE, { role: 'repair' });
+    expect(row).toMatchObject({ provider: 'zai', role: null, preset: null });
   });
 });
 

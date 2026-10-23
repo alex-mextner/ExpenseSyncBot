@@ -90,6 +90,9 @@ function event(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput {
     reasoningTokens: null,
     cachedTokens: null,
     requestId: 'req-1',
+    role: null,
+    preset: null,
+    costMicroUsd: null,
     ...overrides,
   };
 }

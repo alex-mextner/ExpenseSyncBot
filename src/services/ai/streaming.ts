@@ -31,6 +31,7 @@ import type {
 import { createLogger } from '../../utils/logger';
 import { claudeClient, hfClient, openrouterClient, zaiClient } from './clients';
 import {
+  computeCostMicroUsd,
   isExcludedModel,
   isQualifiedFor,
   type ModelPreset,
@@ -389,6 +390,8 @@ interface ProviderSlot {
   model: string;
   /** Registry preset the slot runs (role-routed slots only). */
   presetId?: string;
+  /** Role whose chain this slot belongs to; unset on legacy-chain slots. */
+  role?: Role;
   stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<SlotOutput>;
 }
 
@@ -805,8 +808,8 @@ function buildRoleChain(role: Role): ProviderSlot[] {
       skip(provider, detail, `preset is not qualified for ${role}`);
       continue;
     }
-    slots.push(
-      streamingSlot(
+    slots.push({
+      ...streamingSlot(
         `${TEXT_PROVIDER_LABELS[provider]} (${model})`,
         provider,
         TEXT_PROVIDER_CLIENTS[provider],
@@ -816,7 +819,8 @@ function buildRoleChain(role: Role): ProviderSlot[] {
           ...(preset ? { preset, provider } : {}),
         },
       ),
-    );
+      role,
+    });
   }
   return slots;
 }
@@ -988,6 +992,14 @@ function usageEvent(
     chain: round.chain,
     purpose: round.purpose,
     requestId: round.requestId,
+    role: slot.role ?? null,
+    preset: slot.presetId ?? null,
+    costMicroUsd: computeCostMicroUsd(
+      slot.key,
+      slot.model,
+      attempt.promptTokens,
+      attempt.completionTokens,
+    ),
     ...attempt,
   };
 }
