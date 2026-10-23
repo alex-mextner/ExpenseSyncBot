@@ -1484,6 +1484,22 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Created ai_usage_events table');
       },
     },
+    {
+      // Stage B4: which routing role and registry preset served an attempt, and what it cost.
+      // All three are NULL on legacy-chain rows and on every row written before this migration;
+      // cost_micro_usd is NULL whenever the price or the token counts are unknown — never 0 for
+      // "don't know". Appended, never renumbered (HyperCalendarBot keeps its own numbering).
+      name: '054_add_role_preset_cost_to_ai_usage_events',
+      up: () => {
+        db.exec(`ALTER TABLE ai_usage_events ADD COLUMN role TEXT`);
+        db.exec(`ALTER TABLE ai_usage_events ADD COLUMN preset TEXT`);
+        db.exec(`
+          ALTER TABLE ai_usage_events
+          ADD COLUMN cost_micro_usd INTEGER CHECK (cost_micro_usd IS NULL OR cost_micro_usd >= 0)
+        `);
+        logger.info('✓ Added role, preset and cost to ai_usage_events');
+      },
+    },
   ];
 
   // Check and run migrations

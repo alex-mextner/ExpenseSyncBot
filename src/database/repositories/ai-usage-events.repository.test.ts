@@ -1,4 +1,4 @@
-// Tests for AiUsageEventsRepository and migration 053 — append-only attempt rows, nullable tokens, retention prune
+// Tests for AiUsageEventsRepository and migrations 053 / 054 — append-only attempt rows, nullable tokens, retention prune
 
 import type { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
@@ -27,6 +27,9 @@ interface RawRow {
   reasoning_tokens: number | null;
   cached_tokens: number | null;
   request_id: string | null;
+  role: string | null;
+  preset: string | null;
+  cost_micro_usd: number | null;
 }
 
 function okEvent(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput {
@@ -45,6 +48,9 @@ function okEvent(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput 
     reasoningTokens: null,
     cachedTokens: null,
     requestId: 'req-1',
+    role: null,
+    preset: null,
+    costMicroUsd: null,
     ...overrides,
   };
 }
@@ -65,11 +71,15 @@ beforeEach(() => {
 });
 
 describe('migration 053_create_ai_usage_events', () => {
-  it('is recorded as applied and is the newest migration', () => {
-    const last = db
-      .query<{ name: string }, []>('SELECT name FROM migrations ORDER BY id DESC LIMIT 1')
-      .get();
-    expect(last?.name).toBe('053_create_ai_usage_events');
+  it('is recorded as applied, followed by 054 — migrations are only ever appended', () => {
+    const names = db
+      .query<{ name: string }, []>('SELECT name FROM migrations ORDER BY id')
+      .all()
+      .map((m) => m.name);
+    const at = names.indexOf('053_create_ai_usage_events');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(names[at + 1]).toBe('054_add_role_preset_cost_to_ai_usage_events');
+    expect(names.at(-1)).toBe('054_add_role_preset_cost_to_ai_usage_events');
   });
 
   it('creates the table with exactly the usage columns and no user-identifying column', () => {
@@ -93,6 +103,9 @@ describe('migration 053_create_ai_usage_events', () => {
       'reasoning_tokens',
       'cached_tokens',
       'request_id',
+      'role',
+      'preset',
+      'cost_micro_usd',
     ]);
   });
 
@@ -183,6 +196,26 @@ describe('AiUsageEventsRepository', () => {
       });
     });
 
+    it('stores role, preset and cost, and keeps them NULL for legacy rows', () => {
+      repo.recordMany([
+        okEvent({ role: 'executor', preset: 'glm53-flash-low', costMicroUsd: 124 }),
+        okEvent({ costMicroUsd: 0 }),
+        okEvent(),
+      ]);
+      const [roleRouted, freeCall, legacy] = rawRows();
+      expect(roleRouted).toMatchObject({
+        role: 'executor',
+        preset: 'glm53-flash-low',
+        cost_micro_usd: 124,
+      });
+      expect(freeCall).toMatchObject({ role: null, preset: null, cost_micro_usd: 0 });
+      expect(legacy).toMatchObject({ role: null, preset: null, cost_micro_usd: null });
+    });
+
+    it('rejects a negative cost', () => {
+      expect(() => repo.recordMany([okEvent({ costMicroUsd: -1 })])).toThrow();
+    });
+
     it('stores a skipped attempt with no duration', () => {
       repo.recordMany([
         okEvent({
@@ -235,6 +268,18 @@ describe('AiUsageEventsRepository', () => {
         errorClass: null,
         promptTokens: 100,
         reasoningTokens: null,
+        role: null,
+        preset: null,
+        costMicroUsd: null,
+      });
+    });
+
+    it('reads role, preset and cost back', () => {
+      repo.recordMany([okEvent({ role: 'repair', preset: 'glm53-low', costMicroUsd: 9 })]);
+      expect(repo.listSince(0)[0]).toMatchObject({
+        role: 'repair',
+        preset: 'glm53-low',
+        costMicroUsd: 9,
       });
     });
   });

@@ -142,3 +142,26 @@ export function presetRequestParams(
         : Math.min(callerMaxTokens, preset.maxOutputTokens),
   };
 }
+
+/**
+ * Cost of one attempt in micro-USD (1e-6 USD): tokens × the preset's list price per million tokens,
+ * rounded to a whole micro-USD. The route is found by provider + model, so a legacy chain naming an
+ * OpenRouter model is priced too. `null` = unknown — no preset or price for that route, or a token
+ * count the provider did not report — and is never written as 0. List price, no cache discount:
+ * an upper bound.
+ */
+export function computeCostMicroUsd(
+  provider: string,
+  model: string,
+  promptTokens: number | null,
+  completionTokens: number | null,
+): number | null {
+  if (promptTokens === null || completionTokens === null) return null;
+  const price = MODEL_PRESETS.find((p) =>
+    Object.entries(p.models).some(([route, id]) => route === provider && id === model),
+  )?.priceUsdPerMTok;
+  if (!price || price.via !== provider) return null;
+  const cost = Math.round(promptTokens * price.in + completionTokens * price.out);
+  // An absurd count must not become an inexact or non-finite integer in the ledger: unknown instead.
+  return Number.isSafeInteger(cost) ? cost : null;
+}

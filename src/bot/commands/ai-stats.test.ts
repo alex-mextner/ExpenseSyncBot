@@ -56,6 +56,9 @@ function event(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput {
     reasoningTokens: null,
     cachedTokens: null,
     requestId: 'r',
+    role: null,
+    preset: null,
+    costMicroUsd: null,
     ...overrides,
   };
 }

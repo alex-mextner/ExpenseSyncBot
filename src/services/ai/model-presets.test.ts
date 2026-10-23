@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  computeCostMicroUsd,
   EXCLUDED_MODEL_PATTERNS,
   findPreset,
   isExcludedModel,
@@ -169,5 +170,36 @@ describe('presetRequestParams', () => {
   it('caps max_tokens at the preset ceiling and never raises a smaller caller budget', () => {
     expect(presetRequestParams(flash, 'openrouter', 0.3, 20_000).max_tokens).toBe(8192);
     expect(presetRequestParams(flash, 'openrouter', 0.3, 200).max_tokens).toBe(200);
+  });
+});
+
+describe('computeCostMicroUsd', () => {
+  // deepseek41-flash on OpenRouter: $0.30 in / $1.20 out per million tokens = 0.30 / 1.20 µUSD per token.
+  const MODEL = 'deepseek/deepseek-v4.1-flash';
+
+  it('prices tokens at the list rate of the route, in whole micro-USD', () => {
+    expect(computeCostMicroUsd('openrouter', MODEL, 1_000_000, 1_000_000)).toBe(1_500_000);
+    expect(computeCostMicroUsd('openrouter', MODEL, 352, 15)).toBe(124); // 105.6 + 18 = 123.6
+  });
+
+  it('a reported zero costs 0, which is not the same as unknown', () => {
+    expect(computeCostMicroUsd('openrouter', MODEL, 0, 0)).toBe(0);
+  });
+
+  it('is unknown (null) when either token count was not reported', () => {
+    expect(computeCostMicroUsd('openrouter', MODEL, null, 15)).toBeNull();
+    expect(computeCostMicroUsd('openrouter', MODEL, 352, null)).toBeNull();
+  });
+
+  it('is unknown rather than inexact when the product leaves the safe integer range', () => {
+    expect(
+      computeCostMicroUsd('openrouter', MODEL, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
+    ).toBeNull();
+  });
+
+  it('is unknown for a model or route the registry has no price for', () => {
+    expect(computeCostMicroUsd('openrouter', 'vendor/unlisted', 10, 10)).toBeNull();
+    expect(computeCostMicroUsd('zai', 'glm-5.3-flash', 10, 10)).toBeNull(); // priced via openrouter only
+    expect(computeCostMicroUsd('claude', 'claude-sonnet-5-5', 10, 10)).toBeNull();
   });
 });

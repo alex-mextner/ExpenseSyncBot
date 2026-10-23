@@ -40,6 +40,15 @@ export interface AiUsageEventInput {
   cachedTokens: number | null;
   /** Random id shared by every attempt of one aiStreamRound call — links a failed attempt to its fallback. */
   requestId: string | null;
+  /** Routing role of a role-routed attempt (stage B3); NULL = legacy chain or a row from before it. */
+  role: string | null;
+  /** Registry preset the slot ran, NULL when none. */
+  preset: string | null;
+  /**
+   * Cost in micro-USD at list price (tokens × the preset's price). NULL = unknown — no price for the
+   * route, or tokens not reported — never 0 for "don't know".
+   */
+  costMicroUsd: number | null;
 }
 
 export interface AiUsageEvent extends AiUsageEventInput {
@@ -62,6 +71,9 @@ interface AiUsageEventRow {
   reasoning_tokens: number | null;
   cached_tokens: number | null;
   request_id: string | null;
+  role: string | null;
+  preset: string | null;
+  cost_micro_usd: number | null;
 }
 
 export class AiUsageEventsRepository {
@@ -87,13 +99,17 @@ export class AiUsageEventsRepository {
         number | null,
         number | null,
         string | null,
+        string | null,
+        string | null,
+        number | null,
       ]
     >(`
       INSERT INTO ai_usage_events (
         at, provider, model, chain, purpose, outcome, error_class, http_status, duration_ms,
-        prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens, request_id
+        prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens, request_id,
+        role, preset, cost_micro_usd
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.db.transaction(() => {
       for (const e of events) {
@@ -112,6 +128,9 @@ export class AiUsageEventsRepository {
           e.reasoningTokens,
           e.cachedTokens,
           e.requestId,
+          e.role,
+          e.preset,
+          e.costMicroUsd,
         );
       }
     })();
@@ -140,6 +159,9 @@ export class AiUsageEventsRepository {
         reasoningTokens: r.reasoning_tokens,
         cachedTokens: r.cached_tokens,
         requestId: r.request_id,
+        role: r.role,
+        preset: r.preset,
+        costMicroUsd: r.cost_micro_usd,
       }));
   }
 
