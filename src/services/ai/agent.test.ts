@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import type { Bot } from 'gramio';
 import { createMockLogger } from '../../test-utils/mocks/logger';
+import type { Role } from './model-presets';
 import type { ChainName, StreamRoundResult } from './streaming';
 
 const logMock = createMockLogger();
@@ -25,7 +26,8 @@ const mockIsRetryableError = mock<(error: unknown) => boolean>();
 const mockGetBackoffDelay = mock<(attempt: number, error: unknown) => number>();
 const mockClassifyAiError =
   mock<(error: unknown) => import('./streaming').AiErrorClassification | null>();
-const mockNextProvider = mock<(chain: ChainName, exclude: readonly string[]) => string | null>();
+const mockNextProvider =
+  mock<(chain: ChainName, exclude: readonly string[], role?: Role) => string | null>();
 
 mock.module('./streaming', () => ({
   aiStreamRound: mockAiStreamRound,
@@ -68,6 +70,7 @@ const { aiDebugLogger, ExpenseBotAgent } = await import('./agent');
 const { TOOL_DEFINITIONS } = await import('./tools');
 type ExpenseBotAgent = InstanceType<typeof ExpenseBotAgent>;
 const { database } = await import('../../database');
+const { env } = await import('../../config/env');
 
 // Every run writes an agent_trajectories row, whose group_id references groups(id).
 database.exec(
@@ -80,6 +83,7 @@ function makeCtx(overrides?: Partial<AgentContext>): AgentContext {
     chatId: 123,
     groupId: 1,
     userId: 10,
+    telegramUserId: 99,
     userName: 'testuser',
     userFullName: 'Test User',
     customPrompt: null,
@@ -2271,6 +2275,74 @@ describe('ExpenseBotAgent', () => {
           '5:nudge:cheap_tool_streak',
           '6:handoff:cheap_tool_streak',
         ]);
+      });
+
+      describe('role routing (AI_ROUTING)', () => {
+        const rolesOfRun = () => mockAiStreamRound.mock.calls.map(([opts]) => opts.role);
+
+        afterEach(() => {
+          env.AI_ROUTING = 'legacy';
+          env.AI_ROUTING_USER_IDS = undefined;
+        });
+
+        it('legacy mode (the default) never sets a role', async () => {
+          mockQaRun();
+          await agent.run(
+            'посчитай каждую трату мая в евро и сложи',
+            [],
+            mockBot as unknown as Bot,
+          );
+          expect(rolesOfRun().every((role) => role === undefined)).toBe(true);
+        });
+
+        it('roles mode: executor rounds, repair from the stall nudge on, including the forced answer', async () => {
+          env.AI_ROUTING = 'roles';
+          mockQaRun(false);
+          await agent.run(
+            'посчитай каждую трату мая в евро и сложи',
+            [],
+            mockBot as unknown as Bot,
+          );
+          const roles = rolesOfRun();
+          // Rounds 1-5 are plain tool rounds; the nudge after round 5 turns the run to repair.
+          expect(roles.slice(0, 5)).toEqual(Array(5).fill('executor'));
+          expect(roles.slice(5).length).toBeGreaterThan(0);
+          expect(roles.slice(5).every((role) => role === 'repair')).toBe(true);
+          expect(roles.at(-1)).toBe('repair');
+        });
+
+        it('the handoff target is looked up on the repair chain', async () => {
+          env.AI_ROUTING = 'roles';
+          mockQaRun();
+          await agent.run(
+            'посчитай каждую трату мая в евро и сложи',
+            [],
+            mockBot as unknown as Bot,
+          );
+          expect(mockNextProvider.mock.calls.some(([, , role]) => role === 'repair')).toBe(true);
+        });
+
+        it('the canary list keeps other users on the legacy chain', async () => {
+          env.AI_ROUTING = 'roles';
+          env.AI_ROUTING_USER_IDS = [1234];
+          mockQaRun();
+          await agent.run(
+            'посчитай каждую трату мая в евро и сложи',
+            [],
+            mockBot as unknown as Bot,
+          );
+          expect(rolesOfRun().every((role) => role === undefined)).toBe(true);
+
+          mockAiStreamRound.mockReset();
+          env.AI_ROUTING_USER_IDS = [99];
+          mockQaRun();
+          await agent.run(
+            'посчитай каждую трату мая в евро и сложи',
+            [],
+            mockBot as unknown as Bot,
+          );
+          expect(rolesOfRun()[0]).toBe('executor');
+        });
       });
 
       it('the forced final round tells the model not to present a partial sum as the total', async () => {

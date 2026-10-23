@@ -236,6 +236,7 @@ import { executeTool } from './tool-executor';
 const ctx: AgentContext = {
   groupId: 1,
   userId: 123,
+  telegramUserId: 99,
   chatId: 456,
   userName: 'testuser',
   userFullName: 'Test User',

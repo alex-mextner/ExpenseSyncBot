@@ -182,6 +182,7 @@ async function handleAskWithAnthropic(
   const agentCtx: AgentContext = {
     groupId: group.id,
     userId: user.id,
+    telegramUserId: user.telegram_id,
     chatId,
     userName,
     userFullName,

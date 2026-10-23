@@ -3,6 +3,8 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import type { ChainOrder } from '../../config/env';
 import { createMockLogger } from '../../test-utils/mocks/logger';
+import type { ModelPreset, Role } from './model-presets';
+import type { RoleChainEntry } from './role-routing';
 
 const logMock = createMockLogger();
 
@@ -38,6 +40,8 @@ const mockEnv = {
   OPENROUTER_BASE_URL: 'https://test.openrouter/api/v1',
   OPENROUTER_MODEL: 'or-smart',
   OPENROUTER_FAST_MODEL: 'or-fast',
+  AI_ROUTING: 'legacy' as 'legacy' | 'roles',
+  AI_ROLE_CHAINS: { planner: [], executor: [], repair: [] } as Record<Role, RoleChainEntry[]>,
 };
 mock.module('../../config/env', () => ({ env: mockEnv }));
 
@@ -259,6 +263,8 @@ describe('aiStreamRound fallback chain', () => {
     mockEnv.OPENROUTER_API_KEY = '';
     mockEnv.OPENROUTER_MODEL = 'or-smart';
     mockEnv.OPENROUTER_FAST_MODEL = 'or-fast';
+    mockEnv.AI_ROUTING = 'legacy';
+    mockEnv.AI_ROLE_CHAINS = { planner: [], executor: [], repair: [] };
     // Re-import to get fresh module with mocked deps
     streamingModule = await import('./streaming');
   });
@@ -269,10 +275,13 @@ describe('aiStreamRound fallback chain', () => {
   async function chainModels(
     chain: 'smart' | 'fast' | 'ocr',
     excludeProviders?: readonly string[],
+    role?: Role,
+    requests: OpenAI.ChatCompletionCreateParamsStreaming[] = [],
   ): Promise<string[]> {
     const calls: string[] = [];
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
+      requests.push(params);
       throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
     });
     const clientsMod = await import('./clients');
@@ -289,6 +298,7 @@ describe('aiStreamRound fallback chain', () => {
         maxTokens: 100,
         chain,
         excludeProviders,
+        role,
       });
     } catch (err) {
       message = (err as Error).message;
@@ -384,6 +394,177 @@ describe('aiStreamRound fallback chain', () => {
     mockEnv.OPENROUTER_API_KEY = 'or-key';
     mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['openrouter'], fromEnv: true };
     expect(streamingModule.nextProvider('smart', [])).toBe('OpenRouter (or-smart)');
+  });
+
+  describe('role routing', () => {
+    const qualified = { sha: 'abc1234', rolePass: 0.96, historyPass: 1 };
+    const flash: ModelPreset = {
+      id: 'flash',
+      models: { openrouter: 'vendor/flash', claude: 'claude-flash' },
+      effort: 'low',
+      temperature: 1,
+      maxOutputTokens: 8192,
+      priceUsdPerMTok: null,
+      roles: ['executor'],
+      qualification: qualified,
+    };
+    const entry = (provider: RoleChainEntry['provider'], preset: ModelPreset | null = null) => ({
+      provider,
+      preset,
+    });
+
+    beforeEach(() => {
+      mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+      mockEnv.OPENROUTER_API_KEY = 'or-key';
+    });
+
+    it('legacy mode ignores the role chains and the role a caller passes', async () => {
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [entry('openrouter', flash)],
+      };
+      expect(await chainModels('smart', undefined, 'executor')).toEqual([
+        'test-model',
+        'claude-smart',
+        'hf-test',
+      ]);
+    });
+
+    it('roles mode runs the role chain in its order: preset routes and bare providers', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [entry('openrouter', flash), entry('claude')],
+      };
+      expect(await chainModels('smart', undefined, 'executor')).toEqual([
+        'vendor/flash',
+        'claude-smart',
+      ]);
+      // A round without a role is still the legacy smart chain.
+      expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
+    });
+
+    it('sends the preset settings: reasoning_effort and temperature on OpenRouter, ceiling on max_tokens', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [entry('openrouter', flash)],
+      };
+      const requests: OpenAI.ChatCompletionCreateParamsStreaming[] = [];
+      await chainModels('smart', undefined, 'executor', requests);
+      const request = requests[0] as unknown as Record<string, unknown>;
+      expect(request['reasoning_effort']).toBe('low');
+      expect(request['temperature']).toBe(1);
+      expect(request['max_tokens']).toBe(100);
+    });
+
+    it('keeps the Claude request shape for a preset routed over Claude: no temperature, no effort', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = { ...mockEnv.AI_ROLE_CHAINS, executor: [entry('claude', flash)] };
+      const requests: OpenAI.ChatCompletionCreateParamsStreaming[] = [];
+      expect(await chainModels('smart', undefined, 'executor', requests)).toEqual(['claude-flash']);
+      const request = requests[0] as unknown as Record<string, unknown>;
+      expect(request['temperature']).toBeUndefined();
+      expect(request['reasoning_effort']).toBeUndefined();
+    });
+
+    it('refuses an unqualified preset: it never loads, the bare provider after it still does', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      const unqualified = { ...flash, qualification: null };
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [entry('openrouter', unqualified), entry('claude')],
+      };
+      expect(await chainModels('smart', undefined, 'executor')).toEqual(['claude-smart']);
+    });
+
+    it('refuses a preset below the gate and one qualified for another role', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [
+          entry('openrouter', { ...flash, qualification: { ...qualified, historyPass: 0.99 } }),
+          entry('claude', flash),
+          entry('hf'),
+        ],
+        repair: [entry('openrouter', flash), entry('hf')],
+      };
+      // claude:flash is qualified for executor, so it loads; the 99% one does not.
+      expect(await chainModels('smart', undefined, 'executor')).toEqual([
+        'claude-flash',
+        'hf-test',
+      ]);
+      // flash is not a repair preset: only hf is left.
+      expect(await chainModels('smart', undefined, 'repair')).toEqual(['hf-test']);
+    });
+
+    it('a role chain with nothing loadable falls back to the legacy chain', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [entry('openrouter', { ...flash, qualification: null })],
+      };
+      expect(await chainModels('smart', undefined, 'executor')).toEqual([
+        'test-model',
+        'claude-smart',
+        'hf-test',
+      ]);
+      // An unset role chain behaves the same.
+      expect(await chainModels('smart', undefined, 'repair')).toEqual([
+        'test-model',
+        'claude-smart',
+        'hf-test',
+      ]);
+    });
+
+    it('skips a provider without a key and a bare entry whose model is retired', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.OPENROUTER_API_KEY = '';
+      mockEnv.HF_MODEL = 'openai/gpt-oss-120b';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        executor: [entry('openrouter', flash), entry('hf'), entry('claude')],
+      };
+      try {
+        expect(await chainModels('smart', undefined, 'executor')).toEqual(['claude-smart']);
+      } finally {
+        mockEnv.HF_MODEL = 'hf-test';
+      }
+    });
+
+    it('a bare planner entry uses the provider fast model; fast and ocr chains never take a role', async () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        planner: [entry('claude'), entry('zai')],
+      };
+      expect(await chainModels('smart', undefined, 'planner')).toEqual([
+        'claude-fast',
+        'test-fast',
+      ]);
+      expect(await chainModels('fast', undefined, 'planner')).toEqual([
+        'test-fast',
+        'claude-fast',
+        'hf-fast',
+      ]);
+      expect(await chainModels('ocr', undefined, 'executor')).toEqual([
+        'claude-vision',
+        'hf-vision',
+      ]);
+    });
+
+    it('nextProvider and the excluded list follow the role chain', () => {
+      mockEnv.AI_ROUTING = 'roles';
+      mockEnv.AI_ROLE_CHAINS = {
+        ...mockEnv.AI_ROLE_CHAINS,
+        repair: [entry('claude'), entry('hf')],
+      };
+      expect(streamingModule.nextProvider('smart', [], 'repair')).toBe('Claude (claude-smart)');
+      expect(streamingModule.nextProvider('smart', ['Claude (claude-smart)'], 'repair')).toBe(
+        'HF (hf-test)',
+      );
+      expect(streamingModule.nextProvider('smart', [])).toBe('z.ai (test-model)');
+    });
   });
 
   it('nextProvider names the slot the chain would try first without the excluded ones', () => {

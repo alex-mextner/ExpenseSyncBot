@@ -37,6 +37,8 @@ export interface AgentStreamWriter {
 export interface AgentContext {
   groupId: number;
   userId: number;
+  /** Telegram id of the asking user — the key of the AI_ROUTING_USER_IDS canary. */
+  telegramUserId: number;
   chatId: number;
   userName: string;
   userFullName: string;

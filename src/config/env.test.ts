@@ -38,7 +38,7 @@ function loadEnv(vars: Record<string, string>): LoadResult {
   try {
     // The child reports the loaded config on stdout; the parent parses it.
     const script = `const { env } = await import(${JSON.stringify(ENV_MODULE)});
-process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
+process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], routing: { mode: env.AI_ROUTING, userIds: env.AI_ROUTING_USER_IDS ?? null, chains: Object.fromEntries(Object.entries(env.AI_ROLE_CHAINS).map(([role, entries]) => [role, entries.map((e) => e.provider + (e.preset ? ':' + e.preset.id : ''))])) }, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
     const child = spawnSync(process.execPath, ['-e', script], {
       cwd,
       env: { PATH: process.env['PATH'] ?? '', ...vars },
@@ -60,6 +60,7 @@ function loadedConfig(result: LoadResult): {
   keys: string[];
   claudeVisionModel: string;
   openrouter: string[];
+  routing: { mode: string; userIds: number[] | null; chains: Record<string, string[]> };
   smartChain: ChainOrderJson;
   fastChain: ChainOrderJson;
 } {
@@ -118,6 +119,42 @@ describe('env config loading', () => {
       }),
     );
     expect(openrouter).toEqual(['https://or.test/v1', 'a/b', 'c/d']);
+  });
+
+  it('role routing is off by default: legacy mode, no canary list, empty role chains', () => {
+    expect(loadedConfig(loadEnv(REQUIRED_ENV)).routing).toEqual({
+      mode: 'legacy',
+      userIds: null,
+      chains: { planner: [], executor: [], repair: [] },
+    });
+  });
+
+  it('AI_ROUTING, AI_ROUTING_USER_IDS and the three role chains are read from the environment', () => {
+    const { routing } = loadedConfig(
+      loadEnv({
+        ...REQUIRED_ENV,
+        AI_ROUTING: 'roles',
+        AI_ROUTING_USER_IDS: '11,22',
+        AI_PLANNER_CHAIN: 'openrouter:glm53-flash-low',
+        AI_EXECUTOR_CHAIN: 'openrouter:glm53-flash-low,openrouter:deepseek41-flash,claude',
+        AI_REPAIR_CHAIN: 'openrouter:glm53-low,groq,claude',
+      }),
+    );
+    expect(routing).toEqual({
+      mode: 'roles',
+      userIds: [11, 22],
+      chains: {
+        planner: ['openrouter:glm53-flash-low'],
+        executor: ['openrouter:glm53-flash-low', 'openrouter:deepseek41-flash', 'claude'],
+        repair: ['openrouter:glm53-low', 'claude'],
+      },
+    });
+  });
+
+  it('a misspelled AI_ROUTING stops the process at startup', () => {
+    const result = loadEnv({ ...REQUIRED_ENV, AI_ROUTING: 'role' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('AI_ROUTING must be legacy or roles');
   });
 
   it('a chain order naming no known provider falls back to the default order', () => {
