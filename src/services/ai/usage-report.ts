@@ -6,8 +6,9 @@ import type {
 } from '../../database/repositories/ai-usage-events.repository';
 import { escapeHtml } from '../../utils/html';
 import { pluralize } from '../../utils/pluralize';
+import { PROVIDER_IDS } from './provider-ids';
 
-export const KNOWN_PROVIDERS = ['groq', 'zai', 'claude', 'hf'] as const;
+export const KNOWN_PROVIDERS = PROVIDER_IDS;
 
 const DAY_MS = 86_400_000;
 const TELEGRAM_MESSAGE_LIMIT = 4000;

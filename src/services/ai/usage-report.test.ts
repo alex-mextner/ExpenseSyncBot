@@ -11,7 +11,7 @@ function ev(over: Partial<AiUsageEvent> = {}): AiUsageEvent {
   return {
     id: nextId++,
     at: NOW - 1000,
-    provider: 'groq',
+    provider: 'zai',
     model: 'm1',
     chain: 'smart',
     purpose: 'agent',
@@ -124,8 +124,7 @@ describe('aggregateUsage', () => {
   test('verdicts: explicit no_traffic for every known provider', () => {
     const r = aggregateUsage([ev()], opts);
     expect(r.verdicts.map((v) => [v.provider, v.status])).toEqual([
-      ['groq', 'healthy'],
-      ['zai', 'no_traffic'],
+      ['zai', 'healthy'],
       ['claude', 'no_traffic'],
       ['hf', 'no_traffic'],
     ]);
@@ -157,7 +156,7 @@ describe('aggregateUsage', () => {
     });
     const hf = r.verdicts.find((v) => v.provider === 'hf');
     expect(hf?.skipped).toBe(2);
-    expect(r.verdicts.map((v) => v.provider)).toEqual(['groq', 'zai', 'claude', 'hf', 'other']);
+    expect(r.verdicts.map((v) => v.provider)).toEqual(['zai', 'claude', 'hf', 'groq', 'other']);
   });
 
   test('ordering: provider position, attempts desc, model name; unknown providers alphabetical last', () => {
@@ -174,13 +173,14 @@ describe('aggregateUsage', () => {
       ],
       opts,
     );
+    // 'groq' rows are historical (Groq is no longer a provider): they still render, after the known ones.
     expect(r.models.map((m) => `${m.provider}:${m.model}`)).toEqual([
-      'groq:c',
-      'groq:a',
-      'groq:b',
       'zai:q',
       'hf:x',
       'aaa:a',
+      'groq:c',
+      'groq:a',
+      'groq:b',
       'zzz:a',
     ]);
   });
@@ -189,8 +189,8 @@ describe('aggregateUsage', () => {
 describe('formatUsageText', () => {
   const report = aggregateUsage(
     [
-      ev({ promptTokens: 12345, completionTokens: 4567, durationMs: 800 }),
-      ev({ promptTokens: null }),
+      ev({ provider: 'groq', promptTokens: 12345, completionTokens: 4567, durationMs: 800 }),
+      ev({ provider: 'groq', promptTokens: null }),
       ev({ outcome: 'error', errorClass: 'rate_limit', provider: 'zai', model: 'glm' }),
       ev({ outcome: 'error', errorClass: 'rate_limit', provider: 'zai', model: 'glm' }),
     ],

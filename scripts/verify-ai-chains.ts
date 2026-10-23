@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
-import { claudeClient, groqClient, hfClient, zaiClient } from '../src/services/ai/clients';
+import { claudeClient, hfClient, zaiClient } from '../src/services/ai/clients';
 import { chatRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
@@ -31,17 +31,6 @@ interface SlotSpec {
 
 const SLOTS: SlotSpec[] = [
   // SMART
-  ...(env.GROQ_API_KEY
-    ? [
-        {
-          chain: 'smart' as const,
-          name: `Groq ${env.GROQ_MODEL}`,
-          client: groqClient,
-          model: env.GROQ_MODEL,
-          vision: false,
-        },
-      ]
-    : []),
   {
     chain: 'smart',
     name: `z.ai ${env.AI_MODEL}`,
@@ -69,17 +58,6 @@ const SLOTS: SlotSpec[] = [
     vision: false,
   },
   // FAST
-  ...(env.GROQ_API_KEY
-    ? [
-        {
-          chain: 'fast' as const,
-          name: `Groq ${env.GROQ_FAST_MODEL}`,
-          client: groqClient,
-          model: env.GROQ_FAST_MODEL,
-          vision: false,
-        },
-      ]
-    : []),
   {
     chain: 'fast',
     name: `z.ai ${env.AI_FAST_MODEL}`,

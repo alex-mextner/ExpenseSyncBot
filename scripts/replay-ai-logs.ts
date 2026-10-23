@@ -110,7 +110,7 @@ if (!env.CLAUDE_API_TOKEN) {
 const CLAUDE_HOST = new URL(env.CLAUDE_BASE_URL).host;
 
 // Claude first: push every other endpoint to the back of the chain for the whole run.
-for (const key of ['groq', 'zai', 'hf']) {
+for (const key of ['zai', 'hf']) {
   recordProviderRateLimit(key, Date.now(), 24 * 60 * 60_000);
 }
 

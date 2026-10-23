@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'bun:test';
 import { findReasoningLeak } from './reasoning-leak';
 
-// The answer Groq gpt-oss-120b sent on stage (PR #170 QA, 2026-10-15 05:10 UTC), as stored in
+// The answer gpt-oss-120b (then served by Groq) sent on stage (PR #170 QA, 2026-10-15 05:10 UTC), as stored in
 // chat_messages: a cut-off list, its own notes about the conversation, then the real answer.
 const STAGE_ANSWER = `• <b>Путешествия</b>: <b>2798.61 EUR</b>  
 • <b>Алекс</b>: <b>1705.55 EUR</b>  

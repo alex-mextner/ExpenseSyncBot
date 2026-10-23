@@ -66,8 +66,8 @@ const PARTIAL_DATA_RULE =
  */
 const FINAL_ANSWER_PROMPT = `[SYSTEM] The tool-call limit for this question is reached. Do NOT call any more tools. Answer the user now, using only the tool results above. Never write an amount or a currency that is not in the tool results — do not convert currencies yourself. Adding up amounts that ARE in the tool results is allowed here (no calculate call is possible now): show the amounts you add. ${PARTIAL_DATA_RULE} If some numbers are missing, give what you have and say what is missing.`;
 /**
- * Sent when the model wrote its own notes about the task into the answer (Groq gpt-oss-120b on
- * stage, PR #170 QA). The leaked answer itself is not sent back.
+ * Sent when the model wrote its own notes about the task into the answer (seen on stage,
+ * PR #170 QA). The leaked answer itself is not sent back.
  */
 const REASONING_LEAK_NOTE =
   "[SYSTEM] Your previous reply mixed your internal notes about the conversation into the answer, so it was not shown to the user. Answer the user's last message again: only the final answer, in the user's language, without any notes about the task, the conversation or what you are going to do. Do not call tools: answer from the tool results above.";
@@ -149,7 +149,7 @@ export class ExpenseBotAgent {
   private ctx: AgentContext;
   /**
    * Results of read-only tool calls in the current run, keyed by tool name + canonical args.
-   * Models without parallel tool calls (gpt-oss on Groq) repeat identical calls and burn the
+   * Models without parallel tool calls repeat identical calls and burn the
    * round budget; a repeat gets the stored result back instead of running the tool again.
    */
   private readonly readOnlyToolResults = new Map<string, ToolResult>();
@@ -208,8 +208,8 @@ export class ExpenseBotAgent {
       let { text: finalText } = result;
       let { toolCount: totalToolCalls } = result;
 
-      // --- Reasoning leak: the model wrote its own notes about the task into the answer (Groq
-      // gpt-oss-120b on stage, PR #170 QA). Checked on the first answer and again on a validator
+      // --- Reasoning leak: the model wrote its own notes about the task into the answer (seen on
+      // stage, PR #170 QA). Checked on the first answer and again on a validator
       // re-run's answer; at most one leak re-run per run. ---
       let leakRerunDone = false;
       const handleReasoningLeak = async (): Promise<void> => {
@@ -762,7 +762,7 @@ export class ExpenseBotAgent {
 
     if (mustAnswer) {
       // The tool rounds are over while the model still wanted tools: without a last round that
-      // forbids tool calls the run would end with no text at all (prod 2026-10-12, gpt-oss making
+      // forbids tool calls the run would end with no text at all (prod 2026-10-12, a model making
       // one call per round). The tools stay declared with tool_choice 'none': every smart-chain
       // provider accepted that live (2026-10-12), and without the tools Claude refused to add up
       // the grand total because rule 7 sends all arithmetic to calculate.

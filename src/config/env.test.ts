@@ -38,7 +38,7 @@ function loadEnv(vars: Record<string, string>): LoadResult {
   try {
     // The child reports the loaded config on stdout; the parent parses it.
     const script = `const { env } = await import(${JSON.stringify(ENV_MODULE)});
-process.stdout.write(JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL }) + '\\n');`;
+process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
     const child = spawnSync(process.execPath, ['-e', script], {
       cwd,
       env: { PATH: process.env['PATH'] ?? '', ...vars },
@@ -50,13 +50,57 @@ process.stdout.write(JSON.stringify({ keys: Object.keys(env), claudeVisionModel:
   }
 }
 
-function loadedConfig(result: LoadResult): { keys: string[]; claudeVisionModel: string } {
+interface ChainOrderJson {
+  order: string[];
+  fromEnv: boolean;
+  fallback: string[];
+}
+
+function loadedConfig(result: LoadResult): {
+  keys: string[];
+  claudeVisionModel: string;
+  smartChain: ChainOrderJson;
+  fastChain: ChainOrderJson;
+} {
   expect(result.stderr).not.toContain('Missing required environment variable');
   expect(result.status).toBe(0);
-  return JSON.parse(result.stdout);
+  // A chain-order warning is logged to stdout around the report line.
+  const line = result.stdout.split('\n').find((l) => l.startsWith('REPORT:')) ?? '';
+  return JSON.parse(line.slice('REPORT:'.length));
 }
 
 describe('env config loading', () => {
+  it('defaults both text chains to z.ai → Claude → HF', () => {
+    const { smartChain, fastChain } = loadedConfig(loadEnv(REQUIRED_ENV));
+    const expected = {
+      order: ['zai', 'claude', 'hf'],
+      fromEnv: false,
+      fallback: ['zai', 'claude', 'hf'],
+    };
+    expect(smartChain).toEqual(expected);
+    expect(fastChain).toEqual(expected);
+  });
+
+  it('AI_SMART_CHAIN / AI_FAST_CHAIN set the order; unknown ids and duplicates are dropped', () => {
+    const { smartChain, fastChain } = loadedConfig(
+      loadEnv({ ...REQUIRED_ENV, AI_SMART_CHAIN: 'hf, claude,groq,hf', AI_FAST_CHAIN: 'claude' }),
+    );
+    expect(smartChain.order).toEqual(['hf', 'claude']);
+    expect(smartChain.fromEnv).toBe(true);
+    expect(fastChain.order).toEqual(['claude']);
+  });
+
+  it('a chain order naming no known provider falls back to the default order', () => {
+    const { smartChain } = loadedConfig(
+      loadEnv({ ...REQUIRED_ENV, AI_SMART_CHAIN: 'groq,gemini' }),
+    );
+    expect(smartChain).toEqual({
+      order: ['zai', 'claude', 'hf'],
+      fromEnv: false,
+      fallback: ['zai', 'claude', 'hf'],
+    });
+  });
+
   it('starts with only the required variables set — no CLAUDE_* and no retired provider keys', () => {
     const { keys, claudeVisionModel } = loadedConfig(loadEnv(REQUIRED_ENV));
     // The full credential set: a provider dropped from the chains must not linger in the config.
@@ -65,7 +109,6 @@ describe('env config loading', () => {
       'BOT_TOKEN',
       'CLAUDE_API_TOKEN',
       'GITHUB_TOKEN',
-      'GROQ_API_KEY',
       'HF_TOKEN',
     ]);
     // Claude stays optional: CLAUDE_API_TOKEN is exposed (empty) and its slots are skipped.

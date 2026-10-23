@@ -1,7 +1,7 @@
 /**
  * Detects a model's own reasoning written into the answer text: English notes about the
  * conversation ("We have a conversation where the user…", "Let's produce final answer.") inside a
- * reply to a Russian question. Groq gpt-oss-120b did this on stage (PR #170 QA, 2026-10-15).
+ * reply to a Russian question. gpt-oss-120b (then served by Groq) did this on stage (PR #170 QA, 2026-10-15).
  */
 
 /** English words in one passage before it counts as prose, not a name or a short quote. */
@@ -45,7 +45,8 @@ export function findReasoningLeak(answer: string, question: string): string | nu
   // “…” — is what the answer cites (a comment, a merchant), not the model talking about the task.
   // Every step is one linear pass: model output can be long and malformed.
   const unquoted = withoutQuotedBlocks(answer).replace(/«[^«»]*»|"[^"\n]*"|“[^“”]*”/g, ' ');
-  // gpt-oss's own channel tokens (harmony format) are never part of an answer.
+  // gpt-oss's own channel tokens (harmony format) are never part of an answer — HF_MODEL is
+  // configurable and the HF Router can serve that family.
   const channel = unquoted.indexOf('<|channel|>');
   if (channel !== -1) return unquoted.slice(channel);
   const prose = withoutTags(unquoted).replace(/\s+/g, ' ');

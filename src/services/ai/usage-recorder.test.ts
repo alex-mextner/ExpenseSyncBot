@@ -3,6 +3,7 @@
 
 import { Database } from 'bun:sqlite';
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import type { ChainOrder } from '../../config/env';
 import {
   type AiUsageEventInput,
   AiUsageEventsRepository,
@@ -17,15 +18,18 @@ mock.module('../../utils/logger', () => ({
   logger: logMock,
 }));
 
+const defaultOrder = (): ChainOrder => ({
+  order: ['zai', 'claude', 'hf'],
+  fromEnv: false,
+  fallback: ['zai', 'claude', 'hf'],
+});
 const mockEnv = {
   ANTHROPIC_API_KEY: 'test-key',
   AI_BASE_URL: 'https://test.ai/v1',
   AI_MODEL: 'test-model',
   AI_FAST_MODEL: 'test-fast',
-  GROQ_API_KEY: '',
-  GROQ_BASE_URL: 'https://test.groq/v1',
-  GROQ_MODEL: 'groq-smart',
-  GROQ_FAST_MODEL: 'groq-fast',
+  AI_SMART_CHAIN: defaultOrder(),
+  AI_FAST_CHAIN: defaultOrder(),
   CLAUDE_API_TOKEN: '',
   CLAUDE_BASE_URL: 'https://test.claude/v1/',
   CLAUDE_MODEL: 'claude-smart',
@@ -41,7 +45,6 @@ mock.module('../../config/env', () => ({ env: mockEnv }));
 
 mock.module('./clients', () => ({
   zaiClient: () => ({}),
-  groqClient: () => ({}),
   claudeClient: () => ({}),
   hfClient: () => ({}),
 }));
@@ -149,9 +152,9 @@ describe('recordAiUsage', () => {
   });
 
   it('stores a batch together', async () => {
-    recordAiUsage([event(), event({ provider: 'groq', requestId: 'req-2' })]);
+    recordAiUsage([event(), event({ provider: 'hf', requestId: 'req-2' })]);
     await flushAiUsageRecording();
-    expect(storedRows().map((r) => r.provider)).toEqual(['claude', 'groq']);
+    expect(storedRows().map((r) => r.provider)).toEqual(['claude', 'hf']);
   });
 
   it('ignores an empty batch', async () => {

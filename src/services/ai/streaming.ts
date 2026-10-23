@@ -2,10 +2,10 @@
  * Unified AI streaming round with automatic provider fallback.
  *
  * Three chains, selected via options.chain:
- *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → HF ${HF_MODEL}
- *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → HF ${HF_FAST_MODEL}
+ *   SMART: configured AI_SMART_CHAIN, default z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → HF ${HF_MODEL}
+ *   FAST:  configured AI_FAST_CHAIN, default z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → HF ${HF_FAST_MODEL}
  *   OCR:   Claude ${CLAUDE_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
- * Groq and Claude slots are skipped when their key is absent (OCR then runs HF-only).
+ * The Claude slot is skipped when its key is absent (OCR then runs HF-only); the OCR order is fixed.
  *
  * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
  * Callers that just want the final text (validator, prefill, merchant-agent) omit callbacks.
@@ -23,13 +23,13 @@
  */
 
 import OpenAI from 'openai';
-import { env } from '../../config/env';
+import { type ChainOrder, env } from '../../config/env';
 import type {
   AiUsageErrorClass,
   AiUsageEventInput,
 } from '../../database/repositories/ai-usage-events.repository';
 import { createLogger } from '../../utils/logger';
-import { claudeClient, groqClient, hfClient, zaiClient } from './clients';
+import { claudeClient, hfClient, zaiClient } from './clients';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -37,6 +37,7 @@ import {
   recordProviderReachable,
   recordProviderResponded,
 } from './provider-breaker';
+import type { ProviderId } from './provider-ids';
 import { recordAiUsage } from './usage-recorder';
 
 const logger = createLogger('ai-streaming');
@@ -454,7 +455,7 @@ function rejectsUsageStreamOption(error: unknown): boolean {
 
 /**
  * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
- * (z.ai, Groq, Claude, HF) via the shared OpenAI SDK.
+ * (z.ai, Claude, HF) via the shared OpenAI SDK.
  */
 function streamingSlot(
   name: string,
@@ -622,44 +623,102 @@ function streamingSlot(
 // ── Chain builders ──────────────────────────────────────────────────────────
 // Lazy — read env on each build so tests can mock env per-test.
 
-function buildSmartChain(): ProviderSlot[] {
-  const chain: ProviderSlot[] = [];
-  if (env.GROQ_API_KEY) {
-    chain.push(streamingSlot(`Groq (${env.GROQ_MODEL})`, 'groq', groqClient, env.GROQ_MODEL));
-  }
-  chain.push(streamingSlot(`z.ai (${env.AI_MODEL})`, 'zai', zaiClient, env.AI_MODEL));
-  if (env.CLAUDE_API_TOKEN) {
-    chain.push(
-      streamingSlot(`Claude (${env.CLAUDE_MODEL})`, 'claude', claudeClient, env.CLAUDE_MODEL, {
-        anthropic: true,
-      }),
+/** What a provider needs before it can be put in a text chain: both must be set. */
+interface ProviderAvailability {
+  model: string;
+  apiKey: string;
+}
+
+const TEXT_PROVIDER_LABELS: Record<ProviderId, string> = {
+  zai: 'z.ai',
+  claude: 'Claude',
+  hf: 'HF',
+};
+
+// Resolved at call time, not captured: tests replace the client factories after import.
+const TEXT_PROVIDER_CLIENTS: Record<ProviderId, () => OpenAI> = {
+  zai: () => zaiClient(),
+  claude: () => claudeClient(),
+  hf: () => hfClient(),
+};
+
+const loggedSkips = new Set<string>();
+
+/**
+ * Builds one text chain in the configured order (AI_SMART_CHAIN / AI_FAST_CHAIN, default
+ * z.ai → Claude → HF), skipping — and logging once — any provider whose key or model is
+ * missing. A named-but-unconfigured provider warns; one only in the default order is debug.
+ * When nothing in an operator-configured order is usable the default order is tried instead.
+ */
+function buildTextChain(
+  kind: 'smart' | 'fast',
+  chain: ChainOrder,
+  available: Record<ProviderId, ProviderAvailability>,
+): ProviderSlot[] {
+  const slotsFor = (ids: readonly ProviderId[], named: boolean): ProviderSlot[] => {
+    const slots: ProviderSlot[] = [];
+    for (const provider of ids) {
+      const { model, apiKey } = available[provider];
+      if (!model || !apiKey) {
+        const marker = `${kind}:${provider}:${!!model}:${!!apiKey}`;
+        if (!loggedSkips.has(marker)) {
+          loggedSkips.add(marker);
+          const detail = { chain: kind, provider, hasModel: !!model, hasKey: !!apiKey };
+          if (named) {
+            logger.warn(
+              detail,
+              '[AI_STREAM] Provider named in the chain order is not configured — skipping it',
+            );
+          } else {
+            logger.debug(
+              detail,
+              '[AI_STREAM] Provider in the default chain order is not configured — skipping it',
+            );
+          }
+        }
+        continue;
+      }
+      slots.push(
+        streamingSlot(
+          `${TEXT_PROVIDER_LABELS[provider]} (${model})`,
+          provider,
+          TEXT_PROVIDER_CLIENTS[provider],
+          model,
+          provider === 'claude' ? { anthropic: true } : {},
+        ),
+      );
+    }
+    return slots;
+  };
+
+  const configured = slotsFor(chain.order, chain.fromEnv);
+  if (configured.length > 0 || !chain.fromEnv) return configured;
+  // Rebuilt on every round, so this is logged once per process, like the skips above.
+  const marker = `${kind}:nothing-configured`;
+  if (!loggedSkips.has(marker)) {
+    loggedSkips.add(marker);
+    logger.error(
+      { chain: kind, order: chain.order },
+      '[AI_STREAM] Configured provider order named nothing that is configured — using the default order',
     );
   }
-  chain.push(streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL));
-  return chain;
+  return slotsFor(chain.fallback, false);
+}
+
+function buildSmartChain(): ProviderSlot[] {
+  return buildTextChain('smart', env.AI_SMART_CHAIN, {
+    zai: { model: env.AI_MODEL, apiKey: env.ANTHROPIC_API_KEY },
+    claude: { model: env.CLAUDE_MODEL, apiKey: env.CLAUDE_API_TOKEN },
+    hf: { model: env.HF_MODEL, apiKey: env.HF_TOKEN },
+  });
 }
 
 function buildFastChain(): ProviderSlot[] {
-  const chain: ProviderSlot[] = [];
-  if (env.GROQ_API_KEY) {
-    chain.push(
-      streamingSlot(`Groq (${env.GROQ_FAST_MODEL})`, 'groq', groqClient, env.GROQ_FAST_MODEL),
-    );
-  }
-  chain.push(streamingSlot(`z.ai (${env.AI_FAST_MODEL})`, 'zai', zaiClient, env.AI_FAST_MODEL));
-  if (env.CLAUDE_API_TOKEN) {
-    chain.push(
-      streamingSlot(
-        `Claude (${env.CLAUDE_FAST_MODEL})`,
-        'claude',
-        claudeClient,
-        env.CLAUDE_FAST_MODEL,
-        { anthropic: true },
-      ),
-    );
-  }
-  chain.push(streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL));
-  return chain;
+  return buildTextChain('fast', env.AI_FAST_CHAIN, {
+    zai: { model: env.AI_FAST_MODEL, apiKey: env.ANTHROPIC_API_KEY },
+    claude: { model: env.CLAUDE_FAST_MODEL, apiKey: env.CLAUDE_API_TOKEN },
+    hf: { model: env.HF_FAST_MODEL, apiKey: env.HF_TOKEN },
+  });
 }
 
 function buildOcrChain(): ProviderSlot[] {

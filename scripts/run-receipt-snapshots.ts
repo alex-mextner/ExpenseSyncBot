@@ -4,7 +4,7 @@
  *
  * ⚠ INTENTIONALLY NOT PART OF `bun run test` ⚠
  *
- * This script hits real AI providers (Claude, z.ai, Groq, HF) and costs real tokens.
+ * This script hits real AI providers (Claude, z.ai, HF) and costs real tokens.
  * It's opt-in — run manually before releasing prompt/model changes:
  *
  *     bun run scripts/run-receipt-snapshots.ts

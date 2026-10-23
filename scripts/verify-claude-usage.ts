@@ -64,9 +64,6 @@ for (const [key, value] of Object.entries(PLACEHOLDERS)) {
   // Claude vision call fall through to a billed HF request.
   process.env[key] = value;
 }
-// A Groq key in the environment would add a Groq slot; the chain is Claude-only either way
-// (excludeProviders below), but keep the rows free of surprises.
-process.env['GROQ_API_KEY'] = '';
 process.env['LOG_LEVEL'] ??= 'silent';
 const dbPath =
   argValue('--db') ?? path.join(mkdtempSync(path.join(tmpdir(), 'esb-usage-probe-')), 'probe.db');

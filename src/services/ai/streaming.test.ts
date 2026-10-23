@@ -1,6 +1,7 @@
 // Tests for AI streaming: fallback chain, tool call index resolution, isRetryableError
 
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import type { ChainOrder } from '../../config/env';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const logMock = createMockLogger();
@@ -9,16 +10,20 @@ mock.module('../../utils/logger', () => ({
   createLogger: () => logMock,
   logger: logMock,
 }));
+const defaultOrder = (): ChainOrder => ({
+  order: ['zai', 'claude', 'hf'],
+  fromEnv: false,
+  fallback: ['zai', 'claude', 'hf'],
+});
+const DEFAULT_ORDER = defaultOrder();
 
 const mockEnv = {
   ANTHROPIC_API_KEY: 'test-key',
   AI_BASE_URL: 'https://test.ai/v1',
   AI_MODEL: 'test-model',
   AI_FAST_MODEL: 'test-fast',
-  GROQ_API_KEY: '',
-  GROQ_BASE_URL: 'https://test.groq/v1',
-  GROQ_MODEL: 'groq-smart',
-  GROQ_FAST_MODEL: 'groq-fast',
+  AI_SMART_CHAIN: { ...defaultOrder() },
+  AI_FAST_CHAIN: { ...defaultOrder() },
   CLAUDE_API_TOKEN: '',
   CLAUDE_BASE_URL: 'https://test.claude/v1/',
   CLAUDE_MODEL: 'claude-smart',
@@ -35,7 +40,6 @@ mock.module('../../config/env', () => ({ env: mockEnv }));
 // Mock clients to avoid real HTTP calls
 mock.module('./clients', () => ({
   zaiClient: () => ({}),
-  groqClient: () => ({}),
   claudeClient: () => ({}),
   hfClient: () => ({}),
 }));
@@ -241,7 +245,8 @@ describe('aiStreamRound fallback chain', () => {
   beforeEach(async () => {
     // The provider breaker is module-global state — reset it so demotions don't leak between tests.
     resetProviderBreaker();
-    mockEnv.GROQ_API_KEY = '';
+    mockEnv.AI_SMART_CHAIN = defaultOrder();
+    mockEnv.AI_FAST_CHAIN = defaultOrder();
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     mockEnv.CLAUDE_MODEL = 'claude-smart';
     mockEnv.CLAUDE_FAST_MODEL = 'claude-fast';
@@ -263,7 +268,7 @@ describe('aiStreamRound fallback chain', () => {
       throw new OpenAI.APIError(500, { message: 'down' }, 'down', new Headers());
     });
     const clientsMod = await import('./clients');
-    const spies = (['groqClient', 'zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
+    const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI),
@@ -286,11 +291,10 @@ describe('aiStreamRound fallback chain', () => {
   }
 
   it.each([
-    ['smart' as const, ['groq-smart', 'test-model', 'claude-smart', 'hf-test']],
-    ['fast' as const, ['groq-fast', 'test-fast', 'claude-fast', 'hf-fast']],
+    ['smart' as const, ['test-model', 'claude-smart', 'hf-test']],
+    ['fast' as const, ['test-fast', 'claude-fast', 'hf-fast']],
     ['ocr' as const, ['claude-vision', 'hf-vision']],
   ])('the %s chain with every key set is exactly %p', async (chain, expected) => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     expect(await chainModels(chain)).toEqual(expected);
   });
@@ -299,32 +303,39 @@ describe('aiStreamRound fallback chain', () => {
     ['smart' as const, ['test-model', 'hf-test']],
     ['fast' as const, ['test-fast', 'hf-fast']],
     ['ocr' as const, ['hf-vision']],
-  ])('without Groq and Claude keys the %s chain degrades to %p', async (chain, expected) => {
+  ])('without a Claude key the %s chain degrades to %p', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = '';
     expect(await chainModels(chain)).toEqual(expected);
   });
 
+  it('AI_SMART_CHAIN / AI_FAST_CHAIN override the order; the other chain keeps its default', async () => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['hf', 'claude'], fromEnv: true };
+    expect(await chainModels('smart')).toEqual(['hf-test', 'claude-smart']);
+    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast', 'hf-fast']);
+  });
+
+  it('a configured order naming nothing usable falls back to the default order', async () => {
+    mockEnv.CLAUDE_API_TOKEN = '';
+    mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['claude'], fromEnv: true };
+    expect(await chainModels('smart')).toEqual(['test-model', 'hf-test']);
+  });
+
   // A stalled model is handed off: the agent excludes it for the rest of the run (HYP-1716).
   it('skips the excluded providers and keeps the rest of the chain in order', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
-    expect(await chainModels('smart', ['Groq (groq-smart)'])).toEqual([
-      'test-model',
-      'claude-smart',
-      'hf-test',
-    ]);
-    expect(await chainModels('smart', ['Groq (groq-smart)', 'z.ai (test-model)'])).toEqual([
-      'claude-smart',
+    expect(await chainModels('smart', ['z.ai (test-model)'])).toEqual(['claude-smart', 'hf-test']);
+    expect(await chainModels('smart', ['z.ai (test-model)', 'Claude (claude-smart)'])).toEqual([
       'hf-test',
     ]);
   });
 
   it('nextProvider names the slot the chain would try first without the excluded ones', () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
-    expect(streamingModule.nextProvider('smart', [])).toBe('Groq (groq-smart)');
-    expect(streamingModule.nextProvider('smart', ['Groq (groq-smart)'])).toBe('z.ai (test-model)');
+    expect(streamingModule.nextProvider('smart', [])).toBe('z.ai (test-model)');
+    expect(streamingModule.nextProvider('smart', ['z.ai (test-model)'])).toBe(
+      'Claude (claude-smart)',
+    );
     expect(
       streamingModule.nextProvider('smart', [
-        'Groq (groq-smart)',
         'z.ai (test-model)',
         'Claude (claude-smart)',
         'HF (hf-test)',
@@ -332,49 +343,9 @@ describe('aiStreamRound fallback chain', () => {
     ).toBeNull();
   });
 
-  it('nextProvider follows the breaker order: a demoted provider is not next', () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+  it('nextProvider follows the breaker order: a demoted z.ai is not next, Claude is', () => {
     recordProviderRateLimit('zai', Date.now(), 60_000);
-    expect(streamingModule.nextProvider('smart', ['Groq (groq-smart)'])).toBe(
-      'Claude (claude-smart)',
-    );
-  });
-
-  it.each([
-    ['smart' as const, 'groq-smart'],
-    ['fast' as const, 'groq-fast'],
-  ])('uses Groq first when configured for the %s chain', async (chain, expectedModel) => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
-
-    const calls: string[] = [];
-    const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
-      calls.push(params.model);
-      return {
-        [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: 'hello from Groq' }, finish_reason: null }] };
-          yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
-        },
-      };
-    });
-
-    const clientsMod = await import('./clients');
-    const groqSpy = spyOn(clientsMod, 'groqClient').mockReturnValue({
-      chat: { completions: { create: createMock } },
-    } as unknown as OpenAI);
-
-    try {
-      const result = await streamingModule.aiStreamRound({
-        messages: [{ role: 'user', content: 'hi' }],
-        maxTokens: 100,
-        chain,
-      });
-
-      expect(result.text).toBe('hello from Groq');
-      expect(result.providerUsed).toContain('Groq');
-      expect(calls).toEqual([expectedModel]);
-    } finally {
-      groqSpy.mockRestore();
-    }
+    expect(streamingModule.nextProvider('smart', [])).toBe('Claude (claude-smart)');
   });
 
   it.each([
@@ -478,7 +449,6 @@ describe('aiStreamRound fallback chain', () => {
   it("sends tools with tool_choice 'none' to every smart-chain provider when the caller forbids tool calls", async () => {
     // The agent's forced final round: the history holds tool calls, so the tools stay declared,
     // but the model must answer in text (see the forced round in agent.ts).
-    mockEnv.GROQ_API_KEY = 'test-groq';
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const sent: OpenAI.ChatCompletionCreateParamsStreaming[] = [];
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
@@ -487,7 +457,7 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     const clientsMod = await import('./clients');
-    const spies = (['groqClient', 'zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
+    const spies = (['zaiClient', 'claudeClient', 'hfClient'] as const).map((fn) =>
       spyOn(clientsMod, fn).mockReturnValue({
         chat: { completions: { create } },
       } as unknown as OpenAI),
@@ -504,12 +474,7 @@ describe('aiStreamRound fallback chain', () => {
         }),
       ).rejects.toThrow();
 
-      expect(sent.map((p) => p.model)).toEqual([
-        'groq-smart',
-        'test-model',
-        'claude-smart',
-        'hf-test',
-      ]);
+      expect(sent.map((p) => p.model)).toEqual(['test-model', 'claude-smart', 'hf-test']);
       for (const params of sent) {
         expect(params.tools).toEqual(calculateTool);
         expect(params.tool_choice).toBe('none');
@@ -550,53 +515,46 @@ describe('aiStreamRound fallback chain', () => {
     }
   });
 
-  it('falls back from a rate-limited Groq request without breaking the existing chain', async () => {
-    mockEnv.GROQ_API_KEY = 'test-groq';
+  // Owner-ordered z.ai head: a depleted z.ai (429 quota) must cost one fast failure, not one per request.
+  it.each([
+    ['smart' as const, 'test-model', 'claude-smart'],
+    ['fast' as const, 'test-fast', 'claude-fast'],
+  ])('a quota-exhausted z.ai (429) falls through to Claude and is skipped on the next %s round', async (chain, zaiModel, claudeModel) => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const calls: string[] = [];
-
-    const groqCreate = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
+    const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
-      throw new OpenAI.APIError(429, { message: 'rate limited' }, 'rate limited', new Headers());
-    });
-    const zaiCreate = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
-      calls.push(params.model);
+      if (params.model === zaiModel) {
+        throw new OpenAI.APIError(
+          429,
+          { message: 'Insufficient balance or quota' },
+          'quota',
+          new Headers(),
+        );
+      }
       return {
         [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: 'zai fallback' }, finish_reason: 'stop' }] };
+          yield { choices: [{ delta: { content: 'from Claude' }, finish_reason: 'stop' }] };
         },
       };
     });
-
     const clientsMod = await import('./clients');
-    const groqSpy = spyOn(clientsMod, 'groqClient').mockReturnValue({
-      chat: { completions: { create: groqCreate } },
-    } as unknown as OpenAI);
-    const zaiSpy = spyOn(clientsMod, 'zaiClient').mockReturnValue({
-      chat: { completions: { create: zaiCreate } },
-    } as unknown as OpenAI);
-
+    const spies = (['zaiClient', 'claudeClient'] as const).map((fn) =>
+      spyOn(clientsMod, fn).mockReturnValue({
+        chat: { completions: { create } },
+      } as unknown as OpenAI),
+    );
     try {
-      const result = await streamingModule.aiStreamRound({
-        messages: [{ role: 'user', content: 'hi' }],
+      const options = {
+        messages: [{ role: 'user' as const, content: 'hi' }],
         maxTokens: 100,
-        chain: 'smart',
-      });
-
-      expect(result.text).toBe('zai fallback');
-      expect(calls).toEqual(['groq-smart', 'test-model']);
-
-      // The next request should not pay the same rate-limit penalty again: Groq
-      // is temporarily demoted and the healthy fallback is tried first.
-      const second = await streamingModule.aiStreamRound({
-        messages: [{ role: 'user', content: 'hi again' }],
-        maxTokens: 100,
-        chain: 'smart',
-      });
-      expect(second.text).toBe('zai fallback');
-      expect(calls).toEqual(['groq-smart', 'test-model', 'test-model']);
+        chain,
+      };
+      expect((await streamingModule.aiStreamRound(options)).text).toBe('from Claude');
+      expect((await streamingModule.aiStreamRound(options)).text).toBe('from Claude');
+      expect(calls).toEqual([zaiModel, claudeModel, claudeModel]);
     } finally {
-      groqSpy.mockRestore();
-      zaiSpy.mockRestore();
+      for (const spy of spies) spy.mockRestore();
     }
   });
 

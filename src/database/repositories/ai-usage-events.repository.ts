@@ -21,7 +21,7 @@ export type AiUsageErrorClass =
 export interface AiUsageEventInput {
   /** Epoch ms (UTC) when the attempt started. */
   at: number;
-  /** Endpoint key: 'groq' | 'zai' | 'claude' | 'hf'. */
+  /** Endpoint key: 'zai' | 'claude' | 'hf' (historical rows may carry 'groq'). */
   provider: string;
   model: string;
   chain: string;
