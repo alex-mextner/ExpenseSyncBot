@@ -1450,6 +1450,40 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Created agent trajectory tables');
       },
     },
+    {
+      // Durable per-provider AI usage: one row per provider attempt of aiStreamRound (ok, error,
+      // or skipped before any request). Token columns are NULL when the provider did not report
+      // usage — NULL is "unknown", never 0. No prompts, completions, user ids or chat ids.
+      name: '053_create_ai_usage_events',
+      up: () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS ai_usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            chain TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'error', 'skipped')),
+            error_class TEXT,
+            http_status INTEGER,
+            duration_ms INTEGER,
+            prompt_tokens INTEGER CHECK (prompt_tokens IS NULL OR prompt_tokens >= 0),
+            completion_tokens INTEGER CHECK (completion_tokens IS NULL OR completion_tokens >= 0),
+            reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+            cached_tokens INTEGER CHECK (cached_tokens IS NULL OR cached_tokens >= 0),
+            request_id TEXT,
+            CHECK (outcome = 'error' OR (error_class IS NULL AND http_status IS NULL))
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_usage_events_at ON ai_usage_events(at)`);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_ai_usage_events_provider_at
+          ON ai_usage_events(provider, at)
+        `);
+        logger.info('✓ Created ai_usage_events table');
+      },
+    },
   ];
 
   // Check and run migrations
