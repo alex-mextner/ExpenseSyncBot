@@ -340,6 +340,16 @@ describe('aiStreamRound usage events', () => {
         errorClass: null,
         httpStatus: null,
         durationMs: expect.any(Number),
+        firstTokenMs: expect.any(Number),
+        generationMs: 0,
+        promptSize: {
+          systemPromptTokens: 0,
+          toolCatalogTokens: 0,
+          historyTokens: 0,
+          userTokens: Math.ceil('secret user prompt text'.length / 3.5),
+          toolCount: 0,
+          messageCount: 1,
+        },
         promptTokens: 11,
         completionTokens: 5,
         reasoningTokens: 2,
@@ -392,10 +402,13 @@ describe('aiStreamRound usage events', () => {
       'costMicroUsd',
       'durationMs',
       'errorClass',
+      'firstTokenMs',
+      'generationMs',
       'httpStatus',
       'model',
       'outcome',
       'preset',
+      'promptSize',
       'promptTokens',
       'provider',
       'purpose',
@@ -873,5 +886,185 @@ describe('aiStreamRound streaming usage request', () => {
       ['test-fast', true],
       ['hf-fast', true],
     ]);
+  });
+});
+
+describe('aiStreamRound prompt size estimate', () => {
+  const TOOLS: OpenAI.ChatCompletionTool[] = [
+    { type: 'function', function: { name: 'get_expenses', parameters: { type: 'object' } } },
+  ];
+
+  it('records the estimated request components on every attempt that sent a request, not on skipped ones', async () => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    const restore = await useCreate(async (params) => {
+      if (params.model === 'test-model') throw apiError(500, 'down');
+      return streamOf(textChunks('ok'));
+    });
+    try {
+      await run({
+        excludeProviders: ['HF (hf-test)'],
+        tools: TOOLS,
+        messages: [
+          { role: 'system', content: 's'.repeat(70) },
+          { role: 'user', content: 'h'.repeat(35) },
+          { role: 'assistant', content: 'a'.repeat(35) },
+          { role: 'user', content: 'u'.repeat(7) },
+        ],
+      });
+    } finally {
+      restore();
+    }
+
+    const size = {
+      systemPromptTokens: 20,
+      toolCatalogTokens: Math.ceil(JSON.stringify(TOOLS).length / 3.5),
+      historyTokens: 20,
+      userTokens: 2,
+      toolCount: 1,
+      messageCount: 4,
+    };
+    expect(recorded.map((e) => [e.provider, e.outcome, e.promptSize])).toEqual([
+      ['hf', 'skipped', null],
+      ['zai', 'error', size],
+      ['claude', 'ok', size],
+    ]);
+  });
+
+  it('stores only counts: no prompt text reaches the event', async () => {
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    const restore = await useCreate(async () => streamOf(textChunks('ok')));
+    try {
+      await run();
+    } finally {
+      restore();
+    }
+    expect(JSON.stringify(recorded)).not.toContain('secret user prompt text');
+  });
+});
+
+describe('aiStreamRound timing: first token and generation window', () => {
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  /** A stream that waits before each chunk, so the recorder has real durations to measure. */
+  function timedStream(steps: Array<{ waitMs: number; chunk: object }>) {
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        for (const step of steps) {
+          await sleep(step.waitMs);
+          yield step.chunk;
+        }
+      },
+    };
+  }
+
+  const delta = (content: string) => ({ choices: [{ delta: { content }, finish_reason: null }] });
+
+  it('measures the first content delta from the request start and the window to the last delta', async () => {
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    const restore = await useCreate(async () =>
+      timedStream([
+        { waitMs: 120, chunk: delta('he') },
+        { waitMs: 100, chunk: delta('llo') },
+        { waitMs: 5, chunk: { choices: [{ delta: {}, finish_reason: 'stop' }] } },
+        // Trailing usage-only chunk arrives late: it is not generation.
+        { waitMs: 150, chunk: { choices: [], usage: FULL_USAGE } },
+      ]),
+    );
+    try {
+      await run();
+    } finally {
+      restore();
+    }
+
+    const event = recorded[0];
+    expect(event?.firstTokenMs).toBeGreaterThanOrEqual(110);
+    expect(event?.firstTokenMs).toBeLessThan(220);
+    expect(event?.generationMs).toBeGreaterThanOrEqual(90);
+    expect(event?.generationMs).toBeLessThan(140);
+    expect(event?.durationMs).toBeGreaterThanOrEqual(
+      (event?.firstTokenMs ?? Number.POSITIVE_INFINITY) + (event?.generationMs ?? 0),
+    );
+  });
+
+  it('counts a tool-call delta as the first token', async () => {
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    const toolDelta = {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id: 'c1', function: { name: 'get_expenses', arguments: '{}' } },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    };
+    const restore = await useCreate(async () =>
+      timedStream([
+        { waitMs: 60, chunk: toolDelta },
+        { waitMs: 1, chunk: { choices: [{ delta: {}, finish_reason: 'tool_calls' }] } },
+      ]),
+    );
+    try {
+      await run();
+    } finally {
+      restore();
+    }
+    expect(recorded[0]?.firstTokenMs).toBeGreaterThanOrEqual(50);
+    expect(recorded[0]?.generationMs).toBe(0);
+  });
+
+  it('a one-chunk answer has a zero generation window, not an unknown one', async () => {
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    const restore = await useCreate(async () => streamOf(textChunks('hello', FULL_USAGE)));
+    try {
+      await run();
+    } finally {
+      restore();
+    }
+    expect(recorded[0]?.firstTokenMs).toEqual(expect.any(Number));
+    expect(recorded[0]?.generationMs).toBe(0);
+  });
+
+  it('error, empty and skipped attempts keep both timings NULL', async () => {
+    mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+    const restore = await useCreate(async (params) => {
+      if (params.model === 'test-model') {
+        return streamOf([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+      }
+      if (params.model === 'claude-smart') throw apiError(500, 'down');
+      return streamOf(textChunks('x'));
+    });
+    try {
+      await run({ excludeProviders: ['HF (hf-test)'] }).catch(() => undefined);
+    } finally {
+      restore();
+    }
+    expect(recorded.map((e) => e.outcome)).toEqual(['skipped', 'error', 'error']);
+    for (const event of recorded) {
+      expect(event.firstTokenMs).toBeNull();
+      expect(event.generationMs).toBeNull();
+    }
+  });
+
+  it('a mid-stream failure after text keeps both timings NULL', async () => {
+    mockEnv.AI_SMART_CHAIN = hfHead();
+    const restore = await useCreate(async () => ({
+      [Symbol.asyncIterator]: async function* () {
+        yield delta('partial');
+        throw new OpenAI.APIConnectionError({ message: 'Connection error.' });
+      },
+    }));
+    try {
+      await run().catch(() => undefined);
+    } finally {
+      restore();
+    }
+    expect(recorded[0]).toMatchObject({
+      outcome: 'error',
+      firstTokenMs: null,
+      generationMs: null,
+    });
   });
 });

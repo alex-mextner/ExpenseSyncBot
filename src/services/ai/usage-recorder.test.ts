@@ -93,6 +93,9 @@ function event(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput {
     role: null,
     preset: null,
     costMicroUsd: null,
+    firstTokenMs: null,
+    generationMs: null,
+    promptSize: null,
     ...overrides,
   };
 }

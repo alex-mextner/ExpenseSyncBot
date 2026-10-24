@@ -1500,6 +1500,34 @@ export function runMigrations(db: Database): void {
         logger.info('✓ Added role, preset and cost to ai_usage_events');
       },
     },
+    {
+      // Speed telemetry: first_token_ms is request start → first content/tool-call delta of an ok
+      // attempt; generation_ms is first → last such delta. Tokens per second is NOT stored: it is
+      // derived at read time from generation_ms and the token columns. NULL = not measured (error,
+      // empty or skipped attempt, or a row from before this migration) — never 0 for "unknown".
+      // Prompt size: system_prompt_tokens, tool_catalog_tokens, history_tokens, user_tokens are
+      // character-based ESTIMATES of the request components (the provider's prompt_tokens stays the
+      // truth), tool_count / message_count are exact. NULL on skipped attempts and old rows.
+      // Same column names as HyperCalendarBot's ai_usage_events; numbering is per repo.
+      name: '055_add_timing_and_prompt_size_to_ai_usage_events',
+      up: () => {
+        for (const column of [
+          'first_token_ms',
+          'generation_ms',
+          'system_prompt_tokens',
+          'tool_catalog_tokens',
+          'history_tokens',
+          'user_tokens',
+          'tool_count',
+          'message_count',
+        ]) {
+          db.exec(
+            `ALTER TABLE ai_usage_events ADD COLUMN ${column} INTEGER CHECK (${column} IS NULL OR ${column} >= 0)`,
+          );
+        }
+        logger.info('✓ Added timing and prompt-size columns to ai_usage_events');
+      },
+    },
   ];
 
   // Check and run migrations

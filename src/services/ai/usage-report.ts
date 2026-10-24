@@ -51,6 +51,10 @@ export interface ModelUsageStats {
   cost: CostTotals;
   p50DurationMs: number | null;
   p95DurationMs: number | null;
+  durationRows: number;
+  firstToken: FirstTokenStats;
+  generationSpeed: GenerationSpeedStats;
+  promptSize: PromptSizeStats;
   firstOkAt: number | null;
   lastOkAt: number | null;
   lastError: LastError | null;
@@ -68,6 +72,9 @@ export interface RoleUsageStats {
   cost: CostTotals;
   p50DurationMs: number | null;
   p95DurationMs: number | null;
+  durationRows: number;
+  firstToken: FirstTokenStats;
+  generationSpeed: GenerationSpeedStats;
 }
 
 export type ProviderStatus = 'no_traffic' | 'skipped_only' | 'healthy' | 'degraded' | 'failing';
@@ -193,6 +200,127 @@ function statusOf(c: Counts, successRate: number | null): ProviderStatus {
   return 'failing';
 }
 
+/** A generation window shorter than this is timer noise: it would turn a few tokens into an absurd rate. */
+const MIN_GENERATION_MS = 50;
+
+/**
+ * Visible output tokens per second of one attempt: (completion − reasoning) × 1000 / generationMs.
+ * Reasoning tokens are billed inside completion_tokens but are not streamed in the generation
+ * window, so they are left out when reported. NULL when the window or the completion count is
+ * unknown, the window is under 50 ms, or nothing visible is left — unknown is never 0.
+ */
+export function outputTokensPerS(
+  row: Pick<AiUsageEvent, 'generationMs' | 'completionTokens' | 'reasoningTokens'>,
+): number | null {
+  if (row.generationMs === null || row.completionTokens === null) return null;
+  if (row.generationMs < MIN_GENERATION_MS) return null;
+  const visible = row.completionTokens - (row.reasoningTokens ?? 0);
+  return visible > 0 ? (visible * 1000) / row.generationMs : null;
+}
+
+export interface FirstTokenStats {
+  /** ok rows that had a first-token time; the rest are unknown, not zero. */
+  rows: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+}
+
+export interface GenerationSpeedStats {
+  /** ok rows with a usable tokens-per-second value. */
+  rows: number;
+  p50TokensPerS: number | null;
+  p95TokensPerS: number | null;
+}
+
+interface SpeedStats {
+  /** ok rows that had a total duration (the denominator of p50DurationMs / p95DurationMs). */
+  durationRows: number;
+  firstToken: FirstTokenStats;
+  generationSpeed: GenerationSpeedStats;
+}
+
+/**
+ * Estimated request size of the attempts that sent a request (ok and error, never skipped), from
+ * character-based estimates — the provider's promptTokens stays the truth. `p50`/`p95Tokens` are
+ * over the sum of the four components; `toolCatalogShare` is sum(tool catalog) / sum(total).
+ */
+export interface PromptSizeStats {
+  rows: number;
+  p50Tokens: number | null;
+  p95Tokens: number | null;
+  toolCatalogShare: number | null;
+  /** per-component median, to see which part dominates and what compaction changed. */
+  p50: {
+    system: number | null;
+    toolCatalog: number | null;
+    history: number | null;
+    user: number | null;
+  };
+}
+
+function promptSizeStats(rows: readonly AiUsageEvent[]): PromptSizeStats {
+  const sizes = rows.flatMap((r) =>
+    r.outcome !== 'skipped' && r.promptSize ? [r.promptSize] : [],
+  );
+  const sorted = (pick: (s: (typeof sizes)[number]) => number) =>
+    sizes.map(pick).sort((a, b) => a - b);
+  const totals = sorted(
+    (s) => s.systemPromptTokens + s.toolCatalogTokens + s.historyTokens + s.userTokens,
+  );
+  const totalSum = totals.reduce((sum, t) => sum + t, 0);
+  const toolSum = sizes.reduce((sum, s) => sum + s.toolCatalogTokens, 0);
+  return {
+    rows: sizes.length,
+    p50Tokens: percentile(totals, 0.5),
+    p95Tokens: percentile(totals, 0.95),
+    toolCatalogShare: totalSum > 0 ? toolSum / totalSum : null,
+    p50: {
+      system: percentile(
+        sorted((s) => s.systemPromptTokens),
+        0.5,
+      ),
+      toolCatalog: percentile(
+        sorted((s) => s.toolCatalogTokens),
+        0.5,
+      ),
+      history: percentile(
+        sorted((s) => s.historyTokens),
+        0.5,
+      ),
+      user: percentile(
+        sorted((s) => s.userTokens),
+        0.5,
+      ),
+    },
+  };
+}
+
+/** Speed percentiles (nearest-rank) over successful attempts that have the value. */
+function speedStats(okRows: readonly AiUsageEvent[]): SpeedStats {
+  const firstTokens = okRows
+    .flatMap((r) => (r.firstTokenMs === null ? [] : [r.firstTokenMs]))
+    .sort((a, b) => a - b);
+  const rates = okRows
+    .flatMap((r) => {
+      const rate = outputTokensPerS(r);
+      return rate === null ? [] : [rate];
+    })
+    .sort((a, b) => a - b);
+  return {
+    durationRows: okRows.filter((r) => r.durationMs !== null).length,
+    firstToken: {
+      rows: firstTokens.length,
+      p50Ms: percentile(firstTokens, 0.5),
+      p95Ms: percentile(firstTokens, 0.95),
+    },
+    generationSpeed: {
+      rows: rates.length,
+      p50TokensPerS: percentile(rates, 0.5),
+      p95TokensPerS: percentile(rates, 0.95),
+    },
+  };
+}
+
 const LEGACY_ROLE = 'legacy';
 const ROLE_ORDER: readonly string[] = ['planner', 'executor', 'repair', LEGACY_ROLE];
 
@@ -215,6 +343,7 @@ function roleStats(role: string, provider: string, rows: readonly AiUsageEvent[]
     cost: costTotals(rows),
     p50DurationMs: percentile(durations, 0.5),
     p95DurationMs: percentile(durations, 0.95),
+    ...speedStats(rows.filter((r) => r.outcome === 'ok')),
   };
 }
 
@@ -252,6 +381,8 @@ function modelStats(
     cost: costTotals(rows),
     p50DurationMs: percentile(durations, 0.5),
     p95DurationMs: percentile(durations, 0.95),
+    ...speedStats(okRows),
+    promptSize: promptSizeStats(rows),
     firstOkAt:
       okRows.length === 0
         ? null
@@ -322,6 +453,15 @@ export function aggregateUsage(
 
 const intFmt = new Intl.NumberFormat('en-US');
 
+function tokenCount(value: number | null): string {
+  return value === null ? 'n/a' : intFmt.format(value);
+}
+
+/** `70.0%` of the estimated prompt, `n/a` when no row was estimated. */
+function share(value: number | null): string {
+  return value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
+}
+
 /** Floor, not round: 94.6% must not read as 95% next to a "degraded" verdict. */
 function pct(rate: number | null): string {
   return rate === null ? 'n/a' : `${Math.floor(rate * 1000) / 10}%`;
@@ -338,6 +478,11 @@ function isoDate(ms: number): string {
 function duration(ms: number | null, secondsUnit: string, msUnit: string): string {
   if (ms === null) return 'n/a';
   return ms < 1000 ? `${ms}${msUnit}` : `${(ms / 1000).toFixed(1)}${secondsUnit}`;
+}
+
+/** `50.0 tok/s`, `n/a` when no row had both a window and a token count. */
+function tokensPerS(value: number | null, unit: string): string {
+  return value === null ? 'n/a' : `${value.toFixed(1)} ${unit}`;
 }
 
 function errorClasses(m: ModelUsageStats): string {
@@ -400,6 +545,9 @@ export function formatUsageText(report: UsageReport): string {
       `${m.provider}:${m.model}`,
       `  attempts ${m.attempts}  ok ${m.ok}  err ${m.errors}  skipped ${m.skipped}  success ${pct(m.successRate)}`,
       `  latency p50 ${duration(m.p50DurationMs, 's', 'ms')}  p95 ${duration(m.p95DurationMs, 's', 'ms')}`,
+      `  first token p50 ${duration(m.firstToken.p50Ms, 's', 'ms')}  p95 ${duration(m.firstToken.p95Ms, 's', 'ms')}  (n=${m.firstToken.rows})`,
+      `  speed p50 ${tokensPerS(m.generationSpeed.p50TokensPerS, 'tok/s')}  p95 ${tokensPerS(m.generationSpeed.p95TokensPerS, 'tok/s')}  (n=${m.generationSpeed.rows})`,
+      `  prompt est. p50 ${tokenCount(m.promptSize.p50Tokens)}  p95 ${tokenCount(m.promptSize.p95Tokens)}  tools ${share(m.promptSize.toolCatalogShare)}  (n=${m.promptSize.rows})`,
     );
     let tokens = `  tokens ${tokenSummary(m, 'in', 'out')}`;
     if (m.tokens.reasoning.sum !== null) tokens += ` / reasoning ${tokenValue(m.tokens.reasoning)}`;
@@ -416,7 +564,7 @@ export function formatUsageText(report: UsageReport): string {
     lines.push('By role');
     for (const r of report.roles) {
       lines.push(
-        `  ${r.role} / ${r.provider}: ${r.ok}/${r.attempts} ok (${pct(r.successRate)}), p50 ${duration(r.p50DurationMs, 's', 'ms')}, p95 ${duration(r.p95DurationMs, 's', 'ms')}, tokens in ${tokenValue(r.tokens.prompt)} / out ${tokenValue(r.tokens.completion)}, cost ${costValue(r.cost)}`,
+        `  ${r.role} / ${r.provider}: ${r.ok}/${r.attempts} ok (${pct(r.successRate)}), p50 ${duration(r.p50DurationMs, 's', 'ms')}, p95 ${duration(r.p95DurationMs, 's', 'ms')}, first token p50 ${duration(r.firstToken.p50Ms, 's', 'ms')}, speed p50 ${tokensPerS(r.generationSpeed.p50TokensPerS, 'tok/s')}, tokens in ${tokenValue(r.tokens.prompt)} / out ${tokenValue(r.tokens.completion)}, cost ${costValue(r.cost)}`,
       );
     }
     lines.push('');
@@ -428,6 +576,8 @@ export function formatUsageText(report: UsageReport): string {
     'Legend',
     '  attempts = requests really sent (ok + err); skipped are not attempts. success = ok / attempts.',
     '  latency percentiles (nearest-rank) cover ok attempts only.',
+    '  first token = request start to the first content/tool delta; speed = (completion - reasoning tokens) x 1000 / generation ms (first to last delta, windows < 50 ms not counted); n = ok rows with a value, unknown is not zero.',
+    '  prompt est. = character-based ESTIMATES of the request (system + tool catalog + history + user) over attempts that sent one; promptTokens from the provider stays the truth. tools = share of the tool catalog in it.',
     '  n/a = provider reported no usage; (?N) = N successful calls without usage, not counted in the sum.',
     '  cost = tokens x list price of a priced route (a known upper bound); n/a = no price or no usage, never zero.',
     '  legacy = attempts on the AI_SMART_CHAIN / AI_FAST_CHAIN chains, not role-routed.',
@@ -469,6 +619,9 @@ function modelBlock(m: ModelUsageStats): string {
   const lines = [
     counts,
     `успех ${pct(m.successRate)} · p50 ${duration(m.p50DurationMs, 'с', 'мс')} · p95 ${duration(m.p95DurationMs, 'с', 'мс')}`,
+    `до 1-го токена p50 ${duration(m.firstToken.p50Ms, 'с', 'мс')} · p95 ${duration(m.firstToken.p95Ms, 'с', 'мс')} (n=${m.firstToken.rows})`,
+    `скорость p50 ${tokensPerS(m.generationSpeed.p50TokensPerS, 'ток/с')} · p95 ${tokensPerS(m.generationSpeed.p95TokensPerS, 'ток/с')} (n=${m.generationSpeed.rows})`,
+    `промпт (оценка) p50 ${tokenCount(m.promptSize.p50Tokens)} · p95 ${tokenCount(m.promptSize.p95Tokens)} · каталог тулов ${share(m.promptSize.toolCatalogShare)} (n=${m.promptSize.rows})`,
     tokenSummary(m, 'вх', 'исх'),
     `стоимость ${costValue(m.cost)}`,
   ];
@@ -487,7 +640,7 @@ function modelBlock(m: ModelUsageStats): string {
 function rolesBlock(roles: readonly RoleUsageStats[]): string {
   const lines = roles.map(
     (r) =>
-      `${r.role} · ${r.provider}: ${r.ok}/${r.attempts} ок · p50 ${duration(r.p50DurationMs, 'с', 'мс')} · p95 ${duration(r.p95DurationMs, 'с', 'мс')} · ${costValue(r.cost)}`,
+      `${r.role} · ${r.provider}: ${r.ok}/${r.attempts} ок · p50 ${duration(r.p50DurationMs, 'с', 'мс')} · p95 ${duration(r.p95DurationMs, 'с', 'мс')} · 1-й токен p50 ${duration(r.firstToken.p50Ms, 'с', 'мс')} · ${tokensPerS(r.generationSpeed.p50TokensPerS, 'ток/с')} · ${costValue(r.cost)}`,
   );
   return `<b>По ролям</b>\n<pre>${escapeHtml(lines.join('\n'))}</pre>`;
 }
