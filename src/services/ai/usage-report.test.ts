@@ -1,7 +1,12 @@
 // Tests for the pure AI usage aggregation and its text / Telegram formatters.
 import { describe, expect, test } from 'bun:test';
 import type { AiUsageEvent } from '../../database/repositories/ai-usage-events.repository';
-import { aggregateUsage, formatUsageTelegram, formatUsageText } from './usage-report';
+import {
+  aggregateUsage,
+  formatUsageTelegram,
+  formatUsageText,
+  outputTokensPerS,
+} from './usage-report';
 
 const DAY = 86_400_000;
 const NOW = Date.parse('2026-10-23T12:00:00Z');
@@ -27,6 +32,9 @@ function ev(over: Partial<AiUsageEvent> = {}): AiUsageEvent {
     role: null,
     preset: null,
     costMicroUsd: null,
+    firstTokenMs: null,
+    generationMs: null,
+    promptSize: null,
     ...over,
   };
 }
@@ -386,5 +394,136 @@ describe('cost and roles (stage B4)', () => {
     const all = formatUsageTelegram(aggregateUsage([ev({ costMicroUsd: null })], opts)).join('\n');
     expect(all).not.toContain('По ролям');
     expect(formatUsageText(aggregateUsage([ev()], opts))).not.toContain('By role');
+  });
+});
+
+describe('speed: first token and generation tokens per second', () => {
+  const timed = (over: Partial<AiUsageEvent> = {}) =>
+    ev({
+      durationMs: 3_000,
+      firstTokenMs: 800,
+      generationMs: 2_000,
+      completionTokens: 100,
+      reasoningTokens: null,
+      ...over,
+    });
+
+  test('outputTokensPerS = completion tokens x 1000 / generation ms', () => {
+    expect(outputTokensPerS(timed())).toBe(50);
+  });
+
+  test('hidden reasoning tokens are not counted as generated in the window', () => {
+    expect(outputTokensPerS(timed({ completionTokens: 300, reasoningTokens: 200 }))).toBe(50);
+  });
+
+  test('unknown inputs and too-short windows give null, never 0 or Infinity', () => {
+    expect(outputTokensPerS(timed({ generationMs: null }))).toBeNull();
+    expect(outputTokensPerS(timed({ completionTokens: null }))).toBeNull();
+    expect(outputTokensPerS(timed({ generationMs: 49 }))).toBeNull();
+    expect(outputTokensPerS(timed({ generationMs: 0 }))).toBeNull();
+    expect(outputTokensPerS(timed({ completionTokens: 10, reasoningTokens: 10 }))).toBeNull();
+    expect(outputTokensPerS(timed({ generationMs: 50, completionTokens: 5 }))).toBe(100);
+  });
+
+  test('model stats: percentiles over ok rows with a value, with row counts; unknown is not zero', () => {
+    const r = aggregateUsage(
+      [
+        timed({ firstTokenMs: 500, generationMs: 1_000, completionTokens: 40 }), // 40 tok/s
+        timed({ firstTokenMs: 900, generationMs: 1_000, completionTokens: 80 }), // 80 tok/s
+        timed({ firstTokenMs: 700, generationMs: 1_000, completionTokens: 60 }), // 60 tok/s
+        timed({ firstTokenMs: null, generationMs: null }),
+        timed({ outcome: 'error', errorClass: 'server', firstTokenMs: 99, generationMs: 999 }),
+      ],
+      opts,
+    );
+    const m = r.models[0];
+    expect(m?.durationRows).toBe(4);
+    expect(m?.firstToken).toEqual({ rows: 3, p50Ms: 700, p95Ms: 900 });
+    expect(m?.generationSpeed).toEqual({ rows: 3, p50TokensPerS: 60, p95TokensPerS: 80 });
+  });
+
+  test('no measured rows: rows 0 and null percentiles', () => {
+    const m = aggregateUsage([ev({ durationMs: 1_000 })], opts).models[0];
+    expect(m?.firstToken).toEqual({ rows: 0, p50Ms: null, p95Ms: null });
+    expect(m?.generationSpeed).toEqual({ rows: 0, p50TokensPerS: null, p95TokensPerS: null });
+  });
+
+  test('role stats carry the same speed fields', () => {
+    const r = aggregateUsage([timed({ role: 'executor' })], opts);
+    expect(r.roles[0]?.firstToken).toEqual({ rows: 1, p50Ms: 800, p95Ms: 800 });
+    expect(r.roles[0]?.generationSpeed.p50TokensPerS).toBe(50);
+    expect(r.roles[0]?.durationRows).toBe(1);
+  });
+
+  test('text shows TTFT and tok/s with n, and n/a when nothing was measured', () => {
+    const text = formatUsageText(aggregateUsage([timed(), timed()], opts));
+    expect(text).toContain('first token p50 800ms  p95 800ms  (n=2)');
+    expect(text).toContain('speed p50 50.0 tok/s  p95 50.0 tok/s  (n=2)');
+    const none = formatUsageText(aggregateUsage([ev()], opts));
+    expect(none).toContain('first token p50 n/a  p95 n/a  (n=0)');
+    expect(none).toContain('speed p50 n/a  p95 n/a  (n=0)');
+  });
+
+  test('telegram shows them in Russian', () => {
+    const all = formatUsageTelegram(aggregateUsage([timed({ role: 'executor' })], opts)).join('\n');
+    expect(all).toContain('до 1-го токена p50 800мс · p95 800мс (n=1)');
+    expect(all).toContain('скорость p50 50.0 ток/с · p95 50.0 ток/с (n=1)');
+  });
+});
+
+describe('prompt size (estimates)', () => {
+  const sized = (system: number, tools: number, history: number, user: number, over = {}) =>
+    ev({
+      promptSize: {
+        systemPromptTokens: system,
+        toolCatalogTokens: tools,
+        historyTokens: history,
+        userTokens: user,
+        toolCount: 20,
+        messageCount: 5,
+      },
+      ...over,
+    });
+
+  test('model stats: p50/p95 of the total, per-component p50, and the tool-catalog share', () => {
+    const m = aggregateUsage(
+      [
+        sized(100, 700, 100, 100), // total 1000, tools 70%
+        sized(100, 700, 700, 100), // total 1600
+        sized(100, 700, 1_100, 100), // total 2000
+        ev(), // no estimate: not counted
+        sized(1, 1, 1, 1, { outcome: 'error', errorClass: 'server' }), // failed attempts still sent the prompt
+        sized(9, 9, 9, 9, { outcome: 'skipped' }), // skipped never sent one
+      ],
+      opts,
+    ).models[0];
+    expect(m?.promptSize.rows).toBe(4);
+    expect(m?.promptSize.p50Tokens).toBe(1_000);
+    expect(m?.promptSize.p95Tokens).toBe(2_000);
+    expect(m?.promptSize.p50).toEqual({ system: 100, toolCatalog: 700, history: 100, user: 100 });
+    // (700*3 + 1) / (1000 + 1600 + 2000 + 4)
+    expect(m?.promptSize.toolCatalogShare).toBeCloseTo(2_101 / 4_604, 6);
+  });
+
+  test('no estimated rows: rows 0 and null stats, never 0', () => {
+    const m = aggregateUsage([ev()], opts).models[0];
+    expect(m?.promptSize).toEqual({
+      rows: 0,
+      p50Tokens: null,
+      p95Tokens: null,
+      toolCatalogShare: null,
+      p50: { system: null, toolCatalog: null, history: null, user: null },
+    });
+  });
+
+  test('text and telegram show size and tool-catalog share with n, flagged as estimates', () => {
+    const report = aggregateUsage([sized(100, 700, 100, 100)], opts);
+    const text = formatUsageText(report);
+    expect(text).toContain('prompt est. p50 1,000  p95 1,000  tools 70.0%  (n=1)');
+    expect(text).toContain('ESTIMATES');
+    const tg = formatUsageTelegram(report).join('\n');
+    expect(tg).toContain('промпт (оценка) p50 1,000 · p95 1,000 · каталог тулов 70.0% (n=1)');
+    const none = formatUsageText(aggregateUsage([ev()], opts));
+    expect(none).toContain('prompt est. p50 n/a  p95 n/a  tools n/a  (n=0)');
   });
 });
