@@ -15,7 +15,7 @@ export interface PrefillResult {
 const BATCH_SIZE = 10;
 
 /**
- * Output budget for one batch. Reasoning models (z.ai glm-4.5-flash) spend their thinking from the
+ * Output budget for one batch. Reasoning models (z.ai GLM flash models) spend their thinking from the
  * same max_tokens as the answer: on a 10-tx prod batch they stopped mid-array at 200 and 1000 tokens
  * and finished at 2000, so every card fell back to прочее. It is only a cap — unused tokens cost nothing.
  */
