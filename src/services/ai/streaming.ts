@@ -96,7 +96,7 @@ export interface StreamRoundResult {
   finishReason: string;
   /** Full assistant message for appending to conversation history */
   assistantMessage: OpenAI.ChatCompletionMessageParam;
-  /** Which provider slot actually produced the result (e.g. "z.ai (glm-5.1)") */
+  /** Which provider slot actually produced the result (e.g. "z.ai (glm-5.3)") */
   providerUsed: string;
 }
 
@@ -382,11 +382,11 @@ interface SlotOutput {
 }
 
 interface ProviderSlot {
-  /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.1)". */
+  /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.3)". */
   name: string;
   /** Stable endpoint id shared across chains/models ('zai'/'claude'/'hf'/'openrouter') — the breaker key. */
   key: string;
-  /** Model id the slot sends, e.g. "glm-5.1". */
+  /** Model id the slot sends, e.g. "glm-5.3". */
   model: string;
   /** Registry preset the slot runs (role-routed slots only). */
   presetId?: string;
