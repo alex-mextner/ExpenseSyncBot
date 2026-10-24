@@ -25,6 +25,7 @@
 import OpenAI from 'openai';
 import { type ChainOrder, env } from '../../config/env';
 import type {
+  AiPromptSize,
   AiUsageErrorClass,
   AiUsageEventInput,
 } from '../../database/repositories/ai-usage-events.repository';
@@ -38,6 +39,7 @@ import {
   presetRequestParams,
   type Role,
 } from './model-presets';
+import { estimatePromptSize } from './prompt-size';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -375,10 +377,24 @@ const CREDITS_EXHAUSTED_COOLDOWN_MS = 60 * 60_000;
 
 // ── Provider slots ──────────────────────────────────────────────────────────
 
-/** What a slot hands back: the caller-facing result plus the tokens the provider reported for it. */
+/**
+ * Wall-clock shape of one successful stream, in whole milliseconds. `firstTokenMs` runs from the
+ * request start to the first content or tool-call delta (thinking that is billed but not streamed
+ * sits inside it); `generationMs` from that delta to the last content or tool-call delta, so the
+ * trailing usage-only chunk does not stretch the window. A one-delta answer has `generationMs` 0.
+ */
+export interface StreamTiming {
+  firstTokenMs: number | null;
+  generationMs: number | null;
+}
+
+const UNKNOWN_TIMING: StreamTiming = { firstTokenMs: null, generationMs: null };
+
+/** What a slot hands back: the caller-facing result plus the tokens the provider reported and the stream timing. */
 interface SlotOutput {
   result: StreamRoundResult;
   usage: TokenUsage;
+  timing: StreamTiming;
 }
 
 interface ProviderSlot {
@@ -519,6 +535,7 @@ function streamingSlot(
         if (opts.toolChoice) params.tool_choice = opts.toolChoice;
       }
 
+      const requestStartedPerf = performance.now();
       const client = getClient();
       const request = (withUsage: boolean) =>
         client.chat.completions.create(
@@ -549,6 +566,8 @@ function streamingSlot(
       let lastToolCallKey = -1;
       let finishReason = 'stop';
       let usage: OpenAI.CompletionUsage | null = null;
+      let firstTokenPerf: number | null = null;
+      let lastTokenPerf: number | null = null;
 
       try {
         for await (const chunk of stream) {
@@ -556,6 +575,12 @@ function streamingSlot(
           if (chunk.usage) usage = chunk.usage;
           const delta = chunk.choices[0]?.delta;
           if (!delta) continue;
+
+          if (delta.content || (delta.tool_calls && delta.tool_calls.length > 0)) {
+            const deltaPerf = performance.now();
+            firstTokenPerf ??= deltaPerf;
+            lastTokenPerf = deltaPerf;
+          }
 
           if (delta.content) {
             text += delta.content;
@@ -608,6 +633,13 @@ function streamingSlot(
         throw streamError;
       }
       const tokenUsage = normalizeUsage(usage);
+      const timing: StreamTiming =
+        firstTokenPerf === null || lastTokenPerf === null
+          ? UNKNOWN_TIMING
+          : {
+              firstTokenMs: Math.round(firstTokenPerf - requestStartedPerf),
+              generationMs: Math.round(lastTokenPerf - firstTokenPerf),
+            };
 
       const toolCallsArray: StreamToolCall[] = [...toolCalls.values()].map((tc) => ({
         id: tc.id,
@@ -648,6 +680,7 @@ function streamingSlot(
           providerUsed: name,
         },
         usage: tokenUsage,
+        timing,
       };
     },
   };
@@ -956,6 +989,8 @@ interface UsageRound {
   purpose: AiPurpose;
   /** Shared by every attempt of one aiStreamRound call, so a failed attempt links to its fallback. */
   requestId: string;
+  /** Estimated request size, the same for every attempt of the round (messages and tools do not change per slot). */
+  promptSize: AiPromptSize;
 }
 
 type AttemptResult = Pick<
@@ -964,6 +999,8 @@ type AttemptResult = Pick<
   | 'errorClass'
   | 'httpStatus'
   | 'durationMs'
+  | 'firstTokenMs'
+  | 'generationMs'
   | 'promptTokens'
   | 'completionTokens'
   | 'reasoningTokens'
@@ -976,6 +1013,7 @@ const SKIPPED_ATTEMPT: AttemptResult = {
   errorClass: null,
   httpStatus: null,
   durationMs: null,
+  ...UNKNOWN_TIMING,
   ...UNKNOWN_USAGE,
 };
 
@@ -992,6 +1030,7 @@ function usageEvent(
     chain: round.chain,
     purpose: round.purpose,
     requestId: round.requestId,
+    promptSize: attempt.outcome === 'skipped' ? null : round.promptSize,
     role: slot.role ?? null,
     preset: slot.presetId ?? null,
     costMicroUsd: computeCostMicroUsd(
@@ -1029,6 +1068,7 @@ export async function aiStreamRound(
     chain: chainName,
     purpose: options.purpose,
     requestId: crypto.randomUUID(),
+    promptSize: estimatePromptSize(options.messages, options.tools),
   };
   if (excludeProviders.length > 0) {
     recordAiUsage(
@@ -1077,7 +1117,7 @@ export async function aiStreamRound(
     const attemptStartedPerf = performance.now();
     try {
       logger.info(`[AI_STREAM] Trying ${chainName} → ${slot.name}`);
-      const { result, usage } = await slot.stream(
+      const { result, usage, timing } = await slot.stream(
         { ...options, signal: combinedSignal },
         wrappedCallbacks,
       );
@@ -1088,6 +1128,7 @@ export async function aiStreamRound(
           errorClass: null,
           httpStatus: null,
           durationMs: Math.round(performance.now() - attemptStartedPerf),
+          ...timing,
           ...usage,
         }),
       ]);
@@ -1107,6 +1148,7 @@ export async function aiStreamRound(
             providerTimedOut: perProviderController.signal.aborted,
           }),
           durationMs: Math.round(performance.now() - attemptStartedPerf),
+          ...UNKNOWN_TIMING,
           // The tag sits on the ORIGINAL thrown value, like the responded tag below.
           ...attemptUsage(error),
         }),

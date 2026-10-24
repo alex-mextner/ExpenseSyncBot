@@ -1,6 +1,6 @@
-// Tests for AiUsageEventsRepository and migrations 053 / 054 — append-only attempt rows, nullable tokens, retention prune
+// Tests for AiUsageEventsRepository and migrations 053 / 054 / 055 — append-only attempt rows, nullable tokens and timing, retention prune
 
-import type { Database } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { createTestDb } from '../../test-utils/db';
 import { type AiUsageEventInput, AiUsageEventsRepository } from './ai-usage-events.repository';
@@ -30,6 +30,14 @@ interface RawRow {
   role: string | null;
   preset: string | null;
   cost_micro_usd: number | null;
+  first_token_ms: number | null;
+  generation_ms: number | null;
+  system_prompt_tokens: number | null;
+  tool_catalog_tokens: number | null;
+  history_tokens: number | null;
+  user_tokens: number | null;
+  tool_count: number | null;
+  message_count: number | null;
 }
 
 function okEvent(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput {
@@ -51,6 +59,9 @@ function okEvent(overrides: Partial<AiUsageEventInput> = {}): AiUsageEventInput 
     role: null,
     preset: null,
     costMicroUsd: null,
+    firstTokenMs: null,
+    generationMs: null,
+    promptSize: null,
     ...overrides,
   };
 }
@@ -71,7 +82,7 @@ beforeEach(() => {
 });
 
 describe('migration 053_create_ai_usage_events', () => {
-  it('is recorded as applied, followed by 054 — migrations are only ever appended', () => {
+  it('is recorded as applied, followed by 054 and 055 — migrations are only ever appended', () => {
     const names = db
       .query<{ name: string }, []>('SELECT name FROM migrations ORDER BY id')
       .all()
@@ -79,7 +90,8 @@ describe('migration 053_create_ai_usage_events', () => {
     const at = names.indexOf('053_create_ai_usage_events');
     expect(at).toBeGreaterThanOrEqual(0);
     expect(names[at + 1]).toBe('054_add_role_preset_cost_to_ai_usage_events');
-    expect(names.at(-1)).toBe('054_add_role_preset_cost_to_ai_usage_events');
+    expect(names[at + 2]).toBe('055_add_timing_and_prompt_size_to_ai_usage_events');
+    expect(names.at(-1)).toBe('055_add_timing_and_prompt_size_to_ai_usage_events');
   });
 
   it('creates the table with exactly the usage columns and no user-identifying column', () => {
@@ -106,6 +118,14 @@ describe('migration 053_create_ai_usage_events', () => {
       'role',
       'preset',
       'cost_micro_usd',
+      'first_token_ms',
+      'generation_ms',
+      'system_prompt_tokens',
+      'tool_catalog_tokens',
+      'history_tokens',
+      'user_tokens',
+      'tool_count',
+      'message_count',
     ]);
   });
 
@@ -212,6 +232,66 @@ describe('AiUsageEventsRepository', () => {
       expect(legacy).toMatchObject({ role: null, preset: null, cost_micro_usd: null });
     });
 
+    it('stores first-token and generation timing, and keeps unknown timing NULL', () => {
+      repo.recordMany([
+        okEvent({ firstTokenMs: 640, generationMs: 2_100 }),
+        okEvent({ firstTokenMs: 300, generationMs: 0 }),
+        okEvent({ firstTokenMs: null, generationMs: null }),
+      ]);
+      const [timed, oneDelta, unknown] = rawRows();
+      expect(timed).toMatchObject({ first_token_ms: 640, generation_ms: 2_100 });
+      expect(oneDelta).toMatchObject({ first_token_ms: 300, generation_ms: 0 });
+      expect(unknown).toMatchObject({ first_token_ms: null, generation_ms: null });
+      expect(repo.listSince(0).map((e) => [e.firstTokenMs, e.generationMs])).toEqual([
+        [640, 2_100],
+        [300, 0],
+        [null, null],
+      ]);
+    });
+
+    it('stores the estimated prompt size by component and reads it back; NULL stays null', () => {
+      const promptSize = {
+        systemPromptTokens: 900,
+        toolCatalogTokens: 7_000,
+        historyTokens: 2_500,
+        userTokens: 40,
+        toolCount: 21,
+        messageCount: 9,
+      };
+      repo.recordMany([okEvent({ promptSize }), okEvent({ promptSize: null })]);
+      const [sized, unsized] = rawRows();
+      expect(sized).toMatchObject({
+        system_prompt_tokens: 900,
+        tool_catalog_tokens: 7_000,
+        history_tokens: 2_500,
+        user_tokens: 40,
+        tool_count: 21,
+        message_count: 9,
+      });
+      expect(unsized).toMatchObject({ system_prompt_tokens: null, tool_count: null });
+      expect(repo.listSince(0).map((e) => e.promptSize)).toEqual([promptSize, null]);
+    });
+
+    it('reads rows of a database older than migration 055 as NULL timing', () => {
+      const old = new Database(':memory:');
+      old.exec(`
+        CREATE TABLE ai_usage_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, provider TEXT NOT NULL,
+          model TEXT NOT NULL, chain TEXT NOT NULL, purpose TEXT NOT NULL, outcome TEXT NOT NULL,
+          error_class TEXT, http_status INTEGER, duration_ms INTEGER, prompt_tokens INTEGER,
+          completion_tokens INTEGER, reasoning_tokens INTEGER, cached_tokens INTEGER,
+          request_id TEXT, role TEXT, preset TEXT, cost_micro_usd INTEGER
+        )
+      `);
+      old.exec(
+        `INSERT INTO ai_usage_events (at, provider, model, chain, purpose, outcome, duration_ms)
+         VALUES (${NOW}, 'claude', 'm', 'smart', 'agent', 'ok', 900)`,
+      );
+      const [row] = new AiUsageEventsRepository(old).listSince(0);
+      old.close();
+      expect(row).toMatchObject({ durationMs: 900, firstTokenMs: null, generationMs: null });
+    });
+
     it('rejects a negative cost', () => {
       expect(() => repo.recordMany([okEvent({ costMicroUsd: -1 })])).toThrow();
     });
@@ -271,6 +351,8 @@ describe('AiUsageEventsRepository', () => {
         role: null,
         preset: null,
         costMicroUsd: null,
+        firstTokenMs: null,
+        generationMs: null,
       });
     });
 
