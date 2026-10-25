@@ -2,7 +2,7 @@
 // System prompt of the expense agent, split so a provider-side prefix cache (z.ai implicit cache,
 // Anthropic cache_control) can reuse the large fixed part: the STATIC block is byte-identical for
 // every user, group and moment; everything that varies per request lives in the DYNAMIC block that
-// is sent after it. Never put a date, a name, an id or any per-group text into the static block.
+// follows it in the same system message. Never put a date, a name, an id or any per-group text into the static block.
 
 import { format } from 'date-fns';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
@@ -141,4 +141,12 @@ CURRENT USER:
   }
 
   return prompt;
+}
+
+/** Separator between the static and the dynamic block in the combined system prompt. */
+const BLOCK_SEPARATOR = '\n\n';
+
+/** The system prompt a request carries: static block, then the per-request block. */
+export function buildSystemPrompt(ctx: DynamicPromptContext, now: Date): string {
+  return `${buildStaticSystemPrompt()}${BLOCK_SEPARATOR}${buildDynamicSystemPrompt(ctx, now)}`;
 }

@@ -4,7 +4,11 @@
 // (z.ai implicit cache, Anthropic cache_control) can reuse everything before the dynamic block.
 
 import { describe, expect, it } from 'bun:test';
-import { buildDynamicSystemPrompt, buildStaticSystemPrompt } from './system-prompt';
+import {
+  buildDynamicSystemPrompt,
+  buildStaticSystemPrompt,
+  buildSystemPrompt,
+} from './system-prompt';
 import { TOOL_DEFINITIONS } from './tools';
 
 function commonPrefixLength(a: string, b: string): number {
@@ -70,11 +74,20 @@ describe('dynamic system prompt', () => {
   });
 });
 
+describe('combined system prompt', () => {
+  it('is the static block, a blank line, then the dynamic block', () => {
+    const now = new Date(2026, 9, 25, 9, 0);
+    expect(buildSystemPrompt(ALICE, now)).toBe(
+      `${buildStaticSystemPrompt()}\n\n${buildDynamicSystemPrompt(ALICE, now)}`,
+    );
+  });
+});
+
 describe('request prefix stability across users and times', () => {
   it('shares at least 95% of the static prompt between two users on two dates', () => {
     const staticPrompt = buildStaticSystemPrompt();
-    const requestA = `${staticPrompt}\n\n${buildDynamicSystemPrompt(ALICE, new Date(2026, 9, 25, 9, 0))}`;
-    const requestB = `${staticPrompt}\n\n${buildDynamicSystemPrompt(BOB, new Date(2026, 11, 3, 23, 59))}`;
+    const requestA = buildSystemPrompt(ALICE, new Date(2026, 9, 25, 9, 0));
+    const requestB = buildSystemPrompt(BOB, new Date(2026, 11, 3, 23, 59));
     const shared = commonPrefixLength(requestA, requestB);
     expect(shared / staticPrompt.length).toBeGreaterThanOrEqual(0.95);
     expect(shared).toBeGreaterThanOrEqual(staticPrompt.length);

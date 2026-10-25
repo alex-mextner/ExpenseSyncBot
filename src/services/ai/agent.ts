@@ -43,7 +43,7 @@ import {
   type StreamCallbacks,
   type StreamRoundResult,
 } from './streaming';
-import { buildDynamicSystemPrompt, buildStaticSystemPrompt } from './system-prompt';
+import { buildSystemPrompt } from './system-prompt';
 import { isSkipSignal, NO_ANSWER_MESSAGE, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { READ_ONLY_TOOL_NAMES, SYNCING_READ_TOOL_NAMES, TOOL_DEFINITIONS } from './tools';
@@ -149,7 +149,10 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-type SystemMessage = { role: 'system'; content: string };
+interface SystemMessage {
+  role: 'system';
+  content: string;
+}
 
 export class ExpenseBotAgent {
   private ctx: AgentContext;
@@ -186,9 +189,9 @@ export class ExpenseBotAgent {
       userMessage,
     );
 
-    const systemMessages = this.buildSystemMessages();
+    const systemMessage = this.buildSystemMessage();
     const messages: OpenAI.ChatCompletionMessageParam[] = [
-      ...systemMessages,
+      systemMessage,
       ...this.buildHistoryMessages(conversationHistory),
       { role: 'user', content: userMessage },
     ];
@@ -196,7 +199,7 @@ export class ExpenseBotAgent {
     logger.info('[AGENT] Starting (smart chain)');
     logger.info(`[AGENT] Question: "${userMessage.substring(0, 150)}"`);
 
-    debugCtx?.logSystemPrompt(systemMessages.map((m) => m.content).join('\n\n'));
+    debugCtx?.logSystemPrompt(systemMessage.content);
     debugCtx?.logHistory(conversationHistory.map((m) => ({ role: m.role, content: m.content })));
 
     const toolCallNames: string[] = [];
@@ -346,7 +349,7 @@ export class ExpenseBotAgent {
     let result = '';
     const { text } = await aiStreamRound(
       {
-        messages: [...this.buildSystemMessages(), { role: 'user', content: userMessage }],
+        messages: [this.buildSystemMessage(), { role: 'user', content: userMessage }],
         maxTokens: 1500,
         chain: 'smart',
         purpose: 'agent_batch',
@@ -976,15 +979,13 @@ export class ExpenseBotAgent {
   }
 
   /**
-   * The system prompt as two adjacent messages: the static rules first (identical for every
-   * request, so a provider prefix cache can reuse them), then the per-request block (date, user,
-   * forum state, custom instructions). No data dumps -- data comes from tools.
+   * One system message: the static rules first (identical for every request, so a provider prefix
+   * cache can reuse them), then the per-request block (date, user, forum state, custom
+   * instructions). One message, not two: HF chat templates may reject adjacent system messages.
+   * No data dumps -- data comes from tools.
    */
-  private buildSystemMessages(): [SystemMessage, SystemMessage] {
-    return [
-      { role: 'system', content: buildStaticSystemPrompt() },
-      { role: 'system', content: buildDynamicSystemPrompt(this.ctx, new Date()) },
-    ];
+  private buildSystemMessage(): SystemMessage {
+    return { role: 'system', content: buildSystemPrompt(this.ctx, new Date()) };
   }
 
   /**

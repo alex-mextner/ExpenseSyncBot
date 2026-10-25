@@ -61,6 +61,7 @@ mock.module('./tool-executor', () => ({
 }));
 
 import { AiDebugRunContext } from './debug-logger';
+import { buildStaticSystemPrompt } from './system-prompt';
 import { NO_ANSWER_MESSAGE } from './telegram-stream';
 import type { AgentContext } from './types';
 
@@ -165,7 +166,7 @@ function getLastCallOpts(): import('./streaming').StreamRoundOptions {
   return call[0] as import('./streaming').StreamRoundOptions;
 }
 
-/** Text of every system message of a request, in order (the prompt is sent as static + dynamic blocks). */
+/** Text of every system message of a request, in order. */
 function systemText(opts: import('./streaming').StreamRoundOptions): string {
   return opts.messages
     .filter((m) => m.role === 'system')
@@ -386,32 +387,35 @@ describe('ExpenseBotAgent', () => {
       expect(opts.maxTokens).toBe(4096);
     });
 
-    it('sends the static rules first and the per-request block (current date) second', async () => {
+    it('sends one system message: the static rules first, the per-request block (current date) last', async () => {
       mockStreamReturn();
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
       const opts = getLastCallOpts();
+      expect(opts.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+      const content = opts.messages[0]?.content as string;
       expect(opts.messages[0]?.role).toBe('system');
-      expect(opts.messages[0]?.content as string).not.toContain('CURRENT DATE');
-      expect(opts.messages[1]?.role).toBe('system');
-      expect(opts.messages[1]?.content as string).toContain('CURRENT DATE');
+      expect(content.startsWith(buildStaticSystemPrompt())).toBe(true);
+      expect(content.indexOf('CURRENT DATE')).toBeGreaterThan(buildStaticSystemPrompt().length);
     });
 
-    it('sends the same first system message for two users with different names and prompts (#203)', async () => {
+    it('shares the whole static prompt as the system prefix for two users with different names and prompts (#203)', async () => {
       const first = new ExpenseBotAgent('key', makeCtx({ userName: 'ann', customPrompt: null }));
       mockStreamReturn();
       await first.run('q', [], mockBot as unknown as Bot);
-      const firstOpts = getLastCallOpts();
+      const firstContent = getLastCallOpts().messages[0]?.content as string;
       const second = new ExpenseBotAgent(
         'key',
         makeCtx({ userName: 'ben', userFullName: 'Ben Other', customPrompt: 'Be brief.' }),
       );
       mockStreamReturn();
       await second.run('q', [], mockBot as unknown as Bot);
-      const secondOpts = getLastCallOpts();
+      const secondContent = getLastCallOpts().messages[0]?.content as string;
 
-      expect(firstOpts.messages[0]).toEqual(secondOpts.messages[0]);
-      expect(firstOpts.messages[1]).not.toEqual(secondOpts.messages[1]);
+      const staticPrompt = buildStaticSystemPrompt();
+      expect(firstContent.startsWith(staticPrompt)).toBe(true);
+      expect(secondContent.startsWith(staticPrompt)).toBe(true);
+      expect(firstContent).not.toBe(secondContent);
     });
 
     it('includes user message as last message in messages array', async () => {
@@ -475,8 +479,8 @@ describe('ExpenseBotAgent', () => {
       await agent.run('Thanks', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      // system (2: static + dynamic) + history (2) + new user message (1) = 5
-      expect(opts.messages.length).toBe(5);
+      // system (1) + history (2) + new user message (1) = 4
+      expect(opts.messages.length).toBe(4);
     });
 
     it('maps history role user correctly', async () => {
@@ -496,8 +500,8 @@ describe('ExpenseBotAgent', () => {
       await agent.run('question', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      // messages[0..1] are system, messages[2] is the history entry
-      expect(opts.messages[2]?.role).toBe('user');
+      // messages[0] is system, messages[1] is the history entry
+      expect(opts.messages[1]?.role).toBe('user');
     });
 
     it('maps history role assistant correctly', async () => {
@@ -517,7 +521,7 @@ describe('ExpenseBotAgent', () => {
       await agent.run('question', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      expect(opts.messages[2]?.role).toBe('assistant');
+      expect(opts.messages[1]?.role).toBe('assistant');
     });
 
     it('passes content as-is (string) from history', async () => {
@@ -537,7 +541,7 @@ describe('ExpenseBotAgent', () => {
       await agent.run('q', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      expect(opts.messages[2]?.content).toBe('plain text');
+      expect(opts.messages[1]?.content).toBe('plain text');
     });
   });
 
