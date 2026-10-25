@@ -46,7 +46,9 @@ import {
 import { buildSystemPrompt } from './system-prompt';
 import { isSkipSignal, NO_ANSWER_MESSAGE, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
-import { READ_ONLY_TOOL_NAMES, SYNCING_READ_TOOL_NAMES, TOOL_DEFINITIONS } from './tools';
+import { buildToolIndex, createToolExposure, type ToolExposure } from './tool-exposure';
+import { type ToolSchemaMode, toolSchemaModeFor } from './tool-schema-mode';
+import { READ_ONLY_TOOL_NAMES, SYNCING_READ_TOOL_NAMES } from './tools';
 import type { AgentContext, ToolCallResult, ToolResult } from './types';
 
 const logger = createLogger('agent');
@@ -157,6 +159,8 @@ interface SystemMessage {
 
 export class ExpenseBotAgent {
   private ctx: AgentContext;
+  /** Tool schemas the model sees in this run (hybrid/lazy modes reveal more on request). */
+  private exposure: ToolExposure;
   /**
    * Results of read-only tool calls in the current run, keyed by tool name + canonical args.
    * Models without parallel tool calls repeat identical calls and burn the
@@ -175,6 +179,19 @@ export class ExpenseBotAgent {
 
   constructor(_apiKey: string, ctx: AgentContext) {
     this.ctx = ctx;
+    this.exposure = this.newExposure();
+  }
+
+  private toolSchemaMode(): ToolSchemaMode {
+    return toolSchemaModeFor(
+      env.AI_TOOL_SCHEMA_MODE,
+      env.AI_TOOL_SCHEMA_USER_IDS,
+      this.ctx.telegramUserId,
+    );
+  }
+
+  private newExposure(): ToolExposure {
+    return createToolExposure(this.toolSchemaMode());
   }
 
   /**
@@ -190,7 +207,8 @@ export class ExpenseBotAgent {
       userMessage,
     );
 
-    const systemMessage = this.buildSystemMessage();
+    this.exposure = this.newExposure();
+    const systemMessage = this.buildSystemMessage(buildToolIndex(this.exposure.mode));
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       systemMessage,
       ...this.buildHistoryMessages(conversationHistory),
@@ -259,7 +277,7 @@ export class ExpenseBotAgent {
       // available) --- If the model called tools the data is real (a leak re-run reuses those
       // results); if no tools existed there's nothing to validate against. An intentional [SKIP]
       // is not an answer, so it is not validated.
-      if (totalToolCalls === 0 && TOOL_DEFINITIONS.length > 0 && !isSkipSignal(finalText)) {
+      if (totalToolCalls === 0 && this.exposure.tools().length > 0 && !isSkipSignal(finalText)) {
         const validated = await this.finalizeWithValidation({
           userMessage,
           messages,
@@ -350,7 +368,7 @@ export class ExpenseBotAgent {
     let result = '';
     const { text } = await aiStreamRound(
       {
-        messages: [this.buildSystemMessage(), { role: 'user', content: userMessage }],
+        messages: [this.buildSystemMessage(''), { role: 'user', content: userMessage }],
         maxTokens: 1500,
         chain: 'smart',
         purpose: 'agent_batch',
@@ -579,7 +597,7 @@ export class ExpenseBotAgent {
         result = await aiStreamRound(
           {
             messages,
-            tools: TOOL_DEFINITIONS,
+            tools: this.exposure.tools(),
             maxTokens: 4096,
             temperature: 0.3,
             chain: 'smart',
@@ -608,11 +626,23 @@ export class ExpenseBotAgent {
       for (const tc of result.toolCalls) {
         let input: Record<string, unknown>;
         try {
-          input = JSON.parse(tc.arguments || '{}') as Record<string, unknown>;
+          const parsed: unknown = JSON.parse(tc.arguments || '{}');
+          // `null` is how some backends send a no-argument call. Any other valid JSON that is not an
+          // object (a number, an array) is no argument set.
+          if (parsed === null) {
+            input = {};
+          } else if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new TypeError('Tool arguments are not a JSON object');
+          } else {
+            input = parsed as Record<string, unknown>;
+          }
         } catch {
           logger.error(
             `[AGENT] Malformed tool arguments for ${tc.name}: ${tc.arguments?.substring(0, 200)}`,
           );
+          // The model is guessing arguments for a tool it has no schema for: load the schema so the
+          // retry is informed (the result is moot — this call already failed as malformed).
+          this.exposure.rejectUnexposedCall(tc.name);
           toolResults.push({
             id: tc.id,
             tool: tc.name,
@@ -635,8 +665,16 @@ export class ExpenseBotAgent {
         const argsKey = canonicalJson(input);
         const cacheKey = `${tc.name}:${argsKey}`;
         const cached = isReadOnly ? this.readOnlyToolResults.get(cacheKey) : undefined;
+        const isDiscovery = this.exposure.isDiscovery(tc.name);
+        const unexposed = isDiscovery ? null : this.exposure.rejectUnexposedCall(tc.name);
         let toolResult: ToolResult;
-        if (cached) {
+        if (isDiscovery) {
+          // Loads schemas for the next round; reads and changes no data.
+          toolResult = this.exposure.discover(input);
+        } else if (unexposed) {
+          logger.warn(`[AGENT] ${tc.name} called before its schema was loaded — rejected, loaded`);
+          toolResult = unexposed;
+        } else if (cached) {
           logger.info(`[AGENT] Repeated tool call: ${tc.name} — reusing the earlier result`);
           repeatedCallIds.add(tc.id);
           toolResult = cached;
@@ -686,13 +724,19 @@ export class ExpenseBotAgent {
           toolResult.data,
           toolResult.summary,
         );
-        totalToolCalls++;
-        toolCallNames.push(tc.name);
+        // Discovery and a rejected call read and change no data: neither counts as a data tool call
+        // (a run of only those must still go through the no-tools answer validation).
+        if (!isDiscovery && !unexposed) {
+          totalToolCalls++;
+          toolCallNames.push(tc.name);
+        }
 
         writer.markToolResult(toolResult.success);
 
         toolResults.push({ id: tc.id, tool: tc.name, argsKey, result: toolResult });
       }
+      // Schemas revealed by this round's discover / rejected calls reach the model next round.
+      this.exposure.endRound();
 
       if (toolResults.length > 0) {
         writer.commitIntermediate();
@@ -784,7 +828,7 @@ export class ExpenseBotAgent {
         const final = await aiStreamRound(
           {
             messages,
-            tools: TOOL_DEFINITIONS,
+            tools: this.exposure.tools(),
             toolChoice: 'none',
             maxTokens: 4096,
             temperature: 0.3,
@@ -981,12 +1025,12 @@ export class ExpenseBotAgent {
 
   /**
    * One system message: the static rules first (identical for every request, so a provider prefix
-   * cache can reuse them), then the per-request block (date, user, forum state, custom
-   * instructions). One message, not two: HF chat templates may reject adjacent system messages.
+   * cache can reuse them), then the mode-static tool index (hybrid/lazy tool schemas), then the
+   * per-request block (date, user, forum state, custom instructions). One message, not two: HF chat templates may reject adjacent system messages.
    * No data dumps -- data comes from tools.
    */
-  private buildSystemMessage(): SystemMessage {
-    return { role: 'system', content: buildSystemPrompt(this.ctx, new Date()) };
+  private buildSystemMessage(toolIndex: string): SystemMessage {
+    return { role: 'system', content: buildSystemPrompt(this.ctx, new Date(), toolIndex) };
   }
 
   /**

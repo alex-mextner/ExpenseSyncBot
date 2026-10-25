@@ -63,6 +63,7 @@ mock.module('./tool-executor', () => ({
 import { AiDebugRunContext } from './debug-logger';
 import { buildStaticSystemPrompt } from './system-prompt';
 import { NO_ANSWER_MESSAGE } from './telegram-stream';
+import { HYBRID_CORE_TOOLS } from './tool-exposure';
 import type { AgentContext } from './types';
 
 // Loaded after the mocks above: a static import is hoisted and would create the agent's
@@ -152,6 +153,33 @@ function mockToolCallRound(name: string, args = '{}') {
         role: 'assistant',
         content: null,
         tool_calls: [{ id: 'call_1', type: 'function', function: { name, arguments: args } }],
+      },
+      providerUsed: 'mock',
+    } satisfies StreamRoundResult;
+  });
+}
+
+/** Queue one round that calls several tools at once, as `[name, arguments]` pairs in order. */
+function mockToolCallsRound(calls: ReadonlyArray<readonly [string, string]>) {
+  mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
+    const toolCalls = calls.map(([name, args], index) => ({
+      id: `call_${index + 1}`,
+      name,
+      arguments: args,
+    }));
+    for (const call of toolCalls) callbacks.onToolCallStart?.(call.name);
+    return {
+      text: '',
+      toolCalls,
+      finishReason: 'tool_calls',
+      assistantMessage: {
+        role: 'assistant',
+        content: null,
+        tool_calls: toolCalls.map((call) => ({
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: call.arguments },
+        })),
       },
       providerUsed: 'mock',
     } satisfies StreamRoundResult;
@@ -1226,7 +1254,7 @@ describe('ExpenseBotAgent', () => {
       const lastOpts = getLastCallOpts();
       // Tools stay declared (the history holds tool calls) but tool_choice forbids new ones.
       expect(lastOpts.toolChoice).toBe('none');
-      expect(lastOpts.tools).toBe(TOOL_DEFINITIONS);
+      expect(lastOpts.tools).toEqual(TOOL_DEFINITIONS);
       // The forced round tells the model to answer now from what it already gathered.
       expect(JSON.stringify(lastOpts.messages.at(-1))).toContain('[SYSTEM]');
       // The mocked tool returns the same result every time: nudge after round 4 (calculate
@@ -2374,6 +2402,186 @@ describe('ExpenseBotAgent', () => {
             mockBot as unknown as Bot,
           );
           expect(rolesOfRun()[0]).toBe('executor');
+        });
+      });
+
+      describe('tool schema mode (AI_TOOL_SCHEMA_MODE, #203)', () => {
+        const toolNameOf = (tool: (typeof TOOL_DEFINITIONS)[number]): string =>
+          tool.type === 'function' ? tool.function.name : tool.type;
+        const toolNamesOfCall = (index: number): string[] =>
+          (mockAiStreamRound.mock.calls[index]?.[0].tools ?? []).map(toolNameOf);
+        const systemOfCall = (index: number): string =>
+          mockAiStreamRound.mock.calls[index]?.[0].messages[0]?.content as string;
+
+        afterEach(() => {
+          env.AI_TOOL_SCHEMA_MODE = 'full';
+          env.AI_TOOL_SCHEMA_USER_IDS = undefined;
+        });
+
+        it('full mode (the default) sends every schema and no tool index', async () => {
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)).toEqual(TOOL_DEFINITIONS.map(toolNameOf));
+          expect(systemOfCall(0)).not.toContain('TOOL INDEX');
+          expect(toolNamesOfCall(0)).not.toContain('discover_tools');
+        });
+
+        it('hybrid mode: round 1 carries the core and discover_tools, the index lists the rest', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)).toEqual(['discover_tools', ...HYBRID_CORE_TOOLS]);
+          const system = systemOfCall(0);
+          expect(system).toContain('## TOOL INDEX');
+          expect(system).toContain('- update_group_setting:');
+          expect(system).not.toContain('- get_expenses:');
+          expect(system.startsWith(buildStaticSystemPrompt())).toBe(true);
+        });
+
+        it('discover_tools loads a schema for the next round and runs no tool', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('discover_tools', '{"tools":["get_categories"]}');
+          mockToolCallRound('get_categories');
+          mockStreamReturn(['Категории: еда']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(toolNamesOfCall(0)).not.toContain('get_categories');
+          expect(toolNamesOfCall(1)).toEqual([
+            'discover_tools',
+            ...HYBRID_CORE_TOOLS,
+            'get_categories',
+          ]);
+          expect(mockExecuteTool.mock.calls.map((call) => call[0])).toEqual(['get_categories']);
+          expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+        });
+
+        it('a tool called before its schema was loaded is rejected, not run, and loaded for the next round', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('update_group_setting', '{"setting":"default_currency","value":"EUR"}');
+          mockStreamReturn(['Готово']);
+
+          await agent.run('поставь евро', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+          expect(toolNamesOfCall(1)).toContain('update_group_setting');
+          const toolMessage = mockAiStreamRound.mock.calls[1]?.[0].messages.find(
+            (message) => message.role === 'tool',
+          );
+          expect(String(toolMessage?.content)).toContain('TOOL_SCHEMA_NOT_EXPOSED');
+        });
+
+        it('discover_tools and the tool it loads in one round: the call is rejected, the schema counts from the next round', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallsRound([
+            ['discover_tools', '{"tools":["update_group_setting"]}'],
+            ['update_group_setting', '{"setting":"default_currency","value":"EUR"}'],
+          ]);
+          mockStreamReturn(['Готово']);
+
+          await agent.run('поставь евро', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+          expect(toolNamesOfCall(1)).toContain('update_group_setting');
+        });
+
+        it('the same unloaded tool twice in one round: neither call runs', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallsRound([
+            ['update_group_setting', '{"setting":"default_currency","value":"EUR"}'],
+            ['update_group_setting', '{"setting":"default_currency","value":"USD"}'],
+          ]);
+          mockStreamReturn(['Готово']);
+
+          await agent.run('поставь евро', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+        });
+
+        it('a rejected call is not a data tool call: the answer is still validated', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('update_group_setting', '{"setting":"default_currency","value":"EUR"}');
+          mockStreamReturn(['Готово']);
+
+          await agent.run('поставь евро', [], mockBot as unknown as Bot);
+
+          expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+        });
+
+        it('a rejected read-only tool runs on its retry (the rejection is never cached)', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('get_categories', '{}');
+          mockToolCallRound('get_categories', '{}');
+          mockStreamReturn(['Вот категории']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool.mock.calls.map((call) => call[0])).toEqual(['get_categories']);
+        });
+
+        it('malformed arguments for a tool that is not loaded still load it for the next round', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('update_group_setting', '{"setting":');
+          mockStreamReturn(['Не получилось']);
+
+          await agent.run('поставь евро', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+          expect(toolNamesOfCall(1)).toContain('update_group_setting');
+        });
+
+        it('arguments "null" (a no-argument call from some backends) run the tool with an empty object', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('get_expenses', 'null');
+          mockStreamReturn(['Вот']);
+
+          await agent.run('траты', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+            ['get_expenses', {}],
+          ]);
+        });
+
+        it.each([
+          ['discover_tools', '5'],
+          ['discover_tools', '[]'],
+          ['add_expense', '[]'],
+        ])('%s with arguments that are valid JSON but not an object (%s) is malformed, not executed', async (tool, args) => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound(tool, args);
+          mockStreamReturn(['Не получилось']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+          const toolMessage = mockAiStreamRound.mock.calls[1]?.[0].messages.find(
+            (message) => message.role === 'tool',
+          );
+          expect(String(toolMessage?.content)).toContain('Malformed arguments');
+        });
+
+        it('a discover-only run is still validated: discovery is not a data tool call', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('discover_tools', '{"tools":["get_categories"]}');
+          mockStreamReturn(['Вот категории']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+        });
+
+        it('the canary list keeps other users on the full catalog', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          env.AI_TOOL_SCHEMA_USER_IDS = [1234];
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)).toEqual(TOOL_DEFINITIONS.map(toolNameOf));
+
+          mockAiStreamRound.mockClear();
+          env.AI_TOOL_SCHEMA_USER_IDS = [99];
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)[0]).toBe('discover_tools');
         });
       });
 
