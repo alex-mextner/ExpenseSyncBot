@@ -11,20 +11,21 @@ import { formatCommandsForPrompt } from '../../bot/command-descriptions';
 /** Separator between the static and the dynamic block in the combined system prompt. */
 const BLOCK_SEPARATOR = '\n\n';
 
-/** Longest display name the prompt carries. */
-const MAX_NAME_CHARS = 64;
+/** Longest display name the prompt carries, in Unicode code points. */
+const MAX_NAME_CODE_POINTS = 64;
 
 /**
  * A Telegram display name is text anyone can choose and the dynamic block sits after the rules:
- * keep it to one bounded line (no control or line-break characters) so it reads as a name, not
- * as an instruction block.
+ * keep it to one bounded line (no control or line-break characters, no double quote that could
+ * close the quotes around it) so it reads as a name, not as an instruction block.
  */
 function oneLineName(raw: string): string {
   const flat = raw
     .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ')
     .replace(/\s+/g, ' ')
+    .replace(/"/g, "'")
     .trim();
-  return Array.from(flat).slice(0, MAX_NAME_CHARS).join('');
+  return Array.from(flat).slice(0, MAX_NAME_CODE_POINTS).join('');
 }
 
 export interface DynamicPromptContext {
