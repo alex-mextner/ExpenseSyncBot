@@ -11,6 +11,8 @@ import {
   type RoleChainEntry,
   type RoutingMode,
 } from '../services/ai/role-routing';
+import { parseToolSchemaMode, type ToolSchemaMode } from '../services/ai/tool-schema-mode';
+import { parseUserIdList } from '../services/ai/user-id-list';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('env');
@@ -111,6 +113,12 @@ interface EnvConfig {
   AI_ROUTING_USER_IDS: number[] | undefined;
   AI_ROLE_CHAINS: Record<Role, RoleChainEntry[]>;
 
+  // Hybrid tool catalog (#203 step B). `full` (default) sends every tool schema each request;
+  // `hybrid` sends a core + an index, `lazy` only the calculator + an index. The USER_IDS canary
+  // limits a non-full mode to those Telegram user ids.
+  AI_TOOL_SCHEMA_MODE: ToolSchemaMode;
+  AI_TOOL_SCHEMA_USER_IDS: number[] | undefined;
+
   // OpenRouter (optional; named in a chain order to be used, skipped without key and model).
   // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash`.
   OPENROUTER_API_KEY: string;
@@ -174,6 +182,11 @@ function validateEnv(): EnvConfig {
 
     AI_ROUTING: parseRoutingMode(process.env['AI_ROUTING']),
     AI_ROUTING_USER_IDS: parseRoutingUserIds(process.env['AI_ROUTING_USER_IDS']),
+    AI_TOOL_SCHEMA_MODE: parseToolSchemaMode(process.env['AI_TOOL_SCHEMA_MODE']),
+    AI_TOOL_SCHEMA_USER_IDS: parseUserIdList(
+      'AI_TOOL_SCHEMA_USER_IDS',
+      process.env['AI_TOOL_SCHEMA_USER_IDS'],
+    ),
     AI_ROLE_CHAINS: {
       planner: parseRoleChainEnv('AI_PLANNER_CHAIN'),
       executor: parseRoleChainEnv('AI_EXECUTOR_CHAIN'),

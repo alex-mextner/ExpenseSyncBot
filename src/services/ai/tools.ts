@@ -612,4 +612,5 @@ export const TOOL_LABELS: Record<string, string> = {
   find_missing_expenses: 'Ищу пропущенные расходы',
   render_table: 'Рендерю таблицу',
   send_feedback: 'Отправляю фидбек',
+  discover_tools: 'Подключаю инструменты',
 };
