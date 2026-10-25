@@ -396,7 +396,9 @@ describe('ExpenseBotAgent', () => {
       const content = opts.messages[0]?.content as string;
       expect(opts.messages[0]?.role).toBe('system');
       expect(content.startsWith(buildStaticSystemPrompt())).toBe(true);
-      expect(content.indexOf('CURRENT DATE')).toBeGreaterThan(buildStaticSystemPrompt().length);
+      expect(content.slice(buildStaticSystemPrompt().length)).toMatch(
+        /^\n\nCURRENT DATE: \d{4}-\d{2}-\d{2}\nCURRENT MONTH: \d{4}-\d{2}\n\nCURRENT USER:\n- Username: @\S+\n- Full name: .+$/,
+      );
     });
 
     it('shares the whole static prompt as the system prefix for two users with different names and prompts (#203)', async () => {
