@@ -165,6 +165,14 @@ function getLastCallOpts(): import('./streaming').StreamRoundOptions {
   return call[0] as import('./streaming').StreamRoundOptions;
 }
 
+/** Text of every system message of a request, in order (the prompt is sent as static + dynamic blocks). */
+function systemText(opts: import('./streaming').StreamRoundOptions): string {
+  return opts.messages
+    .filter((m) => m.role === 'system')
+    .map((m) => m.content as string)
+    .join('\n\n');
+}
+
 // Minimal bot stub with tracked calls
 function makeMockBot() {
   return {
@@ -378,15 +386,32 @@ describe('ExpenseBotAgent', () => {
       expect(opts.maxTokens).toBe(4096);
     });
 
-    it('passes system prompt with current date as messages[0]', async () => {
+    it('sends the static rules first and the per-request block (current date) second', async () => {
       mockStreamReturn();
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
       const opts = getLastCallOpts();
-      const systemMsg = opts.messages[0];
-      expect(systemMsg?.role).toBe('system');
-      expect(typeof systemMsg?.content).toBe('string');
-      expect(systemMsg?.content as string).toContain('CURRENT DATE');
+      expect(opts.messages[0]?.role).toBe('system');
+      expect(opts.messages[0]?.content as string).not.toContain('CURRENT DATE');
+      expect(opts.messages[1]?.role).toBe('system');
+      expect(opts.messages[1]?.content as string).toContain('CURRENT DATE');
+    });
+
+    it('sends the same first system message for two users with different names and prompts (#203)', async () => {
+      const first = new ExpenseBotAgent('key', makeCtx({ userName: 'ann', customPrompt: null }));
+      mockStreamReturn();
+      await first.run('q', [], mockBot as unknown as Bot);
+      const firstOpts = getLastCallOpts();
+      const second = new ExpenseBotAgent(
+        'key',
+        makeCtx({ userName: 'ben', userFullName: 'Ben Other', customPrompt: 'Be brief.' }),
+      );
+      mockStreamReturn();
+      await second.run('q', [], mockBot as unknown as Bot);
+      const secondOpts = getLastCallOpts();
+
+      expect(firstOpts.messages[0]).toEqual(secondOpts.messages[0]);
+      expect(firstOpts.messages[1]).not.toEqual(secondOpts.messages[1]);
     });
 
     it('includes user message as last message in messages array', async () => {
@@ -450,8 +475,8 @@ describe('ExpenseBotAgent', () => {
       await agent.run('Thanks', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      // system (1) + history (2) + new user message (1) = 4
-      expect(opts.messages.length).toBe(4);
+      // system (2: static + dynamic) + history (2) + new user message (1) = 5
+      expect(opts.messages.length).toBe(5);
     });
 
     it('maps history role user correctly', async () => {
@@ -471,8 +496,8 @@ describe('ExpenseBotAgent', () => {
       await agent.run('question', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      // messages[0] is system, messages[1] is the history entry
-      expect(opts.messages[1]?.role).toBe('user');
+      // messages[0..1] are system, messages[2] is the history entry
+      expect(opts.messages[2]?.role).toBe('user');
     });
 
     it('maps history role assistant correctly', async () => {
@@ -492,7 +517,7 @@ describe('ExpenseBotAgent', () => {
       await agent.run('question', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      expect(opts.messages[1]?.role).toBe('assistant');
+      expect(opts.messages[2]?.role).toBe('assistant');
     });
 
     it('passes content as-is (string) from history', async () => {
@@ -512,7 +537,7 @@ describe('ExpenseBotAgent', () => {
       await agent.run('q', history, mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      expect(opts.messages[1]?.content).toBe('plain text');
+      expect(opts.messages[2]?.content).toBe('plain text');
     });
   });
 
@@ -526,7 +551,7 @@ describe('ExpenseBotAgent', () => {
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      const systemContent = opts.messages[0]?.content as string;
+      const systemContent = systemText(opts);
       expect(systemContent).toContain('@johndoe');
     });
 
@@ -537,7 +562,7 @@ describe('ExpenseBotAgent', () => {
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      const systemContent = opts.messages[0]?.content as string;
+      const systemContent = systemText(opts);
       expect(systemContent).toContain('Only answer in English.');
     });
 
@@ -548,7 +573,7 @@ describe('ExpenseBotAgent', () => {
       await a.run('test', [], mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      const systemContent = opts.messages[0]?.content as string;
+      const systemContent = systemText(opts);
       expect(systemContent).not.toContain('CUSTOM GROUP INSTRUCTIONS');
     });
 
@@ -558,7 +583,7 @@ describe('ExpenseBotAgent', () => {
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      const systemContent = opts.messages[0]?.content as string;
+      const systemContent = systemText(opts);
       expect(systemContent).toContain('set_custom_prompt');
       expect(systemContent).toContain('NEVER say "got it"');
     });
@@ -569,7 +594,7 @@ describe('ExpenseBotAgent', () => {
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
       const opts = getLastCallOpts();
-      const systemContent = opts.messages[0]?.content as string;
+      const systemContent = systemText(opts);
       expect(systemContent).toContain('update_group_setting');
       expect(systemContent).toContain('never tell the user to open /settings');
     });
@@ -579,7 +604,7 @@ describe('ExpenseBotAgent', () => {
 
       await agent.run('test', [], mockBot as unknown as import('gramio').Bot);
 
-      const systemContent = getLastCallOpts().messages[0]?.content as string;
+      const systemContent = systemText(getLastCallOpts());
       expect(systemContent).toContain('Do NOT use list tags (<ul>, <ol>, <li>)');
       expect(systemContent).toContain('starting with "• "');
     });
