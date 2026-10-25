@@ -2,10 +2,30 @@
 // System prompt of the expense agent, split so a provider-side prefix cache (z.ai implicit cache,
 // Anthropic cache_control) can reuse the large fixed part: the STATIC block is byte-identical for
 // every user, group and moment; everything that varies per request lives in the DYNAMIC block that
-// follows it in the same system message. Never put a date, a name, an id or any per-group text into the static block.
+// follows it in the same system message. Never put a date, a name, an id or any per-group text
+// into the static block.
 
 import { format } from 'date-fns';
 import { formatCommandsForPrompt } from '../../bot/command-descriptions';
+
+/** Separator between the static and the dynamic block in the combined system prompt. */
+const BLOCK_SEPARATOR = '\n\n';
+
+/** Longest display name the prompt carries. */
+const MAX_NAME_CHARS = 64;
+
+/**
+ * A Telegram display name is text anyone can choose and the dynamic block sits after the rules:
+ * keep it to one bounded line (no control or line-break characters) so it reads as a name, not
+ * as an instruction block.
+ */
+function oneLineName(raw: string): string {
+  const flat = raw
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Array.from(flat).slice(0, MAX_NAME_CHARS).join('');
+}
 
 export interface DynamicPromptContext {
   userName: string;
@@ -14,8 +34,15 @@ export interface DynamicPromptContext {
   customPrompt: string | null;
 }
 
-/** Fixed rules of the agent: identical for every request. */
+let staticPrompt: string | undefined;
+
+/** Fixed rules of the agent: identical for every request (built once). */
 export function buildStaticSystemPrompt(): string {
+  staticPrompt ??= renderStaticSystemPrompt();
+  return staticPrompt;
+}
+
+function renderStaticSystemPrompt(): string {
   return `You are a financial assistant for a Telegram expense tracking group.
 
 ## DATA INTEGRITY — CRITICAL
@@ -128,8 +155,8 @@ export function buildDynamicSystemPrompt(ctx: DynamicPromptContext, now: Date): 
 CURRENT MONTH: ${format(now, 'yyyy-MM')}
 
 CURRENT USER:
-- Username: @${ctx.userName}
-- Full name: ${ctx.userFullName}`;
+- Username: @${oneLineName(ctx.userName)}
+- Full name: "${oneLineName(ctx.userFullName)}"`;
 
   if (ctx.isForumWithoutTopic) {
     prompt += `\n\nЭта группа использует топики (форум), но команда /topic ещё не настроена — бот слушает все топики.
@@ -142,9 +169,6 @@ CURRENT USER:
 
   return prompt;
 }
-
-/** Separator between the static and the dynamic block in the combined system prompt. */
-const BLOCK_SEPARATOR = '\n\n';
 
 /** The system prompt a request carries: static block, then the per-request block. */
 export function buildSystemPrompt(ctx: DynamicPromptContext, now: Date): string {

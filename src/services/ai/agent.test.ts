@@ -395,8 +395,9 @@ describe('ExpenseBotAgent', () => {
       expect(opts.messages.filter((m) => m.role === 'system')).toHaveLength(1);
       const content = opts.messages[0]?.content as string;
       expect(opts.messages[0]?.role).toBe('system');
-      expect(content.startsWith(buildStaticSystemPrompt())).toBe(true);
-      expect(content.slice(buildStaticSystemPrompt().length)).toMatch(
+      const staticPrompt = buildStaticSystemPrompt();
+      expect(content.startsWith(staticPrompt)).toBe(true);
+      expect(content.slice(staticPrompt.length)).toMatch(
         /^\n\nCURRENT DATE: \d{4}-\d{2}-\d{2}\nCURRENT MONTH: \d{4}-\d{2}\n\nCURRENT USER:\n- Username: @\S+\n- Full name: .+$/,
       );
     });

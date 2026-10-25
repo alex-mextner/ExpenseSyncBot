@@ -149,6 +149,7 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** A system message whose content is known to be a string (`ChatCompletionSystemMessageParam` also allows parts). */
 interface SystemMessage {
   role: 'system';
   content: string;
