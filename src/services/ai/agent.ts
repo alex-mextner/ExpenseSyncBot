@@ -625,7 +625,12 @@ export class ExpenseBotAgent {
       for (const tc of result.toolCalls) {
         let input: Record<string, unknown>;
         try {
-          input = JSON.parse(tc.arguments || '{}') as Record<string, unknown>;
+          const parsed: unknown = JSON.parse(tc.arguments || '{}');
+          // Valid JSON that is not an object (`null`, a number, an array) is no argument set either.
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new TypeError('Tool arguments are not a JSON object');
+          }
+          input = parsed as Record<string, unknown>;
         } catch {
           logger.error(
             `[AGENT] Malformed tool arguments for ${tc.name}: ${tc.arguments?.substring(0, 200)}`,

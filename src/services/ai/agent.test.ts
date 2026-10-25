@@ -2443,6 +2443,24 @@ describe('ExpenseBotAgent', () => {
           expect(String(toolMessage?.content)).toContain('TOOL_SCHEMA_NOT_EXPOSED');
         });
 
+        it.each([
+          'null',
+          '5',
+          '[]',
+        ])('arguments that are valid JSON but not an object (%s) are malformed, not executed', async (args) => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('discover_tools', args);
+          mockStreamReturn(['Не получилось']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+          const toolMessage = mockAiStreamRound.mock.calls[1]?.[0].messages.find(
+            (message) => message.role === 'tool',
+          );
+          expect(String(toolMessage?.content)).toContain('Malformed arguments');
+        });
+
         it('a discover-only run is still validated: discovery is not a data tool call', async () => {
           env.AI_TOOL_SCHEMA_MODE = 'hybrid';
           mockToolCallRound('discover_tools', '{"tools":["get_categories"]}');
