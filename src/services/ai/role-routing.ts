@@ -12,6 +12,7 @@
 
 import { isExcludedModel, MODEL_PRESETS, type ModelPreset } from './model-presets';
 import { PROVIDER_IDS, type ProviderId } from './provider-ids';
+import { parseUserIdList } from './user-id-list';
 
 export type RoutingMode = 'legacy' | 'roles';
 
@@ -21,9 +22,6 @@ export interface RoleChainEntry {
   preset: ModelPreset | null;
 }
 
-/** Most Telegram ids a canary list may hold — the bound HyperCalendarBot applies to its own lists. */
-const MAX_ROUTING_USER_IDS = 100;
-
 export function parseRoutingMode(raw: string | undefined): RoutingMode {
   if (!raw) return 'legacy';
   if (raw === 'legacy' || raw === 'roles') return raw;
@@ -31,18 +29,7 @@ export function parseRoutingMode(raw: string | undefined): RoutingMode {
 }
 
 export function parseRoutingUserIds(raw: string | undefined): number[] | undefined {
-  if (raw === undefined) return undefined;
-  const parts = raw.split(',').map((part) => part.trim());
-  if (
-    raw.length > 1800 ||
-    parts.length > MAX_ROUTING_USER_IDS ||
-    parts.some((part) => !/^[1-9][0-9]*$/.test(part) || !Number.isSafeInteger(Number(part)))
-  ) {
-    throw new Error(
-      `AI_ROUTING_USER_IDS must be at most ${MAX_ROUTING_USER_IDS} positive safe integer Telegram user IDs`,
-    );
-  }
-  return [...new Set(parts.map(Number))];
+  return parseUserIdList('AI_ROUTING_USER_IDS', raw);
 }
 
 /** Roles routing is on for a user: the mode is `roles` and the canary list, if any, names them. */

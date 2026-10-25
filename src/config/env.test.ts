@@ -38,7 +38,7 @@ function loadEnv(vars: Record<string, string>): LoadResult {
   try {
     // The child reports the loaded config on stdout; the parent parses it.
     const script = `const { env } = await import(${JSON.stringify(ENV_MODULE)});
-process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], routing: { mode: env.AI_ROUTING, userIds: env.AI_ROUTING_USER_IDS ?? null, chains: Object.fromEntries(Object.entries(env.AI_ROLE_CHAINS).map(([role, entries]) => [role, entries.map((e) => e.provider + (e.preset ? ':' + e.preset.id : ''))])) }, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
+process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], routing: { mode: env.AI_ROUTING, userIds: env.AI_ROUTING_USER_IDS ?? null, chains: Object.fromEntries(Object.entries(env.AI_ROLE_CHAINS).map(([role, entries]) => [role, entries.map((e) => e.provider + (e.preset ? ':' + e.preset.id : ''))])) }, toolSchema: { mode: env.AI_TOOL_SCHEMA_MODE, userIds: env.AI_TOOL_SCHEMA_USER_IDS ?? null }, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
     const child = spawnSync(process.execPath, ['-e', script], {
       cwd,
       env: { PATH: process.env['PATH'] ?? '', ...vars },
@@ -61,6 +61,7 @@ function loadedConfig(result: LoadResult): {
   claudeVisionModel: string;
   openrouter: string[];
   routing: { mode: string; userIds: number[] | null; chains: Record<string, string[]> };
+  toolSchema: { mode: string; userIds: number[] | null };
   smartChain: ChainOrderJson;
   fastChain: ChainOrderJson;
 } {
@@ -149,6 +150,29 @@ describe('env config loading', () => {
         repair: ['openrouter:glm53-low', 'claude'],
       },
     });
+  });
+
+  it('tool schema mode is full by default, with no canary list', () => {
+    expect(loadedConfig(loadEnv(REQUIRED_ENV)).toolSchema).toEqual({ mode: 'full', userIds: null });
+  });
+
+  it('AI_TOOL_SCHEMA_MODE and AI_TOOL_SCHEMA_USER_IDS are read from the environment', () => {
+    const { toolSchema } = loadedConfig(
+      loadEnv({ ...REQUIRED_ENV, AI_TOOL_SCHEMA_MODE: 'hybrid', AI_TOOL_SCHEMA_USER_IDS: '11,22' }),
+    );
+    expect(toolSchema).toEqual({ mode: 'hybrid', userIds: [11, 22] });
+  });
+
+  it('a misspelled AI_TOOL_SCHEMA_MODE stops the process at startup', () => {
+    const result = loadEnv({ ...REQUIRED_ENV, AI_TOOL_SCHEMA_MODE: 'hybird' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('AI_TOOL_SCHEMA_MODE must be full, lazy or hybrid');
+  });
+
+  it('a malformed AI_TOOL_SCHEMA_USER_IDS stops the process at startup', () => {
+    const result = loadEnv({ ...REQUIRED_ENV, AI_TOOL_SCHEMA_USER_IDS: 'abc' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('AI_TOOL_SCHEMA_USER_IDS must be at most 100');
   });
 
   it('a misspelled AI_ROUTING stops the process at startup', () => {

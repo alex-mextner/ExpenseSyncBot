@@ -63,6 +63,7 @@ mock.module('./tool-executor', () => ({
 import { AiDebugRunContext } from './debug-logger';
 import { buildStaticSystemPrompt } from './system-prompt';
 import { NO_ANSWER_MESSAGE } from './telegram-stream';
+import { HYBRID_CORE_TOOLS } from './tool-exposure';
 import type { AgentContext } from './types';
 
 // Loaded after the mocks above: a static import is hoisted and would create the agent's
@@ -1225,7 +1226,7 @@ describe('ExpenseBotAgent', () => {
       const lastOpts = getLastCallOpts();
       // Tools stay declared (the history holds tool calls) but tool_choice forbids new ones.
       expect(lastOpts.toolChoice).toBe('none');
-      expect(lastOpts.tools).toBe(TOOL_DEFINITIONS);
+      expect(lastOpts.tools).toEqual(TOOL_DEFINITIONS);
       // The forced round tells the model to answer now from what it already gathered.
       expect(JSON.stringify(lastOpts.messages.at(-1))).toContain('[SYSTEM]');
       // The mocked tool returns the same result every time: nudge after round 4 (calculate
@@ -2373,6 +2374,97 @@ describe('ExpenseBotAgent', () => {
             mockBot as unknown as Bot,
           );
           expect(rolesOfRun()[0]).toBe('executor');
+        });
+      });
+
+      describe('tool schema mode (AI_TOOL_SCHEMA_MODE, #203)', () => {
+        const toolNameOf = (tool: (typeof TOOL_DEFINITIONS)[number]): string =>
+          tool.type === 'function' ? tool.function.name : tool.type;
+        const toolNamesOfCall = (index: number): string[] =>
+          (mockAiStreamRound.mock.calls[index]?.[0].tools ?? []).map(toolNameOf);
+        const systemOfCall = (index: number): string =>
+          mockAiStreamRound.mock.calls[index]?.[0].messages[0]?.content as string;
+
+        afterEach(() => {
+          env.AI_TOOL_SCHEMA_MODE = 'full';
+          env.AI_TOOL_SCHEMA_USER_IDS = undefined;
+        });
+
+        it('full mode (the default) sends every schema and no tool index', async () => {
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)).toEqual(TOOL_DEFINITIONS.map(toolNameOf));
+          expect(systemOfCall(0)).not.toContain('TOOL INDEX');
+          expect(toolNamesOfCall(0)).not.toContain('discover_tools');
+        });
+
+        it('hybrid mode: round 1 carries the core and discover_tools, the index lists the rest', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)).toEqual(['discover_tools', ...HYBRID_CORE_TOOLS]);
+          const system = systemOfCall(0);
+          expect(system).toContain('## TOOL INDEX');
+          expect(system).toContain('- update_group_setting:');
+          expect(system).not.toContain('- get_expenses:');
+          expect(system.startsWith(buildStaticSystemPrompt())).toBe(true);
+        });
+
+        it('discover_tools loads a schema for the next round and runs no tool', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('discover_tools', '{"tools":["get_categories"]}');
+          mockToolCallRound('get_categories');
+          mockStreamReturn(['Категории: еда']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(toolNamesOfCall(0)).not.toContain('get_categories');
+          expect(toolNamesOfCall(1)).toEqual([
+            'discover_tools',
+            ...HYBRID_CORE_TOOLS,
+            'get_categories',
+          ]);
+          expect(mockExecuteTool.mock.calls.map((call) => call[0])).toEqual(['get_categories']);
+          expect(mockAiStreamRound).toHaveBeenCalledTimes(3);
+        });
+
+        it('a tool called before its schema was loaded is rejected, not run, and loaded for the next round', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('update_group_setting', '{"setting":"default_currency","value":"EUR"}');
+          mockStreamReturn(['Готово']);
+
+          await agent.run('поставь евро', [], mockBot as unknown as Bot);
+
+          expect(mockExecuteTool).not.toHaveBeenCalled();
+          expect(toolNamesOfCall(1)).toContain('update_group_setting');
+          const toolMessage = mockAiStreamRound.mock.calls[1]?.[0].messages.find(
+            (message) => message.role === 'tool',
+          );
+          expect(String(toolMessage?.content)).toContain('TOOL_SCHEMA_NOT_EXPOSED');
+        });
+
+        it('a discover-only run is still validated: discovery is not a data tool call', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          mockToolCallRound('discover_tools', '{"tools":["get_categories"]}');
+          mockStreamReturn(['Вот категории']);
+
+          await agent.run('какие категории', [], mockBot as unknown as Bot);
+
+          expect(mockValidateResponse).toHaveBeenCalledTimes(1);
+        });
+
+        it('the canary list keeps other users on the full catalog', async () => {
+          env.AI_TOOL_SCHEMA_MODE = 'hybrid';
+          env.AI_TOOL_SCHEMA_USER_IDS = [1234];
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)).toEqual(TOOL_DEFINITIONS.map(toolNameOf));
+
+          mockAiStreamRound.mockClear();
+          env.AI_TOOL_SCHEMA_USER_IDS = [99];
+          mockStreamReturn();
+          await agent.run('привет', [], mockBot as unknown as Bot);
+          expect(toolNamesOfCall(0)[0]).toBe('discover_tools');
         });
       });
 
