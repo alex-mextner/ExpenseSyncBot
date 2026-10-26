@@ -33,6 +33,18 @@ interface ExpenseOccurrence {
   currency: string;
 }
 
+/** Groups items by key, preserving first-seen key order and item order within a group. */
+function groupBy<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key) || [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
 /**
  * Detects recurring expense patterns from the last 6 months of history.
  * Groups expenses by category, finds similar-amount entries appearing at
@@ -51,36 +63,25 @@ export function detectRecurringPatterns(groupId: number): DetectedPattern[] {
   }
 
   // Group expenses by category
-  const byCategory = new Map<string, ExpenseOccurrence[]>();
-  for (const expense of expenses) {
-    const occurrences = byCategory.get(expense.category) || [];
-    occurrences.push({
-      date: expense.date,
-      amount: expense.amount,
-      currency: expense.currency,
-    });
-    byCategory.set(expense.category, occurrences);
-  }
+  const byCategory = groupBy(
+    expenses.map((expense) => ({
+      category: expense.category,
+      occurrence: { date: expense.date, amount: expense.amount, currency: expense.currency },
+    })),
+    (row) => row.category,
+  );
 
   const detected: DetectedPattern[] = [];
 
-  for (const [category, occurrences] of byCategory) {
+  for (const [category, rows] of byCategory) {
+    const occurrences = rows.map((row) => row.occurrence);
     if (occurrences.length < MIN_OCCURRENCES) {
       continue;
     }
 
     // Group by currency, then find amount clusters
-    const byCurrency = new Map<string, ExpenseOccurrence[]>();
-    for (const occ of occurrences) {
-      const list = byCurrency.get(occ.currency) || [];
-      list.push(occ);
-      byCurrency.set(occ.currency, list);
-    }
-
-    for (const [currency, currencyOccurrences] of byCurrency) {
-      const patterns = findMonthlyAmountClusters(currencyOccurrences);
-
-      for (const pattern of patterns) {
+    for (const [currency, currencyOccurrences] of groupBy(occurrences, (occ) => occ.currency)) {
+      for (const pattern of findMonthlyAmountClusters(currencyOccurrences)) {
         // Skip if already saved in the database
         const existing = database.recurringPatterns.findByGroupCategoryCurrency(
           groupId,
@@ -130,25 +131,14 @@ function findMonthlyAmountClusters(occurrences: ExpenseOccurrence[]): AmountClus
   for (const [i, anchor] of sorted.entries()) {
     if (usedIndices.has(i)) continue;
 
-    // Collect indices of all occurrences with similar amount to the anchor
-    const clusterMembers: ExpenseOccurrence[] = [anchor];
-    const memberIndices: number[] = [i];
+    const { members, memberIndices } = collectSimilarAmountMembers(sorted, i, anchor, usedIndices);
 
-    for (const [j, candidate] of sorted.entries()) {
-      if (j <= i || usedIndices.has(j)) continue;
-      if (isAmountSimilar(anchor.amount, candidate.amount)) {
-        clusterMembers.push(candidate);
-        memberIndices.push(j);
-      }
-    }
-
-    if (clusterMembers.length < MIN_OCCURRENCES) {
+    if (members.length < MIN_OCCURRENCES) {
       continue;
     }
 
     // Check if the cluster has roughly monthly intervals
-    const clusterDates = clusterMembers.map((m) => m.date);
-    if (!hasMonthlyIntervals(clusterDates)) {
+    if (!hasMonthlyIntervals(members.map((m) => m.date))) {
       continue;
     }
 
@@ -157,22 +147,50 @@ function findMonthlyAmountClusters(occurrences: ExpenseOccurrence[]): AmountClus
       usedIndices.add(idx);
     }
 
-    // Compute median amount and median day-of-month
-    const amounts = clusterMembers.map((m) => m.amount);
-    const days = clusterMembers.map((m) => Number.parseInt(m.date.slice(8, 10), 10));
-    const lastMember = clusterMembers[clusterMembers.length - 1];
-    // clusterMembers has >= MIN_OCCURRENCES entries, so lastMember is defined
-    if (!lastMember) continue;
-
-    clusters.push({
-      medianAmount: median(amounts),
-      medianDay: Math.round(median(days)),
-      count: clusterMembers.length,
-      lastDate: lastMember.date,
-    });
+    const cluster = summarizeCluster(members);
+    if (cluster) clusters.push(cluster);
   }
 
   return clusters;
+}
+
+/**
+ * Collects the anchor plus every later, not-yet-used occurrence whose amount is
+ * within tolerance of the anchor's amount.
+ */
+function collectSimilarAmountMembers(
+  sorted: ExpenseOccurrence[],
+  anchorIndex: number,
+  anchor: ExpenseOccurrence,
+  usedIndices: Set<number>,
+): { members: ExpenseOccurrence[]; memberIndices: number[] } {
+  const members: ExpenseOccurrence[] = [anchor];
+  const memberIndices: number[] = [anchorIndex];
+
+  for (const [j, candidate] of sorted.entries()) {
+    if (j <= anchorIndex || usedIndices.has(j)) continue;
+    if (isAmountSimilar(anchor.amount, candidate.amount)) {
+      members.push(candidate);
+      memberIndices.push(j);
+    }
+  }
+  return { members, memberIndices };
+}
+
+/** Median amount and median day-of-month of a date-sorted cluster. */
+function summarizeCluster(members: ExpenseOccurrence[]): AmountCluster | null {
+  const amounts = members.map((m) => m.amount);
+  const days = members.map((m) => Number.parseInt(m.date.slice(8, 10), 10));
+  const lastMember = members[members.length - 1];
+  // members has >= MIN_OCCURRENCES entries, so lastMember is defined
+  if (!lastMember) return null;
+
+  return {
+    medianAmount: median(amounts),
+    medianDay: Math.round(median(days)),
+    count: members.length,
+    lastDate: lastMember.date,
+  };
 }
 
 /**

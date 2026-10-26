@@ -1,0 +1,8003 @@
+{
+  "analyze:empty": {
+    "category": "cat",
+    "monthsOfData": 0,
+    "currentMonthSpent": 0,
+    "forecasts": {
+      "sma3": 0,
+      "wma3": 0,
+      "kama": 0,
+      "median": 0,
+      "holt": {
+        "forecast": 0,
+        "level": 0,
+        "trend": 0
+      },
+      "theta": {
+        "forecast": 0
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 0,
+        "p90": 0,
+        "p95": 0
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 0
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": null,
+        "middle": null,
+        "lower": null,
+        "bandwidth": 0,
+        "percentB": 0.5
+      },
+      "atr": 0,
+      "keltner": {
+        "upper": 0,
+        "middle": 0,
+        "lower": 0
+      },
+      "donchian": {
+        "upper": 0,
+        "lower": 0,
+        "middle": 0,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 0,
+        "middle": 0,
+        "lower": 0
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 0,
+        "p90": 0
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 0,
+        "iqr": 0,
+        "lowerBound": 0,
+        "upperBound": 0,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 0,
+        "intercept": 0,
+        "r2": 0,
+        "forecast": 0,
+        "monthlyChange": 0
+      },
+      "cusum": {
+        "values": [],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 50,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 0,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 0
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 0,
+        "resistance1": 0,
+        "resistance2": 0,
+        "support1": 0,
+        "support2": 0
+      },
+      "direction": "stable",
+      "confidence": 0
+    }
+  },
+  "analyzeCur:empty": {
+    "category": "cat",
+    "monthsOfData": 0,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 0,
+      "wma3": 0,
+      "kama": 0,
+      "median": 0,
+      "holt": {
+        "forecast": 0,
+        "level": 0,
+        "trend": 0
+      },
+      "theta": {
+        "forecast": 0
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 0,
+        "p90": 0,
+        "p95": 0
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 0
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": null,
+        "middle": null,
+        "lower": null,
+        "bandwidth": 0,
+        "percentB": 0.5
+      },
+      "atr": 0,
+      "keltner": {
+        "upper": 0,
+        "middle": 0,
+        "lower": 0
+      },
+      "donchian": {
+        "upper": 0,
+        "lower": 0,
+        "middle": 0,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 0,
+        "middle": 0,
+        "lower": 0
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 0,
+        "p90": 0
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 0,
+        "iqr": 0,
+        "lowerBound": 0,
+        "upperBound": 0,
+        "isOutlier": true
+      },
+      "isAnomaly": false,
+      "anomalyCount": 1
+    },
+    "trend": {
+      "regression": {
+        "slope": 0,
+        "intercept": 0,
+        "r2": 0,
+        "forecast": 0,
+        "monthlyChange": 0
+      },
+      "cusum": {
+        "values": [],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 50,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 0,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 0
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 0,
+        "resistance1": 0,
+        "resistance2": 0,
+        "support1": 0,
+        "support2": 0
+      },
+      "direction": "stable",
+      "confidence": 0
+    }
+  },
+  "dixon:empty": {
+    "outlier": 0,
+    "qRatio": 0,
+    "isSignificant": false
+  },
+  "grubbs:empty": {
+    "outlier": 0,
+    "statistic": 0,
+    "isSignificant": false
+  },
+  "croston:empty": {
+    "forecast": 0,
+    "expectedAmount": 0,
+    "expectedInterval": 1
+  },
+  "crostonTSB:empty": {
+    "forecast": 0,
+    "expectedAmount": 0,
+    "expectedInterval": 1
+  },
+  "kama:empty": {
+    "value": 0,
+    "series": [],
+    "efficiencyRatio": 0
+  },
+  "kama3:empty": {
+    "value": 0,
+    "series": [],
+    "efficiencyRatio": 0
+  },
+  "loess:empty": [],
+  "loess.2:empty": [],
+  "hurst:empty": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:empty": {
+    "trend": [],
+    "seasonal": [],
+    "residual": []
+  },
+  "stl4:empty": {
+    "trend": [],
+    "seasonal": [],
+    "residual": []
+  },
+  "poly:empty": {
+    "coefficients": [0],
+    "forecast": 0,
+    "r2": 0
+  },
+  "poly1:empty": {
+    "coefficients": [0],
+    "forecast": 0,
+    "r2": 0
+  },
+  "poly5:empty": {
+    "coefficients": [0],
+    "forecast": 0,
+    "r2": 0
+  },
+  "robust:empty": {
+    "slope": 0,
+    "intercept": 0,
+    "forecast": 0
+  },
+  "robust3:empty": {
+    "slope": 0,
+    "intercept": 0,
+    "forecast": 0
+  },
+  "analyze:one": {
+    "category": "cat",
+    "monthsOfData": 1,
+    "currentMonthSpent": 5,
+    "forecasts": {
+      "sma3": 5,
+      "wma3": 5,
+      "kama": 5,
+      "median": 5,
+      "holt": {
+        "forecast": 5,
+        "level": 5,
+        "trend": 0
+      },
+      "theta": {
+        "forecast": 5
+      },
+      "quantiles": {
+        "p50": 5,
+        "p75": 5,
+        "p90": 5,
+        "p95": 5
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 5
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 5,
+        "middle": 5,
+        "lower": 5,
+        "bandwidth": 0,
+        "percentB": 0.5
+      },
+      "atr": 0,
+      "keltner": {
+        "upper": 5,
+        "middle": 5,
+        "lower": 5
+      },
+      "donchian": {
+        "upper": 5,
+        "lower": 5,
+        "middle": 5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 6,
+        "middle": 5,
+        "lower": 4
+      },
+      "percentiles": {
+        "p10": 5,
+        "p25": 5,
+        "p50": 5,
+        "p75": 5,
+        "p90": 5
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 5,
+        "q3": 5,
+        "iqr": 0,
+        "lowerBound": 5,
+        "upperBound": 5,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 0,
+        "intercept": 5,
+        "r2": 0,
+        "forecast": 5,
+        "monthlyChange": 0
+      },
+      "cusum": {
+        "values": [0],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 50,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 0,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 5
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 5,
+        "resistance1": 5,
+        "resistance2": 5,
+        "support1": 5,
+        "support2": 5
+      },
+      "direction": "stable",
+      "confidence": 0
+    }
+  },
+  "analyzeCur:one": {
+    "category": "cat",
+    "monthsOfData": 1,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 5,
+      "wma3": 5,
+      "kama": 5,
+      "median": 5,
+      "holt": {
+        "forecast": 5,
+        "level": 5,
+        "trend": 0
+      },
+      "theta": {
+        "forecast": 5
+      },
+      "quantiles": {
+        "p50": 5,
+        "p75": 5,
+        "p90": 5,
+        "p95": 5
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 5
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 5,
+        "middle": 5,
+        "lower": 5,
+        "bandwidth": 0,
+        "percentB": 0.5
+      },
+      "atr": 0,
+      "keltner": {
+        "upper": 5,
+        "middle": 5,
+        "lower": 5
+      },
+      "donchian": {
+        "upper": 5,
+        "lower": 5,
+        "middle": 5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 6,
+        "middle": 5,
+        "lower": 4
+      },
+      "percentiles": {
+        "p10": 5,
+        "p25": 5,
+        "p50": 5,
+        "p75": 5,
+        "p90": 5
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 5,
+        "q3": 5,
+        "iqr": 0,
+        "lowerBound": 5,
+        "upperBound": 5,
+        "isOutlier": true
+      },
+      "isAnomaly": false,
+      "anomalyCount": 1
+    },
+    "trend": {
+      "regression": {
+        "slope": 0,
+        "intercept": 5,
+        "r2": 0,
+        "forecast": 5,
+        "monthlyChange": 0
+      },
+      "cusum": {
+        "values": [0],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 50,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 0,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 5
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 5,
+        "resistance1": 5,
+        "resistance2": 5,
+        "support1": 5,
+        "support2": 5
+      },
+      "direction": "stable",
+      "confidence": 0
+    }
+  },
+  "dixon:one": {
+    "outlier": 5,
+    "qRatio": 0,
+    "isSignificant": false
+  },
+  "grubbs:one": {
+    "outlier": 5,
+    "statistic": 0,
+    "isSignificant": false
+  },
+  "croston:one": {
+    "forecast": 5,
+    "expectedAmount": 5,
+    "expectedInterval": 1
+  },
+  "crostonTSB:one": {
+    "forecast": 5,
+    "expectedAmount": 5,
+    "expectedInterval": 1
+  },
+  "kama:one": {
+    "value": 5,
+    "series": [5],
+    "efficiencyRatio": 0
+  },
+  "kama3:one": {
+    "value": 5,
+    "series": [5],
+    "efficiencyRatio": 0
+  },
+  "loess:one": [
+    {
+      "x": 0,
+      "y": 5
+    }
+  ],
+  "loess.2:one": [
+    {
+      "x": 0,
+      "y": 5
+    }
+  ],
+  "hurst:one": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:one": {
+    "trend": [5],
+    "seasonal": [0],
+    "residual": [0]
+  },
+  "stl4:one": {
+    "trend": [5],
+    "seasonal": [0],
+    "residual": [0]
+  },
+  "poly:one": {
+    "coefficients": [5],
+    "forecast": 5,
+    "r2": 0
+  },
+  "poly1:one": {
+    "coefficients": [5],
+    "forecast": 5,
+    "r2": 0
+  },
+  "poly5:one": {
+    "coefficients": [5],
+    "forecast": 5,
+    "r2": 0
+  },
+  "robust:one": {
+    "slope": 0,
+    "intercept": 5,
+    "forecast": 5
+  },
+  "robust3:one": {
+    "slope": 0,
+    "intercept": 5,
+    "forecast": 5
+  },
+  "analyze:two": {
+    "category": "cat",
+    "monthsOfData": 2,
+    "currentMonthSpent": 9,
+    "forecasts": {
+      "sma3": 7,
+      "wma3": 7.666666666666667,
+      "kama": 9,
+      "median": 7,
+      "holt": {
+        "forecast": 13,
+        "level": 9,
+        "trend": 4
+      },
+      "theta": {
+        "forecast": 9.666666666666668
+      },
+      "quantiles": {
+        "p50": 7,
+        "p75": 8,
+        "p90": 8.6,
+        "p95": 8.799999999999999
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 8.333333333333334
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 11,
+        "middle": 7,
+        "lower": 3,
+        "bandwidth": 1.1428571428571428,
+        "percentB": 0.75
+      },
+      "atr": 4,
+      "keltner": {
+        "upper": 13.666666666666668,
+        "middle": 7.666666666666667,
+        "lower": 1.666666666666667
+      },
+      "donchian": {
+        "upper": 9,
+        "lower": 5,
+        "middle": 7,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 9.2,
+        "middle": 7.666666666666667,
+        "lower": 6.133333333333334
+      },
+      "percentiles": {
+        "p10": 5.4,
+        "p25": 6,
+        "p50": 7,
+        "p75": 8,
+        "p90": 8.6
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 1,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0.6745,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 5,
+        "q3": 9,
+        "iqr": 4,
+        "lowerBound": -1,
+        "upperBound": 15,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 4,
+        "intercept": 5,
+        "r2": 1,
+        "forecast": 13,
+        "monthlyChange": 4
+      },
+      "cusum": {
+        "values": [0, 2],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 99.00990099009901,
+        "signal": "overbought"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 80,
+      "roc3": 80,
+      "momentum3": 4,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 7.125
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 7.666666666666667,
+        "resistance1": 10.333333333333334,
+        "resistance2": 11.666666666666668,
+        "support1": 6.333333333333334,
+        "support2": 3.666666666666667
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:two": {
+    "category": "cat",
+    "monthsOfData": 2,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 7,
+      "wma3": 7.666666666666667,
+      "kama": 9,
+      "median": 7,
+      "holt": {
+        "forecast": 13,
+        "level": 9,
+        "trend": 4
+      },
+      "theta": {
+        "forecast": 9.666666666666668
+      },
+      "quantiles": {
+        "p50": 7,
+        "p75": 8,
+        "p90": 8.6,
+        "p95": 8.799999999999999
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 8.333333333333334
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 11,
+        "middle": 7,
+        "lower": 3,
+        "bandwidth": 1.1428571428571428,
+        "percentB": 0.75
+      },
+      "atr": 4,
+      "keltner": {
+        "upper": 13.666666666666668,
+        "middle": 7.666666666666667,
+        "lower": 1.666666666666667
+      },
+      "donchian": {
+        "upper": 9,
+        "lower": 5,
+        "middle": 7,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 9.2,
+        "middle": 7.666666666666667,
+        "lower": 6.133333333333334
+      },
+      "percentiles": {
+        "p10": 5.4,
+        "p25": 6,
+        "p50": 7,
+        "p75": 8,
+        "p90": 8.6
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 613.5,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 413.80575,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 5,
+        "q3": 9,
+        "iqr": 4,
+        "lowerBound": -1,
+        "upperBound": 15,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 4,
+        "intercept": 5,
+        "r2": 1,
+        "forecast": 13,
+        "monthlyChange": 4
+      },
+      "cusum": {
+        "values": [0, 2],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 99.00990099009901,
+        "signal": "overbought"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 80,
+      "roc3": 80,
+      "momentum3": 4,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 7.125
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 7.666666666666667,
+        "resistance1": 10.333333333333334,
+        "resistance2": 11.666666666666668,
+        "support1": 6.333333333333334,
+        "support2": 3.666666666666667
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "dixon:two": {
+    "outlier": 5,
+    "qRatio": 0,
+    "isSignificant": false
+  },
+  "grubbs:two": {
+    "outlier": 5,
+    "statistic": 0,
+    "isSignificant": false
+  },
+  "croston:two": {
+    "forecast": 5.27,
+    "expectedAmount": 6.199999999999999,
+    "expectedInterval": 1
+  },
+  "crostonTSB:two": {
+    "forecast": 6.199999999999999,
+    "expectedAmount": 6.199999999999999,
+    "expectedInterval": 1
+  },
+  "kama:two": {
+    "value": 9,
+    "series": [5, 9],
+    "efficiencyRatio": 0
+  },
+  "kama3:two": {
+    "value": 9,
+    "series": [5, 9],
+    "efficiencyRatio": 0
+  },
+  "loess:two": [
+    {
+      "x": 0,
+      "y": 5
+    },
+    {
+      "x": 1,
+      "y": 9
+    }
+  ],
+  "loess.2:two": [
+    {
+      "x": 0,
+      "y": 5
+    },
+    {
+      "x": 1,
+      "y": 9
+    }
+  ],
+  "hurst:two": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:two": {
+    "trend": [5, 9],
+    "seasonal": [0, 0],
+    "residual": [0, 0]
+  },
+  "stl4:two": {
+    "trend": [5, 9],
+    "seasonal": [0, 0],
+    "residual": [0, 0]
+  },
+  "poly:two": {
+    "coefficients": [9],
+    "forecast": 9,
+    "r2": 0
+  },
+  "poly1:two": {
+    "coefficients": [5, 4],
+    "forecast": 13,
+    "r2": 1
+  },
+  "poly5:two": {
+    "coefficients": [9],
+    "forecast": 9,
+    "r2": 0
+  },
+  "robust:two": {
+    "slope": 4,
+    "intercept": 5,
+    "forecast": 13
+  },
+  "robust3:two": {
+    "slope": 4,
+    "intercept": 5,
+    "forecast": 13
+  },
+  "analyze:three": {
+    "category": "cat",
+    "monthsOfData": 3,
+    "currentMonthSpent": 4,
+    "forecasts": {
+      "sma3": 2.6666666666666665,
+      "wma3": 2.8333333333333335,
+      "kama": 4,
+      "median": 3,
+      "holt": {
+        "forecast": -1.35,
+        "level": 0.5,
+        "trend": -1.85
+      },
+      "theta": {
+        "forecast": 3.25
+      },
+      "quantiles": {
+        "p50": 3,
+        "p75": 3.5,
+        "p90": 3.8,
+        "p95": 3.9
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 2.9375
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 5.161104924515961,
+        "middle": 2.6666666666666665,
+        "lower": 0.17222840881737245,
+        "bandwidth": 1.8708286933869707,
+        "percentB": 0.7672612419124244
+      },
+      "atr": 2.5,
+      "keltner": {
+        "upper": 6.75,
+        "middle": 3,
+        "lower": -0.75
+      },
+      "donchian": {
+        "upper": 4,
+        "lower": 1,
+        "middle": 2.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 1.2424533248940002,
+      "maEnvelopes": {
+        "upper": 3.5999999999999996,
+        "middle": 3,
+        "lower": 2.4000000000000004
+      },
+      "percentiles": {
+        "p10": 1.4000000000000001,
+        "p25": 2,
+        "p50": 3,
+        "p75": 3.5,
+        "p90": 3.8
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 1.0690449676496978,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0.6745,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 1,
+        "q3": 4,
+        "iqr": 3,
+        "lowerBound": -3.5,
+        "upperBound": 8.5,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 0.5,
+        "intercept": 2.1666666666666665,
+        "r2": 0.1071428571428572,
+        "forecast": 3.6666666666666665,
+        "monthlyChange": 0.5
+      },
+      "cusum": {
+        "values": [0.3333333333333335, 0, 1.3333333333333335],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 60,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 300,
+      "roc3": 33.33333333333333,
+      "momentum3": 1,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 2.734375
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 3,
+        "resistance1": 5,
+        "resistance2": 6,
+        "support1": 2,
+        "support2": 0
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:three": {
+    "category": "cat",
+    "monthsOfData": 3,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 2.6666666666666665,
+      "wma3": 2.8333333333333335,
+      "kama": 4,
+      "median": 3,
+      "holt": {
+        "forecast": -1.35,
+        "level": 0.5,
+        "trend": -1.85
+      },
+      "theta": {
+        "forecast": 3.25
+      },
+      "quantiles": {
+        "p50": 3,
+        "p75": 3.5,
+        "p90": 3.8,
+        "p95": 3.9
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 2.9375
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 5.161104924515961,
+        "middle": 2.6666666666666665,
+        "lower": 0.17222840881737245,
+        "bandwidth": 1.8708286933869707,
+        "percentB": 0.7672612419124244
+      },
+      "atr": 2.5,
+      "keltner": {
+        "upper": 6.75,
+        "middle": 3,
+        "lower": -0.75
+      },
+      "donchian": {
+        "upper": 4,
+        "lower": 1,
+        "middle": 2.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 1.2424533248940002,
+      "maEnvelopes": {
+        "upper": 3.5999999999999996,
+        "middle": 3,
+        "lower": 2.4000000000000004
+      },
+      "percentiles": {
+        "p10": 1.4000000000000001,
+        "p25": 2,
+        "p50": 3,
+        "p75": 3.5,
+        "p90": 3.8
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 987.2630276244956,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 830.3095,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 1,
+        "q3": 4,
+        "iqr": 3,
+        "lowerBound": -3.5,
+        "upperBound": 8.5,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 0.5,
+        "intercept": 2.1666666666666665,
+        "r2": 0.1071428571428572,
+        "forecast": 3.6666666666666665,
+        "monthlyChange": 0.5
+      },
+      "cusum": {
+        "values": [0.3333333333333335, 0, 1.3333333333333335],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 60,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 300,
+      "roc3": 33.33333333333333,
+      "momentum3": 1,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 2.734375
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 3,
+        "resistance1": 5,
+        "resistance2": 6,
+        "support1": 2,
+        "support2": 0
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "dixon:three": {
+    "outlier": 1,
+    "qRatio": 0.6666666666666666,
+    "isSignificant": false
+  },
+  "grubbs:three": {
+    "outlier": 1,
+    "statistic": 1.3363062095621219,
+    "isSignificant": true
+  },
+  "croston:three": {
+    "forecast": 2.4479999999999995,
+    "expectedAmount": 2.8799999999999994,
+    "expectedInterval": 1
+  },
+  "crostonTSB:three": {
+    "forecast": 2.8799999999999994,
+    "expectedAmount": 2.8799999999999994,
+    "expectedInterval": 1
+  },
+  "kama:three": {
+    "value": 4,
+    "series": [3, 1, 4],
+    "efficiencyRatio": 0
+  },
+  "kama3:three": {
+    "value": 4,
+    "series": [3, 1, 4],
+    "efficiencyRatio": 0
+  },
+  "loess:three": [
+    {
+      "x": 0,
+      "y": 2.9999999831755333
+    },
+    {
+      "x": 1,
+      "y": 1.0000001341929543
+    },
+    {
+      "x": 2,
+      "y": 3.9999999831755324
+    }
+  ],
+  "loess.2:three": [
+    {
+      "x": 0,
+      "y": 2.9999999831755333
+    },
+    {
+      "x": 1,
+      "y": 1.0000001341929543
+    },
+    {
+      "x": 2,
+      "y": 3.9999999831755324
+    }
+  ],
+  "hurst:three": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:three": {
+    "trend": [3, 1, 4],
+    "seasonal": [0, 0, 0],
+    "residual": [0, 0, 0]
+  },
+  "stl4:three": {
+    "trend": [3, 1, 4],
+    "seasonal": [0, 0, 0],
+    "residual": [0, 0, 0]
+  },
+  "poly:three": {
+    "coefficients": [3.0000000000000018, -4.500000000000014, 2.500000000000007],
+    "forecast": 12.000000000000023,
+    "r2": 1
+  },
+  "poly1:three": {
+    "coefficients": [2.1666666666666665, 0.5],
+    "forecast": 3.6666666666666665,
+    "r2": 0.1071428571428572
+  },
+  "poly5:three": {
+    "coefficients": [4],
+    "forecast": 4,
+    "r2": 0
+  },
+  "robust:three": {
+    "slope": 0.5000000000000008,
+    "intercept": 2.9765715385872134,
+    "forecast": 4.476571538587216
+  },
+  "robust3:three": {
+    "slope": 0.49999999999999983,
+    "intercept": 2.6700048382292243,
+    "forecast": 4.170004838229223
+  },
+  "analyze:flat": {
+    "category": "cat",
+    "monthsOfData": 10,
+    "currentMonthSpent": 7,
+    "forecasts": {
+      "sma3": 7,
+      "wma3": 7,
+      "kama": 7,
+      "median": 7,
+      "holt": {
+        "forecast": 7,
+        "level": 7,
+        "trend": 0
+      },
+      "theta": {
+        "forecast": 7
+      },
+      "quantiles": {
+        "p50": 7,
+        "p75": 7,
+        "p90": 7,
+        "p95": 7
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 7
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 7,
+        "middle": 7,
+        "lower": 7,
+        "bandwidth": 0,
+        "percentB": 0.5
+      },
+      "atr": 0,
+      "keltner": {
+        "upper": 7,
+        "middle": 7,
+        "lower": 7
+      },
+      "donchian": {
+        "upper": 7,
+        "lower": 7,
+        "middle": 7,
+        "isBreakoutHigh": true,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 8.4,
+        "middle": 7,
+        "lower": 5.6000000000000005
+      },
+      "percentiles": {
+        "p10": 7,
+        "p25": 7,
+        "p50": 7,
+        "p75": 7,
+        "p90": 7
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 7,
+        "q3": 7,
+        "iqr": 0,
+        "lowerBound": 7,
+        "upperBound": 7,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 0,
+        "intercept": 7,
+        "r2": 0,
+        "forecast": 7,
+        "monthlyChange": 0
+      },
+      "cusum": {
+        "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 99.00990099009901,
+        "signal": "overbought"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 0,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 7
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 7,
+        "resistance1": 7,
+        "resistance2": 7,
+        "support1": 7,
+        "support2": 7
+      },
+      "direction": "stable",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:flat": {
+    "category": "cat",
+    "monthsOfData": 10,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 7,
+      "wma3": 7,
+      "kama": 7,
+      "median": 7,
+      "holt": {
+        "forecast": 7,
+        "level": 7,
+        "trend": 0
+      },
+      "theta": {
+        "forecast": 7
+      },
+      "quantiles": {
+        "p50": 7,
+        "p75": 7,
+        "p90": 7,
+        "p95": 7
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 7,
+        "level": 7,
+        "trend": 0,
+        "seasonal": [0, 0, 0, 0]
+      },
+      "ensemble": 7
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 7,
+        "middle": 7,
+        "lower": 7,
+        "bandwidth": 0,
+        "percentB": 0.5
+      },
+      "atr": 0,
+      "keltner": {
+        "upper": 7,
+        "middle": 7,
+        "lower": 7
+      },
+      "donchian": {
+        "upper": 7,
+        "lower": 7,
+        "middle": 7,
+        "isBreakoutHigh": true,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 8.4,
+        "middle": 7,
+        "lower": 5.6000000000000005
+      },
+      "percentiles": {
+        "p10": 7,
+        "p25": 7,
+        "p50": 7,
+        "p75": 7,
+        "p90": 7
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 7,
+        "q3": 7,
+        "iqr": 0,
+        "lowerBound": 7,
+        "upperBound": 7,
+        "isOutlier": true
+      },
+      "isAnomaly": false,
+      "anomalyCount": 1
+    },
+    "trend": {
+      "regression": {
+        "slope": 0,
+        "intercept": 7,
+        "r2": 0,
+        "forecast": 7,
+        "monthlyChange": 0
+      },
+      "cusum": {
+        "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 99.00990099009901,
+        "signal": "overbought"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 0,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 7
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 7,
+        "resistance1": 7,
+        "resistance2": 7,
+        "support1": 7,
+        "support2": 7
+      },
+      "direction": "stable",
+      "confidence": 1
+    }
+  },
+  "dixon:flat": {
+    "outlier": 7,
+    "qRatio": 0,
+    "isSignificant": false
+  },
+  "grubbs:flat": {
+    "outlier": 7,
+    "statistic": 0,
+    "isSignificant": false
+  },
+  "croston:flat": {
+    "forecast": 5.95,
+    "expectedAmount": 7,
+    "expectedInterval": 1
+  },
+  "crostonTSB:flat": {
+    "forecast": 7,
+    "expectedAmount": 7,
+    "expectedInterval": 1
+  },
+  "kama:flat": {
+    "value": 7,
+    "series": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+    "efficiencyRatio": 0
+  },
+  "kama3:flat": {
+    "value": 7,
+    "series": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+    "efficiencyRatio": 0
+  },
+  "loess:flat": [
+    {
+      "x": 0,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 1,
+      "y": 6.999999999999997
+    },
+    {
+      "x": 2,
+      "y": 6.999999999999998
+    },
+    {
+      "x": 3,
+      "y": 6.999999999999999
+    },
+    {
+      "x": 4,
+      "y": 6.999999999999998
+    },
+    {
+      "x": 5,
+      "y": 6.999999999999998
+    },
+    {
+      "x": 6,
+      "y": 6.999999999999998
+    },
+    {
+      "x": 7,
+      "y": 6.999999999999998
+    },
+    {
+      "x": 8,
+      "y": 6.999999999999997
+    },
+    {
+      "x": 9,
+      "y": 7.000000000000009
+    }
+  ],
+  "loess.2:flat": [
+    {
+      "x": 0,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 1,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 2,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 3,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 4,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 5,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 6,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 7,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 8,
+      "y": 7.000000000000001
+    },
+    {
+      "x": 9,
+      "y": 6.999999999999984
+    }
+  ],
+  "hurst:flat": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:flat": {
+    "trend": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:flat": {
+    "trend": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "poly:flat": {
+    "coefficients": [7, 0, 0],
+    "forecast": 7,
+    "r2": 0
+  },
+  "poly1:flat": {
+    "coefficients": [7, 0],
+    "forecast": 7,
+    "r2": 0
+  },
+  "poly5:flat": {
+    "coefficients": [7, 0, 0],
+    "forecast": 7,
+    "r2": 0
+  },
+  "robust:flat": {
+    "slope": 0,
+    "intercept": 7,
+    "forecast": 7
+  },
+  "robust3:flat": {
+    "slope": 0,
+    "intercept": 7,
+    "forecast": 7
+  },
+  "analyze:short": {
+    "category": "cat",
+    "monthsOfData": 4,
+    "currentMonthSpent": 350,
+    "forecasts": {
+      "sma3": 316.6666666666667,
+      "wma3": 321.6666666666667,
+      "kama": 350,
+      "median": 310,
+      "holt": {
+        "forecast": 361.63399999999996,
+        "level": 343.14,
+        "trend": 18.493999999999996
+      },
+      "theta": {
+        "forecast": 323.5799999999999
+      },
+      "quantiles": {
+        "p50": 310,
+        "p75": 327.5,
+        "p90": 341,
+        "p95": 345.5
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 327.97833333333335
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 364.220402163943,
+        "middle": 312.5,
+        "lower": 260.779597836057,
+        "bandwidth": 0.33101057384923516,
+        "percentB": 0.862526183392124
+      },
+      "atr": 43.333333333333336,
+      "keltner": {
+        "upper": 383.0799999999999,
+        "middle": 318.0799999999999,
+        "lower": 253.07999999999993
+      },
+      "donchian": {
+        "upper": 350,
+        "lower": 280,
+        "middle": 315,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0.1459087469652612,
+      "maEnvelopes": {
+        "upper": 381.6959999999999,
+        "middle": 318.0799999999999,
+        "lower": 254.46399999999994
+      },
+      "percentiles": {
+        "p10": 286,
+        "p25": 295,
+        "p50": 310,
+        "p75": 327.5,
+        "p90": 341
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 1.4501047335684956,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 1.349,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 300,
+        "q3": 350,
+        "iqr": 50,
+        "lowerBound": 225,
+        "upperBound": 425,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 11,
+        "intercept": 296,
+        "r2": 0.22616822429906547,
+        "forecast": 340,
+        "monthlyChange": 11
+      },
+      "cusum": {
+        "values": [0, 7.5, 0, 37.5],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 69.23076923076923,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 25,
+      "roc3": 16.666666666666664,
+      "momentum3": 50,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 315.517578125
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 326.6666666666667,
+        "resistance1": 373.33333333333337,
+        "resistance2": 396.6666666666667,
+        "support1": 303.33333333333337,
+        "support2": 256.6666666666667
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:short": {
+    "category": "cat",
+    "monthsOfData": 4,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 316.6666666666667,
+      "wma3": 321.6666666666667,
+      "kama": 350,
+      "median": 310,
+      "holt": {
+        "forecast": 361.63399999999996,
+        "level": 343.14,
+        "trend": 18.493999999999996
+      },
+      "theta": {
+        "forecast": 323.5799999999999
+      },
+      "quantiles": {
+        "p50": 310,
+        "p75": 327.5,
+        "p90": 341,
+        "p95": 345.5
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 327.97833333333335
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 364.220402163943,
+        "middle": 312.5,
+        "lower": 260.779597836057,
+        "bandwidth": 0.33101057384923516,
+        "percentB": 0.862526183392124
+      },
+      "atr": 43.333333333333336,
+      "keltner": {
+        "upper": 383.0799999999999,
+        "middle": 318.0799999999999,
+        "lower": 253.07999999999993
+      },
+      "donchian": {
+        "upper": 350,
+        "lower": 280,
+        "middle": 315,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0.1459087469652612,
+      "maEnvelopes": {
+        "upper": 381.6959999999999,
+        "middle": 318.0799999999999,
+        "lower": 254.46399999999994
+      },
+      "percentiles": {
+        "p10": 286,
+        "p25": 295,
+        "p50": 310,
+        "p75": 327.5,
+        "p90": 341
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 35.63390698622316,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 31.161899999999996,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 300,
+        "q3": 350,
+        "iqr": 50,
+        "lowerBound": 225,
+        "upperBound": 425,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 11,
+        "intercept": 296,
+        "r2": 0.22616822429906547,
+        "forecast": 340,
+        "monthlyChange": 11
+      },
+      "cusum": {
+        "values": [0, 7.5, 0, 37.5],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 69.23076923076923,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 0,
+        "signal": 0,
+        "histogram": 0,
+        "crossover": "none"
+      },
+      "roc1": 25,
+      "roc3": 16.666666666666664,
+      "momentum3": 50,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 315.517578125
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 326.6666666666667,
+        "resistance1": 373.33333333333337,
+        "resistance2": 396.6666666666667,
+        "support1": 303.33333333333337,
+        "support2": 256.6666666666667
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "dixon:short": {
+    "outlier": 350,
+    "qRatio": 0.42857142857142855,
+    "isSignificant": false
+  },
+  "grubbs:short": {
+    "outlier": 350,
+    "statistic": 1.4501047335684956,
+    "isSignificant": true
+  },
+  "croston:short": {
+    "forecast": 266.679,
+    "expectedAmount": 313.74,
+    "expectedInterval": 1
+  },
+  "crostonTSB:short": {
+    "forecast": 313.74,
+    "expectedAmount": 313.74,
+    "expectedInterval": 1
+  },
+  "kama:short": {
+    "value": 350,
+    "series": [300, 320, 280, 350],
+    "efficiencyRatio": 0
+  },
+  "kama3:short": {
+    "value": 286.1377824573214,
+    "series": [300, 320, 280, 286.1377824573214],
+    "efficiencyRatio": 0.38461538461538464
+  },
+  "loess:short": [
+    {
+      "x": 0,
+      "y": 300.0000002018936
+    },
+    {
+      "x": 1,
+      "y": 319.9999983896846
+    },
+    {
+      "x": 2,
+      "y": 280.00000295224504
+    },
+    {
+      "x": 3,
+      "y": 349.99999962986186
+    }
+  ],
+  "loess.2:short": [
+    {
+      "x": 0,
+      "y": 300.0000002018936
+    },
+    {
+      "x": 1,
+      "y": 319.9999983896846
+    },
+    {
+      "x": 2,
+      "y": 280.00000295224504
+    },
+    {
+      "x": 3,
+      "y": 349.99999962986186
+    }
+  ],
+  "hurst:short": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:short": {
+    "trend": [300, 320, 280, 350],
+    "seasonal": [0, 0, 0, 0],
+    "residual": [0, 0, 0, 0]
+  },
+  "stl4:short": {
+    "trend": [300, 320, 280, 350],
+    "seasonal": [0, 0, 0, 0],
+    "residual": [0, 0, 0, 0]
+  },
+  "poly:short": {
+    "coefficients": [308.49999999999983, -26.49999999999958, 12.499999999999865],
+    "forecast": 402.4999999999993,
+    "r2": 0.45981308411214983
+  },
+  "poly1:short": {
+    "coefficients": [295.99999999999994, 11.000000000000021],
+    "forecast": 340,
+    "r2": 0.2261682242990647
+  },
+  "poly5:short": {
+    "coefficients": [350],
+    "forecast": 350,
+    "r2": 0
+  },
+  "robust:short": {
+    "slope": 16.07605118972134,
+    "intercept": 300.88593002972465,
+    "forecast": 365.19013478861
+  },
+  "robust3:short": {
+    "slope": 14.78402559003835,
+    "intercept": 299.78402559003825,
+    "forecast": 358.92012795019167
+  },
+  "analyze:year": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 310,
+    "forecasts": {
+      "sma3": 316.6666666666667,
+      "wma3": 321.6666666666667,
+      "kama": 281.8890745726162,
+      "median": 320,
+      "holt": {
+        "forecast": 352.6545182406901,
+        "level": 344.6807564535534,
+        "trend": 7.973761787136694
+      },
+      "theta": {
+        "forecast": 318.89763825683144
+      },
+      "quantiles": {
+        "p50": 310,
+        "p75": 332.5,
+        "p90": 349,
+        "p95": 354.5
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 319.30774289754123
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 372.9150262212918,
+        "middle": 320,
+        "lower": 267.0849737787082,
+        "bandwidth": 0.3307189138830736,
+        "percentB": 0.4055088817476931
+      },
+      "atr": 50,
+      "keltner": {
+        "upper": 393.21582007501326,
+        "middle": 318.21582007501326,
+        "lower": 243.21582007501326
+      },
+      "donchian": {
+        "upper": 360,
+        "lower": 280,
+        "middle": 320,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0.16422763870657225,
+      "maEnvelopes": {
+        "upper": 381.8589840900159,
+        "middle": 318.21582007501326,
+        "lower": 254.57265606001062
+      },
+      "percentiles": {
+        "p10": 281,
+        "p25": 297.5,
+        "p50": 310,
+        "p75": 332.5,
+        "p90": 349
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": -0.16457700466915906,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 300,
+        "q3": 340,
+        "iqr": 40,
+        "lowerBound": 240,
+        "upperBound": 400,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 1.3636363636363635,
+        "intercept": 306.6666666666667,
+        "r2": 0.0345710627400766,
+        "forecast": 323.03030303030306,
+        "monthlyChange": 1.3636363636363635
+      },
+      "cusum": {
+        "values": [
+          0, 5.833333333333314, 0, 35.833333333333314, 31.66666666666663, 7.499999999999943,
+          33.33333333333326, 19.166666666666572, 34.999999999999886, 0.8333333333332007,
+          46.666666666666515, 42.49999999999983
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 53.33333333333334,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 1.833008049986745,
+        "signal": 2.6595056041445497,
+        "histogram": -0.8264975541578048,
+        "crossover": "bearish"
+      },
+      "roc1": -13.88888888888889,
+      "roc3": -6.0606060606060606,
+      "momentum3": -20,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 317.96967670321465
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 316.6666666666667,
+        "resistance1": 353.33333333333337,
+        "resistance2": 396.6666666666667,
+        "support1": 273.33333333333337,
+        "support2": 236.66666666666669
+      },
+      "direction": "stable",
+      "confidence": 0.6666666666666666
+    }
+  },
+  "analyzeCur:year": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 316.6666666666667,
+      "wma3": 321.6666666666667,
+      "kama": 281.8890745726162,
+      "median": 320,
+      "holt": {
+        "forecast": 352.6545182406901,
+        "level": 344.6807564535534,
+        "trend": 7.973761787136694
+      },
+      "theta": {
+        "forecast": 318.89763825683144
+      },
+      "quantiles": {
+        "p50": 310,
+        "p75": 332.5,
+        "p90": 349,
+        "p95": 354.5
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 311.5824047322216,
+        "level": 314.6560416536806,
+        "trend": -0.14908627127145402,
+        "seasonal": [-2.924550650187488, -6.932370233938125, -2.447866791795425, 15.636183777020833]
+      },
+      "ensemble": 317.7626752644773
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 372.9150262212918,
+        "middle": 320,
+        "lower": 267.0849737787082,
+        "bandwidth": 0.3307189138830736,
+        "percentB": 0.4055088817476931
+      },
+      "atr": 50,
+      "keltner": {
+        "upper": 393.21582007501326,
+        "middle": 318.21582007501326,
+        "lower": 243.21582007501326
+      },
+      "donchian": {
+        "upper": 360,
+        "lower": 280,
+        "middle": 320,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0.16422763870657225,
+      "maEnvelopes": {
+        "upper": 381.8589840900159,
+        "middle": 318.21582007501326,
+        "lower": 254.57265606001062
+      },
+      "percentiles": {
+        "p10": 281,
+        "p25": 297.5,
+        "p50": 310,
+        "p75": 332.5,
+        "p90": 349
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 36.33201955076339,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 31.161899999999996,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 300,
+        "q3": 340,
+        "iqr": 40,
+        "lowerBound": 240,
+        "upperBound": 400,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 1.3636363636363635,
+        "intercept": 306.6666666666667,
+        "r2": 0.0345710627400766,
+        "forecast": 323.03030303030306,
+        "monthlyChange": 1.3636363636363635
+      },
+      "cusum": {
+        "values": [
+          0, 5.833333333333314, 0, 35.833333333333314, 31.66666666666663, 7.499999999999943,
+          33.33333333333326, 19.166666666666572, 34.999999999999886, 0.8333333333332007,
+          46.666666666666515, 42.49999999999983
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 53.33333333333334,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 1.833008049986745,
+        "signal": 2.6595056041445497,
+        "histogram": -0.8264975541578048,
+        "crossover": "bearish"
+      },
+      "roc1": -13.88888888888889,
+      "roc3": -6.0606060606060606,
+      "momentum3": -20,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 317.96967670321465
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 316.6666666666667,
+        "resistance1": 353.33333333333337,
+        "resistance2": 396.6666666666667,
+        "support1": 273.33333333333337,
+        "support2": 236.66666666666669
+      },
+      "direction": "stable",
+      "confidence": 0.6666666666666666
+    }
+  },
+  "dixon:year": {
+    "outlier": 360,
+    "qRatio": 0.125,
+    "isSignificant": false
+  },
+  "grubbs:year": {
+    "outlier": 360,
+    "statistic": 1.8103470513607407,
+    "isSignificant": true
+  },
+  "croston:year": {
+    "forecast": 270.68253362379,
+    "expectedAmount": 318.4500395574,
+    "expectedInterval": 1
+  },
+  "crostonTSB:year": {
+    "forecast": 318.4500395574,
+    "expectedAmount": 318.4500395574,
+    "expectedInterval": 1
+  },
+  "kama:year": {
+    "value": 281.8890745726162,
+    "series": [
+      300, 320, 280, 350, 310, 290, 340, 300, 330, 280, 281.7199714484739, 281.8890745726162
+    ],
+    "efficiencyRatio": 0.02127659574468085
+  },
+  "kama3:year": {
+    "value": 295.24087011204415,
+    "series": [
+      300, 320, 280, 286.1377824573214, 286.3991598955042, 286.44339436589576, 287.20508995030673,
+      287.38706239558024, 290.3848199567858, 288.9968153469992, 294.98147503159134,
+      295.24087011204415
+    ],
+    "efficiencyRatio": 0.1111111111111111
+  },
+  "loess:year": [
+    {
+      "x": 0,
+      "y": 300.5666623637894
+    },
+    {
+      "x": 1,
+      "y": 306.2901306203894
+    },
+    {
+      "x": 2,
+      "y": 313.20432683053514
+    },
+    {
+      "x": 3,
+      "y": 312.78970932207096
+    },
+    {
+      "x": 4,
+      "y": 315.12670400896394
+    },
+    {
+      "x": 5,
+      "y": 314.95390072837574
+    },
+    {
+      "x": 6,
+      "y": 312.923868139123
+    },
+    {
+      "x": 7,
+      "y": 314.9389911559016
+    },
+    {
+      "x": 8,
+      "y": 313.4991477853093
+    },
+    {
+      "x": 9,
+      "y": 318.33103086583674
+    },
+    {
+      "x": 10,
+      "y": 321.02761937832315
+    },
+    {
+      "x": 11,
+      "y": 325.5836813727334
+    }
+  ],
+  "loess.2:year": [
+    {
+      "x": 0,
+      "y": 300.0000002018936
+    },
+    {
+      "x": 1,
+      "y": 319.9999983896846
+    },
+    {
+      "x": 2,
+      "y": 280.00000295224504
+    },
+    {
+      "x": 3,
+      "y": 349.9999970477551
+    },
+    {
+      "x": 4,
+      "y": 310.00000053677195
+    },
+    {
+      "x": 5,
+      "y": 290.00000187870137
+    },
+    {
+      "x": 6,
+      "y": 339.9999975845269
+    },
+    {
+      "x": 7,
+      "y": 300.0000018787014
+    },
+    {
+      "x": 8,
+      "y": 329.9999978529129
+    },
+    {
+      "x": 9,
+      "y": 280.0000034890168
+    },
+    {
+      "x": 10,
+      "y": 359.99999651098324
+    },
+    {
+      "x": 11,
+      "y": 310.00000043743876
+    }
+  ],
+  "hurst:year": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:year": {
+    "trend": [300, 320, 280, 350, 310, 290, 340, 300, 330, 280, 360, 310],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:year": {
+    "trend": [300, 320, 312, 310, 314, 318, 314, 308, 322, 316, 360, 310],
+    "seasonal": [
+      4.166666666666667, -18.5, 0.8333333333333335, 13.5, 4.166666666666667, -18.5,
+      0.8333333333333335, 13.5, 4.166666666666667, -18.5, 0.8333333333333335, 13.5
+    ],
+    "residual": [
+      -4.166666666666667, 18.5, -32.833333333333336, 26.5, -8.166666666666668, -9.5,
+      25.166666666666668, -21.5, 3.833333333333333, -17.5, -0.8333333333333335, -13.5
+    ]
+  },
+  "poly:year": {
+    "coefficients": [305.7967032967037, 1.8856143856142258, -0.047452547452534556],
+    "forecast": 321.59090909090946,
+    "r2": 0.03496178794120297
+  },
+  "poly1:year": {
+    "coefficients": [306.66666666666663, 1.3636363636363653],
+    "forecast": 323.030303030303,
+    "r2": 0.034571062740076486
+  },
+  "poly5:year": {
+    "coefficients": [305.7967032967037, 1.8856143856142258, -0.047452547452534556],
+    "forecast": 321.59090909090946,
+    "r2": 0.03496178794120297
+  },
+  "robust:year": {
+    "slope": 1.3368143388468314,
+    "intercept": 305.1980773129491,
+    "forecast": 321.2398493791111
+  },
+  "robust3:year": {
+    "slope": 1.3627458051996748,
+    "intercept": 305.21929317974866,
+    "forecast": 321.57224284214476
+  },
+  "analyze:rising": {
+    "category": "cat",
+    "monthsOfData": 14,
+    "currentMonthSpent": 370,
+    "forecasts": {
+      "sma3": 348.3333333333333,
+      "wma3": 355,
+      "kama": 343.9559518366102,
+      "median": 315,
+      "holt": {
+        "forecast": 385.7671934032953,
+        "level": 365.15962666695816,
+        "trend": 20.607566736337148
+      },
+      "theta": {
+        "forecast": 325.6688883740834
+      },
+      "quantiles": {
+        "p50": 227.5,
+        "p75": 293.75,
+        "p90": 340.5,
+        "p95": 353.75
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 343.23954338600674
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 390.72124510829263,
+        "middle": 313.3333333333333,
+        "lower": 235.945421558374,
+        "bandwidth": 0.49396539430825104,
+        "percentB": 0.866120918415856
+      },
+      "atr": 21.666666666666668,
+      "keltner": {
+        "upper": 347.78427298946804,
+        "middle": 315.28427298946804,
+        "lower": 282.78427298946804
+      },
+      "donchian": {
+        "upper": 370,
+        "lower": 260,
+        "middle": 315,
+        "isBreakoutHigh": true,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0.017556976040081853,
+      "maEnvelopes": {
+        "upper": 378.34112758736165,
+        "middle": 315.28427298946804,
+        "lower": 252.22741839157445
+      },
+      "percentiles": {
+        "p10": 124.5,
+        "p25": 162.5,
+        "p50": 227.5,
+        "p75": 293.75,
+        "p90": 340.5
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 1.6699155326479427,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 1.3730892857142856,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 160,
+        "q3": 300,
+        "iqr": 140,
+        "lowerBound": -50,
+        "upperBound": 510,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 20.76923076923077,
+        "intercept": 95,
+        "r2": 0.9973030018761726,
+        "forecast": 385.7692307692308,
+        "monthlyChange": 20.76923076923077
+      },
+      "cusum": {
+        "values": [0, 0, 0, 0, 0, 0, 0, 10, 40, 85, 155, 255, 370, 510],
+        "shiftDetected": true,
+        "shiftIndex": 12
+      },
+      "rsi": {
+        "value": 99.00990099009901,
+        "signal": "overbought"
+      },
+      "macd": {
+        "macd": 32.031400838656964,
+        "signal": 31.190843845678245,
+        "histogram": 0.8405569929787191,
+        "crossover": "none"
+      },
+      "roc1": 7.246376811594203,
+      "roc3": 23.333333333333332,
+      "momentum3": 70,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 307.78265077620745
+      },
+      "changePoints": [7],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 333.3333333333333,
+        "resistance1": 406.66666666666663,
+        "resistance2": 443.3333333333333,
+        "support1": 296.66666666666663,
+        "support2": 223.33333333333331
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:rising": {
+    "category": "cat",
+    "monthsOfData": 14,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 348.3333333333333,
+      "wma3": 355,
+      "kama": 343.9559518366102,
+      "median": 315,
+      "holt": {
+        "forecast": 385.7671934032953,
+        "level": 365.15962666695816,
+        "trend": 20.607566736337148
+      },
+      "theta": {
+        "forecast": 325.6688883740834
+      },
+      "quantiles": {
+        "p50": 227.5,
+        "p75": 293.75,
+        "p90": 340.5,
+        "p95": 353.75
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 393.03664841440633,
+        "level": 366.8075847223084,
+        "trend": 21.986936759863713,
+        "seasonal": [-7.248679696889307, -1.4497980342331886, 4.242126932234202, 22.739908117934284]
+      },
+      "ensemble": 351.74507338946444
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 390.72124510829263,
+        "middle": 313.3333333333333,
+        "lower": 235.945421558374,
+        "bandwidth": 0.49396539430825104,
+        "percentB": 0.866120918415856
+      },
+      "atr": 21.666666666666668,
+      "keltner": {
+        "upper": 347.78427298946804,
+        "middle": 315.28427298946804,
+        "lower": 282.78427298946804
+      },
+      "donchian": {
+        "upper": 370,
+        "lower": 260,
+        "middle": 315,
+        "isBreakoutHigh": true,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0.017556976040081853,
+      "maEnvelopes": {
+        "upper": 378.34112758736165,
+        "middle": 315.28427298946804,
+        "lower": 252.22741839157445
+      },
+      "percentiles": {
+        "p10": 124.5,
+        "p25": 162.5,
+        "p50": 227.5,
+        "p75": 293.75,
+        "p90": 340.5
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 11.975679962703818,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 9.698346428571428,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 160,
+        "q3": 300,
+        "iqr": 140,
+        "lowerBound": -50,
+        "upperBound": 510,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 20.76923076923077,
+        "intercept": 95,
+        "r2": 0.9973030018761726,
+        "forecast": 385.7692307692308,
+        "monthlyChange": 20.76923076923077
+      },
+      "cusum": {
+        "values": [0, 0, 0, 0, 0, 0, 0, 10, 40, 85, 155, 255, 370, 510],
+        "shiftDetected": true,
+        "shiftIndex": 12
+      },
+      "rsi": {
+        "value": 99.00990099009901,
+        "signal": "overbought"
+      },
+      "macd": {
+        "macd": 32.031400838656964,
+        "signal": 31.190843845678245,
+        "histogram": 0.8405569929787191,
+        "crossover": "none"
+      },
+      "roc1": 7.246376811594203,
+      "roc3": 23.333333333333332,
+      "momentum3": 70,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 307.78265077620745
+      },
+      "changePoints": [7],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 333.3333333333333,
+        "resistance1": 406.66666666666663,
+        "resistance2": 443.3333333333333,
+        "support1": 296.66666666666663,
+        "support2": 223.33333333333331
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "dixon:rising": {
+    "outlier": 370,
+    "qRatio": 0.09259259259259259,
+    "isSignificant": false
+  },
+  "grubbs:rising": {
+    "outlier": 370,
+    "statistic": 1.6699155326479427,
+    "isSignificant": true
+  },
+  "croston:rising": {
+    "forecast": 270.8704178949578,
+    "expectedAmount": 318.67107987642095,
+    "expectedInterval": 1
+  },
+  "crostonTSB:rising": {
+    "forecast": 318.67107987642095,
+    "expectedAmount": 318.67107987642095,
+    "expectedInterval": 1
+  },
+  "kama:rising": {
+    "value": 343.9559518366102,
+    "series": [
+      100, 120, 135, 160, 170, 200, 215, 240, 260, 275, 286.1111111111111, 305.61728395061726,
+      323.12071330589845, 343.9559518366102
+    ],
+    "efficiencyRatio": 1
+  },
+  "kama3:rising": {
+    "value": 341.81148154661724,
+    "series": [
+      100, 120, 135, 146.11111111111111, 156.7283950617284, 175.960219478738, 193.31123304374333,
+      214.06179613541295, 234.47877563078495, 252.48820868376941, 273.6045603798719,
+      298.66920021103994, 319.26066678391106, 341.81148154661724
+    ],
+    "efficiencyRatio": 1
+  },
+  "loess:rising": [
+    {
+      "x": 0,
+      "y": 100.22361032683895
+    },
+    {
+      "x": 1,
+      "y": 118.86988617978652
+    },
+    {
+      "x": 2,
+      "y": 137.5392154823181
+    },
+    {
+      "x": 3,
+      "y": 156.15497199344517
+    },
+    {
+      "x": 4,
+      "y": 176.12819496994592
+    },
+    {
+      "x": 5,
+      "y": 196.1549719934452
+    },
+    {
+      "x": 6,
+      "y": 217.56335200484725
+    },
+    {
+      "x": 7,
+      "y": 238.21757851673448
+    },
+    {
+      "x": 8,
+      "y": 258.2175785224636
+    },
+    {
+      "x": 9,
+      "y": 279.56633392105323
+    },
+    {
+      "x": 10,
+      "y": 301.78242148326547
+    },
+    {
+      "x": 11,
+      "y": 324.478226620791
+    },
+    {
+      "x": 12,
+      "y": 347.4552139720545
+    },
+    {
+      "x": 13,
+      "y": 370.27493892454595
+    }
+  ],
+  "loess.2:rising": [
+    {
+      "x": 0,
+      "y": 100.00000001682449
+    },
+    {
+      "x": 1,
+      "y": 119.99999986580707
+    },
+    {
+      "x": 2,
+      "y": 135.00000026838592
+    },
+    {
+      "x": 3,
+      "y": 159.99999959742115
+    },
+    {
+      "x": 4,
+      "y": 170.00000053677184
+    },
+    {
+      "x": 5,
+      "y": 199.99999959742115
+    },
+    {
+      "x": 6,
+      "y": 215.00000026838592
+    },
+    {
+      "x": 7,
+      "y": 239.99999986580707
+    },
+    {
+      "x": 8,
+      "y": 259.99999986580707
+    },
+    {
+      "x": 9,
+      "y": 275.0000002683859
+    },
+    {
+      "x": 10,
+      "y": 300.00000013419293
+    },
+    {
+      "x": 11,
+      "y": 329.9999995974212
+    },
+    {
+      "x": 12,
+      "y": 345.00000026838586
+    },
+    {
+      "x": 13,
+      "y": 369.9999999663525
+    }
+  ],
+  "hurst:rising": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:rising": {
+    "trend": [100, 120, 135, 160, 170, 200, 219.23076923076923, 240, 260, 275, 300, 330, 345, 370],
+    "seasonal": [
+      0.3525641025641022, 0.3525641025641022, 0.3525641025641022, 0.3525641025641022,
+      0.3525641025641022, 0.3525641025641022, -3.878205128205124, 0.3525641025641022,
+      0.3525641025641022, 0.3525641025641022, 0.3525641025641022, 0.3525641025641022,
+      0.3525641025641022, 0.3525641025641022
+    ],
+    "residual": [
+      -0.3525641025641022, -0.3525641025641022, -0.3525641025641022, -0.3525641025641022,
+      -0.3525641025641022, -0.3525641025641022, -0.3525641025641022, -0.3525641025641022,
+      -0.3525641025641022, -0.3525641025641022, -0.3525641025641022, -0.3525641025641022,
+      -0.3525641025641022, -0.3525641025641022
+    ]
+  },
+  "stl4:rising": {
+    "trend": [100, 120, 137, 157, 176, 197, 217, 238, 258, 281, 302, 324, 345, 370],
+    "seasonal": [
+      -0.9791666666666666, -0.7291666666666666, -1.9791666666666665, 3.6875, -0.9791666666666666,
+      -0.7291666666666666, -1.9791666666666665, 3.6875, -0.9791666666666666, -0.7291666666666666,
+      -1.9791666666666665, 3.6875, -0.9791666666666666, -0.7291666666666666
+    ],
+    "residual": [
+      0.9791666666666666, 0.7291666666666666, -0.02083333333333348, -0.6875, -5.020833333333333,
+      3.7291666666666665, -0.02083333333333348, -1.6875, 2.9791666666666665, -5.270833333333333,
+      -0.02083333333333348, 2.3125, 0.9791666666666666, 0.7291666666666666
+    ]
+  },
+  "poly:rising": {
+    "coefficients": [100.17857142857126, 18.17994505494515, 0.1991758241758169],
+    "forecast": 393.7362637362635,
+    "r2": 0.9984770057178594
+  },
+  "poly1:rising": {
+    "coefficients": [95.00000000000003, 20.769230769230763],
+    "forecast": 385.7692307692307,
+    "r2": 0.9973030018761726
+  },
+  "poly5:rising": {
+    "coefficients": [100.17857142857126, 18.17994505494515, 0.1991758241758169],
+    "forecast": 393.7362637362635,
+    "r2": 0.9984770057178594
+  },
+  "robust:rising": {
+    "slope": 20.646398533103714,
+    "intercept": 96.11803716759127,
+    "forecast": 385.1676166310433
+  },
+  "robust3:rising": {
+    "slope": 20.6704845753802,
+    "intercept": 95.97004567573845,
+    "forecast": 385.3568297310612
+  },
+  "analyze:falling": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 240,
+    "forecasts": {
+      "sma3": 260,
+      "wma3": 253.33333333333334,
+      "kama": 257.28395061728395,
+      "median": 290,
+      "holt": {
+        "forecast": 202.5848146568229,
+        "level": 228.55543829051007,
+        "trend": -25.970623633687154
+      },
+      "theta": {
+        "forecast": 282.48460863360924
+      },
+      "quantiles": {
+        "p50": 365,
+        "p75": 436.25,
+        "p90": 468.5,
+        "p95": 483.5
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 263.27547314605664
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 374.79139469057213,
+        "middle": 295,
+        "lower": 215.20860530942784,
+        "bandwidth": 0.5409586080716756,
+        "percentB": 0.15535130565590566
+      },
+      "atr": 23.333333333333332,
+      "keltner": {
+        "upper": 329.43390933290993,
+        "middle": 294.43390933290993,
+        "lower": 259.43390933290993
+      },
+      "donchian": {
+        "upper": 350,
+        "lower": 240,
+        "middle": 295,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0.028086306658239867,
+      "maEnvelopes": {
+        "upper": 353.32069119949193,
+        "middle": 294.43390933290993,
+        "lower": 235.54712746632796
+      },
+      "percentiles": {
+        "p10": 262,
+        "p25": 295,
+        "p50": 365,
+        "p75": 436.25,
+        "p90": 468.5
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": -1.5380714745566273,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": -1.1241666666666668,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 300,
+        "q3": 455,
+        "iqr": 155,
+        "lowerBound": 67.5,
+        "upperBound": 687.5,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": -23.8986013986014,
+        "intercept": 498.52564102564105,
+        "r2": 0.9969551085691767,
+        "forecast": 211.74242424242425,
+        "monthlyChange": -23.8986013986014
+      },
+      "cusum": {
+        "values": [
+          132.91666666666669, 235.83333333333343, 323.75000000000017, 386.6666666666669,
+          419.58333333333366, 432.5000000000004, 415.41666666666714, 388.3333333333339,
+          321.2500000000006, 234.16666666666737, 127.08333333333405, 7.389644451905042e-13
+        ],
+        "shiftDetected": true,
+        "shiftIndex": 3
+      },
+      "rsi": {
+        "value": 0,
+        "signal": "oversold"
+      },
+      "macd": {
+        "macd": -33.301096832909934,
+        "signal": -33.175167898599845,
+        "histogram": -0.1259289343100889,
+        "crossover": "none"
+      },
+      "roc1": -7.6923076923076925,
+      "roc3": -20,
+      "momentum3": -60,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 300.5077763646841
+      },
+      "changePoints": [6],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 276.6666666666667,
+        "resistance1": 313.33333333333337,
+        "resistance2": 386.6666666666667,
+        "support1": 203.33333333333337,
+        "support2": 166.66666666666669
+      },
+      "direction": "falling",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:falling": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 260,
+      "wma3": 253.33333333333334,
+      "kama": 257.28395061728395,
+      "median": 290,
+      "holt": {
+        "forecast": 202.5848146568229,
+        "level": 228.55543829051007,
+        "trend": -25.970623633687154
+      },
+      "theta": {
+        "forecast": 282.48460863360924
+      },
+      "quantiles": {
+        "p50": 365,
+        "p75": 436.25,
+        "p90": 468.5,
+        "p95": 483.5
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 227.95472928739375,
+        "level": 241.22095955448026,
+        "trend": -25.349796846367784,
+        "seasonal": [12.083566579281264, 2.077405319587198, -5.339294387411241, -17.83275543603157]
+      },
+      "ensemble": 256.2113243743241
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 374.79139469057213,
+        "middle": 295,
+        "lower": 215.20860530942784,
+        "bandwidth": 0.5409586080716756,
+        "percentB": 0.15535130565590566
+      },
+      "atr": 23.333333333333332,
+      "keltner": {
+        "upper": 329.43390933290993,
+        "middle": 294.43390933290993,
+        "lower": 259.43390933290993
+      },
+      "donchian": {
+        "upper": 350,
+        "lower": 240,
+        "middle": 295,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0.028086306658239867,
+      "maEnvelopes": {
+        "upper": 353.32069119949193,
+        "middle": 294.43390933290993,
+        "lower": 235.54712746632796
+      },
+      "percentiles": {
+        "p10": 262,
+        "p25": 295,
+        "p50": 365,
+        "p75": 436.25,
+        "p90": 468.5
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 10.492168885123014,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 7.815206666666667,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 300,
+        "q3": 455,
+        "iqr": 155,
+        "lowerBound": 67.5,
+        "upperBound": 687.5,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": -23.8986013986014,
+        "intercept": 498.52564102564105,
+        "r2": 0.9969551085691767,
+        "forecast": 211.74242424242425,
+        "monthlyChange": -23.8986013986014
+      },
+      "cusum": {
+        "values": [
+          132.91666666666669, 235.83333333333343, 323.75000000000017, 386.6666666666669,
+          419.58333333333366, 432.5000000000004, 415.41666666666714, 388.3333333333339,
+          321.2500000000006, 234.16666666666737, 127.08333333333405, 7.389644451905042e-13
+        ],
+        "shiftDetected": true,
+        "shiftIndex": 3
+      },
+      "rsi": {
+        "value": 0,
+        "signal": "oversold"
+      },
+      "macd": {
+        "macd": -33.301096832909934,
+        "signal": -33.175167898599845,
+        "histogram": -0.1259289343100889,
+        "crossover": "none"
+      },
+      "roc1": -7.6923076923076925,
+      "roc3": -20,
+      "momentum3": -60,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 300.5077763646841
+      },
+      "changePoints": [6],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 276.6666666666667,
+        "resistance1": 313.33333333333337,
+        "resistance2": 386.6666666666667,
+        "support1": 203.33333333333337,
+        "support2": 166.66666666666669
+      },
+      "direction": "falling",
+      "confidence": 1
+    }
+  },
+  "dixon:falling": {
+    "outlier": 500,
+    "qRatio": 0.11538461538461539,
+    "isSignificant": false
+  },
+  "grubbs:falling": {
+    "outlier": 500,
+    "statistic": 1.6086714766674237,
+    "isSignificant": true
+  },
+  "croston:falling": {
+    "forecast": 247.24498026568997,
+    "expectedAmount": 290.8764473714,
+    "expectedInterval": 1
+  },
+  "crostonTSB:falling": {
+    "forecast": 290.8764473714,
+    "expectedAmount": 290.8764473714,
+    "expectedInterval": 1
+  },
+  "kama:falling": {
+    "value": 257.28395061728395,
+    "series": [
+      500, 470, 455, 430, 400, 380, 350, 340, 300, 280, 271.1111111111111, 257.28395061728395
+    ],
+    "efficiencyRatio": 1
+  },
+  "kama3:falling": {
+    "value": 266.6599051115234,
+    "series": [
+      500, 470, 455, 443.8888888888889, 424.38271604938274, 404.6570644718793, 380.36503581771075,
+      362.4250198987282, 334.6805666104046, 310.3780925613359, 287.98782920074217, 266.6599051115234
+    ],
+    "efficiencyRatio": 1
+  },
+  "loess:falling": [
+    {
+      "x": 0,
+      "y": 497.95073961239996
+    },
+    {
+      "x": 1,
+      "y": 474.8868783879933
+    },
+    {
+      "x": 2,
+      "y": 451.4351570365002
+    },
+    {
+      "x": 3,
+      "y": 427.71683303929115
+    },
+    {
+      "x": 4,
+      "y": 403.06409748089857
+    },
+    {
+      "x": 5,
+      "y": 378.4381389548344
+    },
+    {
+      "x": 6,
+      "y": 355.1267040114073
+    },
+    {
+      "x": 7,
+      "y": 330.30696206790776
+    },
+    {
+      "x": 8,
+      "y": 306.12819496703787
+    },
+    {
+      "x": 9,
+      "y": 282.0029819155917
+    },
+    {
+      "x": 10,
+      "y": 260.1088333477419
+    },
+    {
+      "x": 11,
+      "y": 238.81140337970254
+    }
+  ],
+  "loess.2:falling": [
+    {
+      "x": 0,
+      "y": 499.9999999495267
+    },
+    {
+      "x": 1,
+      "y": 470.0000004025789
+    },
+    {
+      "x": 2,
+      "y": 454.9999997316142
+    },
+    {
+      "x": 3,
+      "y": 429.9999998658072
+    },
+    {
+      "x": 4,
+      "y": 400.000000268386
+    },
+    {
+      "x": 5,
+      "y": 379.99999973161414
+    },
+    {
+      "x": 6,
+      "y": 350.00000053677184
+    },
+    {
+      "x": 7,
+      "y": 339.9999991948423
+    },
+    {
+      "x": 8,
+      "y": 300.000000536772
+    },
+    {
+      "x": 9,
+      "y": 280
+    },
+    {
+      "x": 10,
+      "y": 260.0000000000001
+    },
+    {
+      "x": 11,
+      "y": 240.0000000000014
+    }
+  ],
+  "hurst:falling": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:falling": {
+    "trend": [500, 470, 455, 430, 400, 380, 350, 340, 300, 280, 260, 240],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:falling": {
+    "trend": [500, 470, 451, 427, 403, 380, 354, 330, 306, 284, 260, 240],
+    "seasonal": [
+      -3, -1.3333333333333333, 0, 4.333333333333333, -3, -1.3333333333333333, 0, 4.333333333333333,
+      -3, -1.3333333333333333, 0, 4.333333333333333
+    ],
+    "residual": [
+      3, 1.3333333333333333, 4, -1.333333333333333, 0, 1.3333333333333333, -4, 5.666666666666667,
+      -3, -2.666666666666667, 0, -4.333333333333333
+    ]
+  },
+  "poly:falling": {
+    "coefficients": [499.7390109890111, -24.626623376623428, 0.06618381618382016],
+    "forecast": 213.75000000000006,
+    "r2": 0.9970264712273206
+  },
+  "poly1:falling": {
+    "coefficients": [498.52564102564094, -23.898601398601386],
+    "forecast": 211.7424242424243,
+    "r2": 0.9969551085691767
+  },
+  "poly5:falling": {
+    "coefficients": [499.7390109890111, -24.626623376623428, 0.06618381618382016],
+    "forecast": 213.75000000000006,
+    "r2": 0.9970264712273206
+  },
+  "robust:falling": {
+    "slope": -23.902798448331755,
+    "intercept": 498.4042720879592,
+    "forecast": 211.57069070797814
+  },
+  "robust3:falling": {
+    "slope": -23.902705997677966,
+    "intercept": 498.4042239420325,
+    "forecast": 211.57175196989692
+  },
+  "analyze:outlier": {
+    "category": "cat",
+    "monthsOfData": 10,
+    "currentMonthSpent": 101,
+    "forecasts": {
+      "sma3": 102.33333333333333,
+      "wma3": 101.33333333333333,
+      "kama": 101,
+      "median": 101.5,
+      "holt": {
+        "forecast": 176.10094699066428,
+        "level": 171.78439313482647,
+        "trend": 4.316553855837823
+      },
+      "theta": {
+        "forecast": 141.28358927579504
+      },
+      "quantiles": {
+        "p50": 101.5,
+        "p75": 106.5,
+        "p90": 188.99999999999972,
+        "p95": 544.4999999999991
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 111.61256398561542
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 829.7688468246931,
+        "middle": 234.5,
+        "lower": -360.7688468246931,
+        "bandwidth": 5.076919802342799,
+        "percentB": 0.38786579315201775
+      },
+      "atr": 269.3333333333333,
+      "keltner": {
+        "upper": 547.7896498818557,
+        "middle": 143.78964988185564,
+        "lower": -260.21035011814433
+      },
+      "donchian": {
+        "upper": 900,
+        "lower": 98,
+        "middle": 499,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 1.2498295958276175,
+      "maEnvelopes": {
+        "upper": 172.54757985822675,
+        "middle": 143.78964988185564,
+        "lower": 115.03171990548452
+      },
+      "percentiles": {
+        "p10": 97.7,
+        "p25": 99.25,
+        "p50": 101.5,
+        "p75": 106.5,
+        "p90": 188.99999999999972
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": -0.33699381618639335,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": -0.09635714285714285,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 99,
+        "q3": 107,
+        "iqr": 8,
+        "lowerBound": 87,
+        "upperBound": 119,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": -5.012121212121212,
+        "intercept": 204.25454545454545,
+        "r2": 0.0036140476403017097,
+        "forecast": 154.13333333333333,
+        "monthlyChange": -5.012121212121212
+      },
+      "cusum": {
+        "values": [
+          0, 0, 0, 0, 718.3, 638.5999999999999, 554.8999999999999, 480.1999999999999,
+          397.49999999999983, 316.79999999999984
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 49.87623762376238,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -30.188087381855638,
+        "signal": -25.049807094759412,
+        "histogram": -5.138280287096226,
+        "crossover": "none"
+      },
+      "roc1": 2.0202020202020203,
+      "roc3": 3.061224489795918,
+      "momentum3": 3,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 153.36179285049437
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 366.3333333333333,
+        "resistance1": 634.6666666666666,
+        "resistance2": 1168.3333333333333,
+        "support1": -167.33333333333337,
+        "support2": -435.6666666666667
+      },
+      "direction": "stable",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:outlier": {
+    "category": "cat",
+    "monthsOfData": 10,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 102.33333333333333,
+      "wma3": 101.33333333333333,
+      "kama": 101,
+      "median": 101.5,
+      "holt": {
+        "forecast": 176.10094699066428,
+        "level": 171.78439313482647,
+        "trend": 4.316553855837823
+      },
+      "theta": {
+        "forecast": 141.28358927579504
+      },
+      "quantiles": {
+        "p50": 101.5,
+        "p75": 106.5,
+        "p90": 188.99999999999972,
+        "p95": 544.4999999999991
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 185.5540911335933,
+        "level": 225.2543701249081,
+        "trend": 30.65132057118519,
+        "seasonal": [73.23182586764376, -84.23878166247242, -70.35159956249998, -52.769700644375]
+      },
+      "ensemble": 124.5102405866252
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 829.7688468246931,
+        "middle": 234.5,
+        "lower": -360.7688468246931,
+        "bandwidth": 5.076919802342799,
+        "percentB": 0.38786579315201775
+      },
+      "atr": 269.3333333333333,
+      "keltner": {
+        "upper": 547.7896498818557,
+        "middle": 143.78964988185564,
+        "lower": -260.21035011814433
+      },
+      "donchian": {
+        "upper": 900,
+        "lower": 98,
+        "middle": 499,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 1.2498295958276175,
+      "maEnvelopes": {
+        "upper": 172.54757985822675,
+        "middle": 143.78964988185564,
+        "lower": 115.03171990548452
+      },
+      "percentiles": {
+        "p10": 97.7,
+        "p25": 99.25,
+        "p50": 101.5,
+        "p75": 106.5,
+        "p90": 188.99999999999972
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 4.3942824383264165,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 218.2489285714286,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 99,
+        "q3": 107,
+        "iqr": 8,
+        "lowerBound": 87,
+        "upperBound": 119,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": -5.012121212121212,
+        "intercept": 204.25454545454545,
+        "r2": 0.0036140476403017097,
+        "forecast": 154.13333333333333,
+        "monthlyChange": -5.012121212121212
+      },
+      "cusum": {
+        "values": [
+          0, 0, 0, 0, 718.3, 638.5999999999999, 554.8999999999999, 480.1999999999999,
+          397.49999999999983, 316.79999999999984
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 49.87623762376238,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -30.188087381855638,
+        "signal": -25.049807094759412,
+        "histogram": -5.138280287096226,
+        "crossover": "none"
+      },
+      "roc1": 2.0202020202020203,
+      "roc3": 3.061224489795918,
+      "momentum3": 3,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 153.36179285049437
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 366.3333333333333,
+        "resistance1": 634.6666666666666,
+        "resistance2": 1168.3333333333333,
+        "support1": -167.33333333333337,
+        "support2": -435.6666666666667
+      },
+      "direction": "stable",
+      "confidence": 1
+    }
+  },
+  "dixon:outlier": {
+    "outlier": 900,
+    "qRatio": 0.9813664596273292,
+    "isSignificant": true
+  },
+  "grubbs:outlier": {
+    "outlier": 900,
+    "statistic": 2.999537275919286,
+    "isSignificant": true
+  },
+  "croston:outlier": {
+    "forecast": 120.37695416799995,
+    "expectedAmount": 141.61994607999995,
+    "expectedInterval": 1
+  },
+  "crostonTSB:outlier": {
+    "forecast": 141.61994607999995,
+    "expectedAmount": 141.61994607999995,
+    "expectedInterval": 1
+  },
+  "kama:outlier": {
+    "value": 101,
+    "series": [100, 110, 95, 105, 900, 102, 98, 107, 99, 101],
+    "efficiencyRatio": 0
+  },
+  "kama3:outlier": {
+    "value": 281.20115407838387,
+    "series": [
+      100, 110, 95, 95.22661579373337, 429.6554780366881, 428.1782326362954, 426.6891752441692,
+      290.2446972922787, 285.91079040485977, 281.20115407838387
+    ],
+    "efficiencyRatio": 0.15789473684210525
+  },
+  "loess:outlier": [
+    {
+      "x": 0,
+      "y": 103.19147946878212
+    },
+    {
+      "x": 1,
+      "y": 102.51288727717812
+    },
+    {
+      "x": 2,
+      "y": 102.15972836493714
+    },
+    {
+      "x": 3,
+      "y": 329.815434099104
+    },
+    {
+      "x": 4,
+      "y": 443.78218047291426
+    },
+    {
+      "x": 5,
+      "y": 329.39293589991485
+    },
+    {
+      "x": 6,
+      "y": 101.72305929862617
+    },
+    {
+      "x": 7,
+      "y": 102.1313854878354
+    },
+    {
+      "x": 8,
+      "y": 101.53506332763868
+    },
+    {
+      "x": 9,
+      "y": 100.36266345069858
+    }
+  ],
+  "loess.2:outlier": [
+    {
+      "x": 0,
+      "y": 100.00000008412235
+    },
+    {
+      "x": 1,
+      "y": 109.99999932903525
+    },
+    {
+      "x": 2,
+      "y": 95.0000006709648
+    },
+    {
+      "x": 3,
+      "y": 105.00002106829356
+    },
+    {
+      "x": 4,
+      "y": 899.9999572461248
+    },
+    {
+      "x": 5,
+      "y": 102.00002130984126
+    },
+    {
+      "x": 6,
+      "y": 98.0000003489017
+    },
+    {
+      "x": 7,
+      "y": 106.99999954374398
+    },
+    {
+      "x": 8,
+      "y": 99.00000026838593
+    },
+    {
+      "x": 9,
+      "y": 100.9999999663511
+    }
+  ],
+  "hurst:outlier": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:outlier": {
+    "trend": [100, 110, 95, 105, 900, 102, 98, 107, 99, 101],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:outlier": {
+    "trend": [100, 110, 262, 262.4, 260, 262.4, 261.2, 101.4, 99, 101],
+    "seasonal": [
+      233.61666666666667, -33.18333333333334, -144.81666666666666, -55.61666666666666,
+      233.61666666666667, -33.18333333333334, -144.81666666666666, -55.61666666666666,
+      233.61666666666667, -33.18333333333334
+    ],
+    "residual": [
+      -233.61666666666667, 33.18333333333334, -22.183333333333337, -101.78333333333332,
+      406.3833333333333, -127.21666666666664, -18.383333333333326, 61.216666666666654,
+      -233.61666666666667, 33.18333333333334
+    ]
+  },
+  "poly:outlier": {
+    "coefficients": [59.027272727272134, 103.9083333333337, -12.102272727272764],
+    "forecast": -112.11666666666702,
+    "r2": 0.13846828201035222
+  },
+  "poly1:outlier": {
+    "coefficients": [204.2545454545454, -5.012121212121202],
+    "forecast": 154.13333333333338,
+    "r2": 0.0036140476403015986
+  },
+  "poly5:outlier": {
+    "coefficients": [59.027272727272134, 103.9083333333337, -12.102272727272764],
+    "forecast": -112.11666666666702,
+    "r2": 0.13846828201035222
+  },
+  "robust:outlier": {
+    "slope": -0.27520916274308577,
+    "intercept": 104.01564051419103,
+    "forecast": 101.26354888676018
+  },
+  "robust3:outlier": {
+    "slope": -0.3640082289340173,
+    "intercept": 104.67324811924024,
+    "forecast": 101.03316582990007
+  },
+  "analyze:lowOutlier": {
+    "category": "cat",
+    "monthsOfData": 10,
+    "currentMonthSpent": 501,
+    "forecasts": {
+      "sma3": 502.3333333333333,
+      "wma3": 501.3333333333333,
+      "kama": 501,
+      "median": 500,
+      "holt": {
+        "forecast": 486.91726695098413,
+        "level": 482.29078480202634,
+        "trend": 4.626482148957817
+      },
+      "theta": {
+        "forecast": 477.1634991360702
+      },
+      "quantiles": {
+        "p50": 500.5,
+        "p75": 504.25,
+        "p90": 507.3,
+        "p95": 508.65
+      },
+      "croston": null,
+      "holtWinters": null,
+      "ensemble": 497.31265007107936
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 780.0267446295902,
+        "middle": 421.1666666666667,
+        "lower": 62.30658870374316,
+        "bandwidth": 1.7041238367847575,
+        "percentB": 0.6112318396999031
+      },
+      "atr": 165,
+      "keltner": {
+        "upper": 723.2907718633429,
+        "middle": 475.7907718633429,
+        "lower": 228.2907718633429
+      },
+      "donchian": {
+        "upper": 507,
+        "lower": 20,
+        "middle": 263.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 1.862473209012125,
+      "maEnvelopes": {
+        "upper": 570.9489262360115,
+        "middle": 475.7907718633429,
+        "lower": 380.63261749067436
+      },
+      "percentiles": {
+        "p10": 447.5,
+        "p25": 498.25,
+        "p50": 500.5,
+        "p75": 504.25,
+        "p90": 507.3
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0.3270463167936871,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0.09635714285714285,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 498,
+        "q3": 505,
+        "iqr": 7,
+        "lowerBound": 487.5,
+        "upperBound": 515.5,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 2.7454545454545456,
+        "intercept": 441.3454545454545,
+        "r2": 0.002972889092500819,
+        "forecast": 468.79999999999995,
+        "monthlyChange": 2.7454545454545456
+      },
+      "cusum": {
+        "values": [
+          46.30000000000001, 102.59999999999997, 143.89999999999992, 195.19999999999987, 0,
+          48.30000000000001, 92.59999999999997, 145.89999999999992, 191.19999999999987,
+          238.49999999999983
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 49.7979797979798,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 17.81079063665709,
+        "signal": 14.948322936095087,
+        "histogram": 2.862467700562002,
+        "crossover": "none"
+      },
+      "roc1": 0.4008016032064128,
+      "roc3": 0.6024096385542169,
+      "momentum3": 3,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 470.21616296768184
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 342.6666666666667,
+        "resistance1": 665.3333333333334,
+        "resistance2": 829.6666666666667,
+        "support1": 178.33333333333337,
+        "support2": -144.33333333333331
+      },
+      "direction": "stable",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:lowOutlier": {
+    "category": "cat",
+    "monthsOfData": 10,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 502.3333333333333,
+      "wma3": 501.3333333333333,
+      "kama": 501,
+      "median": 500,
+      "holt": {
+        "forecast": 486.91726695098413,
+        "level": 482.29078480202634,
+        "trend": 4.626482148957817
+      },
+      "theta": {
+        "forecast": 477.1634991360702
+      },
+      "quantiles": {
+        "p50": 500.5,
+        "p75": 504.25,
+        "p90": 507.3,
+        "p95": 508.65
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 437.66950218439325,
+        "level": 424.36544079290803,
+        "trend": -18.933539046014822,
+        "seasonal": [-48.04203425235622, 57.75989713712759, 32.23760043750001, 36.82226335562502]
+      },
+      "ensemble": 493.2828198840775
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 780.0267446295902,
+        "middle": 421.1666666666667,
+        "lower": 62.30658870374316,
+        "bandwidth": 1.7041238367847575,
+        "percentB": 0.6112318396999031
+      },
+      "atr": 165,
+      "keltner": {
+        "upper": 723.2907718633429,
+        "middle": 475.7907718633429,
+        "lower": 228.2907718633429
+      },
+      "donchian": {
+        "upper": 507,
+        "lower": 20,
+        "middle": 263.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 1.862473209012125,
+      "maEnvelopes": {
+        "upper": 570.9489262360115,
+        "middle": 475.7907718633429,
+        "lower": 380.63261749067436
+      },
+      "percentiles": {
+        "p10": 447.5,
+        "p25": 498.25,
+        "p50": 500.5,
+        "p75": 504.25,
+        "p90": 507.3
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 5.395227082327992,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 141.35592857142856,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 498,
+        "q3": 505,
+        "iqr": 7,
+        "lowerBound": 487.5,
+        "upperBound": 515.5,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 2.7454545454545456,
+        "intercept": 441.3454545454545,
+        "r2": 0.002972889092500819,
+        "forecast": 468.79999999999995,
+        "monthlyChange": 2.7454545454545456
+      },
+      "cusum": {
+        "values": [
+          46.30000000000001, 102.59999999999997, 143.89999999999992, 195.19999999999987, 0,
+          48.30000000000001, 92.59999999999997, 145.89999999999992, 191.19999999999987,
+          238.49999999999983
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 49.7979797979798,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 17.81079063665709,
+        "signal": 14.948322936095087,
+        "histogram": 2.862467700562002,
+        "crossover": "none"
+      },
+      "roc1": 0.4008016032064128,
+      "roc3": 0.6024096385542169,
+      "momentum3": 3,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 470.21616296768184
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 342.6666666666667,
+        "resistance1": 665.3333333333334,
+        "resistance2": 829.6666666666667,
+        "support1": 178.33333333333337,
+        "support2": -144.33333333333331
+      },
+      "direction": "stable",
+      "confidence": 1
+    }
+  },
+  "dixon:lowOutlier": {
+    "outlier": 20,
+    "qRatio": 0.9693877551020408,
+    "isSignificant": true
+  },
+  "grubbs:lowOutlier": {
+    "outlier": 20,
+    "statistic": 2.998731238761566,
+    "isSignificant": true
+  },
+  "croston:lowOutlier": {
+    "forecast": 405.51890616799994,
+    "expectedAmount": 477.0810660799999,
+    "expectedInterval": 1
+  },
+  "crostonTSB:lowOutlier": {
+    "forecast": 477.0810660799999,
+    "expectedAmount": 477.0810660799999,
+    "expectedInterval": 1
+  },
+  "kama:lowOutlier": {
+    "value": 501,
+    "series": [500, 510, 495, 505, 20, 502, 498, 507, 499, 501],
+    "efficiencyRatio": 0
+  },
+  "kama3:lowOutlier": {
+    "value": 394.933033803674,
+    "series": [
+      500, 510, 495, 495.2266157937334, 298.7123037284813, 299.67540470583594, 300.61572033620973,
+      389.68364580825835, 392.16092704557843, 394.933033803674
+    ],
+    "efficiencyRatio": 0.15789473684210525
+  },
+  "loess:lowOutlier": [
+    {
+      "x": 0,
+      "y": 503.19147994837346
+    },
+    {
+      "x": 1,
+      "y": 502.512887130653
+    },
+    {
+      "x": 2,
+      "y": 502.1597265248654
+    },
+    {
+      "x": 3,
+      "y": 363.2374014326415
+    },
+    {
+      "x": 4,
+      "y": 296.9382494859823
+    },
+    {
+      "x": 5,
+      "y": 362.81490323345315
+    },
+    {
+      "x": 6,
+      "y": 501.72305745855454
+    },
+    {
+      "x": 7,
+      "y": 502.1313854878354
+    },
+    {
+      "x": 8,
+      "y": 501.5350633276387
+    },
+    {
+      "x": 9,
+      "y": 500.36266345069794
+    }
+  ],
+  "loess.2:lowOutlier": [
+    {
+      "x": 0,
+      "y": 500.00000008412235
+    },
+    {
+      "x": 1,
+      "y": 509.9999993290353
+    },
+    {
+      "x": 2,
+      "y": 495.0000006709649
+    },
+    {
+      "x": 3,
+      "y": 504.99998671489766
+    },
+    {
+      "x": 4,
+      "y": 20.000025952917365
+    },
+    {
+      "x": 5,
+      "y": 501.9999869564448
+    },
+    {
+      "x": 6,
+      "y": 498.0000003489018
+    },
+    {
+      "x": 7,
+      "y": 506.999999543744
+    },
+    {
+      "x": 8,
+      "y": 499.0000002683859
+    },
+    {
+      "x": 9,
+      "y": 500.9999999663503
+    }
+  ],
+  "hurst:lowOutlier": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:lowOutlier": {
+    "trend": [500, 510, 495, 505, 20, 502, 498, 507, 499, 501],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:lowOutlier": {
+    "trend": [500, 510, 406, 406.4, 404, 406.4, 405.2, 501.4, 499, 501],
+    "seasonal": [
+      -139.71666666666667, 20.15, 79.18333333333334, 40.38333333333335, -139.71666666666667, 20.15,
+      79.18333333333334, 40.38333333333335, -139.71666666666667, 20.15
+    ],
+    "residual": [
+      139.71666666666667, -20.15, 9.816666666666663, 58.216666666666676, -244.28333333333333,
+      75.45000000000002, 13.616666666666674, -34.783333333333324, 139.71666666666667, -20.15
+    ]
+  },
+  "poly:lowOutlier": {
+    "coefficients": [528.8454545454548, -62.879545454545614, 7.291666666666683],
+    "forecast": 629.216666666667,
+    "r2": 0.13718255025986814
+  },
+  "poly1:lowOutlier": {
+    "coefficients": [441.34545454545434, 2.7454545454545793],
+    "forecast": 468.8000000000001,
+    "r2": 0.00297288909250093
+  },
+  "poly5:lowOutlier": {
+    "coefficients": [528.8454545454548, -62.879545454545614, 7.291666666666683],
+    "forecast": 629.216666666667,
+    "r2": 0.13718255025986814
+  },
+  "robust:lowOutlier": {
+    "slope": -0.04753120456109674,
+    "intercept": 501.0787502999704,
+    "forecast": 500.60343825435945
+  },
+  "robust3:lowOutlier": {
+    "slope": 0.010868454490311378,
+    "intercept": 500.55945839276643,
+    "forecast": 500.66814293766953
+  },
+  "analyze:intermittent": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 120,
+    "forecasts": {
+      "sma3": 40,
+      "wma3": 60,
+      "kama": 1.5981170840316479,
+      "median": 0,
+      "holt": {
+        "forecast": 59.35278287789712,
+        "level": 57.835637042076,
+        "trend": 1.517145835821116
+      },
+      "theta": {
+        "forecast": 50.94785358373264
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 30,
+        "p90": 237.00000000000006,
+        "p95": 317.4999999999999
+      },
+      "croston": {
+        "forecast": 63.471128608923884,
+        "expectedAmount": 284.5,
+        "expectedInterval": 3.8099999999999996
+      },
+      "holtWinters": null,
+      "ensemble": 42.37975070913228
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 251.54967158168154,
+        "middle": 61.666666666666664,
+        "lower": -128.21633824834822,
+        "bandwidth": 6.158367726973456,
+        "percentB": 0.6536033552856437
+      },
+      "atr": 103.33333333333333,
+      "keltner": {
+        "upper": 208.0982032340823,
+        "middle": 53.09820323408229,
+        "lower": -101.90179676591771
+      },
+      "donchian": {
+        "upper": 250,
+        "lower": 0,
+        "middle": 125,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 63.71784388089875,
+        "middle": 53.09820323408229,
+        "lower": 42.478562587265834
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 30,
+        "p90": 237.00000000000006
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0.44667659292346895,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 120,
+        "iqr": 120,
+        "lowerBound": -180,
+        "upperBound": 300,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": -4.300699300699301,
+        "intercept": 87.82051282051282,
+        "r2": 0.01410692068054642,
+        "forecast": 36.212121212121204,
+        "monthlyChange": -4.300699300699301
+      },
+      "cusum": {
+        "values": [
+          0, 0, 335.8333333333333, 271.66666666666663, 207.49999999999994, 143.33333333333326,
+          329.1666666666666, 264.9999999999999, 200.8333333333332, 136.66666666666652,
+          72.49999999999984, 128.33333333333314
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 59.67741935483871,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 11.198671765917709,
+        "signal": -1.960547056803816,
+        "histogram": 13.159218822721524,
+        "crossover": "bullish"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 120,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 54.372577518224716
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 123.33333333333333,
+        "resistance1": 246.66666666666666,
+        "resistance2": 373.3333333333333,
+        "support1": -3.333333333333343,
+        "support2": -126.66666666666667
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "analyzeCur:intermittent": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 40,
+      "wma3": 60,
+      "kama": 1.5981170840316479,
+      "median": 0,
+      "holt": {
+        "forecast": 59.35278287789712,
+        "level": 57.835637042076,
+        "trend": 1.517145835821116
+      },
+      "theta": {
+        "forecast": 50.94785358373264
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 30,
+        "p90": 237.00000000000006,
+        "p95": 317.4999999999999
+      },
+      "croston": {
+        "forecast": 63.471128608923884,
+        "expectedAmount": 284.5,
+        "expectedInterval": 3.8099999999999996
+      },
+      "holtWinters": {
+        "forecast": -75.23455816313816,
+        "level": 19.66725327008723,
+        "trend": -9.113968065412909,
+        "seasonal": [
+          -85.78784336781248, -86.60227399612185, 203.64450694019519, -29.427166034151167
+        ]
+      },
+      "ensemble": 35.3164589242769
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 251.54967158168154,
+        "middle": 61.666666666666664,
+        "lower": -128.21633824834822,
+        "bandwidth": 6.158367726973456,
+        "percentB": 0.6536033552856437
+      },
+      "atr": 103.33333333333333,
+      "keltner": {
+        "upper": 208.0982032340823,
+        "middle": 53.09820323408229,
+        "lower": -101.90179676591771
+      },
+      "donchian": {
+        "upper": 250,
+        "lower": 0,
+        "middle": 125,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 63.71784388089875,
+        "middle": 53.09820323408229,
+        "lower": 42.478562587265834
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 30,
+        "p90": 237.00000000000006
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 9.358874643969639,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 120,
+        "iqr": 120,
+        "lowerBound": -180,
+        "upperBound": 300,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 2
+    },
+    "trend": {
+      "regression": {
+        "slope": -4.300699300699301,
+        "intercept": 87.82051282051282,
+        "r2": 0.01410692068054642,
+        "forecast": 36.212121212121204,
+        "monthlyChange": -4.300699300699301
+      },
+      "cusum": {
+        "values": [
+          0, 0, 335.8333333333333, 271.66666666666663, 207.49999999999994, 143.33333333333326,
+          329.1666666666666, 264.9999999999999, 200.8333333333332, 136.66666666666652,
+          72.49999999999984, 128.33333333333314
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 59.67741935483871,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 11.198671765917709,
+        "signal": -1.960547056803816,
+        "histogram": 13.159218822721524,
+        "crossover": "bullish"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 120,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 54.372577518224716
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 123.33333333333333,
+        "resistance1": 246.66666666666666,
+        "resistance2": 373.3333333333333,
+        "support1": -3.333333333333343,
+        "support2": -126.66666666666667
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "dixon:intermittent": {
+    "outlier": 400,
+    "qRatio": 0.375,
+    "isSignificant": false
+  },
+  "grubbs:intermittent": {
+    "outlier": 400,
+    "statistic": 2.686726372360567,
+    "isSignificant": true
+  },
+  "croston:intermittent": {
+    "forecast": 63.471128608923884,
+    "expectedAmount": 284.5,
+    "expectedInterval": 3.8099999999999996
+  },
+  "crostonTSB:intermittent": {
+    "forecast": 103.52164156383331,
+    "expectedAmount": 284.5,
+    "expectedInterval": 2.7482176258243753
+  },
+  "kama:intermittent": {
+    "value": 1.5981170840316479,
+    "series": [0, 0, 400, 0, 0, 0, 250, 0, 0, 0, 0, 1.5981170840316479],
+    "efficiencyRatio": 0.08450704225352113
+  },
+  "kama3:intermittent": {
+    "value": 124.51795819941837,
+    "series": [
+      0, 0, 400, 398.3350676378772, 396.67706527518055, 220.37614737510037, 233.542304097278,
+      232.5702237472373, 231.60218951728, 128.6678830651556, 128.13232475895308, 124.51795819941837
+    ],
+    "efficiencyRatio": 1
+  },
+  "loess:intermittent": [
+    {
+      "x": 0,
+      "y": 30.65720154132009
+    },
+    {
+      "x": 1,
+      "y": 83.35184871790076
+    },
+    {
+      "x": 2,
+      "y": 114.81256293957635
+    },
+    {
+      "x": 3,
+      "y": 102.53408009890535
+    },
+    {
+      "x": 4,
+      "y": 65.09691222914059
+    },
+    {
+      "x": 5,
+      "y": 64.08380026023124
+    },
+    {
+      "x": 6,
+      "y": 71.75785183723522
+    },
+    {
+      "x": 7,
+      "y": 64.0838000618158
+    },
+    {
+      "x": 8,
+      "y": 25.03727390909029
+    },
+    {
+      "x": 9,
+      "y": 12.017891579420677
+    },
+    {
+      "x": 10,
+      "y": 46.79276342592942
+    },
+    {
+      "x": 11,
+      "y": 83.67871534148003
+    }
+  ],
+  "loess.2:intermittent": [
+    {
+      "x": 0,
+      "y": -0.000001345957382828104
+    },
+    {
+      "x": 1,
+      "y": 0.000010735436291042788
+    },
+    {
+      "x": 2,
+      "y": 399.99997852912736
+    },
+    {
+      "x": 3,
+      "y": 0.000010735436376307916
+    },
+    {
+      "x": 4,
+      "y": 0
+    },
+    {
+      "x": 5,
+      "y": 0.000006709647664138174
+    },
+    {
+      "x": 6,
+      "y": 249.99998658070461
+    },
+    {
+      "x": 7,
+      "y": 0.000006709647777825012
+    },
+    {
+      "x": 8,
+      "y": 0
+    },
+    {
+      "x": 9,
+      "y": 0
+    },
+    {
+      "x": 10,
+      "y": 0.000003220630901523691
+    },
+    {
+      "x": 11,
+      "y": 119.99999959620732
+    }
+  ],
+  "hurst:intermittent": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:intermittent": {
+    "trend": [0, 0, 400, 0, 0, 0, 250, 0, 0, 0, 0, 120],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:intermittent": {
+    "trend": [0, 0, 80, 80, 130, 50, 50, 50, 50, 24, 0, 120],
+    "seasonal": [
+      -71.33333333333333, -36, 162, -54.66666666666667, -71.33333333333333, -36, 162,
+      -54.66666666666667, -71.33333333333333, -36, 162, -54.66666666666667
+    ],
+    "residual": [
+      71.33333333333333, 36, 158, -25.33333333333333, -58.66666666666667, -14, 38,
+      4.666666666666671, 21.33333333333333, 12, -162, 54.66666666666667
+    ]
+  },
+  "poly:intermittent": {
+    "coefficients": [79.80769230769228, 0.5069930069930209, -0.43706293706293836],
+    "forecast": 22.954545454545404,
+    "r2": 0.015466732476377754
+  },
+  "poly1:intermittent": {
+    "coefficients": [87.8205128205128, -4.300699300699298],
+    "forecast": 36.212121212121225,
+    "r2": 0.01410692068054642
+  },
+  "poly5:intermittent": {
+    "coefficients": [79.80769230769228, 0.5069930069930209, -0.43706293706293836],
+    "forecast": 22.954545454545404,
+    "r2": 0.015466732476377754
+  },
+  "robust:intermittent": {
+    "slope": 0.019700683418523924,
+    "intercept": 0.09275488656283519,
+    "forecast": 0.3291630875851223
+  },
+  "robust3:intermittent": {
+    "slope": 1.2830061922696292,
+    "intercept": 4.3006615681790175,
+    "forecast": 19.696735875414568
+  },
+  "analyze:intermittentLive": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 90,
+    "forecasts": {
+      "sma3": 30,
+      "wma3": 45,
+      "kama": 0.8601967766257131,
+      "median": 45,
+      "holt": {
+        "forecast": 66.10311767789713,
+        "level": 64.65594504207601,
+        "trend": 1.4471726358211174
+      },
+      "theta": {
+        "forecast": 55.343246820233745
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 97.5,
+        "p90": 237.00000000000006,
+        "p95": 317.4999999999999
+      },
+      "croston": {
+        "forecast": 65.45028941096356,
+        "expectedAmount": 226.14999999999998,
+        "expectedInterval": 2.9369999999999994
+      },
+      "holtWinters": null,
+      "ensemble": 48.15870724623946
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 258.7533371166355,
+        "middle": 76.66666666666667,
+        "lower": -105.42000378330219,
+        "bandwidth": 4.750087055216579,
+        "percentB": 0.5366126012969107
+      },
+      "atr": 138.33333333333334,
+      "keltner": {
+        "upper": 264.52156849855544,
+        "middle": 57.021568498555425,
+        "lower": -150.47843150144456
+      },
+      "donchian": {
+        "upper": 250,
+        "lower": 0,
+        "middle": 125,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 68.4258821982665,
+        "middle": 57.021568498555425,
+        "lower": 45.61725479884434
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 97.5,
+        "p90": 237.00000000000006
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 0.14831048758311227,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 120,
+        "iqr": 120,
+        "lowerBound": -180,
+        "upperBound": 300,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": -3.3566433566433567,
+        "intercept": 90.12820512820512,
+        "r2": 0.008786705023753116,
+        "forecast": 49.848484848484844,
+        "monthlyChange": -3.3566433566433567
+      },
+      "cusum": {
+        "values": [
+          0, 0, 328.3333333333333, 256.66666666666663, 184.99999999999994, 113.33333333333327,
+          291.6666666666666, 219.9999999999999, 268.3333333333332, 196.66666666666652,
+          124.99999999999984, 143.33333333333314
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 55.42168674698796,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -0.22469349855542475,
+        "signal": -5.999489164259042,
+        "histogram": 5.774795665703618,
+        "crossover": "bullish"
+      },
+      "roc1": 0,
+      "roc3": -25,
+      "momentum3": -30,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 59.766400158405304
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 113.33333333333333,
+        "resistance1": 226.66666666666666,
+        "resistance2": 363.3333333333333,
+        "support1": -23.333333333333343,
+        "support2": -136.66666666666669
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "analyzeCur:intermittentLive": {
+    "category": "cat",
+    "monthsOfData": 12,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 30,
+      "wma3": 45,
+      "kama": 0.8601967766257131,
+      "median": 45,
+      "holt": {
+        "forecast": 66.10311767789713,
+        "level": 64.65594504207601,
+        "trend": 1.4471726358211174
+      },
+      "theta": {
+        "forecast": 55.343246820233745
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 97.5,
+        "p90": 237.00000000000006,
+        "p95": 317.4999999999999
+      },
+      "croston": {
+        "forecast": 65.45028941096356,
+        "expectedAmount": 226.14999999999998,
+        "expectedInterval": 2.9369999999999994
+      },
+      "holtWinters": {
+        "forecast": -43.28422336313816,
+        "level": 26.48756127008723,
+        "trend": -9.183941265412907,
+        "seasonal": [-60.58784336781248, -94.91827399612185, 197.3167869401952, -40.47325843415116]
+      },
+      "ensemble": 40.2756221679705
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 258.7533371166355,
+        "middle": 76.66666666666667,
+        "lower": -105.42000378330219,
+        "bandwidth": 4.750087055216579,
+        "percentB": 0.5366126012969107
+      },
+      "atr": 138.33333333333334,
+      "keltner": {
+        "upper": 264.52156849855544,
+        "middle": 57.021568498555425,
+        "lower": -150.47843150144456
+      },
+      "donchian": {
+        "upper": 250,
+        "lower": 0,
+        "middle": 125,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 68.4258821982665,
+        "middle": 57.021568498555425,
+        "lower": 45.61725479884434
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 97.5,
+        "p90": 237.00000000000006
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 9.40288491276932,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 120,
+        "iqr": 120,
+        "lowerBound": -180,
+        "upperBound": 300,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 2
+    },
+    "trend": {
+      "regression": {
+        "slope": -3.3566433566433567,
+        "intercept": 90.12820512820512,
+        "r2": 0.008786705023753116,
+        "forecast": 49.848484848484844,
+        "monthlyChange": -3.3566433566433567
+      },
+      "cusum": {
+        "values": [
+          0, 0, 328.3333333333333, 256.66666666666663, 184.99999999999994, 113.33333333333327,
+          291.6666666666666, 219.9999999999999, 268.3333333333332, 196.66666666666652,
+          124.99999999999984, 143.33333333333314
+        ],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 55.42168674698796,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -0.22469349855542475,
+        "signal": -5.999489164259042,
+        "histogram": 5.774795665703618,
+        "crossover": "bullish"
+      },
+      "roc1": 0,
+      "roc3": -25,
+      "momentum3": -30,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 59.766400158405304
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 113.33333333333333,
+        "resistance1": 226.66666666666666,
+        "resistance2": 363.3333333333333,
+        "support1": -23.333333333333343,
+        "support2": -136.66666666666669
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "dixon:intermittentLive": {
+    "outlier": 400,
+    "qRatio": 0.375,
+    "isSignificant": false
+  },
+  "grubbs:intermittentLive": {
+    "outlier": 400,
+    "statistic": 2.656106004897557,
+    "isSignificant": true
+  },
+  "croston:intermittentLive": {
+    "forecast": 65.45028941096356,
+    "expectedAmount": 226.14999999999998,
+    "expectedInterval": 2.9369999999999994
+  },
+  "crostonTSB:intermittentLive": {
+    "forecast": 105.56053355768331,
+    "expectedAmount": 226.14999999999998,
+    "expectedInterval": 2.142372649873173
+  },
+  "kama:intermittentLive": {
+    "value": 0.8601967766257131,
+    "series": [0, 0, 400, 0, 0, 0, 250, 0, 120, 0, 0, 0.8601967766257131],
+    "efficiencyRatio": 0.05521472392638037
+  },
+  "kama3:intermittentLive": {
+    "value": 194.01857210721911,
+    "series": [
+      0, 0, 400, 398.3350676378772, 396.67706527518055, 220.37614737510037, 233.542304097278,
+      232.5702237472373, 228.8798083758799, 197.25148022723224, 196.43045429496487,
+      194.01857210721911
+    ],
+    "efficiencyRatio": 0.14285714285714285
+  },
+  "loess:intermittentLive": [
+    {
+      "x": 0,
+      "y": 30.65720154132009
+    },
+    {
+      "x": 1,
+      "y": 83.35184871790076
+    },
+    {
+      "x": 2,
+      "y": 114.81256293957635
+    },
+    {
+      "x": 3,
+      "y": 102.53408009890535
+    },
+    {
+      "x": 4,
+      "y": 65.09691222914059
+    },
+    {
+      "x": 5,
+      "y": 64.08380026023124
+    },
+    {
+      "x": 6,
+      "y": 83.77574334504136
+    },
+    {
+      "x": 7,
+      "y": 94.84402413172683
+    },
+    {
+      "x": 8,
+      "y": 59.48104279096316
+    },
+    {
+      "x": 9,
+      "y": 39.77364273214069
+    },
+    {
+      "x": 10,
+      "y": 45.008676851052854
+    },
+    {
+      "x": 11,
+      "y": 50.69718356558372
+    }
+  ],
+  "loess.2:intermittentLive": [
+    {
+      "x": 0,
+      "y": -0.000001345957382828104
+    },
+    {
+      "x": 1,
+      "y": 0.000010735436291042788
+    },
+    {
+      "x": 2,
+      "y": 399.99997852912736
+    },
+    {
+      "x": 3,
+      "y": 0.000010735436376307916
+    },
+    {
+      "x": 4,
+      "y": 0
+    },
+    {
+      "x": 5,
+      "y": 0.000006709647664138174
+    },
+    {
+      "x": 6,
+      "y": 249.99998658070461
+    },
+    {
+      "x": 7,
+      "y": 0.000009930278622505284
+    },
+    {
+      "x": 8,
+      "y": 119.99999355873821
+    },
+    {
+      "x": 9,
+      "y": 0.000003220631015210529
+    },
+    {
+      "x": 10,
+      "y": 0.00000241547309087764
+    },
+    {
+      "x": 11,
+      "y": 89.99999969715554
+    }
+  ],
+  "hurst:intermittentLive": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:intermittentLive": {
+    "trend": [0, 0, 400, 0, 0, 0, 250, 0, 120, 0, 0, 90],
+    "seasonal": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "stl4:intermittentLive": {
+    "trend": [0, 0, 80, 80, 130, 50, 74, 74, 74, 42, 0, 90],
+    "seasonal": [
+      -41.833333333333336, -44.5, 151.5, -65.16666666666667, -41.833333333333336, -44.5, 151.5,
+      -65.16666666666667, -41.833333333333336, -44.5, 151.5, -65.16666666666667
+    ],
+    "residual": [
+      41.833333333333336, 44.5, 168.5, -14.833333333333329, -88.16666666666666, -5.5, 24.5,
+      -8.833333333333329, 87.83333333333334, 2.5, -151.5, 65.16666666666667
+    ]
+  },
+  "poly:intermittentLive": {
+    "coefficients": [65.21978021978009, 11.588411588411635, -1.358641358641362],
+    "forecast": 8.636363636363598,
+    "r2": 0.022222460324623605
+  },
+  "poly1:intermittentLive": {
+    "coefficients": [90.12820512820512, -3.356643356643356],
+    "forecast": 49.84848484848486,
+    "r2": 0.008786705023753116
+  },
+  "poly5:intermittentLive": {
+    "coefficients": [65.21978021978009, 11.588411588411635, -1.358641358641362],
+    "forecast": 8.636363636363598,
+    "r2": 0.022222460324623605
+  },
+  "robust:intermittentLive": {
+    "slope": 3.6954166362543894,
+    "intercept": 4.951451902772275,
+    "forecast": 49.29645153782495
+  },
+  "robust3:intermittentLive": {
+    "slope": 3.7130715569393176,
+    "intercept": 6.69193040041912,
+    "forecast": 51.24878908369093
+  },
+  "analyze:lead0": {
+    "category": "cat",
+    "monthsOfData": 6,
+    "currentMonthSpent": 60,
+    "forecasts": {
+      "sma3": 46.666666666666664,
+      "wma3": 43.333333333333336,
+      "kama": 60,
+      "median": 0,
+      "holt": {
+        "forecast": 34.86696,
+        "level": 32.0616,
+        "trend": 2.8053600000000003
+      },
+      "theta": {
+        "forecast": 34.2332361516035
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 45,
+        "p90": 70,
+        "p95": 75
+      },
+      "croston": {
+        "forecast": 18.5,
+        "expectedAmount": 74,
+        "expectedInterval": 3.4
+      },
+      "holtWinters": null,
+      "ensemble": 35.5200392303207
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 90.33250414080594,
+        "middle": 23.333333333333332,
+        "lower": -43.66583747413928,
+        "bandwidth": 5.742786069211938,
+        "percentB": 0.773635227307747
+      },
+      "atr": 44,
+      "keltner": {
+        "upper": 94.80466472303206,
+        "middle": 28.80466472303207,
+        "lower": -37.19533527696793
+      },
+      "donchian": {
+        "upper": 80,
+        "lower": 0,
+        "middle": 40,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 34.56559766763848,
+        "middle": 28.80466472303207,
+        "lower": 23.043731778425656
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 45,
+        "p90": 70
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 1.0945409092309881,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 60,
+        "iqr": 60,
+        "lowerBound": -90,
+        "upperBound": 150,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 10.857142857142858,
+        "intercept": -3.80952380952381,
+        "r2": 0.30636492220650624,
+        "forecast": 61.33333333333333,
+        "monthlyChange": 10.857142857142858
+      },
+      "cusum": {
+        "values": [0, 0, 0, 56.66666666666667, 33.33333333333334, 70.00000000000001],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 63.63636363636363,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 11.195335276967931,
+        "signal": 8.658892128279884,
+        "histogram": 2.536443148688047,
+        "crossover": "bullish"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 60,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 30.40283203125
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 46.666666666666664,
+        "resistance1": 93.33333333333333,
+        "resistance2": 126.66666666666666,
+        "support1": 13.333333333333329,
+        "support2": -33.333333333333336
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "analyzeCur:lead0": {
+    "category": "cat",
+    "monthsOfData": 6,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 46.666666666666664,
+      "wma3": 43.333333333333336,
+      "kama": 60,
+      "median": 0,
+      "holt": {
+        "forecast": 34.86696,
+        "level": 32.0616,
+        "trend": 2.8053600000000003
+      },
+      "theta": {
+        "forecast": 34.2332361516035
+      },
+      "quantiles": {
+        "p50": 0,
+        "p75": 45,
+        "p90": 70,
+        "p95": 75
+      },
+      "croston": {
+        "forecast": 18.5,
+        "expectedAmount": 74,
+        "expectedInterval": 3.4
+      },
+      "holtWinters": null,
+      "ensemble": 35.5200392303207
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 90.33250414080594,
+        "middle": 23.333333333333332,
+        "lower": -43.66583747413928,
+        "bandwidth": 5.742786069211938,
+        "percentB": 0.773635227307747
+      },
+      "atr": 44,
+      "keltner": {
+        "upper": 94.80466472303206,
+        "middle": 28.80466472303207,
+        "lower": -37.19533527696793
+      },
+      "donchian": {
+        "upper": 80,
+        "lower": 0,
+        "middle": 40,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": false
+      },
+      "historicalVol": 0,
+      "maEnvelopes": {
+        "upper": 34.56559766763848,
+        "middle": 28.80466472303207,
+        "lower": 23.043731778425656
+      },
+      "percentiles": {
+        "p10": 0,
+        "p25": 0,
+        "p50": 0,
+        "p75": 45,
+        "p90": 70
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 36.139750748426806,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 0,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 0,
+        "q3": 60,
+        "iqr": 60,
+        "lowerBound": -90,
+        "upperBound": 150,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 2
+    },
+    "trend": {
+      "regression": {
+        "slope": 10.857142857142858,
+        "intercept": -3.80952380952381,
+        "r2": 0.30636492220650624,
+        "forecast": 61.33333333333333,
+        "monthlyChange": 10.857142857142858
+      },
+      "cusum": {
+        "values": [0, 0, 0, 56.66666666666667, 33.33333333333334, 70.00000000000001],
+        "shiftDetected": false,
+        "shiftIndex": -1
+      },
+      "rsi": {
+        "value": 63.63636363636363,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": 11.195335276967931,
+        "signal": 8.658892128279884,
+        "histogram": 2.536443148688047,
+        "crossover": "bullish"
+      },
+      "roc1": 0,
+      "roc3": 0,
+      "momentum3": 60,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 30.40283203125
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.5,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 46.666666666666664,
+        "resistance1": 93.33333333333333,
+        "resistance2": 126.66666666666666,
+        "support1": 13.333333333333329,
+        "support2": -33.333333333333336
+      },
+      "direction": "rising",
+      "confidence": 1
+    }
+  },
+  "dixon:lead0": {
+    "outlier": 80,
+    "qRatio": 0.25,
+    "isSignificant": false
+  },
+  "grubbs:lead0": {
+    "outlier": 80,
+    "statistic": 1.6915632233569815,
+    "isSignificant": true
+  },
+  "croston:lead0": {
+    "forecast": 18.5,
+    "expectedAmount": 74,
+    "expectedInterval": 3.4
+  },
+  "crostonTSB:lead0": {
+    "forecast": 31.265,
+    "expectedAmount": 74,
+    "expectedInterval": 2.366863905325444
+  },
+  "kama:lead0": {
+    "value": 60,
+    "series": [0, 0, 0, 80, 0, 60],
+    "efficiencyRatio": 0
+  },
+  "kama3:lead0": {
+    "value": 36.69427560898256,
+    "series": [0, 0, 0, 35.55555555555554, 35.40756156781129, 36.69427560898256],
+    "efficiencyRatio": 0.2727272727272727
+  },
+  "loess:lead0": [
+    {
+      "x": 0,
+      "y": 0
+    },
+    {
+      "x": 1,
+      "y": 0
+    },
+    {
+      "x": 2,
+      "y": 0.0000021470872724194123
+    },
+    {
+      "x": 3,
+      "y": 79.99999570582547
+    },
+    {
+      "x": 4,
+      "y": 0.0000037574027302866853
+    },
+    {
+      "x": 5,
+      "y": 59.999999528915
+    }
+  ],
+  "loess.2:lead0": [
+    {
+      "x": 0,
+      "y": 0
+    },
+    {
+      "x": 1,
+      "y": 0
+    },
+    {
+      "x": 2,
+      "y": 0.0000021470872724194123
+    },
+    {
+      "x": 3,
+      "y": 79.99999570582547
+    },
+    {
+      "x": 4,
+      "y": 0.0000037574027302866853
+    },
+    {
+      "x": 5,
+      "y": 59.999999528915
+    }
+  ],
+  "hurst:lead0": {
+    "value": 0.5,
+    "type": "random_walk"
+  },
+  "stl:lead0": {
+    "trend": [0, 0, 0, 80, 0, 60],
+    "seasonal": [0, 0, 0, 0, 0, 0],
+    "residual": [0, 0, 0, 0, 0, 0]
+  },
+  "stl4:lead0": {
+    "trend": [0, 0, 16, 28, 0, 60],
+    "seasonal": [-9, -9, -25, 43, -9, -9],
+    "residual": [9, 9, 9, 9, 9, 9]
+  },
+  "poly:lead0": {
+    "coefficients": [-4.999999999999942, 12.642857142857078, -0.35714285714284527],
+    "forecast": 58.00000000000009,
+    "r2": 0.307072135785007
+  },
+  "poly1:lead0": {
+    "coefficients": [-3.80952380952381, 10.857142857142858],
+    "forecast": 61.33333333333333,
+    "r2": 0.30636492220650624
+  },
+  "poly5:lead0": {
+    "coefficients": [-4.999999999999942, 12.642857142857078, -0.35714285714284527],
+    "forecast": 58.00000000000009,
+    "r2": 0.307072135785007
+  },
+  "robust:lead0": {
+    "slope": 11.654498241489433,
+    "intercept": -8.308994114827904,
+    "forecast": 61.61799533410869
+  },
+  "robust3:lead0": {
+    "slope": 11.661405512788905,
+    "intercept": -8.313602808538388,
+    "forecast": 61.65483026819504
+  },
+  "analyze:twoYears": {
+    "category": "cat",
+    "monthsOfData": 25,
+    "currentMonthSpent": 225,
+    "forecasts": {
+      "sma3": 291.6666666666667,
+      "wma3": 290.8333333333333,
+      "kama": 287.28372324495905,
+      "median": 270,
+      "holt": {
+        "forecast": 291.14968763039406,
+        "level": 290.78140887909746,
+        "trend": 0.3682787512966281
+      },
+      "theta": {
+        "forecast": 289.6390004579761
+      },
+      "quantiles": {
+        "p50": 265,
+        "p75": 320,
+        "p90": 343,
+        "p95": 388.99999999999983
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 205.1862529751449,
+        "level": 290.4234405582333,
+        "trend": 0.9573436669116027,
+        "seasonal": [
+          -65.65567800080333, -86.19453125000001, -45.46622135416666, -17.092417786458327,
+          23.88201724453126, 62.44766124888801, 52.520182214471106, 33.64534142394515,
+          2.323592627858619, -27.521339308237692, -56.33715148425799, 125.5318945370555
+        ]
+      },
+      "ensemble": 285.7811489333325
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 423.0094434194257,
+        "middle": 289.1666666666667,
+        "lower": 155.3238899139077,
+        "bandwidth": 0.9257137297020794,
+        "percentB": 0.26029088672749773
+      },
+      "atr": 81.66666666666667,
+      "keltner": {
+        "upper": 411.13515430412997,
+        "middle": 288.63515430412997,
+        "lower": 166.13515430412997
+      },
+      "donchian": {
+        "upper": 420,
+        "lower": 225,
+        "middle": 322.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0.35691100765525,
+      "maEnvelopes": {
+        "upper": 346.362185164956,
+        "middle": 288.63515430412997,
+        "lower": 230.908123443304
+      },
+      "percentiles": {
+        "p10": 212,
+        "p25": 230,
+        "p50": 265,
+        "p75": 320,
+        "p90": 343
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": -0.8854077883677641,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": -0.5995555555555556,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 230,
+        "q3": 320,
+        "iqr": 90,
+        "lowerBound": 95,
+        "upperBound": 455,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 2.0076923076923077,
+        "intercept": 254.3076923076923,
+        "r2": 0.05762378951215075,
+        "forecast": 304.5,
+        "monthlyChange": 2.0076923076923077
+      },
+      "cusum": {
+        "values": [
+          0, 0, 0, 0, 21.600000000000023, 83.20000000000005, 134.80000000000007, 166.4000000000001,
+          168.0000000000001, 139.60000000000014, 81.20000000000016, 202.80000000000018,
+          139.4000000000002, 56.00000000000023, 17.60000000000025, 4.200000000000273,
+          35.800000000000296, 102.40000000000032, 159.00000000000034, 200.60000000000036,
+          207.2000000000004, 183.8000000000004, 135.40000000000043, 277.00000000000045,
+          223.60000000000048
+        ],
+        "shiftDetected": true,
+        "shiftIndex": 23
+      },
+      "rsi": {
+        "value": 38.775510204081634,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -7.48179131470431,
+        "signal": -0.1446943435785948,
+        "histogram": -7.337096971125716,
+        "crossover": "bearish"
+      },
+      "roc1": -46.42857142857143,
+      "roc3": -11.76470588235294,
+      "momentum3": -30,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 289.17910720246044
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.77767464652898,
+        "type": "trending"
+      },
+      "pivotPoints": {
+        "pivot": 290,
+        "resistance1": 355,
+        "resistance2": 485,
+        "support1": 160,
+        "support2": 95
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "analyzeCur:twoYears": {
+    "category": "cat",
+    "monthsOfData": 25,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 291.6666666666667,
+      "wma3": 290.8333333333333,
+      "kama": 287.28372324495905,
+      "median": 270,
+      "holt": {
+        "forecast": 291.14968763039406,
+        "level": 290.78140887909746,
+        "trend": 0.3682787512966281
+      },
+      "theta": {
+        "forecast": 289.6390004579761
+      },
+      "quantiles": {
+        "p50": 265,
+        "p75": 320,
+        "p90": 343,
+        "p95": 388.99999999999983
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 281.894239452346,
+        "level": 331.1811976751449,
+        "trend": 3.9217457435812264,
+        "seasonal": [-60.35814268188746, -53.2087039663801, -49.897189166326825, 20.29125601966325]
+      },
+      "ensemble": 288.1599968238017
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 423.0094434194257,
+        "middle": 289.1666666666667,
+        "lower": 155.3238899139077,
+        "bandwidth": 0.9257137297020794,
+        "percentB": 0.26029088672749773
+      },
+      "atr": 81.66666666666667,
+      "keltner": {
+        "upper": 411.13515430412997,
+        "middle": 288.63515430412997,
+        "lower": 166.13515430412997
+      },
+      "donchian": {
+        "upper": 420,
+        "lower": 225,
+        "middle": 322.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0.35691100765525,
+      "maEnvelopes": {
+        "upper": 346.362185164956,
+        "middle": 288.63515430412997,
+        "lower": 230.908123443304
+      },
+      "percentiles": {
+        "p10": 212,
+        "p25": 230,
+        "p50": 265,
+        "p75": 320,
+        "p90": 343
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 15.844488437532506,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 14.524233333333333,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 230,
+        "q3": 320,
+        "iqr": 90,
+        "lowerBound": 95,
+        "upperBound": 455,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 2.0076923076923077,
+        "intercept": 254.3076923076923,
+        "r2": 0.05762378951215075,
+        "forecast": 304.5,
+        "monthlyChange": 2.0076923076923077
+      },
+      "cusum": {
+        "values": [
+          0, 0, 0, 0, 21.600000000000023, 83.20000000000005, 134.80000000000007, 166.4000000000001,
+          168.0000000000001, 139.60000000000014, 81.20000000000016, 202.80000000000018,
+          139.4000000000002, 56.00000000000023, 17.60000000000025, 4.200000000000273,
+          35.800000000000296, 102.40000000000032, 159.00000000000034, 200.60000000000036,
+          207.2000000000004, 183.8000000000004, 135.40000000000043, 277.00000000000045,
+          223.60000000000048
+        ],
+        "shiftDetected": true,
+        "shiftIndex": 23
+      },
+      "rsi": {
+        "value": 38.775510204081634,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -7.48179131470431,
+        "signal": -0.1446943435785948,
+        "histogram": -7.337096971125716,
+        "crossover": "bearish"
+      },
+      "roc1": -46.42857142857143,
+      "roc3": -11.76470588235294,
+      "momentum3": -30,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 289.17910720246044
+      },
+      "changePoints": [],
+      "hurst": {
+        "value": 0.77767464652898,
+        "type": "trending"
+      },
+      "pivotPoints": {
+        "pivot": 290,
+        "resistance1": 355,
+        "resistance2": 485,
+        "support1": 160,
+        "support2": 95
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "dixon:twoYears": {
+    "outlier": 420,
+    "qRatio": 0.08695652173913043,
+    "isSignificant": false
+  },
+  "grubbs:twoYears": {
+    "outlier": 420,
+    "statistic": 2.34782289949205,
+    "isSignificant": true
+  },
+  "croston:twoYears": {
+    "forecast": 245.09783911887433,
+    "expectedAmount": 288.35039896338156,
+    "expectedInterval": 1
+  },
+  "crostonTSB:twoYears": {
+    "forecast": 288.35039896338156,
+    "expectedAmount": 288.35039896338156,
+    "expectedInterval": 1
+  },
+  "kama:twoYears": {
+    "value": 287.28372324495905,
+    "series": [
+      210, 190, 230, 260, 300, 340, 330, 310, 280, 250, 249.78181995155495, 267.7154479684483,
+      267.3806249927549, 266.1304903701662, 265.71727561506134, 265.7025962473204,
+      266.01708744851055, 266.7793058500075, 267.7495578083656, 268.71538116713833,
+      268.99185134921885, 268.04073827242155, 267.68863206570177, 287.67932912613253,
+      287.28372324495905
+    ],
+    "efficiencyRatio": 0.024793388429752067
+  },
+  "kama3:twoYears": {
+    "value": 283.4261560098233,
+    "series": [
+      210, 190, 230, 234.77708833819366, 263.76504907677423, 297.64724948709676, 306.8333249786253,
+      306.90508683597176, 294.94727046442875, 274.97070581357156, 250.53928100753976,
+      270.51576281529606, 269.74444739142155, 268.941957817898, 263.0840118597734,
+      263.38910667979985, 284.1050592665555, 311.1694773703086, 317.9357948057185,
+      317.99190737096177, 303.3288374283121, 281.84935412684007, 258.8051967371334,
+      284.1231428589912, 283.4261560098233
+    ],
+    "efficiencyRatio": 0.07317073170731707
+  },
+  "loess:twoYears": [
+    {
+      "x": 0,
+      "y": 212.07711998534594
+    },
+    {
+      "x": 1,
+      "y": 228.14126296880082
+    },
+    {
+      "x": 2,
+      "y": 242.97077093308994
+    },
+    {
+      "x": 3,
+      "y": 256.4646369529318
+    },
+    {
+      "x": 4,
+      "y": 268.7967477481233
+    },
+    {
+      "x": 5,
+      "y": 280.67093951330537
+    },
+    {
+      "x": 6,
+      "y": 292.52634143676556
+    },
+    {
+      "x": 7,
+      "y": 295.19619418460127
+    },
+    {
+      "x": 8,
+      "y": 292.6873008557454
+    },
+    {
+      "x": 9,
+      "y": 283.52918881083826
+    },
+    {
+      "x": 10,
+      "y": 271.4647517803613
+    },
+    {
+      "x": 11,
+      "y": 262.5006532778444
+    },
+    {
+      "x": 12,
+      "y": 260.94405433476874
+    },
+    {
+      "x": 13,
+      "y": 265.81000942897055
+    },
+    {
+      "x": 14,
+      "y": 273.2468861266225
+    },
+    {
+      "x": 15,
+      "y": 280.3235362517066
+    },
+    {
+      "x": 16,
+      "y": 287.0183920367901
+    },
+    {
+      "x": 17,
+      "y": 294.50167951640805
+    },
+    {
+      "x": 18,
+      "y": 299.5429441477092
+    },
+    {
+      "x": 19,
+      "y": 299.7906045746098
+    },
+    {
+      "x": 20,
+      "y": 298.3248627271229
+    },
+    {
+      "x": 21,
+      "y": 295.35725773865613
+    },
+    {
+      "x": 22,
+      "y": 291.47706610189346
+    },
+    {
+      "x": 23,
+      "y": 287.27645330003025
+    },
+    {
+      "x": 24,
+      "y": 283.205555307407
+    }
+  ],
+  "loess.2:twoYears": [
+    {
+      "x": 0,
+      "y": 197.7743388457648
+    },
+    {
+      "x": 1,
+      "y": 211.25322645817388
+    },
+    {
+      "x": 2,
+      "y": 227.136109191671
+    },
+    {
+      "x": 3,
+      "y": 262.86389089458225
+    },
+    {
+      "x": 4,
+      "y": 299.99999994249777
+    },
+    {
+      "x": 5,
+      "y": 325.6805454408351
+    },
+    {
+      "x": 6,
+      "y": 327.13610900478875
+    },
+    {
+      "x": 7,
+      "y": 307.1361090766666
+    },
+    {
+      "x": 8,
+      "y": 279.9999999856243
+    },
+    {
+      "x": 9,
+      "y": 250.0000003018867
+    },
+    {
+      "x": 10,
+      "y": 280.14170856340706
+    },
+    {
+      "x": 11,
+      "y": 295.46798236212175
+    },
+    {
+      "x": 12,
+      "y": 262.25419956653764
+    },
+    {
+      "x": 13,
+      "y": 213.61529111667164
+    },
+    {
+      "x": 14,
+      "y": 234.27221830427652
+    },
+    {
+      "x": 15,
+      "y": 270.7277817747889
+    },
+    {
+      "x": 16,
+      "y": 307.1361090551033
+    },
+    {
+      "x": 17,
+      "y": 332.1124908881263
+    },
+    {
+      "x": 18,
+      "y": 333.56805445207976
+    },
+    {
+      "x": 19,
+      "y": 314.2722181820842
+    },
+    {
+      "x": 20,
+      "y": 286.4319454329153
+    },
+    {
+      "x": 21,
+      "y": 256.4319457707412
+    },
+    {
+      "x": 22,
+      "y": 291.5736539963232
+    },
+    {
+      "x": 23,
+      "y": 293.53233328284904
+    },
+    {
+      "x": 24,
+      "y": 289.6735613932304
+    }
+  ],
+  "hurst:twoYears": {
+    "value": 0.77767464652898,
+    "type": "trending"
+  },
+  "stl:twoYears": {
+    "trend": [
+      210, 190, 230, 260, 300, 340, 271.9230769230769, 270.7692307692308, 274.61538461538464,
+      277.3076923076923, 281.15384615384613, 284.61538461538464, 284.2307692307692,
+      283.46153846153845, 281.53846153846155, 279.61538461538464, 278.0769230769231,
+      293.46153846153845, 280, 320, 285, 255, 230, 420, 225
+    ],
+    "seasonal": [
+      -26.29807692307692, -47.451923076923066, -23.990384615384617, -10.528846153846164,
+      12.74038461538461, 22.54807692307693, 53.31730769230771, 16.39423076923077,
+      -0.528846153846164, -16.875000000000004, -33.798076923076906, 54.47115384615384,
+      -26.29807692307692, -47.451923076923066, -23.990384615384617, -10.528846153846164,
+      12.74038461538461, 22.54807692307693, 53.31730769230771, 16.39423076923077,
+      -0.528846153846164, -16.875000000000004, -33.798076923076906, 54.47115384615384,
+      -26.29807692307692
+    ],
+    "residual": [
+      26.29807692307692, 47.451923076923066, 23.990384615384617, 10.528846153846164,
+      -12.74038461538461, -22.54807692307693, 4.759615384615387, 22.836538461538456,
+      5.913461538461522, -10.432692307692317, -27.355769230769226, 60.91346153846152,
+      -42.93269230769231, -41.00961538461539, -17.54807692307693, -4.086538461538478,
+      19.182692307692296, 28.990384615384617, 1.6826923076922924, -16.39423076923077,
+      0.528846153846164, 16.875000000000004, 33.798076923076906, -54.47115384615384,
+      26.29807692307692
+    ]
+  },
+  "stl4:twoYears": {
+    "trend": [
+      210, 190, 238, 264, 292, 308, 312, 302, 278, 292, 273, 256, 254, 263, 245, 271, 299, 315, 319,
+      308, 285, 302, 283, 420, 225
+    ],
+    "seasonal": [
+      -0.8452380952380962, -14.107142857142858, -12.44047619047619, 27.392857142857142,
+      -0.8452380952380962, -14.107142857142858, -12.44047619047619, 27.392857142857142,
+      -0.8452380952380962, -14.107142857142858, -12.44047619047619, 27.392857142857142,
+      -0.8452380952380962, -14.107142857142858, -12.44047619047619, 27.392857142857142,
+      -0.8452380952380962, -14.107142857142858, -12.44047619047619, 27.392857142857142,
+      -0.8452380952380962, -14.107142857142858, -12.44047619047619, 27.392857142857142,
+      -0.8452380952380962
+    ],
+    "residual": [
+      0.8452380952380962, 14.107142857142858, 4.44047619047619, -31.392857142857142,
+      8.845238095238097, 46.10714285714286, 30.44047619047619, -19.392857142857142,
+      2.8452380952380962, -27.892857142857142, -40.55952380952381, 116.60714285714286,
+      -38.154761904761905, -53.89285714285714, 7.44047619047619, -33.39285714285714,
+      11.845238095238097, 44.10714285714286, 28.44047619047619, -15.392857142857142,
+      0.8452380952380962, -32.89285714285714, -40.55952380952381, -27.392857142857142,
+      0.8452380952380962
+    ]
+  },
+  "poly:twoYears": {
+    "coefficients": [235.24786324786376, 6.979821627647602, -0.2071720549981376],
+    "forecast": 280.26086956521783,
+    "r2": 0.0830259230261523
+  },
+  "poly1:twoYears": {
+    "coefficients": [254.30769230769218, 2.0076923076923165],
+    "forecast": 304.5000000000001,
+    "r2": 0.057623789512150525
+  },
+  "poly5:twoYears": {
+    "coefficients": [235.24786324786376, 6.979821627647602, -0.2071720549981376],
+    "forecast": 280.26086956521783,
+    "r2": 0.0830259230261523
+  },
+  "robust:twoYears": {
+    "slope": 1.6364530170708957,
+    "intercept": 253.46854847585243,
+    "forecast": 294.3798739026248
+  },
+  "robust3:twoYears": {
+    "slope": 1.6681611832848924,
+    "intercept": 253.23572283843774,
+    "forecast": 294.93975242056007
+  },
+  "analyze:long": {
+    "category": "cat",
+    "monthsOfData": 70,
+    "currentMonthSpent": 169,
+    "forecasts": {
+      "sma3": 213,
+      "wma3": 198.33333333333334,
+      "kama": 173.81865877630977,
+      "median": 221.5,
+      "holt": {
+        "forecast": 210.8800001388341,
+        "level": 211.51759212042822,
+        "trend": -0.6375919815941129
+      },
+      "theta": {
+        "forecast": 209.28090707712363
+      },
+      "quantiles": {
+        "p50": 188.5,
+        "p75": 217.75,
+        "p90": 241.3,
+        "p95": 252.64999999999998
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 185.36951634355125,
+        "level": 207.64499475378284,
+        "trend": -1.0567190030493858,
+        "seasonal": [
+          -10.944384203080741, 0.7697857125249481, -4.045335964033307, -3.873871281185858,
+          12.489997744085173, -9.600967990040585, 3.2875370619953834, -0.3393937942692977,
+          0.9889467397462361, -5.705518990763735, -21.218759407182212, 20.149098017525397
+        ]
+      },
+      "ensemble": 203.37275137856847
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 295.3354025293197,
+        "middle": 221.5,
+        "lower": 147.66459747068032,
+        "bandwidth": 0.6666853501518708,
+        "percentB": 0.14447948950266432
+      },
+      "atr": 53,
+      "keltner": {
+        "upper": 288.25978031656024,
+        "middle": 208.75978031656024,
+        "lower": 129.25978031656024
+      },
+      "donchian": {
+        "upper": 274,
+        "lower": 169,
+        "middle": 221.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0.24270279856973728,
+      "maEnvelopes": {
+        "upper": 250.51173637987227,
+        "middle": 208.75978031656024,
+        "lower": 167.0078242532482
+      },
+      "percentiles": {
+        "p10": 136.6,
+        "p25": 160.75,
+        "p50": 188.5,
+        "p75": 217.75,
+        "p90": 241.3
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": -0.4976019046410418,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "modifiedZScore": {
+        "zScore": -0.45354310344827586,
+        "isAnomaly": false,
+        "direction": null
+      },
+      "iqr": {
+        "q1": 160,
+        "q3": 218,
+        "iqr": 58,
+        "lowerBound": 73,
+        "upperBound": 305,
+        "isOutlier": false
+      },
+      "isAnomaly": false,
+      "anomalyCount": 0
+    },
+    "trend": {
+      "regression": {
+        "slope": 1.0422535211267605,
+        "intercept": 152.7565392354125,
+        "r2": 0.2825367275422871,
+        "forecast": 225.71428571428572,
+        "monthlyChange": 1.0422535211267605
+      },
+      "cusum": {
+        "values": [
+          0, 0, 0, 9.285714285714278, 0, 0, 0, 0, 19.285714285714278, 0, 0, 2.2857142857142776, 0,
+          29.285714285714278, 14.571428571428555, 0, 12.285714285714278, 0, 39.28571428571428,
+          34.571428571428555, 0, 22.285714285714278, 0.5714285714285552, 0, 5.285714285714278, 0,
+          32.28571428571428, 20.571428571428555, 0, 15.285714285714278, 0, 42.28571428571428,
+          40.571428571428555, 0, 25.285714285714278, 6.571428571428555, 58.85714285714283,
+          67.14285714285711, 31.428571428571388, 66.71428571428567, 57.99999999999994,
+          120.28571428571422, 138.5714285714285, 112.85714285714278, 158.14285714285705,
+          159.42857142857133, 116.71428571428561, 144.9999999999999, 129.28571428571416,
+          184.57142857142844, 195.85714285714272, 163.142857142857, 201.42857142857127,
+          195.71428571428555, 260.99999999999983, 282.2857142857141, 259.5714285714284,
+          307.85714285714266, 312.14285714285694, 387.42857142857116, 418.7142857142854,
+          405.9999999999996, 464.2857142857138, 478.57142857142804, 563.8571428571422,
+          605.1428571428564, 602.4285714285706, 670.7142857142849, 694.9999999999991,
+          675.2857142857133
+        ],
+        "shiftDetected": true,
+        "shiftIndex": 45
+      },
+      "rsi": {
+        "value": 44.65408805031447,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -12.453328482542986,
+        "signal": -5.924379015379985,
+        "histogram": -6.528949467163001,
+        "crossover": "none"
+      },
+      "roc1": -20.657276995305164,
+      "roc3": -9.13978494623656,
+      "momentum3": -17,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 210.56544066271752
+      },
+      "changePoints": [34],
+      "hurst": {
+        "value": 0.5797427201460481,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 204,
+        "resistance1": 239,
+        "resistance2": 309,
+        "support1": 134,
+        "support2": 99
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "analyzeCur:long": {
+    "category": "cat",
+    "monthsOfData": 70,
+    "currentMonthSpent": 1234,
+    "forecasts": {
+      "sma3": 213,
+      "wma3": 198.33333333333334,
+      "kama": 173.81865877630977,
+      "median": 221.5,
+      "holt": {
+        "forecast": 210.8800001388341,
+        "level": 211.51759212042822,
+        "trend": -0.6375919815941129
+      },
+      "theta": {
+        "forecast": 209.28090707712363
+      },
+      "quantiles": {
+        "p50": 188.5,
+        "p75": 217.75,
+        "p90": 241.3,
+        "p95": 252.64999999999998
+      },
+      "croston": null,
+      "holtWinters": {
+        "forecast": 203.06043198184977,
+        "level": 206.87062586519443,
+        "trend": -0.7303038154732455,
+        "seasonal": [
+          4.470190865100692, -11.105692296688959, -3.0798900678714043, 10.728264791147609
+        ]
+      },
+      "ensemble": 206.91093450622822
+    },
+    "volatility": {
+      "bollingerBands": {
+        "upper": 295.3354025293197,
+        "middle": 221.5,
+        "lower": 147.66459747068032,
+        "bandwidth": 0.6666853501518708,
+        "percentB": 0.14447948950266432
+      },
+      "atr": 53,
+      "keltner": {
+        "upper": 288.25978031656024,
+        "middle": 208.75978031656024,
+        "lower": 129.25978031656024
+      },
+      "donchian": {
+        "upper": 274,
+        "lower": 169,
+        "middle": 221.5,
+        "isBreakoutHigh": false,
+        "isBreakoutLow": true
+      },
+      "historicalVol": 0.24270279856973728,
+      "maEnvelopes": {
+        "upper": 250.51173637987227,
+        "middle": 208.75978031656024,
+        "lower": 167.0078242532482
+      },
+      "percentiles": {
+        "p10": 136.6,
+        "p25": 160.75,
+        "p50": 188.5,
+        "p75": 217.75,
+        "p90": 241.3
+      }
+    },
+    "anomaly": {
+      "zScore": {
+        "zScore": 26.38371837868479,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "modifiedZScore": {
+        "zScore": 24.316887931034483,
+        "isAnomaly": true,
+        "direction": "high"
+      },
+      "iqr": {
+        "q1": 160,
+        "q3": 218,
+        "iqr": 58,
+        "lowerBound": 73,
+        "upperBound": 305,
+        "isOutlier": true
+      },
+      "isAnomaly": true,
+      "anomalyCount": 3
+    },
+    "trend": {
+      "regression": {
+        "slope": 1.0422535211267605,
+        "intercept": 152.7565392354125,
+        "r2": 0.2825367275422871,
+        "forecast": 225.71428571428572,
+        "monthlyChange": 1.0422535211267605
+      },
+      "cusum": {
+        "values": [
+          0, 0, 0, 9.285714285714278, 0, 0, 0, 0, 19.285714285714278, 0, 0, 2.2857142857142776, 0,
+          29.285714285714278, 14.571428571428555, 0, 12.285714285714278, 0, 39.28571428571428,
+          34.571428571428555, 0, 22.285714285714278, 0.5714285714285552, 0, 5.285714285714278, 0,
+          32.28571428571428, 20.571428571428555, 0, 15.285714285714278, 0, 42.28571428571428,
+          40.571428571428555, 0, 25.285714285714278, 6.571428571428555, 58.85714285714283,
+          67.14285714285711, 31.428571428571388, 66.71428571428567, 57.99999999999994,
+          120.28571428571422, 138.5714285714285, 112.85714285714278, 158.14285714285705,
+          159.42857142857133, 116.71428571428561, 144.9999999999999, 129.28571428571416,
+          184.57142857142844, 195.85714285714272, 163.142857142857, 201.42857142857127,
+          195.71428571428555, 260.99999999999983, 282.2857142857141, 259.5714285714284,
+          307.85714285714266, 312.14285714285694, 387.42857142857116, 418.7142857142854,
+          405.9999999999996, 464.2857142857138, 478.57142857142804, 563.8571428571422,
+          605.1428571428564, 602.4285714285706, 670.7142857142849, 694.9999999999991,
+          675.2857142857133
+        ],
+        "shiftDetected": true,
+        "shiftIndex": 45
+      },
+      "rsi": {
+        "value": 44.65408805031447,
+        "signal": "neutral"
+      },
+      "macd": {
+        "macd": -12.453328482542986,
+        "signal": -5.924379015379985,
+        "histogram": -6.528949467163001,
+        "crossover": "none"
+      },
+      "roc1": -20.657276995305164,
+      "roc3": -9.13978494623656,
+      "momentum3": -17,
+      "ewmaControl": {
+        "outOfControl": false,
+        "value": 210.56544066271752
+      },
+      "changePoints": [34],
+      "hurst": {
+        "value": 0.5797427201460481,
+        "type": "random_walk"
+      },
+      "pivotPoints": {
+        "pivot": 204,
+        "resistance1": 239,
+        "resistance2": 309,
+        "support1": 134,
+        "support2": 99
+      },
+      "direction": "stable",
+      "confidence": 0.5
+    }
+  },
+  "dixon:long": {
+    "outlier": 274,
+    "qRatio": 0.05747126436781609,
+    "isSignificant": false
+  },
+  "grubbs:long": {
+    "outlier": 100,
+    "statistic": 2.2392085708846876,
+    "isSignificant": true
+  },
+  "croston:long": {
+    "forecast": 176.79301387043873,
+    "expectedAmount": 207.99178102404557,
+    "expectedInterval": 1
+  },
+  "crostonTSB:long": {
+    "forecast": 207.99178102404557,
+    "expectedAmount": 207.99178102404557,
+    "expectedInterval": 1
+  },
+  "kama:long": {
+    "value": 173.81865877630977,
+    "series": [
+      100, 171, 127, 198, 154, 110, 181, 137, 208, 164, 163.67083865056438, 163.8752864603081,
+      163.74904345886748, 164.15489159666865, 164.22854225956365, 163.97248059685066,
+      164.24948123896417, 164.19524830652495, 164.67256781033922, 164.81715516626363,
+      164.63149952345273, 164.97837948227468, 164.99350310358517, 163.71752589968298,
+      163.9440672642082, 163.83975253699666, 164.26736490492837, 164.3626169810594,
+      163.40966041956855, 163.71331430480365, 163.68553522417983, 164.18911068013767,
+      164.3597575690093, 164.19996650934948, 164.57251755993406, 164.6131202291161,
+      165.18456587512884, 165.42257522125206, 165.32964268435904, 165.7685520931292,
+      165.87501669761664, 166.5118315697643, 166.81472111877957, 166.78618341988917,
+      167.28900593275796, 167.45890551126246, 166.806874310495, 167.1823660601393,
+      167.22588742918853, 167.80022994045058, 168.0411144805487, 167.675243894595,
+      168.1190488212903, 168.23037232062825, 168.87200973852669, 169.17968575611852,
+      169.15589871852157, 169.66343635327289, 169.83801578011713, 170.54243591173875,
+      170.91242496935445, 170.95048481168268, 171.5194066535761, 171.75491107600664,
+      172.51980042699267, 172.94980633738538, 173.04743405003043, 173.67547813859122,
+      173.9696625177233, 173.81865877630977
+    ],
+    "efficiencyRatio": 0.18234165067178504
+  },
+  "kama3:long": {
+    "value": 225.32976135307138,
+    "series": [
+      100, 171, 127, 137.3485783562028, 137.62523236326157, 137.16625466197485, 137.8945276918441,
+      137.87966561726168, 148.10002864152798, 148.36419772465726, 147.8929425294315,
+      148.60914204901957, 148.58240705874, 158.70034226791773, 158.95453747771745,
+      158.4734741194589, 159.18002843312755, 159.14380848660116, 169.17991684133517,
+      169.42614418927553, 168.9372453507019, 169.63609436615477, 169.59229714060956,
+      168.81819232375, 169.236573897867, 168.91696903980915, 176.5083116724862, 176.51648079755796,
+      175.793478939622, 176.26211442573668, 175.99192853918782, 184.00960935236836,
+      184.05929301139975, 183.37711594678643, 183.88589794523963, 183.65519155930227,
+      192.013462594091, 192.0963111090229, 191.44674788487882, 191.98760186318148,
+      191.78843459918335, 200.41879409416612, 200.52813712949825, 199.90462823419654,
+      200.47110366331896, 200.29713216414285, 199.3950158460082, 199.68751275795938,
+      199.2441147406092, 205.76749200128566, 205.67166836490387, 204.8464015267679,
+      205.2144711078222, 204.84539016217454, 212.00990187309446, 211.97650848369616,
+      211.21263464909632, 211.64107722345594, 211.33136620777924, 219.0080631614827,
+      219.02454363426128, 218.30971503566366, 218.78638798700885, 218.52410602772537,
+      226.6099741355068, 226.66629750894046, 225.9906498436083, 226.50585275904527,
+      226.28146061016665, 225.32976135307138
+    ],
+    "efficiencyRatio": 0.1069182389937107
+  },
+  "loess:long": [
+    {
+      "x": 0,
+      "y": 146.37898037321887
+    },
+    {
+      "x": 1,
+      "y": 148.15691963436632
+    },
+    {
+      "x": 2,
+      "y": 149.90468362880597
+    },
+    {
+      "x": 3,
+      "y": 151.6241868203379
+    },
+    {
+      "x": 4,
+      "y": 153.31797693260432
+    },
+    {
+      "x": 5,
+      "y": 154.9852518200123
+    },
+    {
+      "x": 6,
+      "y": 156.6248251446923
+    },
+    {
+      "x": 7,
+      "y": 158.23849514167424
+    },
+    {
+      "x": 8,
+      "y": 159.8276487664751
+    },
+    {
+      "x": 9,
+      "y": 161.39406021174582
+    },
+    {
+      "x": 10,
+      "y": 162.93603072922986
+    },
+    {
+      "x": 11,
+      "y": 164.45056720766277
+    },
+    {
+      "x": 12,
+      "y": 165.93699331693625
+    },
+    {
+      "x": 13,
+      "y": 167.39335709877898
+    },
+    {
+      "x": 14,
+      "y": 168.81605318905673
+    },
+    {
+      "x": 15,
+      "y": 170.18743166901243
+    },
+    {
+      "x": 16,
+      "y": 171.4612485759037
+    },
+    {
+      "x": 17,
+      "y": 172.57652607246033
+    },
+    {
+      "x": 18,
+      "y": 173.42283713324355
+    },
+    {
+      "x": 19,
+      "y": 174.26558003600064
+    },
+    {
+      "x": 20,
+      "y": 175.09293741945672
+    },
+    {
+      "x": 21,
+      "y": 175.90706258054328
+    },
+    {
+      "x": 22,
+      "y": 176.7344199639993
+    },
+    {
+      "x": 23,
+      "y": 177.5771628667564
+    },
+    {
+      "x": 24,
+      "y": 178.4234739275397
+    },
+    {
+      "x": 25,
+      "y": 179.27576776986334
+    },
+    {
+      "x": 26,
+      "y": 180.15721969476834
+    },
+    {
+      "x": 27,
+      "y": 181.11419232880263
+    },
+    {
+      "x": 28,
+      "y": 182.16634710479775
+    },
+    {
+      "x": 29,
+      "y": 183.31528946157357
+    },
+    {
+      "x": 30,
+      "y": 184.5438085133083
+    },
+    {
+      "x": 31,
+      "y": 185.77549199453767
+    },
+    {
+      "x": 32,
+      "y": 187
+    },
+    {
+      "x": 33,
+      "y": 188.2245080054624
+    },
+    {
+      "x": 34,
+      "y": 189.4561914866917
+    },
+    {
+      "x": 35,
+      "y": 190.6847105384264
+    },
+    {
+      "x": 36,
+      "y": 191.8336528952022
+    },
+    {
+      "x": 37,
+      "y": 192.88580767119737
+    },
+    {
+      "x": 38,
+      "y": 193.84278030523163
+    },
+    {
+      "x": 39,
+      "y": 194.72423223013664
+    },
+    {
+      "x": 40,
+      "y": 195.57652607246035
+    },
+    {
+      "x": 41,
+      "y": 196.42283713324355
+    },
+    {
+      "x": 42,
+      "y": 197.2655800360007
+    },
+    {
+      "x": 43,
+      "y": 198.0929374194567
+    },
+    {
+      "x": 44,
+      "y": 198.90706258054323
+    },
+    {
+      "x": 45,
+      "y": 199.73441996399933
+    },
+    {
+      "x": 46,
+      "y": 200.57716286675645
+    },
+    {
+      "x": 47,
+      "y": 201.42347392753965
+    },
+    {
+      "x": 48,
+      "y": 202.27576776986342
+    },
+    {
+      "x": 49,
+      "y": 203.1572196947684
+    },
+    {
+      "x": 50,
+      "y": 204.11419232880263
+    },
+    {
+      "x": 51,
+      "y": 205.16634710479775
+    },
+    {
+      "x": 52,
+      "y": 206.3152894615735
+    },
+    {
+      "x": 53,
+      "y": 207.79098811433357
+    },
+    {
+      "x": 54,
+      "y": 208.9923256225394
+    },
+    {
+      "x": 55,
+      "y": 210.01881598741136
+    },
+    {
+      "x": 56,
+      "y": 210.95758839568248
+    },
+    {
+      "x": 57,
+      "y": 211.8536721475568
+    },
+    {
+      "x": 58,
+      "y": 212.73359121945106
+    },
+    {
+      "x": 59,
+      "y": 213.61133645674397
+    },
+    {
+      "x": 60,
+      "y": 214.49479452729173
+    },
+    {
+      "x": 61,
+      "y": 215.38489373557454
+    },
+    {
+      "x": 62,
+      "y": 216.28059062327742
+    },
+    {
+      "x": 63,
+      "y": 217.18190062945467
+    },
+    {
+      "x": 64,
+      "y": 218.0866234945317
+    },
+    {
+      "x": 65,
+      "y": 218.99154740108946
+    },
+    {
+      "x": 66,
+      "y": 219.88931551192258
+    },
+    {
+      "x": 67,
+      "y": 220.77193407553608
+    },
+    {
+      "x": 68,
+      "y": 221.6337665466045
+    },
+    {
+      "x": 69,
+      "y": 222.46747383801
+    }
+  ],
+  "loess.2:long": [
+    {
+      "x": 0,
+      "y": 136.23929818525707
+    },
+    {
+      "x": 1,
+      "y": 140.2320303064869
+    },
+    {
+      "x": 2,
+      "y": 144.1104905920394
+    },
+    {
+      "x": 3,
+      "y": 147.97002756102782
+    },
+    {
+      "x": 4,
+      "y": 151.89005324936733
+    },
+    {
+      "x": 5,
+      "y": 155.68396194769616
+    },
+    {
+      "x": 6,
+      "y": 158.56713496987615
+    },
+    {
+      "x": 7,
+      "y": 159.43286503012376
+    },
+    {
+      "x": 8,
+      "y": 161.24346195041608
+    },
+    {
+      "x": 9,
+      "y": 163.9999999998439
+    },
+    {
+      "x": 10,
+      "y": 166.7565380502859
+    },
+    {
+      "x": 11,
+      "y": 168.5671349693302
+    },
+    {
+      "x": 12,
+      "y": 169.43286503012376
+    },
+    {
+      "x": 13,
+      "y": 171.2434619504161
+    },
+    {
+      "x": 14,
+      "y": 173.9999999998439
+    },
+    {
+      "x": 15,
+      "y": 176.7565380502859
+    },
+    {
+      "x": 16,
+      "y": 178.56713496933014
+    },
+    {
+      "x": 17,
+      "y": 178.71081215868904
+    },
+    {
+      "x": 18,
+      "y": 177.5967766072815
+    },
+    {
+      "x": 19,
+      "y": 176.3590136466567
+    },
+    {
+      "x": 20,
+      "y": 175.6566726321152
+    },
+    {
+      "x": 21,
+      "y": 175.3433273679463
+    },
+    {
+      "x": 22,
+      "y": 174.64098635244324
+    },
+    {
+      "x": 23,
+      "y": 173.40322339306982
+    },
+    {
+      "x": 24,
+      "y": 172.2891878406815
+    },
+    {
+      "x": 25,
+      "y": 172.4328650312401
+    },
+    {
+      "x": 26,
+      "y": 174.24346195041613
+    },
+    {
+      "x": 27,
+      "y": 176.9999999998439
+    },
+    {
+      "x": 28,
+      "y": 179.7565380502859
+    },
+    {
+      "x": 29,
+      "y": 181.56713496933006
+    },
+    {
+      "x": 30,
+      "y": 182.43286503012382
+    },
+    {
+      "x": 31,
+      "y": 184.2434619504162
+    },
+    {
+      "x": 32,
+      "y": 186.99999999984396
+    },
+    {
+      "x": 33,
+      "y": 189.75653805028594
+    },
+    {
+      "x": 34,
+      "y": 191.56713496933008
+    },
+    {
+      "x": 35,
+      "y": 192.43286503012382
+    },
+    {
+      "x": 36,
+      "y": 194.24346195041613
+    },
+    {
+      "x": 37,
+      "y": 196.99999999984396
+    },
+    {
+      "x": 38,
+      "y": 199.7565380502859
+    },
+    {
+      "x": 39,
+      "y": 201.56713496933014
+    },
+    {
+      "x": 40,
+      "y": 201.71081215868904
+    },
+    {
+      "x": 41,
+      "y": 200.5967766072815
+    },
+    {
+      "x": 42,
+      "y": 199.35901364665676
+    },
+    {
+      "x": 43,
+      "y": 198.65667263211515
+    },
+    {
+      "x": 44,
+      "y": 198.3433273679463
+    },
+    {
+      "x": 45,
+      "y": 197.6409863524433
+    },
+    {
+      "x": 46,
+      "y": 196.4032233930698
+    },
+    {
+      "x": 47,
+      "y": 195.2891878406815
+    },
+    {
+      "x": 48,
+      "y": 195.43286503124006
+    },
+    {
+      "x": 49,
+      "y": 197.24346195041613
+    },
+    {
+      "x": 50,
+      "y": 199.99999999984394
+    },
+    {
+      "x": 51,
+      "y": 202.75653805028597
+    },
+    {
+      "x": 52,
+      "y": 204.56713496933017
+    },
+    {
+      "x": 53,
+      "y": 205.4328650301237
+    },
+    {
+      "x": 54,
+      "y": 207.24346195041608
+    },
+    {
+      "x": 55,
+      "y": 209.9999999998439
+    },
+    {
+      "x": 56,
+      "y": 212.75653805028594
+    },
+    {
+      "x": 57,
+      "y": 214.56713496933014
+    },
+    {
+      "x": 58,
+      "y": 215.43286503012376
+    },
+    {
+      "x": 59,
+      "y": 217.24346195041608
+    },
+    {
+      "x": 60,
+      "y": 219.9999999998439
+    },
+    {
+      "x": 61,
+      "y": 222.75653805028594
+    },
+    {
+      "x": 62,
+      "y": 224.56713496933014
+    },
+    {
+      "x": 63,
+      "y": 224.710812158689
+    },
+    {
+      "x": 64,
+      "y": 222.29009680345496
+    },
+    {
+      "x": 65,
+      "y": 219.44042566872355
+    },
+    {
+      "x": 66,
+      "y": 216.45183324075182
+    },
+    {
+      "x": 67,
+      "y": 213.27482713283766
+    },
+    {
+      "x": 68,
+      "y": 209.88583637762702
+    },
+    {
+      "x": 69,
+      "y": 206.14311586560956
+    }
+  ],
+  "hurst:long": {
+    "value": 0.5797427201460481,
+    "type": "random_walk"
+  },
+  "stl:long": {
+    "trend": [
+      100, 171, 127, 198, 154, 110, 154.46153846153845, 163.53846153846155, 163.76923076923077, 164,
+      164.23076923076923, 164.46153846153845, 173.53846153846155, 173.76923076923077, 174,
+      174.23076923076923, 174.46153846153845, 174.69230769230768, 174.92307692307693,
+      175.15384615384616, 175.3846153846154, 175.6153846153846, 175.84615384615384,
+      176.07692307692307, 176.30769230769232, 176.53846153846155, 176.76923076923077, 177,
+      177.23076923076923, 177.46153846153845, 186.53846153846155, 186.76923076923077, 187,
+      187.23076923076923, 187.46153846153845, 196.53846153846155, 196.76923076923077, 197,
+      197.23076923076923, 197.46153846153845, 197.69230769230768, 197.92307692307693,
+      198.15384615384616, 198.3846153846154, 198.6153846153846, 198.84615384615384,
+      199.07692307692307, 199.30769230769232, 199.53846153846155, 199.76923076923077, 200,
+      200.23076923076923, 200.46153846153845, 209.53846153846155, 209.76923076923077, 210,
+      210.23076923076923, 210.46153846153845, 219.53846153846155, 219.76923076923077, 220,
+      220.23076923076923, 220.46153846153845, 220.69230769230768, 274, 230, 186, 257, 213, 169
+    ],
+    "seasonal": [
+      1.6217948717948656, 3.0961538461538436, 4.570512820512821, -13.121794871794867,
+      -1.3269230769230713, 6.044871794871795, 17.839743589743588, -1.3269230769230809,
+      0.1474358974358971, 1.6217948717948751, -21.08333333333333, 1.916666666666665,
+      1.6217948717948656, 3.0961538461538436, 4.570512820512821, -13.121794871794867,
+      -1.3269230769230713, 6.044871794871795, 17.839743589743588, -1.3269230769230809,
+      0.1474358974358971, 1.6217948717948751, -21.08333333333333, 1.916666666666665,
+      1.6217948717948656, 3.0961538461538436, 4.570512820512821, -13.121794871794867,
+      -1.3269230769230713, 6.044871794871795, 17.839743589743588, -1.3269230769230809,
+      0.1474358974358971, 1.6217948717948751, -21.08333333333333, 1.916666666666665,
+      1.6217948717948656, 3.0961538461538436, 4.570512820512821, -13.121794871794867,
+      -1.3269230769230713, 6.044871794871795, 17.839743589743588, -1.3269230769230809,
+      0.1474358974358971, 1.6217948717948751, -21.08333333333333, 1.916666666666665,
+      1.6217948717948656, 3.0961538461538436, 4.570512820512821, -13.121794871794867,
+      -1.3269230769230713, 6.044871794871795, 17.839743589743588, -1.3269230769230809,
+      0.1474358974358971, 1.6217948717948751, -21.08333333333333, 1.916666666666665,
+      1.6217948717948656, 3.0961538461538436, 4.570512820512821, -13.121794871794867,
+      -1.3269230769230713, 6.044871794871795, 17.839743589743588, -1.3269230769230809,
+      0.1474358974358971, 1.6217948717948751
+    ],
+    "residual": [
+      -1.6217948717948656, -3.0961538461538436, -4.570512820512821, 13.121794871794867,
+      1.3269230769230713, -6.044871794871795, 8.69871794871796, -25.211538461538467,
+      44.08333333333333, -1.6217948717948751, -23.147435897435898, 24.621794871794883,
+      -28.160256410256412, 41.13461538461538, -4.570512820512821, -31.108974358974358,
+      27.86538461538462, -23.737179487179475, 35.237179487179475, 10.17307692307692,
+      -35.532051282051285, 33.76282051282051, 12.237179487179489, -54.99358974358973,
+      16.070512820512814, -29.63461538461539, 39.66025641025641, 13.121794871794867,
+      -42.90384615384615, 20.49358974358975, -44.37820512820514, 45.55769230769231,
+      -0.1474358974358971, -45.8525641025641, 47.621794871794876, -28.45512820512821,
+      42.60897435897436, -3.0961538461538436, -48.801282051282044, 39.660256410256416,
+      -16.365384615384606, 47.03205128205127, -8.993589743589748, -34.05769230769231,
+      35.23717948717949, -10.467948717948715, -31.993589743589737, 15.775641025641015,
+      -28.160256410256412, 41.13461538461538, -4.570512820512821, -31.108974358974358,
+      27.86538461538462, -32.58333333333334, 26.39102564102564, 1.3269230769230809,
+      -44.378205128205124, 24.91666666666667, -5.455128205128219, 42.31410256410256,
+      -1.6217948717948656, -47.32692307692307, 21.967948717948726, -4.570512820512812,
+      1.3269230769230713, -6.044871794871795, -17.839743589743588, 1.3269230769230809,
+      -0.1474358974358971, -1.6217948717948751
+    ]
+  },
+  "stl4:long": {
+    "trend": [
+      100, 171, 150, 152, 154, 156, 158, 160, 162, 164, 166, 168, 170, 172, 174, 176, 178, 180, 182,
+      184, 186, 165, 167, 169, 171, 173, 175, 177, 179, 181, 183, 185, 187, 189, 191, 193, 195, 197,
+      199, 201, 203, 205, 207, 209, 188, 190, 192, 194, 196, 198, 200, 202, 204, 206, 208, 210, 212,
+      214, 216, 218, 220, 222, 224, 226, 228, 230, 232, 211, 213, 169
+    ],
+    "seasonal": [
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386, -2.9877450980392157, -0.2818627450980391,
+      2.2736928104575163, 0.9959150326797386
+    ],
+    "residual": [
+      -2.2736928104575163, -0.9959150326797386, -20.012254901960784, 46.28186274509804,
+      -2.2736928104575163, -46.99591503267974, 25.987745098039216, -22.71813725490196,
+      43.72630718954248, -0.9959150326797386, -43.01225490196079, 23.28186274509804,
+      -25.273692810457515, 45.00408496732026, 2.9877450980392157, -45.71813725490196,
+      20.726307189542485, -23.99591503267974, 48.98774509803921, 0.2818627450980391,
+      -48.27369281045752, 45.00408496732026, 2.9877450980392157, -45.71813725490196,
+      20.726307189542485, -23.99591503267974, 48.98774509803921, 0.2818627450980391,
+      -48.27369281045752, 22.00408496732026, -20.012254901960784, 46.28186274509804,
+      -2.2736928104575163, -46.99591503267974, 25.987745098039216, -22.71813725490196,
+      43.72630718954248, -0.9959150326797386, -43.01225490196079, 23.28186274509804,
+      -25.273692810457515, 45.00408496732026, 2.9877450980392157, -45.71813725490196,
+      43.72630718954248, -0.9959150326797386, -43.01225490196079, 23.28186274509804,
+      -25.273692810457515, 45.00408496732026, 2.9877450980392157, -45.71813725490196,
+      20.726307189542485, -23.99591503267974, 48.98774509803921, 0.2818627450980391,
+      -48.27369281045752, 22.00408496732026, -20.012254901960784, 46.28186274509804,
+      -2.2736928104575163, -46.99591503267974, 25.987745098039216, -22.71813725490196,
+      43.72630718954248, -0.9959150326797386, -43.01225490196079, 46.28186274509804,
+      -2.2736928104575163, -0.9959150326797386
+    ]
+  },
+  "poly:long": {
+    "coefficients": [147.87810194500352, 1.4727038702804895, -0.006238410857300418],
+    "forecast": 220.39915966386576,
+    "r2": 0.28584062276605515
+  },
+  "poly1:long": {
+    "coefficients": [152.75653923541253, 1.042253521126759],
+    "forecast": 225.71428571428567,
+    "r2": 0.2825367275422873
+  },
+  "poly5:long": {
+    "coefficients": [147.87810194500352, 1.4727038702804895, -0.006238410857300418],
+    "forecast": 220.39915966386576,
+    "r2": 0.28584062276605515
+  },
+  "robust:long": {
+    "slope": 1.039415956642524,
+    "intercept": 152.76580066455637,
+    "forecast": 225.52491762953304
+  },
+  "robust3:long": {
+    "slope": 1.03948031977081,
+    "intercept": 152.76598768780835,
+    "forecast": 225.52961007176503
+  },
+  "sizedGrubbs:2": {
+    "outlier": 100,
+    "statistic": 0,
+    "isSignificant": false
+  },
+  "sizedDixon:2": {
+    "outlier": 100,
+    "qRatio": 0,
+    "isSignificant": false
+  },
+  "sizedDixonLow:2": {
+    "outlier": 900,
+    "qRatio": 0,
+    "isSignificant": false
+  },
+  "sizedGrubbs:3": {
+    "outlier": 400,
+    "statistic": 1.412188810363897,
+    "isSignificant": true
+  },
+  "sizedDixon:3": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": false
+  },
+  "sizedDixonLow:3": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": false
+  },
+  "sizedGrubbs:4": {
+    "outlier": 400,
+    "statistic": 1.7294850195457456,
+    "isSignificant": true
+  },
+  "sizedDixon:4": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:4": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:5": {
+    "outlier": 400,
+    "statistic": 1.997206067861474,
+    "isSignificant": true
+  },
+  "sizedDixon:5": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:5": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:6": {
+    "outlier": 400,
+    "statistic": 2.233013566441567,
+    "isSignificant": true
+  },
+  "sizedDixon:6": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:6": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:7": {
+    "outlier": 400,
+    "statistic": 2.4459295944500488,
+    "isSignificant": true
+  },
+  "sizedDixon:7": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:7": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:8": {
+    "outlier": 400,
+    "statistic": 2.6412636558700333,
+    "isSignificant": true
+  },
+  "sizedDixon:8": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:8": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:9": {
+    "outlier": 400,
+    "statistic": 2.8224267169687107,
+    "isSignificant": true
+  },
+  "sizedDixon:9": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:9": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:10": {
+    "outlier": 400,
+    "statistic": 2.991884820361393,
+    "isSignificant": true
+  },
+  "sizedDixon:10": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:10": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:11": {
+    "outlier": 400,
+    "statistic": 3.153111190142887,
+    "isSignificant": true
+  },
+  "sizedDixon:11": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:11": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:12": {
+    "outlier": 400,
+    "statistic": 3.3069642218748654,
+    "isSignificant": true
+  },
+  "sizedDixon:12": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:12": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:13": {
+    "outlier": 400,
+    "statistic": 3.4540723846261328,
+    "isSignificant": true
+  },
+  "sizedDixon:13": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:13": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:14": {
+    "outlier": 400,
+    "statistic": 3.5948985802075053,
+    "isSignificant": true
+  },
+  "sizedDixon:14": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:14": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:15": {
+    "outlier": 400,
+    "statistic": 3.7297841051333065,
+    "isSignificant": true
+  },
+  "sizedDixon:15": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:15": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:16": {
+    "outlier": 400,
+    "statistic": 3.85897982349124,
+    "isSignificant": true
+  },
+  "sizedDixon:16": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:16": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:17": {
+    "outlier": 400,
+    "statistic": 3.983391297190364,
+    "isSignificant": true
+  },
+  "sizedDixon:17": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:17": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:18": {
+    "outlier": 400,
+    "statistic": 4.105139050028962,
+    "isSignificant": true
+  },
+  "sizedDixon:18": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:18": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:19": {
+    "outlier": 400,
+    "statistic": 4.224018080524382,
+    "isSignificant": true
+  },
+  "sizedDixon:19": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:19": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:20": {
+    "outlier": 400,
+    "statistic": 4.339815766835692,
+    "isSignificant": true
+  },
+  "sizedDixon:20": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:20": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:21": {
+    "outlier": 400,
+    "statistic": 4.452314532144016,
+    "isSignificant": true
+  },
+  "sizedDixon:21": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:21": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:22": {
+    "outlier": 400,
+    "statistic": 4.561295017365438,
+    "isSignificant": true
+  },
+  "sizedDixon:22": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:22": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:23": {
+    "outlier": 400,
+    "statistic": 4.666539561974932,
+    "isSignificant": true
+  },
+  "sizedDixon:23": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:23": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:24": {
+    "outlier": 400,
+    "statistic": 4.768934238748003,
+    "isSignificant": true
+  },
+  "sizedDixon:24": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:24": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:25": {
+    "outlier": 400,
+    "statistic": 4.870480632539201,
+    "isSignificant": true
+  },
+  "sizedDixon:25": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:25": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:26": {
+    "outlier": 400,
+    "statistic": 4.970718247518755,
+    "isSignificant": true
+  },
+  "sizedDixon:26": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:26": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:27": {
+    "outlier": 400,
+    "statistic": 5.069200634132353,
+    "isSignificant": true
+  },
+  "sizedDixon:27": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:27": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:28": {
+    "outlier": 400,
+    "statistic": 5.165494902373053,
+    "isSignificant": true
+  },
+  "sizedDixon:28": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:28": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:29": {
+    "outlier": 400,
+    "statistic": 5.259182695502402,
+    "isSignificant": true
+  },
+  "sizedDixon:29": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:29": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:30": {
+    "outlier": 400,
+    "statistic": 5.34986225887125,
+    "isSignificant": true
+  },
+  "sizedDixon:30": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:30": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:31": {
+    "outlier": 400,
+    "statistic": 5.438539848419809,
+    "isSignificant": true
+  },
+  "sizedDixon:31": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:31": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedGrubbs:32": {
+    "outlier": 400,
+    "statistic": 5.527269330377219,
+    "isSignificant": true
+  },
+  "sizedDixon:32": {
+    "outlier": 400,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "sizedDixonLow:32": {
+    "outlier": 600,
+    "qRatio": 0.94,
+    "isSignificant": true
+  },
+  "correlation": [
+    {
+      "category1": "a",
+      "category2": "b",
+      "correlation": 1,
+      "strength": "strong_positive"
+    },
+    {
+      "category1": "a",
+      "category2": "c",
+      "correlation": -1,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "b",
+      "category2": "c",
+      "correlation": -1,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "f",
+      "category2": "g",
+      "correlation": -0.9347684233387699,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "d",
+      "category2": "f",
+      "correlation": 0.8788707488040823,
+      "strength": "strong_positive"
+    },
+    {
+      "category1": "d",
+      "category2": "g",
+      "correlation": -0.7930544721608831,
+      "strength": "strong_negative"
+    }
+  ],
+  "correlationLow": [
+    {
+      "category1": "a",
+      "category2": "b",
+      "correlation": 1,
+      "strength": "strong_positive"
+    },
+    {
+      "category1": "a",
+      "category2": "c",
+      "correlation": -1,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "b",
+      "category2": "c",
+      "correlation": -1,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "f",
+      "category2": "g",
+      "correlation": -0.9347684233387699,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "d",
+      "category2": "f",
+      "correlation": 0.8788707488040823,
+      "strength": "strong_positive"
+    },
+    {
+      "category1": "d",
+      "category2": "g",
+      "correlation": -0.7930544721608831,
+      "strength": "strong_negative"
+    },
+    {
+      "category1": "a",
+      "category2": "g",
+      "correlation": 0.38000526791042305,
+      "strength": "weak"
+    },
+    {
+      "category1": "b",
+      "category2": "g",
+      "correlation": 0.38000526791042305,
+      "strength": "weak"
+    },
+    {
+      "category1": "c",
+      "category2": "g",
+      "correlation": -0.38000526791042305,
+      "strength": "weak"
+    },
+    {
+      "category1": "a",
+      "category2": "f",
+      "correlation": -0.282494169258455,
+      "strength": "weak"
+    },
+    {
+      "category1": "b",
+      "category2": "f",
+      "correlation": -0.282494169258455,
+      "strength": "weak"
+    },
+    {
+      "category1": "c",
+      "category2": "f",
+      "correlation": 0.282494169258455,
+      "strength": "weak"
+    },
+    {
+      "category1": "a",
+      "category2": "d",
+      "correlation": 0.08571428571428572,
+      "strength": "weak"
+    },
+    {
+      "category1": "b",
+      "category2": "d",
+      "correlation": 0.08571428571428572,
+      "strength": "weak"
+    },
+    {
+      "category1": "c",
+      "category2": "d",
+      "correlation": -0.08571428571428572,
+      "strength": "weak"
+    }
+  ]
+}

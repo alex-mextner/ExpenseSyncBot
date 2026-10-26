@@ -743,6 +743,22 @@ describe('edge cases', () => {
     expect(result?.type).toBe('velocity_spike');
   });
 
+  test('velocity_spike with an unparseable last-alert created_at is treated as in cooldown', () => {
+    mockAdviceLogs.getRecent.mockImplementation(() => [
+      { topic: 'velocity_spike', created_at: 'not-a-date' } as AdviceLog,
+    ]);
+    setSystemTime(new Date('2026-03-24T10:00:00Z'));
+    const snapshot = buildTriggerSnapshot({
+      velocity: {
+        period_1_daily_avg: 30,
+        period_2_daily_avg: 80,
+        acceleration: 167,
+        trend: 'accelerating',
+      },
+    });
+    expect(checkSmartTriggers(8099, snapshot)).toBeNull();
+  });
+
   test('projection-based alert (critical) suppressed in first 5 days', () => {
     setSystemTime(new Date('2026-03-24T10:00:00Z')); // Tuesday — no weekly_check
     const snapshot = buildNeutralSnapshot({

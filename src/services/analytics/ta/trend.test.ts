@@ -191,6 +191,14 @@ describe('robustRegression', () => {
     expect(result.slope).toBe(0);
     expect(result.forecast).toBe(42);
   });
+
+  test('a missing month counts as a zero observation (baseline behavior)', () => {
+    // Value recorded from the pre-refactor implementation (70ae8d4) for a sparse series.
+    const sparse = new Array<number>(3);
+    sparse[0] = 10;
+    sparse[2] = 30;
+    expect(robustRegression(sparse).forecast).toBe(33.333333333333336);
+  });
 });
 
 describe('ewmaControl', () => {

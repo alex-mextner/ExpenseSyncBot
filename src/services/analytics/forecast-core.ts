@@ -92,44 +92,50 @@ export function buildIntervalProfiles(
   const profiles = new Map<string, IntervalProfile>();
 
   for (const [category, txList] of byCategory) {
-    txList.sort((a, b) => a.date.localeCompare(b.date));
-
-    const intervals: number[] = [];
-    const amounts: number[] = [];
-    for (let i = 1; i < txList.length; i++) {
-      const curr = txList[i];
-      const prev = txList[i - 1];
-      if (!curr || !prev) continue;
-      const days = differenceInDays(parseISO(curr.date), parseISO(prev.date));
-      if (days > MAX_INTERVAL_DAYS) continue;
-      if (days <= 0) continue;
-      intervals.push(days);
-    }
-
-    if (intervals.length < MIN_INTERVALS) continue;
-
-    for (const tx of txList) {
-      amounts.push(tx.amount);
-    }
-
-    const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
-    const variance = intervals.reduce((s, v) => s + (v - avgInterval) ** 2, 0) / intervals.length;
-    const stddev = Math.sqrt(variance);
-    const intervalCv = avgInterval > 0 ? stddev / avgInterval : 999;
-
-    const avgAmount = amounts.reduce((s, v) => s + v, 0) / amounts.length;
-
-    profiles.set(category, {
-      avgInterval: Math.round(avgInterval * 100) / 100,
-      intervalCv: Math.round(intervalCv * 1000) / 1000,
-      avgAmount: Math.round(avgAmount * 100) / 100,
-      // Only for low-frequency categories (≥5 day intervals): refueling, salon, etc.
-      // High-frequency (daily groceries) should use monthly EMA, not interval-based.
-      isStable: intervalCv < INTERVAL_CV_THRESHOLD && avgInterval >= 5,
-    });
+    const profile = buildIntervalProfile(txList);
+    if (profile) profiles.set(category, profile);
   }
 
   return profiles;
+}
+
+/** Day gaps between consecutive (date-sorted) transactions, dropping same-day and outlier gaps. */
+function validIntervalDays(sortedTxList: { date: string }[]): number[] {
+  const intervals: number[] = [];
+  for (let i = 1; i < sortedTxList.length; i++) {
+    const curr = sortedTxList[i];
+    const prev = sortedTxList[i - 1];
+    if (!curr || !prev) continue;
+    const days = differenceInDays(parseISO(curr.date), parseISO(prev.date));
+    if (days > MAX_INTERVAL_DAYS) continue;
+    if (days <= 0) continue;
+    intervals.push(days);
+  }
+  return intervals;
+}
+
+/** Sorts the list in place by date; returns null when there are too few valid intervals. */
+function buildIntervalProfile(txList: { date: string; amount: number }[]): IntervalProfile | null {
+  txList.sort((a, b) => a.date.localeCompare(b.date));
+
+  const intervals = validIntervalDays(txList);
+  if (intervals.length < MIN_INTERVALS) return null;
+
+  const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
+  const variance = intervals.reduce((s, v) => s + (v - avgInterval) ** 2, 0) / intervals.length;
+  const stddev = Math.sqrt(variance);
+  const intervalCv = avgInterval > 0 ? stddev / avgInterval : 999;
+
+  const avgAmount = txList.reduce((s, tx) => s + tx.amount, 0) / txList.length;
+
+  return {
+    avgInterval: Math.round(avgInterval * 100) / 100,
+    intervalCv: Math.round(intervalCv * 1000) / 1000,
+    avgAmount: Math.round(avgAmount * 100) / 100,
+    // Only for low-frequency categories (≥5 day intervals): refueling, salon, etc.
+    // High-frequency (daily groceries) should use monthly EMA, not interval-based.
+    isStable: intervalCv < INTERVAL_CV_THRESHOLD && avgInterval >= 5,
+  };
 }
 
 /**
@@ -212,15 +218,13 @@ export function projectCategory(
   // The interval math itself handles the "no more fills this month" case by
   // falling back to currentSpent when expectedMoreFills = 0.
   if (intervalProfile?.isStable) {
-    const daysRemaining = daysInMonth - daysElapsed;
-    const daysSinceLast = daysSinceLastTx ?? 0;
-    const timeToNextFill = Math.max(0, intervalProfile.avgInterval - daysSinceLast);
-    const expectedMoreFills =
-      timeToNextFill <= daysRemaining
-        ? 1 + Math.floor((daysRemaining - timeToNextFill) / intervalProfile.avgInterval)
-        : 0;
-    const projected = currentSpent + expectedMoreFills * intervalProfile.avgAmount;
-    return Math.max(currentSpent, Math.round(projected * 100) / 100);
+    return projectFromIntervalCycle(
+      currentSpent,
+      daysElapsed,
+      daysInMonth,
+      daysSinceLastTx,
+      intervalProfile,
+    );
   }
 
   // Stall detection — only applies when we have no stable interval to fall back on.
@@ -232,34 +236,70 @@ export function projectCategory(
   if (!profile || profile.monthsOfData < 3) return currentSpent;
 
   const pattern = classifyDemandPattern(profile);
+  const paceBased = (currentSpent / daysElapsed) * daysInMonth;
 
   // Lumpy: unforecastable → only factual alerts
   if (pattern === 'lumpy') return currentSpent;
 
   if (pattern === 'intermittent') {
-    // TSB handles fading demand: if category stops being used, forecast decays to 0
-    let expectedTotal: number;
-    if (profile.monthlyTotals && profile.monthlyTotals.length > 0) {
-      expectedTotal = crostonTSB(profile.monthlyTotals).forecast;
-    } else {
-      const activityProb = 1 - profile.zeroMonthRatio;
-      expectedTotal = profile.ema * activityProb;
-    }
-    const paceBased = (currentSpent / daysElapsed) * daysInMonth;
-    const alpha = monthProgress * monthProgress;
-    const projected = alpha * paceBased + (1 - alpha) * Math.max(currentSpent, expectedTotal);
-    return Math.max(currentSpent, Math.round(projected * 100) / 100);
+    return projectIntermittent(currentSpent, monthProgress, paceBased, profile);
   }
 
   if (pattern === 'erratic') {
-    const paceBased = (currentSpent / daysElapsed) * daysInMonth;
     return Math.max(currentSpent, Math.round(paceBased * 100) / 100);
   }
 
-  // Smooth: standard EMA blend with CV-adjusted pace trust
+  return projectSmooth(currentSpent, monthProgress, paceBased, profile);
+}
+
+/** Stable cycle: current spend plus the fills still expected before month end. */
+function projectFromIntervalCycle(
+  currentSpent: number,
+  daysElapsed: number,
+  daysInMonth: number,
+  daysSinceLastTx: number | undefined,
+  intervalProfile: IntervalProfile,
+): number {
+  const daysRemaining = daysInMonth - daysElapsed;
+  const daysSinceLast = daysSinceLastTx ?? 0;
+  const timeToNextFill = Math.max(0, intervalProfile.avgInterval - daysSinceLast);
+  const expectedMoreFills =
+    timeToNextFill <= daysRemaining
+      ? 1 + Math.floor((daysRemaining - timeToNextFill) / intervalProfile.avgInterval)
+      : 0;
+  const projected = currentSpent + expectedMoreFills * intervalProfile.avgAmount;
+  return Math.max(currentSpent, Math.round(projected * 100) / 100);
+}
+
+/** Intermittent demand: blend pace with a TSB (fading demand) expectation, trust pace as month progresses. */
+function projectIntermittent(
+  currentSpent: number,
+  monthProgress: number,
+  paceBased: number,
+  profile: CategoryProfile,
+): number {
+  // TSB handles fading demand: if category stops being used, forecast decays to 0
+  let expectedTotal: number;
+  if (profile.monthlyTotals && profile.monthlyTotals.length > 0) {
+    expectedTotal = crostonTSB(profile.monthlyTotals).forecast;
+  } else {
+    const activityProb = 1 - profile.zeroMonthRatio;
+    expectedTotal = profile.ema * activityProb;
+  }
+  const alpha = monthProgress * monthProgress;
+  const projected = alpha * paceBased + (1 - alpha) * Math.max(currentSpent, expectedTotal);
+  return Math.max(currentSpent, Math.round(projected * 100) / 100);
+}
+
+/** Smooth: standard EMA blend with CV-adjusted pace trust */
+function projectSmooth(
+  currentSpent: number,
+  monthProgress: number,
+  paceBased: number,
+  profile: CategoryProfile,
+): number {
   const alpha = Math.min(1, monthProgress * monthProgress * (1 + profile.cv));
   const historyBased = Math.max(currentSpent, profile.ema);
-  const paceBased = (currentSpent / daysElapsed) * daysInMonth;
   const projected = alpha * paceBased + (1 - alpha) * historyBased;
   return Math.round(projected * 100) / 100;
 }

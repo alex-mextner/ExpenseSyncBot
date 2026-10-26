@@ -127,23 +127,37 @@ interface AnalyzeOptions {
   seasonalPeriod?: number;
 }
 
-/**
- * Run full TA analysis on a single category's monthly spending history.
- * @param category Category name
- * @param monthlyTotals Array of monthly spending totals (chronological, oldest first)
- * @param options Additional parameters
- */
-export function analyzeCategory(
-  category: string,
-  monthlyTotals: number[],
-  options: AnalyzeOptions = {},
-): CategoryTaAnalysis {
-  const data = monthlyTotals;
-  const n = data.length;
-  const currentSpent = options.currentMonthSpent ?? data[n - 1] ?? 0;
-  const seasonalPeriod = options.seasonalPeriod ?? 12;
+type Forecasts = CategoryTaAnalysis['forecasts'];
+type Volatility = CategoryTaAnalysis['volatility'];
+type Anomaly = CategoryTaAnalysis['anomaly'];
+type Trend = CategoryTaAnalysis['trend'];
 
-  // === Forecasting ===
+/**
+ * Croston/TSB for intermittent data (>30% zero months).
+ * TSB handles fading demand better — use it when the last observation is zero.
+ */
+function intermittentForecast(data: number[]): CrostonResult | null {
+  const n = data.length;
+  const zeroMonths = data.filter((v) => v === 0).length;
+  const isIntermittent = zeroMonths > n * 0.3;
+  if (!isIntermittent) return null;
+  const lastIsZero = (data[n - 1] ?? 0) === 0;
+  return lastIsZero ? crostonTSB(data) : croston(data);
+}
+
+/**
+ * Ensemble forecast: mean of the individual forecasts after trimming the top/bottom 20%
+ * so a single extreme method cannot dominate.
+ */
+function trimmedEnsemble(forecastValues: number[], fallback: number): number {
+  const sortedForecasts = [...forecastValues].sort((a, b) => a - b);
+  const trimCount = Math.floor(sortedForecasts.length * 0.2);
+  const trimmed = sortedForecasts.slice(trimCount, sortedForecasts.length - trimCount);
+  return trimmed.length > 0 ? trimmed.reduce((s, v) => s + v, 0) / trimmed.length : fallback;
+}
+
+function analyzeForecasts(data: number[], seasonalPeriod: number): Forecasts {
+  const n = data.length;
   const sma3 = sma(data, Math.min(3, n)).value;
   const wma3 = wma(data, Math.min(3, n)).value;
   const kamaResult = kama(data, Math.min(10, n));
@@ -151,13 +165,7 @@ export function analyzeCategory(
   const holtResult = holt(data);
   const thetaResult = theta(data);
   const quantiles = quantileForecast(data);
-
-  // Croston/TSB for intermittent data (>30% zero months)
-  // TSB handles fading demand better — use it when the last observation is zero
-  const zeroMonths = data.filter((v) => v === 0).length;
-  const isIntermittent = zeroMonths > n * 0.3;
-  const lastIsZero = (data[n - 1] ?? 0) === 0;
-  const crostonResult = isIntermittent ? (lastIsZero ? crostonTSB(data) : croston(data)) : null;
+  const crostonResult = intermittentForecast(data);
 
   // Holt-Winters only with enough seasonal data
   const hwResult = n >= seasonalPeriod * 2 ? holtWinters(data, seasonalPeriod) : null;
@@ -174,30 +182,93 @@ export function analyzeCategory(
   if (hwResult) forecastValues.push(hwResult.forecast);
   if (crostonResult) forecastValues.push(crostonResult.forecast);
 
-  // Remove extreme outliers from ensemble (trim top/bottom 20%)
-  const sortedForecasts = [...forecastValues].sort((a, b) => a - b);
-  const trimCount = Math.floor(sortedForecasts.length * 0.2);
-  const trimmed = sortedForecasts.slice(trimCount, sortedForecasts.length - trimCount);
-  const ensemble = trimmed.length > 0 ? trimmed.reduce((s, v) => s + v, 0) / trimmed.length : sma3;
+  return {
+    sma3,
+    wma3,
+    kama: kamaResult.value,
+    median: medianVal,
+    holt: holtResult,
+    theta: thetaResult,
+    quantiles,
+    croston: crostonResult,
+    holtWinters: hwResult,
+    ensemble: trimmedEnsemble(forecastValues, sma3),
+  };
+}
 
-  // === Volatility ===
-  const bb = bollingerBands(data, Math.min(6, n));
-  const atrVal = atr(data, Math.min(6, n));
-  const keltner = keltnerChannels(data, Math.min(6, n), Math.min(6, n));
-  const donchian = donchianChannels(data, Math.min(6, n));
-  const histVol = historicalVolatility(data, Math.min(6, n));
-  const envelopes = maEnvelopes(data, Math.min(6, n));
-  const pctBands = percentileBands(data);
+function analyzeVolatility(data: number[]): Volatility {
+  const window = Math.min(6, data.length);
+  return {
+    bollingerBands: bollingerBands(data, window),
+    atr: atr(data, window),
+    keltner: keltnerChannels(data, window, window),
+    donchian: donchianChannels(data, window),
+    historicalVol: historicalVolatility(data, window),
+    maEnvelopes: maEnvelopes(data, window),
+    percentiles: percentileBands(data),
+  };
+}
 
-  // === Anomaly (current month vs history) ===
+/** Anomaly detection: current month vs history; flagged when at least two methods agree. */
+function analyzeAnomaly(currentSpent: number, data: number[]): Anomaly {
   const zScoreResult = zScore(currentSpent, data);
   const modZScore = modifiedZScore(currentSpent, data);
   const iqrResult = iqrMethod(currentSpent, data);
   const anomalyCount = [zScoreResult.isAnomaly, modZScore.isAnomaly, iqrResult.isOutlier].filter(
     Boolean,
   ).length;
+  return {
+    zScore: zScoreResult,
+    modifiedZScore: modZScore,
+    iqr: iqrResult,
+    isAnomaly: anomalyCount >= 2,
+    anomalyCount,
+  };
+}
 
-  // === Trend ===
+type SignalVote = 'up' | 'down' | 'none';
+
+function vote(isUp: boolean, isDown: boolean): SignalVote {
+  if (isUp) return 'up';
+  if (isDown) return 'down';
+  return 'none';
+}
+
+interface TrendIndicators {
+  regression: LinearRegressionResult;
+  rsiResult: RsiResult;
+  macdResult: MacdResult;
+  roc1: number;
+  hurst: HurstResult;
+}
+
+/** Direction consensus: each indicator votes up/down; direction needs a margin of 2 votes. */
+function trendConsensus(indicators: TrendIndicators): {
+  direction: Trend['direction'];
+  confidence: number;
+} {
+  const { regression, rsiResult, macdResult, roc1, hurst } = indicators;
+  const isTrending = hurst.type === 'trending';
+  const votes: SignalVote[] = [
+    vote(regression.slope > 0, regression.slope < 0),
+    vote(rsiResult.signal === 'overbought', rsiResult.signal === 'oversold'),
+    vote(macdResult.crossover === 'bullish', macdResult.crossover === 'bearish'),
+    vote(roc1 > 10, roc1 < -10),
+    vote(isTrending && regression.slope > 0, isTrending && regression.slope < 0),
+  ];
+  const upSignals = votes.filter((v) => v === 'up').length;
+  const downSignals = votes.filter((v) => v === 'down').length;
+
+  const totalSignals = upSignals + downSignals;
+  let direction: Trend['direction'] = 'stable';
+  if (upSignals > downSignals + 1) direction = 'rising';
+  else if (downSignals > upSignals + 1) direction = 'falling';
+  const confidence = totalSignals > 0 ? Math.max(upSignals, downSignals) / totalSignals : 0;
+  return { direction, confidence };
+}
+
+function analyzeTrend(data: number[]): Trend {
+  const n = data.length;
   const regression = linearRegression(data);
   const cusumResult = cusum(data);
   const rsiResult = rsi(data, Math.min(6, n));
@@ -209,72 +280,54 @@ export function analyzeCategory(
   const cpResult = changePointDetection(data);
   const hurst = hurstExponent(data);
   const pivot = pivotPoints(data, Math.min(6, n));
+  const { direction, confidence } = trendConsensus({
+    regression,
+    rsiResult,
+    macdResult,
+    roc1,
+    hurst,
+  });
 
-  // Trend direction consensus
-  let upSignals = 0;
-  let downSignals = 0;
-  if (regression.slope > 0) upSignals++;
-  else if (regression.slope < 0) downSignals++;
-  if (rsiResult.signal === 'overbought') upSignals++;
-  else if (rsiResult.signal === 'oversold') downSignals++;
-  if (macdResult.crossover === 'bullish') upSignals++;
-  else if (macdResult.crossover === 'bearish') downSignals++;
-  if (roc1 > 10) upSignals++;
-  else if (roc1 < -10) downSignals++;
-  if (hurst.type === 'trending' && regression.slope > 0) upSignals++;
-  else if (hurst.type === 'trending' && regression.slope < 0) downSignals++;
+  return {
+    regression,
+    cusum: cusumResult,
+    rsi: rsiResult,
+    macd: macdResult,
+    roc1,
+    roc3,
+    momentum3: mom3,
+    ewmaControl: { outOfControl: ewma.outOfControl, value: ewma.value },
+    changePoints: cpResult.changePoints,
+    hurst,
+    pivotPoints: pivot,
+    direction,
+    confidence,
+  };
+}
 
-  const totalSignals = upSignals + downSignals;
-  const direction =
-    upSignals > downSignals + 1 ? 'rising' : downSignals > upSignals + 1 ? 'falling' : 'stable';
-  const confidence = totalSignals > 0 ? Math.max(upSignals, downSignals) / totalSignals : 0;
+/**
+ * Run full TA analysis on a single category's monthly spending history.
+ * @param category Category name
+ * @param monthlyTotals Array of monthly spending totals (chronological, oldest first)
+ * @param options Additional parameters
+ */
+export function analyzeCategory(
+  category: string,
+  monthlyTotals: number[],
+  options: AnalyzeOptions = {},
+): CategoryTaAnalysis {
+  const data = monthlyTotals;
+  const n = data.length;
+  const currentSpent = options.currentMonthSpent ?? data[n - 1] ?? 0;
+  const seasonalPeriod = options.seasonalPeriod ?? 12;
 
   return {
     category,
     monthsOfData: n,
     currentMonthSpent: currentSpent,
-    forecasts: {
-      sma3,
-      wma3,
-      kama: kamaResult.value,
-      median: medianVal,
-      holt: holtResult,
-      theta: thetaResult,
-      quantiles,
-      croston: crostonResult,
-      holtWinters: hwResult,
-      ensemble,
-    },
-    volatility: {
-      bollingerBands: bb,
-      atr: atrVal,
-      keltner,
-      donchian,
-      historicalVol: histVol,
-      maEnvelopes: envelopes,
-      percentiles: pctBands,
-    },
-    anomaly: {
-      zScore: zScoreResult,
-      modifiedZScore: modZScore,
-      iqr: iqrResult,
-      isAnomaly: anomalyCount >= 2,
-      anomalyCount,
-    },
-    trend: {
-      regression,
-      cusum: cusumResult,
-      rsi: rsiResult,
-      macd: macdResult,
-      roc1,
-      roc3,
-      momentum3: mom3,
-      ewmaControl: { outOfControl: ewma.outOfControl, value: ewma.value },
-      changePoints: cpResult.changePoints,
-      hurst,
-      pivotPoints: pivot,
-      direction,
-      confidence,
-    },
+    forecasts: analyzeForecasts(data, seasonalPeriod),
+    volatility: analyzeVolatility(data),
+    anomaly: analyzeAnomaly(currentSpent, data),
+    trend: analyzeTrend(data),
   };
 }

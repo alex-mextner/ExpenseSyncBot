@@ -9,6 +9,7 @@ import type {
   PivotPointResult,
   StlResult,
 } from './types';
+import { accumulateWeightedSums, solveWeightedLine } from './weighted-regression';
 
 /** Quantile from sorted array */
 function quantile(sorted: number[], q: number): number {
@@ -33,7 +34,24 @@ export function stlDecomposition(data: number[], seasonalPeriod = 12): StlResult
   }
 
   // Step 1: Extract trend using centered moving average
-  const halfWindow = Math.floor(seasonalPeriod / 2);
+  const trend = centeredMovingAverageTrend(data, Math.floor(seasonalPeriod / 2));
+
+  // Step 2: Detrend
+  const detrended = data.map((v, i) => v - (trend[i] ?? 0));
+
+  // Step 3: Average detrended values for each seasonal position, centered to mean 0
+  const centeredSeasonal = centeredSeasonalProfile(detrended, seasonalPeriod);
+
+  // Step 4: Build full seasonal and residual
+  const seasonal = Array.from({ length: n }, (_, i) => centeredSeasonal[i % seasonalPeriod] ?? 0);
+  const residual = data.map((v, i) => v - (trend[i] ?? 0) - (seasonal[i] ?? 0));
+
+  return { trend, seasonal, residual };
+}
+
+/** Centered moving average; the first/last `halfWindow` points keep their raw values. */
+function centeredMovingAverageTrend(data: number[], halfWindow: number): number[] {
+  const n = data.length;
   const trend: number[] = [];
   for (let i = 0; i < n; i++) {
     if (i < halfWindow || i >= n - halfWindow) {
@@ -44,14 +62,14 @@ export function stlDecomposition(data: number[], seasonalPeriod = 12): StlResult
       trend.push(sum / (2 * halfWindow + 1));
     }
   }
+  return trend;
+}
 
-  // Step 2: Detrend
-  const detrended = data.map((v, i) => v - (trend[i] ?? 0));
-
-  // Step 3: Average detrended values for each seasonal position
+/** Per-position mean of detrended values over one season, shifted so the profile sums to zero. */
+function centeredSeasonalProfile(detrended: number[], seasonalPeriod: number): number[] {
   const seasonalAvg: number[] = Array(seasonalPeriod).fill(0);
   const seasonalCount: number[] = Array(seasonalPeriod).fill(0);
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < detrended.length; i++) {
     const idx = i % seasonalPeriod;
     seasonalAvg[idx] = (seasonalAvg[idx] ?? 0) + (detrended[i] ?? 0);
     seasonalCount[idx] = (seasonalCount[idx] ?? 0) + 1;
@@ -63,13 +81,7 @@ export function stlDecomposition(data: number[], seasonalPeriod = 12): StlResult
 
   // Center seasonal component (mean = 0)
   const seasonalMean = seasonalAvg.reduce((s, v) => s + v, 0) / seasonalPeriod;
-  const centeredSeasonal = seasonalAvg.map((v) => v - seasonalMean);
-
-  // Step 4: Build full seasonal and residual
-  const seasonal = Array.from({ length: n }, (_, i) => centeredSeasonal[i % seasonalPeriod] ?? 0);
-  const residual = data.map((v, i) => v - (trend[i] ?? 0) - (seasonal[i] ?? 0));
-
-  return { trend, seasonal, residual };
+  return seasonalAvg.map((v) => v - seasonalMean);
 }
 
 /**
@@ -146,31 +158,38 @@ export function categoryCorrelation(
       const cat1 = categories[i];
       const cat2 = categories[j];
       if (!cat1 || !cat2) continue;
-      const data1 = allCategoryData.get(cat1) ?? [];
-      const data2 = allCategoryData.get(cat2) ?? [];
 
-      // Align lengths
-      const len = Math.min(data1.length, data2.length);
-      if (len < 3) continue;
+      const r = alignedCorrelation(
+        allCategoryData.get(cat1) ?? [],
+        allCategoryData.get(cat2) ?? [],
+      );
+      if (r === null || Math.abs(r) < minCorrelation) continue;
 
-      const x = data1.slice(-len);
-      const y = data2.slice(-len);
-
-      const r = pearsonCorrelation(x, y);
-      if (Math.abs(r) < minCorrelation) continue;
-
-      let strength: CorrelationResult['strength'];
-      if (r > 0.7) strength = 'strong_positive';
-      else if (r > 0.4) strength = 'moderate_positive';
-      else if (r > -0.4) strength = 'weak';
-      else if (r > -0.7) strength = 'moderate_negative';
-      else strength = 'strong_negative';
-
-      results.push({ category1: cat1, category2: cat2, correlation: r, strength });
+      results.push({
+        category1: cat1,
+        category2: cat2,
+        correlation: r,
+        strength: correlationStrength(r),
+      });
     }
   }
 
   return results.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
+}
+
+/** Pearson r over the overlapping most-recent months; null when fewer than 3 months overlap. */
+function alignedCorrelation(data1: number[], data2: number[]): number | null {
+  const len = Math.min(data1.length, data2.length);
+  if (len < 3) return null;
+  return pearsonCorrelation(data1.slice(-len), data2.slice(-len));
+}
+
+function correlationStrength(r: number): CorrelationResult['strength'] {
+  if (r > 0.7) return 'strong_positive';
+  if (r > 0.4) return 'moderate_positive';
+  if (r > -0.4) return 'weak';
+  if (r > -0.7) return 'moderate_negative';
+  return 'strong_negative';
 }
 
 function pearsonCorrelation(x: number[], y: number[]): number {
@@ -212,38 +231,52 @@ export function hurstExponent(data: number[]): HurstResult {
   const logN: number[] = [];
 
   for (const size of sizes) {
-    const rsValues: number[] = [];
-    const numBlocks = Math.floor(n / size);
-
-    for (let b = 0; b < numBlocks; b++) {
-      const block = data.slice(b * size, (b + 1) * size);
-      const mean = block.reduce((s, v) => s + v, 0) / block.length;
-
-      // Cumulative deviation from mean
-      const cumDev: number[] = [];
-      let cumSum = 0;
-      for (const v of block) {
-        cumSum += v - mean;
-        cumDev.push(cumSum);
-      }
-
-      const R = Math.max(...cumDev) - Math.min(...cumDev);
-      const S = Math.sqrt(block.reduce((s, v) => s + (v - mean) ** 2, 0) / block.length);
-      if (S > 0) rsValues.push(R / S);
-    }
-
-    if (rsValues.length > 0) {
-      const avgRS = rsValues.reduce((s, v) => s + v, 0) / rsValues.length;
-      if (avgRS > 0) {
-        logRS.push(Math.log(avgRS));
-        logN.push(Math.log(size));
-      }
+    const avgRS = averageRescaledRange(data, size);
+    if (avgRS !== null && avgRS > 0) {
+      logRS.push(Math.log(avgRS));
+      logN.push(Math.log(size));
     }
   }
 
   if (logN.length < 2) return { value: 0.5, type: 'random_walk' };
 
-  // Linear regression of log(R/S) vs log(n) → slope = Hurst exponent
+  const H = hurstFromLogRegression(logN, logRS);
+  return { value: H, type: classifyHurst(H) };
+}
+
+/** Rescaled range R/S of one block, or null when the block has no variation. */
+function rescaledRange(block: number[]): number | null {
+  const mean = block.reduce((s, v) => s + v, 0) / block.length;
+
+  // Cumulative deviation from mean
+  const cumDev: number[] = [];
+  let cumSum = 0;
+  for (const v of block) {
+    cumSum += v - mean;
+    cumDev.push(cumSum);
+  }
+
+  const R = Math.max(...cumDev) - Math.min(...cumDev);
+  const S = Math.sqrt(block.reduce((s, v) => s + (v - mean) ** 2, 0) / block.length);
+  return S > 0 ? R / S : null;
+}
+
+/** Mean R/S over all non-overlapping blocks of `size`; null when no block had variation. */
+function averageRescaledRange(data: number[], size: number): number | null {
+  const rsValues: number[] = [];
+  const numBlocks = Math.floor(data.length / size);
+
+  for (let b = 0; b < numBlocks; b++) {
+    const rs = rescaledRange(data.slice(b * size, (b + 1) * size));
+    if (rs !== null) rsValues.push(rs);
+  }
+
+  if (rsValues.length === 0) return null;
+  return rsValues.reduce((s, v) => s + v, 0) / rsValues.length;
+}
+
+/** Linear regression of log(R/S) vs log(n) → slope = Hurst exponent, clamped to [0, 1]. */
+function hurstFromLogRegression(logN: number[], logRS: number[]): number {
   const meanLogN = logN.reduce((s, v) => s + v, 0) / logN.length;
   const meanLogRS = logRS.reduce((s, v) => s + v, 0) / logRS.length;
 
@@ -256,10 +289,13 @@ export function hurstExponent(data: number[]): HurstResult {
     den += dx * dx;
   }
 
-  const H = den > 0 ? Math.max(0, Math.min(1, num / den)) : 0.5;
+  return den > 0 ? Math.max(0, Math.min(1, num / den)) : 0.5;
+}
 
-  const type = H > 0.6 ? 'trending' : H < 0.4 ? 'mean_reverting' : 'random_walk';
-  return { value: H, type };
+function classifyHurst(H: number): HurstResult['type'] {
+  if (H > 0.6) return 'trending';
+  if (H < 0.4) return 'mean_reverting';
+  return 'random_walk';
 }
 
 /**
@@ -299,51 +335,39 @@ export function loess(data: number[], bandwidth = 0.5): LoessPoint[] {
   const result: LoessPoint[] = [];
 
   for (let i = 0; i < n; i++) {
-    // Find nearest `span` points
-    const distances: Array<{ idx: number; dist: number }> = [];
-    for (let j = 0; j < n; j++) {
-      distances.push({ idx: j, dist: Math.abs(i - j) });
-    }
-    distances.sort((a, b) => a.dist - b.dist);
-    const neighbors = distances.slice(0, span);
-    const maxDist = neighbors[neighbors.length - 1]?.dist ?? 1;
-
-    // Tricube weight function
-    const weights: number[] = [];
-    for (const nb of neighbors) {
-      const u = maxDist > 0 ? nb.dist / (maxDist + 0.001) : 0;
-      weights.push(u < 1 ? (1 - u ** 3) ** 3 : 0);
-    }
-
-    // Weighted linear regression
-    let swx = 0;
-    let swy = 0;
-    let swx2 = 0;
-    let swxy = 0;
-    let sw = 0;
-
-    for (let k = 0; k < neighbors.length; k++) {
-      const idx = neighbors[k]?.idx ?? 0;
-      const w = weights[k] ?? 0;
-      sw += w;
-      swx += w * idx;
-      swy += w * (data[idx] ?? 0);
-      swx2 += w * idx * idx;
-      swxy += w * idx * (data[idx] ?? 0);
-    }
-
-    const denom = sw * swx2 - swx * swx;
-    let y: number;
-    if (Math.abs(denom) < 1e-12) {
-      y = sw > 0 ? swy / sw : (data[i] ?? 0);
-    } else {
-      const slope = (sw * swxy - swx * swy) / denom;
-      const intercept = (swy - slope * swx) / sw;
-      y = intercept + slope * i;
-    }
-
-    result.push({ x: i, y });
+    result.push({ x: i, y: loessFitAt(data, i, span) });
   }
 
   return result;
+}
+
+/** Tricube kernel weights for neighbors at the given distances (0 at or beyond the span edge). */
+function tricubeWeights(distances: number[]): number[] {
+  const maxDist = distances[distances.length - 1] ?? 1;
+  return distances.map((dist) => {
+    const u = maxDist > 0 ? dist / (maxDist + 0.001) : 0;
+    return u < 1 ? (1 - u ** 3) ** 3 : 0;
+  });
+}
+
+/** Locally weighted linear fit evaluated at index `i` using the nearest `span` points. */
+function loessFitAt(data: number[], i: number, span: number): number {
+  // Find nearest `span` points
+  const distances: Array<{ idx: number; dist: number }> = [];
+  for (let j = 0; j < data.length; j++) {
+    distances.push({ idx: j, dist: Math.abs(i - j) });
+  }
+  distances.sort((a, b) => a.dist - b.dist);
+  const neighbors = distances.slice(0, span);
+
+  const weights = tricubeWeights(neighbors.map((nb) => nb.dist));
+  const sums = accumulateWeightedSums(
+    neighbors.map((nb) => nb.idx),
+    neighbors.map((nb) => data[nb.idx] ?? 0),
+    weights,
+  );
+
+  const fit = solveWeightedLine(sums);
+  if (fit) return fit.intercept + fit.slope * i;
+  return sums.sw > 0 ? sums.swy / sums.sw : (data[i] ?? 0);
 }
