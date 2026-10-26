@@ -71,3 +71,14 @@ harness:
   enabled: true
   kind: claude-code
   auto_mode: true
+lint_checks:
+  enabled: true
+  complexity:
+    enabled: true
+    max_cognitive: 15
+    max_cyclomatic: 20
+  file_lines:
+    enabled: true
+    warn_above: 1200
+    error_above: 2400
+    exempt_extensions: [json]

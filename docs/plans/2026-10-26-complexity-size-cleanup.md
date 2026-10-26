@@ -48,6 +48,6 @@ Artifacts (scratch): `/tmp/cccc-finance/{baseline.json,baseline-findings.md,base
 - Base HEAD: 70ae8d4.
 - cccc (final run): exit 0, 520 files, 13382 functions, 0 findings, parse errors 0, thresholds 15/20. Baseline was 115 findings in 56 files, plus 7 python findings in `scripts/*.py` found in the all-language rerun; all fixed.
 - Oversized text files (>1200 lines): 23 -> 0 (none >2400).
-- Server gates: `bun install` 0, type-check 0, lint 0 (471 files), `bun run test` exit 0 with 231 files / 5233 tests (baseline 185 / 4398).
-- The rig lint check is not usable yet (exit 2, invalid choice), so cccc was run directly.
-- Scratch: `~/scratch/esb-cccc-final4-20261026T205532Z`; report: `/home/ultra/.local/state/rig-cccc-20261026/finance-final-verify4.md`.
+- Server gates (final): `bun install` 0, type-check 0, lint 0, miniapp `tsc --noEmit` 0, `bun run test` exit 0 with 231 files / 5233 tests (baseline 185 / 4398). knip output equals the baseline's.
+- `rig lint check --json` (rig `lint_checks` block in `rig.yaml`, same 15/20 and 1200/2400 limits, `.json` exempt): exit 0, complexity pass, file_lines pass, 649 files considered, 0 errors, 0 warnings, 0 incomplete. Verified with the rig-cli `cccc-lint-check` branch (`python3 -m riglib lint check --json -C <repo>`, ticket rig-cli#772); a rig that predates that branch rejects the `lint_checks` key (`unknown top-level key`) and has no `lint check` subcommand, so this block needs a rig release that includes it.
+- Independent review compared golden fixtures (`schema-migrations.golden.json`, `ta/golden.json`) and every new characterization test against the baseline source; review fixes: miniapp `Scanner.tsx` typecheck, explicit `parseBudgetAmount` fall-through, sync window computed before the shim mutex wait, rate tables derived from `SUPPORTED_CURRENCIES`, sparse-input `robustRegression` parity, per-file mini app harness mock re-install.

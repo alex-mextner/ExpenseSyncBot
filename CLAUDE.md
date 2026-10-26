@@ -146,7 +146,7 @@ Access via singleton: `database.users`, `database.expenses`, `database.bankConne
 **Key files:**
 
 - [src/services/google/oauth.ts](src/services/google/oauth.ts) - OAuth client, token encryption/decryption
-- [src/services/google/sheets.ts](src/services/google/sheets.ts) - Google Sheets API operations
+- [src/services/google/sheets.ts](src/services/google/sheets.ts) - Google Sheets API operations (public entry point; re-exports the `sheets-core`, `sheets-read`, `sheets-rows`, `sheets-repair` and `sheets-month-tabs` modules)
 - [src/web/oauth-callback.ts](src/web/oauth-callback.ts) - HTTP server for OAuth callback
 - [src/web/miniapp-api.ts](src/web/miniapp-api.ts) - Mini App REST API endpoints
 - [src/web/sse-emitter.ts](src/web/sse-emitter.ts) - Server-Sent Events for real-time updates
@@ -227,7 +227,7 @@ Bot uses callback queries (inline keyboards) and message handlers to manage mult
 **Key files:**
 
 - [src/bot/keyboards.ts](src/bot/keyboards.ts) - Inline keyboard builders
-- [src/bot/handlers/callback.handler.ts](src/bot/handlers/callback.handler.ts) - Button click handlers
+- [src/bot/handlers/callback.handler.ts](src/bot/handlers/callback.handler.ts) - Button click dispatcher (action → handler route table); handlers live in `src/bot/handlers/callback/` (bank-routes, category, budget, receipt-items, receipt-summary, overflow, misc-routes)
 - [src/bot/handlers/message.handler.ts](src/bot/handlers/message.handler.ts) - Text message handlers
 
 #### 6. Bank Integration (ZenPlugins)
