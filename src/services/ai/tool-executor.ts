@@ -3,26 +3,18 @@
  * Maps tool calls to database operations and services
  */
 import type Big from 'big.js';
-import { endOfMonth, format, getDaysInMonth } from 'date-fns';
+import { format } from 'date-fns';
 import { marked } from 'marked';
-import {
-  BASE_CURRENCY,
-  type CurrencyCode,
-  isSupportedCurrency,
-  SUPPORTED_CURRENCIES,
-} from '../../config/constants';
+import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
 import { database } from '../../database';
-import { computeBudgetProgress } from '../../database/repositories/budget.repository';
-import type { BankTransaction, BankTransactionFilters, Expense } from '../../database/types';
+import type { BankTransaction, BankTransactionFilters } from '../../database/types';
 import { getErrorMessage } from '../../utils/error';
 import { createLogger } from '../../utils/logger.ts';
 import { normalizeArrayParam, resolvePeriodDates } from '../../utils/period';
 import { pluralize } from '../../utils/pluralize';
-import { formatReceiptCommentForTelegram } from '../../utils/receipt-display';
-import { spendingAnalytics } from '../analytics/spending-analytics';
 import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
-import { convertCurrency, formatAmount, formatExchangeRatesForAI } from '../currency/converter';
+import { formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
 import { renderTableToPng } from '../render/table-renderer.ts';
 import {
@@ -31,17 +23,62 @@ import {
   isEditableGroupSettingKey,
 } from '../settings/group-settings-registry';
 import { executeBatchItems, isBatchInput } from './batch';
-import {
-  computeExpenseStats,
-  type ExpenseStats,
-  formatStats,
-  formatStatsDiff,
-  formatStatsTrend,
-  type TrendEntry,
-} from './stats';
+import { executeGetBudgets } from './tool-executor/budgets-report';
+import { executeGetExpenses } from './tool-executor/expenses-report';
+import { executeGetTechnicalAnalysis } from './tool-executor/technical-analysis';
 import type { AgentContext, ToolResult } from './types';
 
 const logger = createLogger('tool-executor');
+
+interface ToolCall {
+  input: Record<string, unknown>;
+  ctx: AgentContext;
+}
+
+type ToolHandler = (call: ToolCall) => ToolResult | Promise<ToolResult>;
+
+const TOOL_HANDLERS: Record<string, ToolHandler> = {
+  get_expenses: ({ input, ctx }) => executeGetExpenses(input, ctx),
+  get_budgets: ({ input, ctx }) => executeGetBudgets(input, ctx),
+  get_categories: ({ ctx }) => executeGetCategories(ctx),
+  get_group_settings: ({ ctx }) => executeGetGroupSettings(ctx),
+  get_exchange_rates: () => executeGetExchangeRates(),
+  set_budget: ({ input, ctx }) => executeSetBudget(input, ctx),
+  delete_budget: ({ input, ctx }) => executeDeleteBudget(input, ctx),
+  add_expense: ({ input, ctx }) => executeAddExpense(input, ctx),
+  delete_expense: ({ input, ctx }) => executeDeleteExpense(input, ctx),
+  sync_from_sheets: ({ ctx }) => executeSyncFromSheets(ctx),
+  sync_budgets: ({ ctx }) => executeSyncBudgets(ctx),
+  set_custom_prompt: ({ input, ctx }) => executeSetCustomPrompt(input, ctx),
+  update_group_setting: ({ input, ctx }) => executeUpdateGroupSetting(input, ctx),
+  manage_category: ({ input, ctx }) => executeManageCategory(input, ctx),
+  calculate: ({ input, ctx }) => executeCalculate(input, ctx),
+  get_bank_transactions: ({ input, ctx }) => executeGetBankTransactions(input, ctx),
+  get_bank_balances: ({ input, ctx }) => executeGetBankBalances(input, ctx),
+  get_technical_analysis: ({ input, ctx }) => executeGetTechnicalAnalysis(input, ctx),
+  get_recurring_patterns: ({ ctx }) => executeGetRecurringPatterns(ctx),
+  manage_recurring_pattern: ({ input, ctx }) => executeManageRecurringPattern(input, ctx),
+  find_missing_expenses: ({ input, ctx }) => executeFindMissingExpenses(input, ctx),
+  render_table: ({ input, ctx }) => executeRenderTable(input, ctx),
+  send_feedback: ({ input, ctx }) => executeSendFeedback(input, ctx),
+};
+
+/** Tools that read or write expense/budget data first pull the latest state from the sheet. */
+const EXPENSE_SYNC_TOOLS = ['get_expenses', 'add_expense', 'delete_expense'];
+const BUDGET_SYNC_TOOLS = ['get_budgets', 'set_budget', 'delete_budget'];
+
+// The sync modules are imported lazily so the bot command layer stays out of this module's
+// static import graph.
+async function syncBeforeTool(name: string, groupId: number): Promise<void> {
+  if (EXPENSE_SYNC_TOOLS.includes(name)) {
+    const { ensureFreshExpenses } = await import('../../bot/commands/sync');
+    await ensureFreshExpenses(groupId);
+  }
+  if (BUDGET_SYNC_TOOLS.includes(name)) {
+    const { ensureFreshBudgets } = await import('../../bot/services/budget-sync');
+    await ensureFreshBudgets(groupId);
+  }
+}
 
 /**
  * Execute a tool by name with given input
@@ -52,69 +89,13 @@ export async function executeTool(
   ctx: AgentContext,
 ): Promise<ToolResult> {
   try {
-    // Pre-sync for tools that read expense/budget data
-    const needsExpenseSync = ['get_expenses', 'add_expense', 'delete_expense'].includes(name);
-    const needsBudgetSync = ['get_budgets', 'set_budget', 'delete_budget'].includes(name);
+    await syncBeforeTool(name, ctx.groupId);
 
-    if (needsExpenseSync) {
-      const { ensureFreshExpenses } = await import('../../bot/commands/sync');
-      await ensureFreshExpenses(ctx.groupId);
+    // hasOwn: a tool named "constructor" or "toString" must stay unknown, not hit Object.prototype.
+    if (!Object.hasOwn(TOOL_HANDLERS, name)) {
+      return { success: false, error: `Unknown tool: ${name}` };
     }
-    if (needsBudgetSync) {
-      const { ensureFreshBudgets } = await import('../../bot/services/budget-sync');
-      await ensureFreshBudgets(ctx.groupId);
-    }
-
-    switch (name) {
-      case 'get_expenses':
-        return await executeGetExpenses(input, ctx);
-      case 'get_budgets':
-        return await executeGetBudgets(input, ctx);
-      case 'get_categories':
-        return executeGetCategories(ctx);
-      case 'get_group_settings':
-        return executeGetGroupSettings(ctx);
-      case 'get_exchange_rates':
-        return executeGetExchangeRates();
-      case 'set_budget':
-        return await executeSetBudget(input, ctx);
-      case 'delete_budget':
-        return await executeDeleteBudget(input, ctx);
-      case 'add_expense':
-        return await executeAddExpense(input, ctx);
-      case 'delete_expense':
-        return await executeDeleteExpense(input, ctx);
-      case 'sync_from_sheets':
-        return await executeSyncFromSheets(ctx);
-      case 'sync_budgets':
-        return await executeSyncBudgets(ctx);
-      case 'set_custom_prompt':
-        return executeSetCustomPrompt(input, ctx);
-      case 'update_group_setting':
-        return await executeUpdateGroupSetting(input, ctx);
-      case 'manage_category':
-        return await executeManageCategory(input, ctx);
-      case 'calculate':
-        return executeCalculate(input, ctx);
-      case 'get_bank_transactions':
-        return executeGetBankTransactions(input, ctx);
-      case 'get_bank_balances':
-        return executeGetBankBalances(input, ctx);
-      case 'get_technical_analysis':
-        return executeGetTechnicalAnalysis(input, ctx);
-      case 'get_recurring_patterns':
-        return executeGetRecurringPatterns(ctx);
-      case 'manage_recurring_pattern':
-        return await executeManageRecurringPattern(input, ctx);
-      case 'find_missing_expenses':
-        return await executeFindMissingExpenses(input, ctx);
-      case 'render_table':
-        return executeRenderTable(input, ctx);
-      case 'send_feedback':
-        return await executeSendFeedback(input, ctx);
-      default:
-        return { success: false, error: `Unknown tool: ${name}` };
-    }
+    return await (TOOL_HANDLERS[name] as ToolHandler)({ input, ctx });
   } catch (error) {
     logger.error({ err: error }, `[TOOL] Error executing ${name}`);
     return {
@@ -125,390 +106,6 @@ export async function executeTool(
 }
 
 // === Read tools ===
-
-async function executeGetExpenses(
-  input: Record<string, unknown>,
-  ctx: AgentContext,
-): Promise<ToolResult> {
-  const periods = normalizeArrayParam(input['period'], 'current_month');
-  const categories = normalizeArrayParam(input['category']);
-  // Whole numbers only: the schema says number, and a model may send 1.5.
-  const pageSize = Math.floor(Math.min(Math.max((input['page_size'] as number) || 100, 1), 500));
-  const page = Math.floor(Math.max((input['page'] as number) || 1, 1));
-  const summaryOnly = (input['summary_only'] as boolean) || false;
-
-  const group = database.groups.findById(ctx.groupId);
-  // Totals come in the requested currency when asked (one call instead of a `calculate` per
-  // category), otherwise in the group's default currency. null/blank means "not given".
-  const requestedCurrency = String(input['currency'] ?? '')
-    .trim()
-    .toUpperCase();
-  let displayCurrency: CurrencyCode = group?.default_currency ?? BASE_CURRENCY;
-  if (requestedCurrency) {
-    if (!isSupportedCurrency(requestedCurrency)) {
-      return {
-        success: false,
-        error: `Unknown currency: "${requestedCurrency.slice(0, 32)}". Supported: ${SUPPORTED_CURRENCIES.join(', ')}`,
-      };
-    }
-    displayCurrency = requestedCurrency;
-  }
-
-  // Resolve all periods and fetch expenses
-  const periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[] =
-    [];
-
-  for (const period of periods) {
-    const { startDate, endDate } = resolvePeriodDates(period);
-    let expenses = database.expenses.findByDateRange(ctx.groupId, startDate, endDate);
-
-    if (categories.length > 0) {
-      const lowerCategories = categories.map((c) => c.toLowerCase());
-      expenses = expenses.filter((e) => lowerCategories.includes(e.category.toLowerCase()));
-    }
-
-    periodData.push({ label: period, startDate, endDate, expenses });
-  }
-
-  const isBatch = periods.length > 1;
-  const allExpenses = periodData.flatMap((p) => p.expenses);
-
-  if (summaryOnly) {
-    return buildSummaryOutput(periodData, allExpenses, displayCurrency, isBatch);
-  }
-
-  return buildDetailOutput(
-    periodData,
-    allExpenses,
-    displayCurrency,
-    group?.default_currency ?? BASE_CURRENCY,
-    isBatch,
-    page,
-    pageSize,
-  );
-}
-
-function buildSummaryOutput(
-  periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
-  allExpenses: Expense[],
-  displayCurrency: CurrencyCode,
-  isBatch: boolean,
-): ToolResult {
-  const lines: string[] = [];
-  const perPeriodStats: ExpenseStats[] = [];
-
-  for (const pd of periodData) {
-    if (isBatch) lines.push(`=== ${pd.label} ===`);
-    lines.push(`Period: ${pd.startDate} to ${pd.endDate}`);
-
-    if (pd.expenses.length === 0) {
-      perPeriodStats.push({ count: 0, total: 0, avg: 0, median: 0, min: null, max: null });
-      lines.push('No expenses', '');
-      continue;
-    }
-
-    // Category aggregation
-    const totals: Record<
-      string,
-      { count: number; eur_total: number; amounts: Record<string, number> }
-    > = {};
-    for (const e of pd.expenses) {
-      const existing = totals[e.category];
-      const cat = existing ?? { count: 0, eur_total: 0, amounts: {} };
-      totals[e.category] = cat;
-      cat.count++;
-      cat.eur_total += e.eur_amount;
-      cat.amounts[e.currency] = (cat.amounts[e.currency] || 0) + e.amount;
-    }
-
-    const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
-    const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
-    lines.push(`Total: ${formatAmount(totalDisplay, displayCurrency, true)}`, '');
-
-    const sorted = Object.entries(totals).sort((a, b) => b[1].eur_total - a[1].eur_total);
-    for (const [cat, data] of sorted) {
-      const amountParts = Object.entries(data.amounts)
-        .map(([c, a]) => formatAmount(a, c as CurrencyCode, true))
-        .join(', ');
-      const catDisplay = convertCurrency(data.eur_total, BASE_CURRENCY, displayCurrency);
-      lines.push(
-        `${cat}: ${formatAmount(catDisplay, displayCurrency, true)} (${data.count} ops) [${amountParts}]`,
-      );
-    }
-
-    // Per-period stats
-    const stats = computeExpenseStats(pd.expenses, displayCurrency);
-    perPeriodStats.push(stats);
-    lines.push('', `=== Stats${isBatch ? ` (${pd.label})` : ''} ===`);
-    lines.push(formatStats(stats, displayCurrency));
-    lines.push('');
-  }
-
-  // Overall stats for batch
-  if (isBatch && allExpenses.length > 0) {
-    const overallStats = computeExpenseStats(allExpenses, displayCurrency);
-    const overallEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
-    const overallDisplay = convertCurrency(overallEur, BASE_CURRENCY, displayCurrency);
-    lines.push('=== Overall ===');
-    lines.push(`Total: ${formatAmount(overallDisplay, displayCurrency, true)}`);
-    lines.push(formatStats(overallStats, displayCurrency));
-    lines.push('');
-
-    // Diff for exactly 2 periods
-    if (
-      periodData.length === 2 &&
-      perPeriodStats[0] &&
-      perPeriodStats[1] &&
-      periodData[0] &&
-      periodData[1]
-    ) {
-      lines.push(
-        formatStatsDiff(
-          perPeriodStats[0],
-          perPeriodStats[1],
-          periodData[0].label,
-          periodData[1].label,
-          displayCurrency,
-          periodData[0].expenses,
-          periodData[1].expenses,
-        ),
-      );
-    }
-
-    // Trend for 3+ periods
-    if (periodData.length >= 3) {
-      const entries: TrendEntry[] = [];
-      for (let i = 0; i < periodData.length; i++) {
-        const pd = periodData[i];
-        const stats = perPeriodStats[i];
-        if (pd && stats) entries.push({ label: pd.label, stats });
-      }
-      lines.push(formatStatsTrend(entries, displayCurrency));
-    }
-  }
-
-  const output = lines.join('\n');
-  logger.info(
-    `[TOOL] get_expenses summary output (${allExpenses.length} expenses, ${periodData.length} periods)`,
-  );
-  return { success: true, output };
-}
-
-function buildDetailOutput(
-  periodData: { label: string; startDate: string; endDate: string; expenses: Expense[] }[],
-  allExpenses: Expense[],
-  displayCurrency: CurrencyCode,
-  defaultCurrency: CurrencyCode,
-  isBatch: boolean,
-  page: number,
-  pageSize: number,
-): ToolResult {
-  // Sort all expenses by date desc
-  allExpenses.sort((a, b) => b.date.localeCompare(a.date));
-
-  const totalPages = Math.max(1, Math.ceil(allExpenses.length / pageSize));
-  const offset = (page - 1) * pageSize;
-  const pageItems = allExpenses.slice(offset, offset + pageSize);
-
-  const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
-  const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
-  // A requested currency other than the group's also gets the total in the group currency, so
-  // the model never has to convert the authoritative total itself.
-  const totalInDefault =
-    displayCurrency === defaultCurrency
-      ? ''
-      : ` (= ${formatAmount(convertCurrency(totalEur, BASE_CURRENCY, defaultCurrency), defaultCurrency, true)})`;
-
-  const firstPeriod = periodData[0];
-  const lastPeriod = periodData[periodData.length - 1];
-  const dateRange =
-    isBatch && firstPeriod && lastPeriod
-      ? `${firstPeriod.startDate} to ${lastPeriod.endDate}`
-      : `${firstPeriod?.startDate ?? '?'} to ${firstPeriod?.endDate ?? '?'}`;
-
-  // Stage QA 2026-10-15: a model summed page 1 of 8 and called it the total. Every page says what
-  // it shows, the total for the whole filtered set (authoritative), and how to get the rest.
-  const lines = [
-    `Period: ${dateRange}`,
-    pageItems.length > 0
-      ? `Showing ${offset + 1}–${offset + pageItems.length} of ${allExpenses.length} expenses (page ${page} of ${totalPages})`
-      : `Showing none of ${allExpenses.length} expenses (page ${page} of ${totalPages})`,
-    `Total for all ${allExpenses.length} expenses: ${formatAmount(totalDisplay, displayCurrency, true)}${totalInDefault}`,
-  ];
-  if (page < totalPages) {
-    lines.push(
-      `More pages: ${page + 1}–${totalPages} are not shown. For totals use the "Total for all" line above (or get_expenses with summary_only: true) — never add up the rows of one page as the total. For the individual rows call get_expenses again with page=${page + 1} … page=${totalPages} with page_size=${pageSize} and the same filters.`,
-    );
-  }
-  lines.push('');
-
-  // Stats for ALL expenses (not just page)
-  const allStats = computeExpenseStats(allExpenses, displayCurrency);
-  lines.push('=== Stats (all) ===');
-  lines.push(formatStats(allStats, displayCurrency));
-  lines.push('');
-
-  // Stats for current page
-  if (totalPages > 1) {
-    const pageStats = computeExpenseStats(pageItems, displayCurrency);
-    lines.push('=== Stats (this page only, not the total) ===');
-    lines.push(formatStats(pageStats, displayCurrency));
-    lines.push('');
-  }
-
-  for (const e of pageItems) {
-    const displayComment = formatReceiptCommentForTelegram(e.comment).trim() || '(no comment)';
-    lines.push(
-      `[id:${e.id}] ${e.date} | ${e.category} | ${formatAmount(e.amount, e.currency, true)} (EUR ${formatAmount(e.eur_amount, BASE_CURRENCY, true)}) | ${displayComment}`,
-    );
-  }
-
-  const output = lines.join('\n');
-  logger.info(
-    `[TOOL] get_expenses detail output (page ${page}/${totalPages}, ${allExpenses.length} total)`,
-  );
-  return { success: true, output };
-}
-
-async function executeGetBudgets(
-  input: Record<string, unknown>,
-  ctx: AgentContext,
-): Promise<ToolResult> {
-  const now = new Date();
-  const months = normalizeArrayParam(input['month'], format(now, 'yyyy-MM'));
-  const categories = normalizeArrayParam(input['category']);
-  const isBatch = months.length > 1;
-
-  const group = database.groups.findById(ctx.groupId);
-  const displayCurrency = (group?.default_currency ?? BASE_CURRENCY) as CurrencyCode;
-
-  const allLines: string[] = [];
-  let grandTotalEur = 0;
-
-  const nowMonth = format(now, 'yyyy-MM');
-
-  // Pre-compute EMA-based burn rates for current month (avoids naive linear projection)
-  const burnRateMap = new Map<
-    string,
-    { projected_total: number; daily_burn_rate: number; runway_days: number }
-  >();
-  if (months.includes(nowMonth)) {
-    const snapshot = spendingAnalytics.getFinancialSnapshot(ctx.groupId);
-    for (const br of snapshot.burnRates) {
-      burnRateMap.set(br.category, {
-        projected_total: br.projected_total,
-        daily_burn_rate: br.daily_burn_rate,
-        runway_days: br.runway_days,
-      });
-    }
-  }
-
-  for (const month of months) {
-    let budgets = database.budgets.getAllBudgetsForMonth(ctx.groupId, month);
-
-    if (categories.length > 0) {
-      const lowerCategories = categories.map((c) => c.toLowerCase());
-      budgets = budgets.filter((b) => lowerCategories.includes(b.category.toLowerCase()));
-    }
-
-    if (budgets.length === 0) {
-      if (isBatch) allLines.push(`=== ${month} ===`, 'No budgets set.', '');
-      else allLines.push(`No budgets set for ${month}.`);
-      continue;
-    }
-
-    const monthStart = `${month}-01`;
-    const monthDate = new Date(`${month}-01`);
-    const monthEnd = format(endOfMonth(monthDate), 'yyyy-MM-dd');
-    const expenses = database.expenses.findByDateRange(ctx.groupId, monthStart, monthEnd);
-
-    const spendingByCategory: Record<string, number> = {};
-    for (const e of expenses) {
-      spendingByCategory[e.category] = (spendingByCategory[e.category] || 0) + e.eur_amount;
-      grandTotalEur += e.eur_amount;
-    }
-
-    // Days elapsed for header and grand total
-    const isCurrentMonth = nowMonth === month;
-    const daysInMonth = getDaysInMonth(monthDate);
-    const daysElapsed = isCurrentMonth ? now.getDate() : daysInMonth;
-    const daysRemaining = isCurrentMonth ? daysInMonth - daysElapsed : 0;
-
-    if (isBatch) allLines.push(`=== ${month} ===`);
-    else allLines.push(`Budgets for ${month} (day ${daysElapsed}/${daysInMonth}):`, '');
-
-    // Per-month totals in EUR (for single-month grand total)
-    let monthBudgetSpentEur = 0;
-    let monthBudgetLimitEur = 0;
-
-    for (const budget of budgets) {
-      const spentEur = spendingByCategory[budget.category] || 0;
-      const spentInCurrency = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
-      const progress = computeBudgetProgress(budget, spentInCurrency);
-      const status = progress.is_exceeded ? 'EXCEEDED' : progress.is_warning ? 'WARNING' : 'OK';
-
-      // Use EMA-based projections for current month (from spending-analytics)
-      let details = '';
-      if (isCurrentMonth && daysElapsed > 0) {
-        const br = burnRateMap.get(budget.category);
-        if (br) {
-          // EMA-based projection (budget currency, already computed by spending-analytics)
-          const projectedDisplay = formatAmount(br.projected_total, budget.currency, true);
-          const burnDisplay = formatAmount(br.daily_burn_rate, budget.currency, true);
-          const runwayStr = br.runway_days >= 999 ? '∞' : `${Math.round(br.runway_days)}d`;
-          details = ` | burn: ${burnDisplay}/day, projected: ${projectedDisplay}, runway: ${runwayStr}`;
-        } else {
-          // Fallback for categories without burn rate data (e.g. no spending yet)
-          const dailyBurn = spentInCurrency / daysElapsed;
-          const remaining = budget.limit_amount - spentInCurrency;
-          const runwayDays = dailyBurn > 0 ? Math.max(0, remaining / dailyBurn) : 999;
-          details = ` | burn: ${formatAmount(dailyBurn, budget.currency, true)}/day, projected: ${formatAmount(dailyBurn * daysInMonth, budget.currency, true)}, runway: ${runwayDays >= 999 ? '∞' : `${Math.round(runwayDays)}d`}`;
-        }
-      }
-
-      allLines.push(
-        `${budget.category}: ${formatAmount(spentInCurrency, budget.currency, true)}/${formatAmount(budget.limit_amount, budget.currency, true)} (${progress.percentage}%) [${status}]${details}`,
-      );
-
-      monthBudgetSpentEur += spentEur;
-      monthBudgetLimitEur += convertCurrency(budget.limit_amount, budget.currency, BASE_CURRENCY);
-    }
-
-    // Per-month grand total with burn/projection (single-month view only)
-    if (!isBatch) {
-      const monthSpentDisplay = convertCurrency(
-        monthBudgetSpentEur,
-        BASE_CURRENCY,
-        displayCurrency,
-      );
-      const monthLimitDisplay = convertCurrency(
-        monthBudgetLimitEur,
-        BASE_CURRENCY,
-        displayCurrency,
-      );
-      const grandPercentage =
-        monthLimitDisplay > 0 ? Math.round((monthSpentDisplay / monthLimitDisplay) * 100) : 0;
-      allLines.push('');
-      let grandLine = `Grand Total: ${formatAmount(monthSpentDisplay, displayCurrency, true)}/${formatAmount(monthLimitDisplay, displayCurrency, true)} (${grandPercentage}%)`;
-      if (isCurrentMonth && daysElapsed > 0) {
-        const grandDailyBurn = monthSpentDisplay / daysElapsed;
-        const grandProjected = grandDailyBurn * daysInMonth;
-        grandLine += ` | burn: ${formatAmount(grandDailyBurn, displayCurrency, true)}/day, projected: ${formatAmount(grandProjected, displayCurrency, true)}, ${daysRemaining}d left`;
-      }
-      allLines.push(grandLine);
-    }
-    allLines.push('');
-  }
-
-  // Grand total across all months for batch (uses accumulated EUR total from all expenses)
-  if (isBatch && grandTotalEur > 0) {
-    const totalDisplay = convertCurrency(grandTotalEur, BASE_CURRENCY, displayCurrency);
-    allLines.push(`=== Grand Total (${months.length} months) ===`);
-    allLines.push(`${formatAmount(totalDisplay, displayCurrency, true)}`);
-  }
-
-  return { success: true, output: allLines.join('\n') };
-}
 
 function executeGetCategories(ctx: AgentContext): ToolResult {
   const categories = database.categories.findByGroupId(ctx.groupId);
@@ -1210,161 +807,6 @@ async function executeFindMissingExpenses(
       ? `${allMissing.length} ${pluralize(allMissing.length, 'транзакция', 'транзакции', 'транзакций')} без записи:\n${summaryParts.join('\n')}`
       : (summaryParts[0] ?? '0 транзакций без записи'),
   };
-}
-
-// === Technical Analysis tool ===
-
-function executeGetTechnicalAnalysis(
-  input: Record<string, unknown>,
-  ctx: AgentContext,
-): ToolResult {
-  const snapshot = spendingAnalytics.getFinancialSnapshot(ctx.groupId);
-
-  if (!snapshot.technicalAnalysis) {
-    return {
-      success: true,
-      output: 'Недостаточно данных для технического анализа (нужно ≥3 месяцев истории).',
-    };
-  }
-
-  const group = database.groups.findById(ctx.groupId);
-  const displayCurrency: CurrencyCode = group?.default_currency ?? BASE_CURRENCY;
-  // TA snapshot amounts are stored in EUR (eur_amount aggregations).
-  // Convert + format each number for the user's default currency so the AI
-  // surfaces meaningful figures instead of leaking raw EUR.
-  const fmt = (eurAmount: number): string =>
-    formatAmount(convertCurrency(eurAmount, BASE_CURRENCY, displayCurrency), displayCurrency);
-
-  const ta = snapshot.technicalAnalysis;
-  const categoryFilter = input['category'] as string | undefined;
-
-  const categories = categoryFilter
-    ? ta.categories.filter((c) => c.category.toLowerCase() === categoryFilter.toLowerCase())
-    : ta.categories;
-
-  if (categories.length === 0) {
-    return {
-      success: true,
-      output: categoryFilter
-        ? `Нет данных для категории "${categoryFilter}". Доступные: ${ta.categories.map((c) => c.category).join(', ')}`
-        : 'Нет категорий с достаточной историей для анализа.',
-    };
-  }
-
-  const lines: string[] = [];
-
-  for (const cat of categories) {
-    const trendRu =
-      cat.trend.direction === 'rising'
-        ? 'растут'
-        : cat.trend.direction === 'falling'
-          ? 'снижаются'
-          : 'стабильны';
-    const confidencePct = Math.round(cat.trend.confidence * 100);
-    const q = cat.forecasts.quantiles;
-    const bb = cat.volatility.bollingerBands;
-
-    // Current month pace: extrapolate current spending to end of month
-    const now = new Date();
-    const dayOfMonth = now.getDate();
-    const daysInMonth = getDaysInMonth(now);
-    const paceProjectionEur =
-      dayOfMonth > 0 ? (cat.currentMonthSpent / dayOfMonth) * daysInMonth : 0;
-
-    const catLines: string[] = [
-      `## ${cat.category} (данные за ${cat.monthsOfData} мес.)`,
-      `Текущий месяц: потрачено ${fmt(cat.currentMonthSpent)} за ${dayOfMonth} из ${daysInMonth} дней`,
-      `Темп текущего месяца: если так пойдёт дальше → ~${fmt(paceProjectionEur)} к концу месяца`,
-      `Прогноз по истории: ~${fmt(cat.forecasts.ensemble)}`,
-      `Тренд: расходы ${trendRu} (уверенность ${confidencePct}%)`,
-      `Обычный коридор: ${fmt(bb.lower)}–${fmt(bb.upper)}, в худшем случае до ${fmt(q.p95)}`,
-    ];
-
-    // Monthly change direction
-    if (cat.forecasts.holt.trend !== 0) {
-      const changePerMonthEur = Math.abs(cat.forecasts.holt.trend);
-      const changeDir = cat.forecasts.holt.trend > 0 ? 'растут' : 'снижаются';
-      catLines.push(`Динамика: расходы ${changeDir} примерно на ${fmt(changePerMonthEur)}/мес.`);
-    }
-
-    // Anomaly
-    if (cat.anomaly.isAnomaly) {
-      const zAbs = Math.abs(cat.anomaly.zScore.zScore);
-      const severity = zAbs > 3 ? 'сильно' : 'заметно';
-      catLines.push(`⚠️ Необычный расход: текущий месяц ${severity} выбивается из нормы`);
-    }
-
-    // Momentum signals (MACD in user terms)
-    if (cat.trend.macd.crossover === 'bullish') {
-      catLines.push('📈 Расходы начали расти после периода снижения');
-    } else if (cat.trend.macd.crossover === 'bearish') {
-      catLines.push('📉 Расходы начали снижаться после периода роста');
-    }
-
-    // Unusually high/low spending (RSI in user terms)
-    if (cat.trend.rsi.signal === 'overbought') {
-      catLines.push(
-        '🔴 Траты непривычно высокие уже несколько месяцев — стоит проверить, не появились ли лишние расходы',
-      );
-    } else if (cat.trend.rsi.signal === 'oversold') {
-      catLines.push(
-        '🟢 Траты непривычно низкие — возможно, что-то откладывается и потом придёт разом',
-      );
-    }
-
-    // Predictability (Hurst in user terms)
-    if (cat.trend.hurst.type === 'trending') {
-      catLines.push('Характер расходов: стабильный, скорее всего продолжат в том же направлении');
-    } else if (cat.trend.hurst.type === 'mean_reverting') {
-      catLines.push('Характер расходов: после всплесков обычно возвращаются к привычному уровню');
-    } else {
-      catLines.push('Характер расходов: меняются хаотично, сложно предсказать');
-    }
-
-    // Regime changes (change points in user terms)
-    if (cat.trend.changePoints.length > 0) {
-      catLines.push(`За историю было ${cat.trend.changePoints.length} резких смен уровня трат`);
-    }
-
-    // Typical spending bounds (pivot points in user terms)
-    const pp = cat.trend.pivotPoints;
-    catLines.push(
-      `Типичный минимум ~${fmt(pp.support1)}, типичный максимум ~${fmt(pp.resistance1)}`,
-    );
-
-    // Intermittent spending (Croston in user terms)
-    if (cat.forecasts.croston) {
-      const cr = cat.forecasts.croston;
-      catLines.push(
-        `Нерегулярные расходы: ~${fmt(cr.expectedAmount)} примерно раз в ${cr.expectedInterval.toFixed(1)} мес.`,
-      );
-    }
-
-    // Record high (Donchian in user terms)
-    if (cat.volatility.donchian.isBreakoutHigh) {
-      catLines.push('🚨 Расходы достигли исторического максимума!');
-    }
-
-    lines.push(catLines.join('\n'));
-  }
-
-  // Correlations (in user terms)
-  if (ta.correlations.length > 0) {
-    const corrLines = ['## Связи между категориями'];
-    for (const corr of ta.correlations.slice(0, 10)) {
-      const direction = corr.correlation > 0 ? 'растут вместе' : 'одна растёт — другая падает';
-      const strengthRu =
-        corr.strength === 'strong_positive' || corr.strength === 'strong_negative'
-          ? 'сильная'
-          : corr.strength === 'moderate_positive' || corr.strength === 'moderate_negative'
-            ? 'заметная'
-            : 'слабая';
-      corrLines.push(`${corr.category1} ↔ ${corr.category2}: ${direction} (${strengthRu} связь)`);
-    }
-    lines.push(corrLines.join('\n'));
-  }
-
-  return { success: true, output: lines.join('\n\n') };
 }
 
 // === Recurring pattern tools ===
