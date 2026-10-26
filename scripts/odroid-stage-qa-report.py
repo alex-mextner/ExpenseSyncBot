@@ -31,6 +31,7 @@ script never writes, starts, stops or locks anything and never prints a token or
 
 Exit codes: 0 reported, 2 refused (bad verb), 3 not provisioned or the stage bot's identity cannot be
 proven (missing files, cannot drop to www-data, pm2 or Telegram unreachable, token and username disagree).
+Any other exit status is a bug in this script; the PC driver treats it as a refusal.
 """
 import argparse
 import functools
@@ -46,7 +47,8 @@ from pathlib import Path
 
 REPORT_PREFIX = "STAGE_REPORT "
 VERB = "report"
-EXIT_REFUSED, EXIT_NOT_PROVISIONED = 2, 3
+EXIT_REFUSED = 2
+EXIT_NOT_PROVISIONED = 3
 
 DEFAULT_MAIN_DIR = "/var/www/ExpenseSyncBot"
 DEFAULT_PM2 = "/var/www/.bun/bin/pm2"
@@ -197,7 +199,7 @@ def finite_number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def case_problem(case, required_forbid):
+def case_problem(case):
     """Why a case may not run, or None: what the engine checks plus what a PR must not weaken.
 
     The engine accepts a case without `expect`/`forbid`, `"expect": ["."]` and timeouts of any size
@@ -223,12 +225,12 @@ def case_problem(case, required_forbid):
         for pattern in patterns:
             try:
                 re.compile(pattern)
-            except re.error:
+            except (re.error, RecursionError):
                 return f"case {name}: bad {key} pattern"
     for pattern in case["expect"]:
         if any(re.search(pattern, probe, re.IGNORECASE | re.DOTALL) for probe in TRIVIAL_REPLIES):
             return f"case {name}: expect pattern {pattern!r} matches any reply"
-    if any(pattern not in case["forbid"] for pattern in required_forbid):
+    if any(pattern not in case["forbid"] for pattern in REQUIRED_FORBID):
         return f"case {name}: forbid must contain the error patterns the trusted side requires"
     return None
 
@@ -239,22 +241,27 @@ def refuse_json_constant(name):
 
 def read_cases(smoke, code_dir, sha, environ):
     """(cases, None) or (None, reason): the PR's list as committed, validated and held to the floor."""
+    # Ask for the size first: `git show` output is buffered whole, and a PR chooses what is at that path.
+    sized = run(["git", "-C", code_dir, "cat-file", "-s", f"{sha}:{CASES_PATH}"], environ, "git cat-file")
+    if sized.returncode != 0:
+        return None, f"{CASES_PATH} is not in commit {sha[:12]}"
+    if not sized.stdout.strip().isdigit() or int(sized.stdout) > MAX_CASES_BYTES:
+        return None, f"{CASES_PATH} is larger than {MAX_CASES_BYTES} bytes"
     done = run(["git", "-C", code_dir, "show", f"{sha}:{CASES_PATH}"], environ, "git show")
     if done.returncode != 0:
         return None, f"{CASES_PATH} is not in commit {sha[:12]}"
-    if len(done.stdout.encode("utf-8", "replace")) > MAX_CASES_BYTES:
-        return None, f"{CASES_PATH} is larger than {MAX_CASES_BYTES} bytes"
     try:
         cases = json.loads(done.stdout, parse_constant=refuse_json_constant)
-        if type(cases) is not list:
-            return None, f"{CASES_PATH} is not a list of cases"
-        for case in cases:
-            problem = case_problem(case, REQUIRED_FORBID)
-            if problem:
-                return None, problem
-        cases = smoke.validate_cases(cases, CASES_PATH)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None, f"{CASES_PATH} is not valid JSON"
+    if type(cases) is not list:
+        return None, f"{CASES_PATH} is not a list of cases"
+    for case in cases:
+        problem = case_problem(case)
+        if problem:
+            return None, problem
+    try:
+        cases = smoke.validate_cases(cases, CASES_PATH)
     except smoke.Refused as error:
         return None, str(error)
     if len(cases) < MIN_CASES:
@@ -275,16 +282,17 @@ def prove_identity(smoke, main_dir, get_me):
     try:
         token = smoke.parse_env(stage_file).get("BOT_TOKEN", "")
         prod_env = smoke.parse_env(prod_file)
-    except OSError as error:
-        raise NotProvisioned(f"{error.filename} is not readable") from None
+    except (OSError, ValueError) as error:
+        raise NotProvisioned(f"{getattr(error, 'filename', None) or stage_file} is not readable") from None
     try:
         username = smoke.guard_target({"BOT_USERNAME": STAGE_USERNAME, "BOT_TOKEN": token}, prod_env, DENY_USERNAMES)
         actual = get_me(token)
+        peer = smoke.bot_id(token)
     except smoke.Refused as error:
         raise NotProvisioned(f"stage identity: {error}") from None
     if actual.lower() != username.lower():
         raise NotProvisioned(f"stage identity: the stage token belongs to @{actual}, not @{username}")
-    return smoke.bot_id(token)
+    return peer
 
 
 def report(main_dir, pm2, environ, get_me):

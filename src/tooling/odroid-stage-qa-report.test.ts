@@ -21,6 +21,7 @@ import {
   envText,
   fakeBotCredential,
   PROD_USERNAME,
+  pingCase,
   REPO,
   realCases,
   STAGE_USERNAME,
@@ -35,7 +36,8 @@ setDefaultTimeout(60_000);
 const SCRIPT = join(REPO, 'scripts/odroid-stage-qa-report.py');
 const STAGE_ID = '222222222';
 const PROD_ID = '111111111';
-const BUN = '/var/www/.bun/bin/bun --no-env-file --env-file=/var/www/ExpenseSyncBot-stage/.env';
+const STAGE_BUN_COMMAND =
+  '/var/www/.bun/bin/bun --no-env-file --env-file=/var/www/ExpenseSyncBot-stage/.env';
 
 // What the stand-in pm2 prints for `jlist`: pm2's spawn banner first, like a cold daemon, then the list.
 const FAKE_PM2 = `#!/usr/bin/env bash
@@ -93,11 +95,11 @@ interface Slot {
   cleanup: () => void;
 }
 
-let temp: TempRoot | null = null;
+// Every slot a test creates (some create several): all are removed after the test.
+const temps: TempRoot[] = [];
 
 afterEach(() => {
-  temp?.cleanup();
-  temp = null;
+  for (const temp of temps.splice(0)) temp.cleanup();
 });
 
 function git(cwd: string, ...args: string[]): string {
@@ -135,7 +137,7 @@ function stageProcess(
     pm2_env: {
       status: 'online',
       pm_exec_path: '/usr/bin/bash',
-      args: ['-c', `${BUN} ${codeDir}/index.ts`],
+      args: ['-c', `${STAGE_BUN_COMMAND} ${codeDir}/index.ts`],
       pm_uptime: 1_761_000_000_000,
       restart_time: 0,
       ...overrides,
@@ -148,7 +150,8 @@ function writeJlist(slot: Slot, processes: object[]): void {
 }
 
 function createSlot(): Slot {
-  temp = tempRoot('odroid-stage-qa-report-');
+  const temp = tempRoot('odroid-stage-qa-report-');
+  temps.push(temp);
   const root = temp.dir;
   const main = join(root, 'ExpenseSyncBot');
   const fix = join(root, 'fix');
@@ -189,7 +192,6 @@ function createSlot(): Slot {
     worktree,
     prSha,
     mainSha,
-    cleanup: () => temp?.cleanup(),
   };
   writeJlist(slot, [
     { name: 'expensesyncbot', pm2_env: { status: 'online', pm_exec_path: `${main}/start.sh` } },
@@ -209,7 +211,6 @@ interface Run {
 
 interface Options {
   env?: Record<string, string>;
-  args?: string[];
 }
 
 function runReport(slot: Slot, options: Options = {}): Run {
@@ -378,7 +379,6 @@ describe('the report of a slot that runs main or nothing', () => {
       expect(report.peer).toBeNull();
       expect(report.cases).toBeNull();
       expect(run.getMeCalls).toBe(0);
-      temp?.cleanup();
     }
   });
 
@@ -488,8 +488,7 @@ describe('the PR case list is data that is held to the floor', () => {
   });
 
   test.each(BAD_CASES)('$title is refused with its reason', ({ mutate, reason }) => {
-    const ping = realCases().find((c) => c.name === 'ping') ?? { name: 'ping', send: '/ping' };
-    const report = reportWithCases(JSON.stringify(withCase('ping', mutate({ ...ping }))));
+    const report = reportWithCases(JSON.stringify(withCase('ping', mutate(pingCase()))));
     expect(report.cases).toBeNull();
     expect(report.cases_error).toContain(reason);
     expect(report.sha).not.toBeNull();
@@ -505,6 +504,20 @@ describe('the PR case list is data that is held to the floor', () => {
     const report = reportWithCases(text);
     expect(report.cases).toBeNull();
     expect(report.cases_error).toContain('not valid JSON');
+  });
+
+  test('JSON nested far deeper than the parser allows, and a nested regular expression, are refused not crashed on', () => {
+    const deep = reportWithCases(`${'['.repeat(50_000)}${']'.repeat(50_000)}`);
+    expect(deep.cases).toBeNull();
+    // Older Pythons raise RecursionError inside json.loads, newer ones return a list of lists: both are refused.
+    expect(deep.cases_error).toMatch(/not valid JSON|has no text name/);
+    const nested = reportWithCases(
+      JSON.stringify(
+        withCase('ping', { ...pingCase(), expect: [`${'('.repeat(5000)}a${')'.repeat(5000)}`] }),
+      ),
+    );
+    expect(nested.cases).toBeNull();
+    expect(nested.cases_error).toContain('case ping: bad expect pattern');
   });
 
   test('a case list that is not a list', () => {
@@ -707,6 +720,14 @@ describe('when the stage identity or pm2 cannot be proven', () => {
     expect(run.status).toBe(3);
     expect(run.stderr).toContain('.env is not readable');
     expect(run.getMeCalls).toBe(0);
+  });
+
+  test('a stage env file that is not UTF-8 is not provisioned, not a crash', () => {
+    const slot = createSlot();
+    writeFileSync(join(slot.main, '.env.stage'), Buffer.from([0xff, 0xfe, 0x42, 0x4f, 0x54, 0x3d]));
+    const run = runReport(slot);
+    expect(run.status).toBe(3);
+    expect(run.stderr).toContain('.env.stage is not readable');
   });
 
   test('pm2 fails or prints something that is not a list', () => {

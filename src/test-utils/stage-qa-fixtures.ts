@@ -85,6 +85,13 @@ export function writeExecutable(path: string, text: string): void {
 
 export type CaseRecord = Record<string, unknown>;
 
+/** The committed `ping` case as a plain record a test can mutate a copy of. */
+export function pingCase(): CaseRecord {
+  const found = realCases().find((c) => c.name === 'ping');
+  if (!found) throw new Error('scripts/stage-smoke-cases.json has no ping case');
+  return { ...found };
+}
+
 /** The committed list with the case `name` replaced by `replacement`. */
 export function withCase(name: string, replacement: CaseRecord): CaseRecord[] {
   return realCases().map((c) => (c.name === name ? replacement : { ...c }));
