@@ -11,13 +11,20 @@
 
 import type { Bot } from 'gramio';
 import type OpenAI from 'openai';
-import { CURRENCY_ALIASES, SUPPORTED_CURRENCIES } from '../../config/constants';
+import { SUPPORTED_CURRENCIES } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import type { AgentRunOutcome } from '../../database/repositories/agent-trajectory.repository';
 import type { ChatMessage } from '../../database/types';
 import { AgentError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
+import {
+  amountCurrencies,
+  canonicalJson,
+  parseToolInput,
+  sanitizeAssistantToolCalls,
+  toolResultContent,
+} from './agent-helpers';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { reportAiFailureToAdmin } from './error-reporter';
 import type { Role } from './model-presets';
@@ -76,27 +83,6 @@ const REASONING_LEAK_NOTE =
   "[SYSTEM] Your previous reply mixed your internal notes about the conversation into the answer, so it was not shown to the user. Answer the user's last message again: only the final answer, in the user's language, without any notes about the task, the conversation or what you are going to do. Do not call tools: answer from the tool results above.";
 
 /**
- * Currencies of the amounts in `text`, once each: a supported code or a currency symbol right
- * before or after a digit ("700 USD", "USD 700", "$700", "700 €"). Used to spot a forced answer
- * that names a currency no tool result had — the invented amounts of #166. Every pattern is a
- * fixed-width match, so the scan stays linear on long digit runs.
- */
-function amountCurrencies(text: string): string[] {
-  const codes = new Set<string>();
-  const add = (token: string | undefined) => {
-    const code = token && (CURRENCY_ALIASES[token] ?? token);
-    if (code && SUPPORTED_CURRENCIES.some((c) => c === code)) codes.add(code);
-  };
-  // Up to 3 spaces of any kind (non-breaking ones included) between amount and currency, and an
-  // optional sign before a prefixed amount ("USD -700", "USD −700").
-  for (const m of text.matchAll(
-    /\d[\s\u00a0\u202f]{0,3}([A-Z]{3}|[$€₽£])(?![A-Za-z])|(?<![A-Za-z])([A-Z]{3}|[$€₽£])[\s\u00a0\u202f]{0,3}[-−+]?\d/g,
-  )) {
-    add(m[1] ?? m[2]);
-  }
-  return [...codes];
-}
-/**
  * What the model was doing when the stall guard stepped in — quoted in the nudge (the first stall
  * of a run) and in the note for the model that takes the run over (later stalls).
  */
@@ -138,23 +124,37 @@ function newTrajectory(startedAt: number): RunTrajectory {
   };
 }
 
-/**
- * JSON with object keys sorted at every level, so two tool calls with the same arguments in a
- * different key order produce the same cache key.
- */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** A system message whose content is known to be a string (`ChatCompletionSystemMessageParam` also allows parts). */
 interface SystemMessage {
   role: 'system';
   content: string;
+}
+
+/** What a run's answer steps (leak re-run, validation) share. */
+interface RunIo {
+  userMessage: string;
+  messages: OpenAI.ChatCompletionMessageParam[];
+  writer: TelegramStreamWriter;
+  debugCtx: AiDebugRunContext | null;
+  toolCallNames: string[];
+}
+
+/** The answer being shaped by the post-loop steps. */
+interface RunAnswer {
+  text: string;
+  toolCount: number;
+  leakRerunDone: boolean;
+}
+
+type ExecutedToolCall = ToolCallResult & { tool: string; argsKey: string };
+
+/** The tool calls of one round, in order. */
+interface ExecutedRound {
+  results: ExecutedToolCall[];
+  /** Ids answered from the run's cache (the model repeated the call). */
+  repeatedCallIds: Set<string>;
+  /** Calls that read or changed data (not discovery, not rejected). */
+  dataCalls: number;
 }
 
 export class ExpenseBotAgent {
@@ -207,6 +207,27 @@ export class ExpenseBotAgent {
       userMessage,
     );
 
+    const messages = this.beginRun(userMessage, conversationHistory, debugCtx);
+    const toolCallNames: string[] = [];
+    this.resetRunState();
+
+    try {
+      const result = await this.runWithRetry(messages, writer, debugCtx, toolCallNames);
+      return await this.completeRun(
+        { userMessage, messages, writer, debugCtx, toolCallNames },
+        result,
+      );
+    } catch (error) {
+      return this.failRun(error, userMessage, writer, debugCtx);
+    }
+  }
+
+  /** Build the history for a run and log its start. */
+  private beginRun(
+    userMessage: string,
+    conversationHistory: ChatMessage[],
+    debugCtx: AiDebugRunContext | null,
+  ): OpenAI.ChatCompletionMessageParam[] {
     this.exposure = this.newExposure();
     const systemMessage = this.buildSystemMessage(buildToolIndex(this.exposure.mode));
     const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -220,8 +241,11 @@ export class ExpenseBotAgent {
 
     debugCtx?.logSystemPrompt(systemMessage.content);
     debugCtx?.logHistory(conversationHistory.map((m) => ({ role: m.role, content: m.content })));
+    return messages;
+  }
 
-    const toolCallNames: string[] = [];
+  /** Fresh per-run state; the previous run of the group counts as followed up by this one. */
+  private resetRunState(): void {
     this.readOnlyToolResults.clear();
     this.writeToolRan = false;
     this.toolResultCurrencies.clear();
@@ -231,133 +255,149 @@ export class ExpenseBotAgent {
     } catch (err) {
       logger.error({ err }, '[AGENT] Failed to mark the previous run trajectory as followed up');
     }
+  }
 
-    try {
-      const result = await this.runWithRetry(messages, writer, debugCtx, toolCallNames);
-      let { text: finalText } = result;
-      let { toolCount: totalToolCalls } = result;
+  /** Leak re-run, validation, skip handling and trajectory record for a finished agent loop. */
+  private async completeRun(
+    io: RunIo,
+    result: { text: string; toolCount: number },
+  ): Promise<string> {
+    const { userMessage, messages, writer, debugCtx, toolCallNames } = io;
+    const answer: RunAnswer = {
+      text: result.text,
+      toolCount: result.toolCount,
+      leakRerunDone: false,
+    };
 
-      // --- Reasoning leak: the model wrote its own notes about the task into the answer (seen on
-      // stage, PR #170 QA). Checked on the first answer and again on a validator
-      // re-run's answer; at most one leak re-run per run. ---
-      let leakRerunDone = false;
-      const handleReasoningLeak = async (): Promise<void> => {
-        if (leakRerunDone || isSkipSignal(finalText)) return;
-        const leak = findReasoningLeak(finalText, userMessage);
-        if (!leak) return;
-        leakRerunDone = true;
-        logger.warn(
-          { leak: leak.slice(0, 200) },
-          '[AGENT] Answer contains the model reasoning — re-running once without it',
-        );
-        const retry = await this.rerunWithNote({
-          messages,
-          writer,
-          debugCtx,
-          toolCallNames,
-          rejectedText: null,
-          // Tool-free: the first answer's tool results are in the history, and a write tool that
-          // already ran (add_expense) must not run a second time.
-          note: REASONING_LEAK_NOTE,
-          toolFree: true,
-        });
-        const leakAgain = findReasoningLeak(retry.text, userMessage);
-        if (leakAgain) {
-          logger.warn(
-            { leak: leakAgain.slice(0, 200) },
-            '[AGENT] The re-run answer still contains the model reasoning — surfacing it',
-          );
-        }
-        finalText = retry.text;
-        totalToolCalls += retry.toolCount;
-      };
-      await handleReasoningLeak();
+    // --- Reasoning leak: the model wrote its own notes about the task into the answer (seen on
+    // stage, PR #170 QA). Checked on the first answer and again on a validator
+    // re-run's answer; at most one leak re-run per run. ---
+    await this.handleReasoningLeak(io, answer);
 
-      // --- Validation pass (runs only when no tools were called in the whole run AND tools were
-      // available) --- If the model called tools the data is real (a leak re-run reuses those
-      // results); if no tools existed there's nothing to validate against. An intentional [SKIP]
-      // is not an answer, so it is not validated.
-      if (totalToolCalls === 0 && this.exposure.tools().length > 0 && !isSkipSignal(finalText)) {
-        const validated = await this.finalizeWithValidation({
-          userMessage,
-          messages,
-          writer,
-          debugCtx,
-          toolCallNames,
-          initial: { text: finalText, toolCount: totalToolCalls },
-        });
-        finalText = validated.text;
-        totalToolCalls = validated.toolCount;
-        await handleReasoningLeak();
-      }
-
-      // Skip signal — bot chose to stay silent. The writer replaces a missing answer with the
-      // failure message unless silence is allowed (no mention, no write tool, no forced answer;
-      // after reads only an explicit [SKIP]), so a skip here is always intentional — including
-      // one emitted by the validator re-run (#108).
-      if (isSkipSignal(finalText)) {
-        logger.info('[AGENT] Skip signal — staying silent');
-        debugCtx?.logFinal(finalText, totalToolCalls);
-        debugCtx?.flush();
-        this.recordTrajectory('silent');
-        await writer.deleteSentMessage();
-        return '';
-      }
-
-      debugCtx?.logAiText(finalText);
-      debugCtx?.logFinal(finalText, totalToolCalls);
-      debugCtx?.flush();
-      this.recordTrajectory(finalText === NO_ANSWER_MESSAGE ? 'no_answer' : 'answered');
-
-      await writer.sendRemainingChunks();
-      return finalText;
-    } catch (error) {
-      const classification = classifyAiError(error);
-      debugCtx?.logError(
-        `${classification?.kind ?? 'unclassified'}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      debugCtx?.flush();
-      this.recordTrajectory('error', classification?.kind ?? 'unclassified');
-      if (!classification) {
-        // Not a recognizable AI/network/timeout failure — propagate so the caller
-        // (and logs) see the real, unrelated error instead of a masked generic one.
-        // (No admin AI-failure report here: it isn't an AI failure.)
-        await writer.deleteSentMessage();
-        throw error;
-      }
-
-      // Only genuine failures page the admin: provider_down (chain unreachable / 5xx) and generic
-      // (a recognized-but-uncategorized API error, including an exhausted-chain empty-response). The
-      // transient / user-side classes — rate_limit (429), overloaded (529), timeout (our own 60s
-      // abort) — are self-resolving and would only spam the operator, so they are logged warn and
-      // skipped here. This is the SAME split as the warn-vs-error logging below.
-      const isGenuineFailure =
-        classification.kind === 'provider_down' || classification.kind === 'generic';
-      if (isGenuineFailure) {
-        // Throttled, fire-and-forget — never blocks the user path, never throws back into it.
-        reportAiFailureToAdmin({
-          groupId: this.ctx.groupId,
-          telegramGroupId: this.ctx.telegramGroupId,
-          userMessage,
-          error,
-        }).catch((reportErr) =>
-          logger.error({ err: reportErr }, '[AGENT] admin failure report errored'),
-        );
-      }
-      // Keep the original error (stack, status) in the logs — the user only sees the
-      // short classified message, so this is the one place it's recorded at the boundary.
-      // Server-side / unknown failures are error-level; transient client-side ones are warn.
-      const logFields = { err: error, kind: classification.kind };
-      const logMsg = '[AGENT] AI run failed — surfacing classified error to user';
-      if (isGenuineFailure) {
-        logger.error(logFields, logMsg);
-      } else {
-        logger.warn(logFields, logMsg);
-      }
-      // Under the work log when tools ran (they may have changed data), else as a plain message
-      await writer.fail(classification.userMessage);
-      throw new AgentError(classification.userMessage);
+    // --- Validation pass (runs only when no tools were called in the whole run AND tools were
+    // available) --- If the model called tools the data is real (a leak re-run reuses those
+    // results); if no tools existed there's nothing to validate against. An intentional [SKIP]
+    // is not an answer, so it is not validated.
+    if (answer.toolCount === 0 && this.exposure.tools().length > 0 && !isSkipSignal(answer.text)) {
+      const validated = await this.finalizeWithValidation({
+        userMessage,
+        messages,
+        writer,
+        debugCtx,
+        toolCallNames,
+        initial: { text: answer.text, toolCount: answer.toolCount },
+      });
+      answer.text = validated.text;
+      answer.toolCount = validated.toolCount;
+      await this.handleReasoningLeak(io, answer);
     }
+
+    // Skip signal — bot chose to stay silent. The writer replaces a missing answer with the
+    // failure message unless silence is allowed (no mention, no write tool, no forced answer;
+    // after reads only an explicit [SKIP]), so a skip here is always intentional — including
+    // one emitted by the validator re-run (#108).
+    if (isSkipSignal(answer.text)) {
+      logger.info('[AGENT] Skip signal — staying silent');
+      debugCtx?.logFinal(answer.text, answer.toolCount);
+      debugCtx?.flush();
+      this.recordTrajectory('silent');
+      await writer.deleteSentMessage();
+      return '';
+    }
+
+    debugCtx?.logAiText(answer.text);
+    debugCtx?.logFinal(answer.text, answer.toolCount);
+    debugCtx?.flush();
+    this.recordTrajectory(answer.text === NO_ANSWER_MESSAGE ? 'no_answer' : 'answered');
+
+    await writer.sendRemainingChunks();
+    return answer.text;
+  }
+
+  private async handleReasoningLeak(io: RunIo, answer: RunAnswer): Promise<void> {
+    if (answer.leakRerunDone || isSkipSignal(answer.text)) return;
+    const { userMessage, messages, writer, debugCtx, toolCallNames } = io;
+    const leak = findReasoningLeak(answer.text, userMessage);
+    if (!leak) return;
+    answer.leakRerunDone = true;
+    logger.warn(
+      { leak: leak.slice(0, 200) },
+      '[AGENT] Answer contains the model reasoning — re-running once without it',
+    );
+    const retry = await this.rerunWithNote({
+      messages,
+      writer,
+      debugCtx,
+      toolCallNames,
+      rejectedText: null,
+      // Tool-free: the first answer's tool results are in the history, and a write tool that
+      // already ran (add_expense) must not run a second time.
+      note: REASONING_LEAK_NOTE,
+      toolFree: true,
+    });
+    const leakAgain = findReasoningLeak(retry.text, userMessage);
+    if (leakAgain) {
+      logger.warn(
+        { leak: leakAgain.slice(0, 200) },
+        '[AGENT] The re-run answer still contains the model reasoning — surfacing it',
+      );
+    }
+    answer.text = retry.text;
+    answer.toolCount += retry.toolCount;
+  }
+
+  /** Report a failed run to the user (and the admin when genuine); always throws. */
+  private async failRun(
+    error: unknown,
+    userMessage: string,
+    writer: TelegramStreamWriter,
+    debugCtx: AiDebugRunContext | null,
+  ): Promise<never> {
+    const classification = classifyAiError(error);
+    debugCtx?.logError(
+      `${classification?.kind ?? 'unclassified'}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    debugCtx?.flush();
+    this.recordTrajectory('error', classification?.kind ?? 'unclassified');
+    if (!classification) {
+      // Not a recognizable AI/network/timeout failure — propagate so the caller
+      // (and logs) see the real, unrelated error instead of a masked generic one.
+      // (No admin AI-failure report here: it isn't an AI failure.)
+      await writer.deleteSentMessage();
+      throw error;
+    }
+
+    // Only genuine failures page the admin: provider_down (chain unreachable / 5xx) and generic
+    // (a recognized-but-uncategorized API error, including an exhausted-chain empty-response). The
+    // transient / user-side classes — rate_limit (429), overloaded (529), timeout (our own 60s
+    // abort) — are self-resolving and would only spam the operator, so they are logged warn and
+    // skipped here. This is the SAME split as the warn-vs-error logging below.
+    const isGenuineFailure =
+      classification.kind === 'provider_down' || classification.kind === 'generic';
+    if (isGenuineFailure) {
+      // Throttled, fire-and-forget — never blocks the user path, never throws back into it.
+      reportAiFailureToAdmin({
+        groupId: this.ctx.groupId,
+        telegramGroupId: this.ctx.telegramGroupId,
+        userMessage,
+        error,
+      }).catch((reportErr) =>
+        logger.error({ err: reportErr }, '[AGENT] admin failure report errored'),
+      );
+    }
+    // Keep the original error (stack, status) in the logs — the user only sees the
+    // short classified message, so this is the one place it's recorded at the boundary.
+    // Server-side / unknown failures are error-level; transient client-side ones are warn.
+    const logFields = { err: error, kind: classification.kind };
+    const logMsg = '[AGENT] AI run failed — surfacing classified error to user';
+    if (isGenuineFailure) {
+      logger.error(logFields, logMsg);
+    } else {
+      logger.warn(logFields, logMsg);
+    }
+    // Under the work log when tools ran (they may have changed data), else as a plain message
+    await writer.fail(classification.userMessage);
+    throw new AgentError(classification.userMessage);
   }
 
   /**
@@ -586,32 +626,15 @@ export class ExpenseBotAgent {
       round++;
       debugCtx?.logRound(round);
 
-      const callbacks: StreamCallbacks = {
-        onTextDelta: (text) => writer.appendText(text),
-        onToolCallStart: (name) => writer.setToolLabel(name, {}),
-      };
-
-      const toolTime = AbortSignal.timeout(toolTimeLeft);
-      let result: StreamRoundResult;
-      try {
-        result = await aiStreamRound(
-          {
-            messages,
-            tools: this.exposure.tools(),
-            maxTokens: 4096,
-            temperature: 0.3,
-            chain: 'smart',
-            role: this.routingRole(),
-            purpose: 'agent',
-            signal: AbortSignal.any([signal, toolTime]),
-            excludeProviders: [...this.trajectory.excludedProviders],
-          },
-          callbacks,
-        );
-      } catch (err) {
+      const result = await this.streamToolRound(
+        messages,
+        writer,
+        signal,
+        AbortSignal.timeout(toolTimeLeft),
+      );
+      if (result === null) {
         // Only the tool-round time ran out (the run deadline did not): the cut round's partial
         // text is dropped and the forced round answers from what was gathered.
-        if (signal.aborted || !toolTime.aborted) throw err;
         writer.commitIntermediate();
         this.endToolRounds('time_budget');
         mustAnswer = true;
@@ -619,261 +642,22 @@ export class ExpenseBotAgent {
       }
       this.logRoundProvider(round, result, debugCtx);
 
-      // Execute tool calls
-      const toolResults: Array<ToolCallResult & { tool: string; argsKey: string }> = [];
-      const repeatedCallIds = new Set<string>();
-
-      for (const tc of result.toolCalls) {
-        let input: Record<string, unknown>;
-        try {
-          const parsed: unknown = JSON.parse(tc.arguments || '{}');
-          // `null` is how some backends send a no-argument call. Any other valid JSON that is not an
-          // object (a number, an array) is no argument set.
-          if (parsed === null) {
-            input = {};
-          } else if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw new TypeError('Tool arguments are not a JSON object');
-          } else {
-            input = parsed as Record<string, unknown>;
-          }
-        } catch {
-          logger.error(
-            `[AGENT] Malformed tool arguments for ${tc.name}: ${tc.arguments?.substring(0, 200)}`,
-          );
-          // The model is guessing arguments for a tool it has no schema for: load the schema so the
-          // retry is informed (the result is moot — this call already failed as malformed).
-          this.exposure.rejectUnexposedCall(tc.name);
-          toolResults.push({
-            id: tc.id,
-            tool: tc.name,
-            argsKey: tc.arguments ?? '',
-            result: {
-              success: false,
-              error: `Malformed arguments: ${tc.arguments?.substring(0, 100)}`,
-            },
-          });
-          continue;
-        }
-
-        logger.info(`[AGENT] Tool call: ${tc.name} ${JSON.stringify(input)}`);
-        debugCtx?.logToolCall(tc.name, input);
-
-        writer.setToolLabel(tc.name, input);
-        await writer.flush(true);
-
-        const isReadOnly = READ_ONLY_TOOL_NAMES[tc.name] === true;
-        const argsKey = canonicalJson(input);
-        const cacheKey = `${tc.name}:${argsKey}`;
-        const cached = isReadOnly ? this.readOnlyToolResults.get(cacheKey) : undefined;
-        const isDiscovery = this.exposure.isDiscovery(tc.name);
-        const unexposed = isDiscovery ? null : this.exposure.rejectUnexposedCall(tc.name);
-        let toolResult: ToolResult;
-        if (isDiscovery) {
-          // Loads schemas for the next round; reads and changes no data.
-          toolResult = this.exposure.discover(input);
-        } else if (unexposed) {
-          logger.warn(`[AGENT] ${tc.name} called before its schema was loaded — rejected, loaded`);
-          toolResult = unexposed;
-        } else if (cached) {
-          logger.info(`[AGENT] Repeated tool call: ${tc.name} — reusing the earlier result`);
-          repeatedCallIds.add(tc.id);
-          toolResult = cached;
-        } else if (
-          // Checked right before the tool starts (after the awaited Telegram flush, which can wait
-          // out a 429): once the final-round reserve is reached a tool is not started — an earlier
-          // call may have been slow — so the forced answer keeps its time. A started tool is never
-          // aborted, so writes stay whole.
-          this.now() - this.trajectory.startedAt >=
-          RUN_DEADLINE_MS - FINAL_ROUND_RESERVE_MS
-        ) {
-          logger.warn(
-            `[AGENT] Tool call ${tc.name} skipped — no time left before the final answer`,
-          );
-          toolResult = {
-            success: false,
-            error: 'Not run: no time left for more tool calls in this answer.',
-          };
-        } else {
-          if (!isReadOnly) this.writeToolRan = true;
-          toolResult = await executeTool(tc.name, input, this.ctx);
-          if (!isReadOnly || SYNCING_READ_TOOL_NAMES[tc.name] === true) {
-            // The data may have changed (a write, or a read that synced from Sheets first) —
-            // earlier reads are stale now.
-            this.readOnlyToolResults.clear();
-          }
-          if (isReadOnly && toolResult.success) {
-            this.readOnlyToolResults.set(cacheKey, toolResult);
-          }
-        }
-
-        if (toolResult.success) {
-          const preview = toolResult.output ? toolResult.output.substring(0, 300) : '(no output)';
-          const total = toolResult.output?.length ?? 0;
-          logger.info(
-            `[AGENT] Tool result: ${tc.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
-          );
-        } else {
-          logger.info(`[AGENT] Tool result: ${tc.name} ERR: ${toolResult.error}`);
-        }
-
-        debugCtx?.logToolResult(
-          tc.name,
-          toolResult.success,
-          toolResult.output,
-          toolResult.error,
-          toolResult.data,
-          toolResult.summary,
-        );
-        // Discovery and a rejected call read and change no data: neither counts as a data tool call
-        // (a run of only those must still go through the no-tools answer validation).
-        if (!isDiscovery && !unexposed) {
-          totalToolCalls++;
-          toolCallNames.push(tc.name);
-        }
-
-        writer.markToolResult(toolResult.success);
-
-        toolResults.push({ id: tc.id, tool: tc.name, argsKey, result: toolResult });
-      }
+      const executed = await this.executeRoundToolCalls(result, writer, debugCtx, toolCallNames);
+      totalToolCalls += executed.dataCalls;
       // Schemas revealed by this round's discover / rejected calls reach the model next round.
       this.exposure.endRound();
 
-      if (toolResults.length > 0) {
+      if (executed.results.length > 0) {
         writer.commitIntermediate();
-
-        // Sanitize tool_calls before pushing to history — some providers
-        // generate malformed JSON arguments that break subsequent
-        // rounds when the next provider tries to parse the history.
-        const sanitized = { ...result.assistantMessage };
-        if ('tool_calls' in sanitized && Array.isArray(sanitized.tool_calls)) {
-          sanitized.tool_calls = sanitized.tool_calls.map((tc) => {
-            if (!('function' in tc)) return tc;
-            try {
-              JSON.parse(tc.function.arguments);
-              return tc;
-            } catch {
-              return { ...tc, function: { ...tc.function, arguments: '{}' } };
-            }
-          });
-        }
-        messages.push(sanitized);
-
-        // Add tool results (OpenAI format: role=tool)
-        const seed = this.trajectory.hashSeed;
-        const calls: ToolCallRecord[] = [];
-        for (const tr of toolResults) {
-          const content = tr.result.success
-            ? tr.result.data !== undefined
-              ? `${tr.result.summary ? `${tr.result.summary}\n` : ''}${JSON.stringify(tr.result.data)}`
-              : tr.result.output || 'Success'
-            : `Error: ${tr.result.error}`;
-          // Evidence for the forced-answer check: currencies a successful result names (an error
-          // listing every supported code is not data) — as whole-word codes (JSON fields like
-          // "currency":"RSD" carry no amount next to them) or as amounts with a symbol ("10.00 $").
-          if (tr.result.success) {
-            for (const code of SUPPORTED_CURRENCIES) {
-              if (new RegExp(`(?<![A-Za-z])${code}(?![A-Za-z])`).test(content)) {
-                this.toolResultCurrencies.add(code);
-              }
-            }
-            for (const code of amountCurrencies(content)) this.toolResultCurrencies.add(code);
-          }
-          calls.push({
-            tool: tr.tool,
-            argsHash: hashFeature(tr.argsKey, seed),
-            resultHash: hashFeature(content, seed),
-            isError: !tr.result.success,
-          });
-
-          messages.push({
-            role: 'tool',
-            tool_call_id: tr.id,
-            content: repeatedCallIds.has(tr.id)
-              ? `[This exact call was already made earlier in this answer — same result again. Do not repeat it; use the result.]\n${content}`
-              : content,
-          });
-        }
-
-        const decision = this.trajectory.guard.next(
-          {
-            round: this.trajectory.guard.entries.length + 1,
-            provider: result.providerUsed,
-            elapsedMs: this.now() - this.trajectory.startedAt,
-            calls,
-          },
-          nextProvider(
-            'smart',
-            [...this.trajectory.excludedProviders, result.providerUsed],
-            this.routingRole(),
-          ) !== null,
-        );
-        mustAnswer = decision.action === 'finalize';
+        mustAnswer = await this.concludeToolRound(result, executed, messages, writer);
         continueLoop = !mustAnswer;
-        await this.applyStallDecision(decision, result.providerUsed, messages, writer);
       } else {
         continueLoop = false;
       }
     }
 
     if (mustAnswer) {
-      // The tool rounds are over while the model still wanted tools: without a last round that
-      // forbids tool calls the run would end with no text at all (prod 2026-10-12, a model making
-      // one call per round). The tools stay declared with tool_choice 'none': every smart-chain
-      // provider accepted that live (2026-10-12), and without the tools Claude refused to add up
-      // the grand total because rule 7 sends all arithmetic to calculate.
-      // A tool-free re-run already ends with its own note asking for the answer.
-      if (!toolFree) messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
-      debugCtx?.logRound(round + 1);
-      try {
-        const final = await aiStreamRound(
-          {
-            messages,
-            tools: this.exposure.tools(),
-            toolChoice: 'none',
-            maxTokens: 4096,
-            temperature: 0.3,
-            chain: 'smart',
-            role: this.routingRole(),
-            purpose: 'agent_final',
-            signal,
-            excludeProviders: [...this.trajectory.excludedProviders],
-          },
-          { onTextDelta: (text) => writer.appendText(text) },
-        );
-        this.logRoundProvider(round + 1, final, debugCtx);
-        const unseen = amountCurrencies(final.text).filter(
-          (code) => !this.toolResultCurrencies.has(code),
-        );
-        if (unseen.length > 0) {
-          // Not blocked: a log signal for review and the phase-1 dataset, not a verifier.
-          logger.warn(
-            { currencies: unseen, provider: final.providerUsed },
-            '[AGENT] Forced final answer names amounts in a currency not in any tool result — possibly invented',
-          );
-        }
-        if (final.toolCalls.length > 0) {
-          // The provider ignored tool_choice 'none'. Its calls never run: once the tool rounds are
-          // over only the text counts (none of the providers did this in the 2026-10-12 smoke).
-          logger.warn(
-            { provider: final.providerUsed, toolCalls: final.toolCalls.map((tc) => tc.name) },
-            '[AGENT] Forced final round returned tool calls despite tool_choice none — ignored',
-          );
-        }
-      } catch (err) {
-        if (signal.aborted) {
-          // The run deadline fired: report the timeout whatever error the round ended with.
-          // runWithRetry never retries once the deadline fired, so no tool round is replayed.
-          const deadlineError = new Error('AI overall deadline exceeded', { cause: err });
-          deadlineError.name = 'AbortError';
-          throw deadlineError;
-        }
-        // Rethrowing would make runWithRetry replay all tool rounds, and write tools
-        // (add_expense, …) would run twice. The finalize below shows the failure message.
-        logger.warn(
-          { err },
-          '[AGENT] Forced final answer round failed — showing the failure message',
-        );
-      }
+      await this.runForcedFinalRound({ messages, writer, debugCtx, signal, toolFree, round });
     }
 
     // Silence is a choice only for chatter the bot was not asked about. A run that changed data
@@ -891,6 +675,331 @@ export class ExpenseBotAgent {
     );
 
     return { text: finalText, toolCount: totalToolCalls };
+  }
+
+  /** One streamed tool round of the smart chain; null when only the tool-round time ran out. */
+  private async streamToolRound(
+    messages: OpenAI.ChatCompletionMessageParam[],
+    writer: TelegramStreamWriter,
+    signal: AbortSignal,
+    toolTime: AbortSignal,
+  ): Promise<StreamRoundResult | null> {
+    const callbacks: StreamCallbacks = {
+      onTextDelta: (text) => writer.appendText(text),
+      onToolCallStart: (name) => writer.setToolLabel(name, {}),
+    };
+    try {
+      return await aiStreamRound(
+        {
+          messages,
+          tools: this.exposure.tools(),
+          maxTokens: 4096,
+          temperature: 0.3,
+          chain: 'smart',
+          role: this.routingRole(),
+          purpose: 'agent',
+          signal: AbortSignal.any([signal, toolTime]),
+          excludeProviders: [...this.trajectory.excludedProviders],
+        },
+        callbacks,
+      );
+    } catch (err) {
+      if (signal.aborted || !toolTime.aborted) throw err;
+      return null;
+    }
+  }
+
+  /** Run every tool call of a round in order; `dataCalls` counts the ones that read or change data. */
+  private async executeRoundToolCalls(
+    result: StreamRoundResult,
+    writer: TelegramStreamWriter,
+    debugCtx: AiDebugRunContext | null,
+    toolCallNames: string[],
+  ): Promise<ExecutedRound> {
+    const executed: ExecutedRound = { results: [], repeatedCallIds: new Set(), dataCalls: 0 };
+    for (const tc of result.toolCalls) {
+      const input = parseToolInput(tc.arguments);
+      if (input === null) {
+        logger.error(
+          `[AGENT] Malformed tool arguments for ${tc.name}: ${tc.arguments?.substring(0, 200)}`,
+        );
+        // The model is guessing arguments for a tool it has no schema for: load the schema so the
+        // retry is informed (the result is moot — this call already failed as malformed).
+        this.exposure.rejectUnexposedCall(tc.name);
+        executed.results.push({
+          id: tc.id,
+          tool: tc.name,
+          argsKey: tc.arguments ?? '',
+          result: {
+            success: false,
+            error: `Malformed arguments: ${tc.arguments?.substring(0, 100)}`,
+          },
+        });
+        continue;
+      }
+
+      const call = await this.executeToolCall(tc, input, writer, debugCtx);
+      if (call.repeated) executed.repeatedCallIds.add(tc.id);
+      if (call.counted) {
+        executed.dataCalls++;
+        toolCallNames.push(tc.name);
+      }
+      executed.results.push(call.entry);
+    }
+    return executed;
+  }
+
+  /** Execute (or answer from cache / reject) one well-formed tool call, with its logging. */
+  private async executeToolCall(
+    tc: { id: string; name: string },
+    input: Record<string, unknown>,
+    writer: TelegramStreamWriter,
+    debugCtx: AiDebugRunContext | null,
+  ): Promise<{ entry: ExecutedToolCall; repeated: boolean; counted: boolean }> {
+    logger.info(`[AGENT] Tool call: ${tc.name} ${JSON.stringify(input)}`);
+    debugCtx?.logToolCall(tc.name, input);
+
+    writer.setToolLabel(tc.name, input);
+    await writer.flush(true);
+
+    const argsKey = canonicalJson(input);
+    const isDiscovery = this.exposure.isDiscovery(tc.name);
+    const unexposed = isDiscovery ? null : this.exposure.rejectUnexposedCall(tc.name);
+    const { toolResult, repeated } = await this.resolveToolResult(
+      tc.name,
+      input,
+      `${tc.name}:${argsKey}`,
+      isDiscovery,
+      unexposed,
+    );
+
+    if (toolResult.success) {
+      const preview = toolResult.output ? toolResult.output.substring(0, 300) : '(no output)';
+      const total = toolResult.output?.length ?? 0;
+      logger.info(
+        `[AGENT] Tool result: ${tc.name} OK (${total} chars) preview: ${preview}${total > 300 ? '...' : ''}`,
+      );
+    } else {
+      logger.info(`[AGENT] Tool result: ${tc.name} ERR: ${toolResult.error}`);
+    }
+
+    debugCtx?.logToolResult(
+      tc.name,
+      toolResult.success,
+      toolResult.output,
+      toolResult.error,
+      toolResult.data,
+      toolResult.summary,
+    );
+    writer.markToolResult(toolResult.success);
+
+    return {
+      entry: { id: tc.id, tool: tc.name, argsKey, result: toolResult },
+      repeated,
+      // Discovery and a rejected call read and change no data: neither counts as a data tool call
+      // (a run of only those must still go through the no-tools answer validation).
+      counted: !isDiscovery && !unexposed,
+    };
+  }
+
+  /** Where a tool call's result comes from: discovery, rejection, the run's cache, a time stop, or the tool. */
+  private async resolveToolResult(
+    name: string,
+    input: Record<string, unknown>,
+    cacheKey: string,
+    isDiscovery: boolean,
+    unexposed: ToolResult | null,
+  ): Promise<{ toolResult: ToolResult; repeated: boolean }> {
+    if (isDiscovery) {
+      // Loads schemas for the next round; reads and changes no data.
+      return { toolResult: this.exposure.discover(input), repeated: false };
+    }
+    if (unexposed) {
+      logger.warn(`[AGENT] ${name} called before its schema was loaded — rejected, loaded`);
+      return { toolResult: unexposed, repeated: false };
+    }
+    const isReadOnly = READ_ONLY_TOOL_NAMES[name] === true;
+    const cached = isReadOnly ? this.readOnlyToolResults.get(cacheKey) : undefined;
+    if (cached) {
+      logger.info(`[AGENT] Repeated tool call: ${name} — reusing the earlier result`);
+      return { toolResult: cached, repeated: true };
+    }
+    // Checked right before the tool starts (after the awaited Telegram flush, which can wait
+    // out a 429): once the final-round reserve is reached a tool is not started — an earlier
+    // call may have been slow — so the forced answer keeps its time. A started tool is never
+    // aborted, so writes stay whole.
+    if (this.now() - this.trajectory.startedAt >= RUN_DEADLINE_MS - FINAL_ROUND_RESERVE_MS) {
+      logger.warn(`[AGENT] Tool call ${name} skipped — no time left before the final answer`);
+      return {
+        toolResult: {
+          success: false,
+          error: 'Not run: no time left for more tool calls in this answer.',
+        },
+        repeated: false,
+      };
+    }
+    return { toolResult: await this.runTool(name, input, isReadOnly, cacheKey), repeated: false };
+  }
+
+  private async runTool(
+    name: string,
+    input: Record<string, unknown>,
+    isReadOnly: boolean,
+    cacheKey: string,
+  ): Promise<ToolResult> {
+    if (!isReadOnly) this.writeToolRan = true;
+    const toolResult = await executeTool(name, input, this.ctx);
+    if (!isReadOnly || SYNCING_READ_TOOL_NAMES[name] === true) {
+      // The data may have changed (a write, or a read that synced from Sheets first) —
+      // earlier reads are stale now.
+      this.readOnlyToolResults.clear();
+    }
+    if (isReadOnly && toolResult.success) {
+      this.readOnlyToolResults.set(cacheKey, toolResult);
+    }
+    return toolResult;
+  }
+
+  /**
+   * After a round with tool calls: push the assistant turn and the tool results into the history,
+   * let the stall guard judge the round and act on its decision. Returns whether the run must
+   * now give its final answer.
+   */
+  private async concludeToolRound(
+    result: StreamRoundResult,
+    executed: ExecutedRound,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    writer: TelegramStreamWriter,
+  ): Promise<boolean> {
+    messages.push(sanitizeAssistantToolCalls(result.assistantMessage));
+
+    // Add tool results (OpenAI format: role=tool)
+    const seed = this.trajectory.hashSeed;
+    const calls: ToolCallRecord[] = [];
+    for (const tr of executed.results) {
+      const content = toolResultContent(tr.result);
+      // Evidence for the forced-answer check: currencies a successful result names (an error
+      // listing every supported code is not data).
+      if (tr.result.success) this.noteResultCurrencies(content);
+      calls.push({
+        tool: tr.tool,
+        argsHash: hashFeature(tr.argsKey, seed),
+        resultHash: hashFeature(content, seed),
+        isError: !tr.result.success,
+      });
+
+      messages.push({
+        role: 'tool',
+        tool_call_id: tr.id,
+        content: executed.repeatedCallIds.has(tr.id)
+          ? `[This exact call was already made earlier in this answer — same result again. Do not repeat it; use the result.]\n${content}`
+          : content,
+      });
+    }
+
+    const decision = this.trajectory.guard.next(
+      {
+        round: this.trajectory.guard.entries.length + 1,
+        provider: result.providerUsed,
+        elapsedMs: this.now() - this.trajectory.startedAt,
+        calls,
+      },
+      nextProvider(
+        'smart',
+        [...this.trajectory.excludedProviders, result.providerUsed],
+        this.routingRole(),
+      ) !== null,
+    );
+    await this.applyStallDecision(decision, result.providerUsed, messages, writer);
+    return decision.action === 'finalize';
+  }
+
+  /**
+   * Currencies a successful result names — as whole-word codes (JSON fields like "currency":"RSD"
+   * carry no amount next to them) or as amounts with a symbol ("10.00 $").
+   */
+  private noteResultCurrencies(content: string): void {
+    for (const code of SUPPORTED_CURRENCIES) {
+      if (new RegExp(`(?<![A-Za-z])${code}(?![A-Za-z])`).test(content)) {
+        this.toolResultCurrencies.add(code);
+      }
+    }
+    for (const code of amountCurrencies(content)) this.toolResultCurrencies.add(code);
+  }
+
+  /**
+   * The tool rounds are over while the model still wanted tools: without a last round that
+   * forbids tool calls the run would end with no text at all (prod 2026-10-12, a model making
+   * one call per round). The tools stay declared with tool_choice 'none': every smart-chain
+   * provider accepted that live (2026-10-12), and without the tools Claude refused to add up
+   * the grand total because rule 7 sends all arithmetic to calculate.
+   */
+  private async runForcedFinalRound(args: {
+    messages: OpenAI.ChatCompletionMessageParam[];
+    writer: TelegramStreamWriter;
+    debugCtx: AiDebugRunContext | null;
+    signal: AbortSignal;
+    toolFree: boolean;
+    round: number;
+  }): Promise<void> {
+    const { messages, writer, debugCtx, signal, toolFree, round } = args;
+    // A tool-free re-run already ends with its own note asking for the answer.
+    if (!toolFree) messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
+    debugCtx?.logRound(round + 1);
+    try {
+      const final = await aiStreamRound(
+        {
+          messages,
+          tools: this.exposure.tools(),
+          toolChoice: 'none',
+          maxTokens: 4096,
+          temperature: 0.3,
+          chain: 'smart',
+          role: this.routingRole(),
+          purpose: 'agent_final',
+          signal,
+          excludeProviders: [...this.trajectory.excludedProviders],
+        },
+        { onTextDelta: (text) => writer.appendText(text) },
+      );
+      this.logRoundProvider(round + 1, final, debugCtx);
+      this.warnOnForcedAnswerAnomalies(final);
+    } catch (err) {
+      if (signal.aborted) {
+        // The run deadline fired: report the timeout whatever error the round ended with.
+        // runWithRetry never retries once the deadline fired, so no tool round is replayed.
+        const deadlineError = new Error('AI overall deadline exceeded', { cause: err });
+        deadlineError.name = 'AbortError';
+        throw deadlineError;
+      }
+      // Rethrowing would make runWithRetry replay all tool rounds, and write tools
+      // (add_expense, …) would run twice. The finalize below shows the failure message.
+      logger.warn(
+        { err },
+        '[AGENT] Forced final answer round failed — showing the failure message',
+      );
+    }
+  }
+
+  private warnOnForcedAnswerAnomalies(final: StreamRoundResult): void {
+    const unseen = amountCurrencies(final.text).filter(
+      (code) => !this.toolResultCurrencies.has(code),
+    );
+    if (unseen.length > 0) {
+      // Not blocked: a log signal for review and the phase-1 dataset, not a verifier.
+      logger.warn(
+        { currencies: unseen, provider: final.providerUsed },
+        '[AGENT] Forced final answer names amounts in a currency not in any tool result — possibly invented',
+      );
+    }
+    if (final.toolCalls.length > 0) {
+      // The provider ignored tool_choice 'none'. Its calls never run: once the tool rounds are
+      // over only the text counts (none of the providers did this in the 2026-10-12 smoke).
+      logger.warn(
+        { provider: final.providerUsed, toolCalls: final.toolCalls.map((tc) => tc.name) },
+        '[AGENT] Forced final round returned tool calls despite tool_choice none — ignored',
+      );
+    }
   }
 
   /** Record which provider actually answered — the chain can fall back on any round. */

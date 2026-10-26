@@ -26,67 +26,83 @@ function formatParam(value: unknown): string | false {
   return false;
 }
 
-/**
- * Extract key parameters from tool input for display in the indicator
- */
-function formatToolInput(name: string, input?: Record<string, unknown>): string {
-  if (!input) return '';
+type ToolInput = Record<string, unknown>;
 
-  switch (name) {
-    case 'set_budget':
-      return [
-        input['category'],
-        input['amount'] != null && `${input['amount']} ${input['currency'] || ''}`.trim(),
-      ]
-        .filter(Boolean)
-        .join(', ');
-    case 'delete_budget':
-      return [input['category'], input['month']].filter(Boolean).join(', ');
-    case 'add_expense':
-      return [
-        input['amount'] && `${input['amount']} ${input['currency'] || ''}`.trim(),
-        input['category'],
-        input['comment'],
-      ]
-        .filter(Boolean)
-        .join(', ');
-    case 'delete_expense':
-      return input['expense_id'] ? `#${input['expense_id']}` : '';
-    case 'get_expenses': {
-      const parts = [
+/** Join the shown (truthy) parts of a step's details. */
+function joinShown(parts: unknown[], separator = ', '): string {
+  return parts.filter(Boolean).join(separator);
+}
+
+/** "500 EUR", or just "500" when the currency is missing. */
+function formatAmount(input: ToolInput): string {
+  return `${input['amount']} ${input['currency'] || ''}`.trim();
+}
+
+/** Page and page size, shown only when they differ from the defaults (page 1, 100 rows). */
+function formatPaging(input: ToolInput): string[] {
+  const parts: string[] = [];
+  const page = input['page'] as number | undefined;
+  if (page && page > 1) parts.push(`стр. ${page}`);
+  const pageSize = input['page_size'] as number | undefined;
+  if (pageSize && pageSize !== 100) parts.push(`(${pageSize})`);
+  return parts;
+}
+
+/**
+ * How each tool's input is shown next to its label in the work log. Tools missing here show
+ * only the label. A Map, not an object: tool names come from the model and must never reach
+ * Object.prototype members.
+ */
+const TOOL_INPUT_FORMATTERS = new Map<string, (input: ToolInput) => string>([
+  [
+    'set_budget',
+    (input) => joinShown([input['category'], input['amount'] != null && formatAmount(input)]),
+  ],
+  ['delete_budget', (input) => joinShown([input['category'], input['month']])],
+  [
+    'add_expense',
+    (input) =>
+      joinShown([input['amount'] && formatAmount(input), input['category'], input['comment']]),
+  ],
+  ['delete_expense', (input) => (input['expense_id'] ? `#${input['expense_id']}` : '')],
+  [
+    'get_expenses',
+    (input) =>
+      joinShown([
         formatParam(input['category']),
         formatParam(input['period']),
         input['summary_only'] && 'сводка',
-      ];
-      const page = input['page'] as number | undefined;
-      if (page && page > 1) parts.push(`стр. ${page}`);
-      const pageSize = input['page_size'] as number | undefined;
-      if (pageSize && pageSize !== 100) parts.push(`(${pageSize})`);
-      return parts.filter(Boolean).join(', ');
-    }
-    case 'get_budgets':
-      return [formatParam(input['category']), formatParam(input['month'])]
-        .filter(Boolean)
-        .join(', ');
-    case 'get_bank_transactions':
-      return [
+        ...formatPaging(input),
+      ]),
+  ],
+  [
+    'get_budgets',
+    (input) => joinShown([formatParam(input['category']), formatParam(input['month'])]),
+  ],
+  [
+    'get_bank_transactions',
+    (input) =>
+      joinShown([
         formatParam(input['bank_name']),
         formatParam(input['period']),
         formatParam(input['status']),
-      ]
-        .filter(Boolean)
-        .join(', ');
-    case 'find_missing_expenses':
-      return formatParam(input['period']) || '';
-    case 'manage_category':
-      return [input['action'], input['name']].filter(Boolean).join(' ');
-    case 'set_custom_prompt':
-      return input['prompt'] ? `${String(input['prompt']).length} символов` : 'очистка';
-    case 'calculate':
-      return input['expression'] ? String(input['expression']) : '';
-    default:
-      return '';
-  }
+      ]),
+  ],
+  ['find_missing_expenses', (input) => formatParam(input['period']) || ''],
+  ['manage_category', (input) => joinShown([input['action'], input['name']], ' ')],
+  [
+    'set_custom_prompt',
+    (input) => (input['prompt'] ? `${String(input['prompt']).length} символов` : 'очистка'),
+  ],
+  ['calculate', (input) => (input['expression'] ? String(input['expression']) : '')],
+]);
+
+/**
+ * Extract key parameters from tool input for display in the indicator
+ */
+function formatToolInput(name: string, input?: ToolInput): string {
+  if (!input) return '';
+  return TOOL_INPUT_FORMATTERS.get(name)?.(input) ?? '';
 }
 
 /**
@@ -462,68 +478,76 @@ export class TelegramStreamWriter {
         this.sentMessageId = placeholderId;
       }
 
-      if (this.sentMessageId) {
-        await this.bot.api.editMessageText({
-          chat_id: this.chatId,
-          message_id: this.sentMessageId,
-          text,
-          parse_mode: 'HTML',
-        });
-      } else {
-        // Placeholder creation failed — fall back to a new message
-        const sent = await this.bot.api.sendMessage({
-          chat_id: this.chatId,
-          text,
-          parse_mode: 'HTML',
-        });
-        this.sentMessageId = sent.message_id;
-      }
-
-      this.lastSentText = text;
-      this.lastFlushTime = Date.now();
+      await this.deliverHtml(text);
+      this.markSent(text);
     } catch (err) {
-      if (err instanceof TelegramError) {
-        if (err.code === 429) {
-          const retryAfter = err.payload?.retry_after ?? 5;
-          logger.error({ retryAfter }, '[STREAM] Rate limited, retrying after delay');
-          await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
-          // Retry once — rate limiter middleware will also delay the call
-          try {
-            if (this.sentMessageId) {
-              await this.bot.api.editMessageText({
-                chat_id: this.chatId,
-                message_id: this.sentMessageId,
-                text,
-                parse_mode: 'HTML',
-              });
-            } else {
-              const sent = await this.bot.api.sendMessage({
-                chat_id: this.chatId,
-                text,
-                parse_mode: 'HTML',
-              });
-              this.sentMessageId = sent.message_id;
-            }
-            this.lastSentText = text;
-            this.lastFlushTime = Date.now();
-          } catch (retryErr) {
-            logger.error({ err: retryErr }, '[STREAM] Retry after 429 also failed');
-            this.lastErrorTime = Date.now();
-          }
-        } else if (err.message.includes('message is not modified')) {
-          this.lastSentText = text;
-          this.lastFlushTime = Date.now();
-        } else if (err.message.includes("can't parse entities")) {
-          logger.warn('[STREAM] HTML parse error, falling back to plain text');
-          await this.sendPlainTextFallback(text);
-        } else {
-          logger.error({ err }, '[STREAM] Update error');
-          this.lastErrorTime = Date.now();
-        }
-      } else {
-        logger.error({ err }, '[STREAM] Update error');
-        this.lastErrorTime = Date.now();
-      }
+      await this.handleSendError(err, text);
+    }
+  }
+
+  /**
+   * Edit the streamed message in place, or send a new one when there is none yet
+   * (placeholder creation failed).
+   */
+  private async deliverHtml(text: string): Promise<void> {
+    if (this.sentMessageId) {
+      await this.bot.api.editMessageText({
+        chat_id: this.chatId,
+        message_id: this.sentMessageId,
+        text,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+    const sent = await this.bot.api.sendMessage({
+      chat_id: this.chatId,
+      text,
+      parse_mode: 'HTML',
+    });
+    this.sentMessageId = sent.message_id;
+  }
+
+  /** `text` is on screen (or Telegram says it already was): the next identical flush is skipped. */
+  private markSent(text: string): void {
+    this.lastSentText = text;
+    this.lastFlushTime = Date.now();
+  }
+
+  /** An update failed for good: log it and pause flushes for ERROR_COOLDOWN_MS. */
+  private recordUpdateError(err: unknown): void {
+    logger.error({ err }, '[STREAM] Update error');
+    this.lastErrorTime = Date.now();
+  }
+
+  /** Route a failed send/edit: rate limit, harmless "not modified", bad HTML, or a real error. */
+  private async handleSendError(err: unknown, text: string): Promise<void> {
+    if (!(err instanceof TelegramError)) {
+      this.recordUpdateError(err);
+      return;
+    }
+    if (err.code === 429) {
+      await this.retryAfterRateLimit(err.payload?.retry_after ?? 5, text);
+    } else if (err.message.includes('message is not modified')) {
+      this.markSent(text);
+    } else if (err.message.includes("can't parse entities")) {
+      logger.warn('[STREAM] HTML parse error, falling back to plain text');
+      await this.sendPlainTextFallback(text);
+    } else {
+      this.recordUpdateError(err);
+    }
+  }
+
+  /** Wait out Telegram's retry_after (default 5 s), then retry the delivery once. */
+  private async retryAfterRateLimit(retryAfter: number, text: string): Promise<void> {
+    logger.error({ retryAfter }, '[STREAM] Rate limited, retrying after delay');
+    await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+    // Retry once — rate limiter middleware will also delay the call
+    try {
+      await this.deliverHtml(text);
+      this.markSent(text);
+    } catch (retryErr) {
+      logger.error({ err: retryErr }, '[STREAM] Retry after 429 also failed');
+      this.lastErrorTime = Date.now();
     }
   }
 

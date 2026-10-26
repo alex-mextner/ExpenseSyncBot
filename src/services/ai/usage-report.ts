@@ -534,54 +534,63 @@ function verdictText(v: ProviderVerdict, days: number): string {
   return `${v.provider}: ${v.status} — ${parts.join(', ')}`;
 }
 
+const USAGE_TEXT_LEGEND = [
+  'Legend',
+  '  attempts = requests really sent (ok + err); skipped are not attempts. success = ok / attempts.',
+  '  latency percentiles (nearest-rank) cover ok attempts only.',
+  '  first token = request start to the first content/tool delta; speed = (completion - reasoning tokens) x 1000 / generation ms (first to last delta, windows < 50 ms not counted); n = ok rows with a value, unknown is not zero.',
+  '  prompt est. = character-based ESTIMATES of the request (system + tool catalog + history + user) over attempts that sent one; promptTokens from the provider stays the truth. tools = share of the tool catalog in it.',
+  '  n/a = provider reported no usage; (?N) = N successful calls without usage, not counted in the sum.',
+  '  cost = tokens x list price of a priced route (a known upper bound); n/a = no price or no usage, never zero.',
+  '  legacy = attempts on the AI_SMART_CHAIN / AI_FAST_CHAIN chains, not role-routed.',
+];
+
+/** One model's plain-text block, ending with the blank separator line. */
+function modelTextLines(m: ModelUsageStats): string[] {
+  const lines = [
+    `${m.provider}:${m.model}`,
+    `  attempts ${m.attempts}  ok ${m.ok}  err ${m.errors}  skipped ${m.skipped}  success ${pct(m.successRate)}`,
+    `  latency p50 ${duration(m.p50DurationMs, 's', 'ms')}  p95 ${duration(m.p95DurationMs, 's', 'ms')}`,
+    `  first token p50 ${duration(m.firstToken.p50Ms, 's', 'ms')}  p95 ${duration(m.firstToken.p95Ms, 's', 'ms')}  (n=${m.firstToken.rows})`,
+    `  speed p50 ${tokensPerS(m.generationSpeed.p50TokensPerS, 'tok/s')}  p95 ${tokensPerS(m.generationSpeed.p95TokensPerS, 'tok/s')}  (n=${m.generationSpeed.rows})`,
+    `  prompt est. p50 ${tokenCount(m.promptSize.p50Tokens)}  p95 ${tokenCount(m.promptSize.p95Tokens)}  tools ${share(m.promptSize.toolCatalogShare)}  (n=${m.promptSize.rows})`,
+  ];
+  let tokens = `  tokens ${tokenSummary(m, 'in', 'out')}`;
+  if (m.tokens.reasoning.sum !== null) tokens += ` / reasoning ${tokenValue(m.tokens.reasoning)}`;
+  if (m.tokens.cached.sum !== null) tokens += ` / cached ${tokenValue(m.tokens.cached)}`;
+  lines.push(tokens, `  cost ${costValue(m.cost)}`);
+  if (m.errors > 0) lines.push(`  errors by class: ${errorClasses(m)}`);
+  lines.push(
+    `  first ok ${m.firstOkAt === null ? 'n/a' : isoMinute(m.firstOkAt)}  last ok ${m.lastOkAt === null ? 'n/a' : isoMinute(m.lastOkAt)}`,
+    `  last error ${m.lastError ? `${m.lastError.errorClass} @ ${isoMinute(m.lastError.at)}` : 'none'}`,
+    '',
+  );
+  return lines;
+}
+
+/** The "By role" section (header, one line per role, trailing blank line). */
+function roleTextLines(roles: readonly RoleUsageStats[]): string[] {
+  const lines = ['By role'];
+  for (const r of roles) {
+    lines.push(
+      `  ${r.role} / ${r.provider}: ${r.ok}/${r.attempts} ok (${pct(r.successRate)}), p50 ${duration(r.p50DurationMs, 's', 'ms')}, p95 ${duration(r.p95DurationMs, 's', 'ms')}, first token p50 ${duration(r.firstToken.p50Ms, 's', 'ms')}, speed p50 ${tokensPerS(r.generationSpeed.p50TokensPerS, 'tok/s')}, tokens in ${tokenValue(r.tokens.prompt)} / out ${tokenValue(r.tokens.completion)}, cost ${costValue(r.cost)}`,
+    );
+  }
+  lines.push('');
+  return lines;
+}
+
 export function formatUsageText(report: UsageReport): string {
   const lines = [
     `AI usage, ${isoDate(report.since)} .. ${isoDate(report.until)} (last ${report.windowDays} ${dayWord(report.windowDays)}, UTC)`,
     '',
   ];
   if (report.models.length === 0) lines.push('No rows in this window.', '');
-  for (const m of report.models) {
-    lines.push(
-      `${m.provider}:${m.model}`,
-      `  attempts ${m.attempts}  ok ${m.ok}  err ${m.errors}  skipped ${m.skipped}  success ${pct(m.successRate)}`,
-      `  latency p50 ${duration(m.p50DurationMs, 's', 'ms')}  p95 ${duration(m.p95DurationMs, 's', 'ms')}`,
-      `  first token p50 ${duration(m.firstToken.p50Ms, 's', 'ms')}  p95 ${duration(m.firstToken.p95Ms, 's', 'ms')}  (n=${m.firstToken.rows})`,
-      `  speed p50 ${tokensPerS(m.generationSpeed.p50TokensPerS, 'tok/s')}  p95 ${tokensPerS(m.generationSpeed.p95TokensPerS, 'tok/s')}  (n=${m.generationSpeed.rows})`,
-      `  prompt est. p50 ${tokenCount(m.promptSize.p50Tokens)}  p95 ${tokenCount(m.promptSize.p95Tokens)}  tools ${share(m.promptSize.toolCatalogShare)}  (n=${m.promptSize.rows})`,
-    );
-    let tokens = `  tokens ${tokenSummary(m, 'in', 'out')}`;
-    if (m.tokens.reasoning.sum !== null) tokens += ` / reasoning ${tokenValue(m.tokens.reasoning)}`;
-    if (m.tokens.cached.sum !== null) tokens += ` / cached ${tokenValue(m.tokens.cached)}`;
-    lines.push(tokens, `  cost ${costValue(m.cost)}`);
-    if (m.errors > 0) lines.push(`  errors by class: ${errorClasses(m)}`);
-    lines.push(
-      `  first ok ${m.firstOkAt === null ? 'n/a' : isoMinute(m.firstOkAt)}  last ok ${m.lastOkAt === null ? 'n/a' : isoMinute(m.lastOkAt)}`,
-      `  last error ${m.lastError ? `${m.lastError.errorClass} @ ${isoMinute(m.lastError.at)}` : 'none'}`,
-      '',
-    );
-  }
-  if (report.roles.length > 0) {
-    lines.push('By role');
-    for (const r of report.roles) {
-      lines.push(
-        `  ${r.role} / ${r.provider}: ${r.ok}/${r.attempts} ok (${pct(r.successRate)}), p50 ${duration(r.p50DurationMs, 's', 'ms')}, p95 ${duration(r.p95DurationMs, 's', 'ms')}, first token p50 ${duration(r.firstToken.p50Ms, 's', 'ms')}, speed p50 ${tokensPerS(r.generationSpeed.p50TokensPerS, 'tok/s')}, tokens in ${tokenValue(r.tokens.prompt)} / out ${tokenValue(r.tokens.completion)}, cost ${costValue(r.cost)}`,
-      );
-    }
-    lines.push('');
-  }
+  for (const m of report.models) lines.push(...modelTextLines(m));
+  if (report.roles.length > 0) lines.push(...roleTextLines(report.roles));
   lines.push('Verdicts');
   for (const v of report.verdicts) lines.push(`  ${verdictText(v, report.windowDays)}`);
-  lines.push(
-    '',
-    'Legend',
-    '  attempts = requests really sent (ok + err); skipped are not attempts. success = ok / attempts.',
-    '  latency percentiles (nearest-rank) cover ok attempts only.',
-    '  first token = request start to the first content/tool delta; speed = (completion - reasoning tokens) x 1000 / generation ms (first to last delta, windows < 50 ms not counted); n = ok rows with a value, unknown is not zero.',
-    '  prompt est. = character-based ESTIMATES of the request (system + tool catalog + history + user) over attempts that sent one; promptTokens from the provider stays the truth. tools = share of the tool catalog in it.',
-    '  n/a = provider reported no usage; (?N) = N successful calls without usage, not counted in the sum.',
-    '  cost = tokens x list price of a priced route (a known upper bound); n/a = no price or no usage, never zero.',
-    '  legacy = attempts on the AI_SMART_CHAIN / AI_FAST_CHAIN chains, not role-routed.',
-  );
+  lines.push('', ...USAGE_TEXT_LEGEND);
   return lines.join('\n');
 }
 

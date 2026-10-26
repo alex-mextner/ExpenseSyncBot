@@ -141,6 +141,53 @@ function aggregateByCategory(
   return result;
 }
 
+interface CategoryChange {
+  category: string;
+  delta: number;
+}
+
+/**
+ * Largest per-category increase and decrease (display currency) going from `expensesA` to
+ * `expensesB`. Ties keep the first category seen; a side with no change keeps delta 0.
+ */
+function findBiggestCategoryChanges(
+  expensesA: ExpenseRecord[],
+  expensesB: ExpenseRecord[],
+  currency: CurrencyCode,
+): { growth: CategoryChange; drop: CategoryChange } {
+  const catA = aggregateByCategory(expensesA, currency);
+  const catB = aggregateByCategory(expensesB, currency);
+  const allCategories = new Set([...Object.keys(catA), ...Object.keys(catB)]);
+
+  let growth: CategoryChange = { category: '', delta: 0 };
+  let drop: CategoryChange = { category: '', delta: 0 };
+
+  for (const cat of allCategories) {
+    const delta = (catB[cat] ?? 0) - (catA[cat] ?? 0);
+    if (delta > growth.delta) growth = { category: cat, delta };
+    if (delta < drop.delta) drop = { category: cat, delta };
+  }
+  return { growth, drop };
+}
+
+function formatCategoryChangeLines(
+  expensesA: ExpenseRecord[],
+  expensesB: ExpenseRecord[],
+  currency: CurrencyCode,
+): string[] {
+  const { growth, drop } = findBiggestCategoryChanges(expensesA, expensesB, currency);
+  const lines: string[] = [];
+  if (growth.delta > 0) {
+    lines.push(`Biggest growth: ${growth.category} +${formatAmount(growth.delta, currency, true)}`);
+  }
+  if (drop.delta < 0) {
+    lines.push(
+      `Biggest drop: ${drop.category} \u2212${formatAmount(Math.abs(drop.delta), currency, true)}`,
+    );
+  }
+  return lines;
+}
+
 export function formatStatsDiff(
   a: ExpenseStats,
   b: ExpenseStats,
@@ -160,29 +207,7 @@ export function formatStatsDiff(
 
   // Per-category biggest growth/drop (requires raw expenses)
   if (expensesA && expensesB && expensesA.length > 0 && expensesB.length > 0) {
-    const catA = aggregateByCategory(expensesA, currency);
-    const catB = aggregateByCategory(expensesB, currency);
-    const allCategories = new Set([...Object.keys(catA), ...Object.keys(catB)]);
-
-    let biggestGrowth = { category: '', delta: 0 };
-    let biggestDrop = { category: '', delta: 0 };
-
-    for (const cat of allCategories) {
-      const delta = (catB[cat] ?? 0) - (catA[cat] ?? 0);
-      if (delta > biggestGrowth.delta) biggestGrowth = { category: cat, delta };
-      if (delta < biggestDrop.delta) biggestDrop = { category: cat, delta };
-    }
-
-    if (biggestGrowth.delta > 0) {
-      lines.push(
-        `Biggest growth: ${biggestGrowth.category} +${formatAmount(biggestGrowth.delta, currency, true)}`,
-      );
-    }
-    if (biggestDrop.delta < 0) {
-      lines.push(
-        `Biggest drop: ${biggestDrop.category} \u2212${formatAmount(Math.abs(biggestDrop.delta), currency, true)}`,
-      );
-    }
+    lines.push(...formatCategoryChangeLines(expensesA, expensesB, currency));
   }
 
   return lines.join('\n');
