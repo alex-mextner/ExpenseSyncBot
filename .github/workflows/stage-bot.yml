@@ -55,6 +55,10 @@ jobs:
       github.event.pull_request.user.type != 'Bot' &&
       (github.event.action == 'closed' || github.event.sender.type != 'Bot')
     runs-on: [self-hosted, odroid]
+    # The step may first WAIT up to 40 min for another deploy on the odroid (host deploy lock,
+    # DEPLOY.md "Deploy reliability"), then install and start the stage bot. GitHub's default
+    # job limit is 360 min; this one is explicit because a stuck step holds the host lock.
+    timeout-minutes: 100
 
     # Each run deploys its own event's commit, so a delayed older run must not reset
     # stage back after a newer one. Serialize per PR; a newer event replaces any run of
@@ -91,11 +95,35 @@ jobs:
             WORKTREE="$MAIN_DIR/.claude/worktrees/$BRANCH"
             STAGE_CWD="/var/www/ExpenseSyncBot-stage"
             STAGE_ENV="$MAIN_DIR/.env.stage"
+            BUN="/var/www/.bun/bin/bun"
+
+            # One deploy at a time on the whole odroid, whichever repository it belongs to; stage
+            # installs and pm2 restarts load the box like a prod deploy does. The lock script is
+            # read from the main checkout (never from PR code), taken before anything else runs and
+            # held until this shell exits. The main checkout has it from the first prod deploy that
+            # ships it; until then the deploy runs unlocked, and says so.
+            LOCK_LIB="$MAIN_DIR/scripts/odroid-deploy-lock.sh"
+            if [ -r "$LOCK_LIB" ]; then
+              # shellcheck source=/dev/null
+              source "$LOCK_LIB"
+              odroid_deploy_lock_acquire esb || exit $?
+            else
+              echo "::warning::$LOCK_LIB is missing: this stage deploy runs without the host deploy lock"
+            fi
+
             # The runner SIGKILLs every process still carrying this job's tracking id when
             # the job ends ("Terminate orphan process"); pm2 would hand it to the stage bot.
             # Only pm2 runs without it: install scripts keep the runner's orphan cleanup.
-            PM2="env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2"
-            BUN="/var/www/.bun/bin/bun"
+            # pm2 also runs without the lock's file descriptor: a pm2 daemon started from here
+            # would inherit it and keep the host lock after this step has ended.
+            pm2() {
+              if [ -n "${ODROID_DEPLOY_LOCK_FD:-}" ]; then
+                env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2 "$@" {ODROID_DEPLOY_LOCK_FD}<&-
+              else
+                env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2 "$@"
+              fi
+            }
+            PM2=pm2
 
             # Run from the checkout the stage bot will use. `git worktree add` leaves submodules
             # empty, and without ZenPlugins every bank connection is "Unknown bank in registry".

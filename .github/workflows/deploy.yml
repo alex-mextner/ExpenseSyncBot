@@ -35,24 +35,103 @@ jobs:
     needs: [check]
     # Self-hosted runner on the home server (odroid), running as www-data.
     runs-on: [self-hosted, odroid]
+    # The step may first WAIT up to 40 min for the other repository's deploy (host deploy lock,
+    # DEPLOY.md "Deploy reliability"), then install, build, reload and watch the health verdict
+    # for up to 15 min. GitHub's default job limit is 360 min; this one is explicit, because a
+    # stuck step holds the host lock for both repositories until it is killed.
+    timeout-minutes: 100
+    outputs:
+      failed_evidence: ${{ steps.deploy.outputs.failed_evidence }}
+      failure_note: ${{ steps.deploy.outputs.failure_note }}
 
     steps:
       - name: Deploy via git pull
+        id: deploy
         shell: bash {0}
         run: |
             set -e
+            PM2_BIN="/var/www/.bun/bin/pm2"
+            APP_DIR="/var/www/ExpenseSyncBot"
+            LOGS_DIR="$APP_DIR/logs"
+            APPS=(--app expensesyncbot --app bank-sync)
+            cd "$APP_DIR"
+            export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+
+            # Evidence and the health verdict are python3 scripts; fail before touching anything.
+            command -v python3 >/dev/null || { echo "❌ python3 is required (deploy evidence and health verdict)"; exit 1; }
+
+            RELOADED=""
+            FAILURE_NOTE=""
+            FAILED_EVIDENCE=""
+            VERDICT_LOG="$(mktemp)"
+
+            # Any failure after the reload leaves a bounded, redacted bundle of the release that did
+            # not come up, saved BEFORE anything else restarts; its path goes to the failure alert.
+            # Runs while the host deploy lock is still held (the shell has not exited yet).
+            on_exit() {
+              local rc=$?
+              if [ "$rc" -ne 0 ]; then
+                if [ -n "$RELOADED" ]; then
+                  echo "🧾 Saving failure evidence before anything else restarts..."
+                  local out
+                  out="$(timeout 300 python3 scripts/deploy-evidence.py failed --pm2 "$PM2_BIN" --logs-root "$LOGS_DIR" \
+                    --sha "${DEPLOYED_SHA:-unknown}" "${APPS[@]}" --verdict-log "$VERDICT_LOG" || true)"
+                  echo "$out"
+                  FAILED_EVIDENCE="$(printf '%s\n' "$out" | sed -n 's/^EVIDENCE_DIR=//p' | tail -n 1)"
+                  if [ -n "$FAILED_EVIDENCE" ]; then echo "FAILED_EVIDENCE $FAILED_EVIDENCE"; fi
+                fi
+                if [ -n "${GITHUB_OUTPUT:-}" ]; then
+                  { echo "failed_evidence=$FAILED_EVIDENCE"; echo "failure_note=$FAILURE_NOTE"; } >> "$GITHUB_OUTPUT"
+                fi
+              fi
+              rm -f "$VERDICT_LOG"
+            }
+            trap on_exit EXIT
+
+            # One deploy at a time on the whole odroid, whichever repository it belongs to: a
+            # contender waits here (up to 40 min), then exits 75 and can simply be re-run. Taken
+            # BEFORE the checkout is touched, so a deploy that waits cannot move the files the
+            # deploy that holds the lock is installing and reloading from. The lock script comes
+            # from the commit being deployed (fetched, not yet checked out); held until this shell
+            # exits, i.e. through the pull, install, reload and health verdict.
+            echo "🔒 Taking the host deploy lock..."
+            git remote prune origin
+            git fetch origin main
+            LOCK_LIB="$(mktemp)"
+            git show FETCH_HEAD:scripts/odroid-deploy-lock.sh > "$LOCK_LIB"
+            source "$LOCK_LIB"
+            rm -f "$LOCK_LIB"
+            odroid_deploy_lock_acquire esb || {
+              rc=$?
+              if [ "$rc" -eq 75 ]; then
+                FAILURE_NOTE="gave up waiting for the host deploy lock (another deploy is running); re-run the job"
+              else
+                FAILURE_NOTE="host deploy lock unavailable (exit $rc)"
+              fi
+              exit "$rc"
+            }
+
+            # The release being replaced: read only now, with the lock held, because another deploy
+            # may have pulled and reloaded while this one waited.
+            PREV_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+
+            echo "📥 Pulling latest changes..."
+            git pull origin main
+            git submodule update --init
+            # What is actually checked out now that nothing else can move it: another ESB deploy
+            # may have pulled while this one waited for the lock.
+            DEPLOYED_SHA="$(git rev-parse HEAD)"
+
             # The runner SIGKILLs every process still carrying this job's tracking id when
             # the job ends ("Terminate orphan process"); pm2 would hand it to the apps it
             # (re)starts here, e.g. pm2-logrotate after `pm2 set`. Only pm2 runs without
             # it: install and build scripts keep the runner's orphan cleanup.
-            PM2="env -u RUNNER_TRACKING_ID /var/www/.bun/bin/pm2"
-            cd /var/www/ExpenseSyncBot
-            export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
-
-            echo "📥 Pulling latest changes..."
-            git remote prune origin
-            git pull origin main
-            git submodule update --init
+            # pm2 also runs without the lock's file descriptor: a pm2 daemon started from
+            # here would inherit it and keep the host lock after this step has ended.
+            pm2() {
+              env -u RUNNER_TRACKING_ID "$PM2_BIN" "$@" {ODROID_DEPLOY_LOCK_FD}<&-
+            }
+            PM2=pm2
 
             echo "📋 Copying .env into dev worktrees..."
             MAIN_WT="$(pwd)"
@@ -80,36 +159,89 @@ jobs:
             echo "🔧 Making start script executable..."
             chmod +x start.sh
 
-            echo "📜 Rotating logs before restart..."
-            STAMP=$(date +%Y-%m-%d_%H-%M-%S)
-            cd logs
-            for f in error.log out.log healthcheck.log; do
-              if [ -s "$f" ]; then
-                mv "$f" "${f%.log}_${STAMP}.log"
-                gzip "${f%.log}_${STAMP}.log"
-              fi
-            done
-            cd ..
+            # Evidence of the release being replaced, before anything is rotated or reloaded. Bounded
+            # by `timeout`, so it can never hold the reload up for more than 5 minutes.
+            echo "🗂️ Saving the running release's logs..."
+            mkdir -p "$LOGS_DIR"
+            timeout 300 python3 scripts/deploy-evidence.py release-logs --pm2 "$PM2_BIN" --logs-root "$LOGS_DIR" \
+              --label "${PREV_SHA:0:12}" "${APPS[@]}" || echo "⚠️ release logs were not saved (exit $?); every log file is still in place"
 
             echo "🔄 Reloading Caddy..."
             caddy reload --config /etc/caddy/Caddyfile
 
+            # pm2-logrotate deletes the oldest rotated files beyond `retain`; a count no logs
+            # directory ever reaches keeps every one (the README documents only numbers, so no
+            # undocumented "all"). The only thing that deletes logs is scripts/run-log-retention.sh,
+            # by size and free space.
             echo "📜 Ensuring pm2-logrotate module is installed and configured..."
             if ! $PM2 list 2>/dev/null | grep -q pm2-logrotate; then
               $PM2 install pm2-logrotate
             fi
             $PM2 set pm2-logrotate:max_size 20M
-            $PM2 set pm2-logrotate:retain 14
+            $PM2 set pm2-logrotate:retain 100000
             $PM2 set pm2-logrotate:compress true
             $PM2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
 
+            # Set the current logs aside right before the reload so the new release starts on empty
+            # files. Only renamed here (mv -n never overwrites), compressed after the reload: the old
+            # process keeps writing into the file it holds open until it stops, and gzip would unlink
+            # that file under it and lose those lines.
+            echo "📜 Setting aside the current logs..."
+            STAMP=$(date +%Y-%m-%d_%H-%M-%S)
+            ROTATED=()
+            for f in error.log out.log healthcheck.log; do
+              target="logs/${f%.log}_${STAMP}.log"
+              # A rename keeps the old mtime and log retention protects only what changed in the last
+              # 5 minutes, so the file is marked fresh BEFORE it is renamed: a sweep that lists the
+              # renamed file between the two steps must already find it protected.
+              if [ -s "logs/$f" ] && touch "logs/$f" && mv -n "logs/$f" "$target" && [ ! -e "logs/$f" ]; then
+                # healthcheck.log is appended to by the cron job, which may hold it open for minutes:
+                # gzip would unlink it under that writer. It stays as is; log retention compresses it
+                # once it is old.
+                if [ "$f" != healthcheck.log ]; then ROTATED+=("$target"); fi
+              fi
+            done
+
             echo "🔄 Reloading PM2 process..."
+            RELOADED=1
             $PM2 reload ecosystem.config.cjs --update-env
 
-            echo "✅ Deployment completed successfully!"
+            # Restart counts right after the reload: the crash-loop check counts from here, not from
+            # the first health poll (restarts before it would otherwise hide in the baseline).
+            BASELINE_ARGS=()
+            if BASELINE_OUT="$(timeout 60 python3 scripts/deploy-health.py counts --pm2 "$PM2_BIN" "${APPS[@]}")"; then
+              while IFS= read -r pair; do [ -n "$pair" ] && BASELINE_ARGS+=(--baseline "$pair"); done <<< "$BASELINE_OUT"
+            fi
+
+            for target in "${ROTATED[@]}"; do
+              gzip "$target" || echo "⚠️ could not compress $target (kept as is; log retention compresses it later)"
+            done
 
             echo "📊 PM2 status:"
             $PM2 list
+
+            # Verdict: a slow start is not a failure, a dead or crash-looping app is (scripts/deploy-health.py).
+            # No automatic rollback: a failing verdict fails the job and the bundle above is saved.
+            HEALTH_PORT="$(grep -E '^OAUTH_SERVER_PORT=' .env 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d "\"' " || true)"
+            echo "🩺 Waiting for /health on port ${HEALTH_PORT:-3000} to stay ok..."
+            timeout 1200 python3 scripts/deploy-health.py wait --pm2 "$PM2_BIN" "${APPS[@]}" "${BASELINE_ARGS[@]}" \
+              --url "http://127.0.0.1:${HEALTH_PORT:-3000}/health" \
+              --poll "${DEPLOY_HEALTH_POLL:-4}" --stable "${DEPLOY_HEALTH_STABLE:-30}" \
+              --base-budget "${DEPLOY_HEALTH_BASE_BUDGET:-240}" --hard-cap "${DEPLOY_HEALTH_HARD_CAP:-900}" \
+              --max-error-logs "${DEPLOY_HEALTH_MAX_ERROR_LOGS:-20}" | tee "$VERDICT_LOG"
+            VERDICT_RC=${PIPESTATUS[0]}
+            if [ "$VERDICT_RC" -ne 0 ]; then
+              FAILURE_NOTE="$(grep '^RESULT ' "$VERDICT_LOG" | tail -n 1 | tr -cd '[:print:]' | cut -c1-300)"
+              [ -n "$FAILURE_NOTE" ] || FAILURE_NOTE="the health verdict did not finish (exit $VERDICT_RC)"
+              echo "❌ The new release did not come up: $FAILURE_NOTE"
+              exit "$VERDICT_RC"
+            fi
+
+            # After a verified deploy only; a retention problem must not fail the deploy.
+            echo "🧹 Log retention (deletes only when a size or free-space limit is violated)..."
+            timeout 300 bash scripts/run-log-retention.sh || echo "⚠️ log retention exited with $? (the deploy is unaffected)"
+
+            echo "✅ Deployment completed successfully!"
 
       - name: Notify deploy success
         if: success()
@@ -120,8 +252,10 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Telegram's HTML mode rejects a bare <, > or & in free text.
+          escape_html() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
           FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
-          TEXT=$(printf '✅ <b>Deployed</b> <code>%s</code>\n%s' "${COMMIT_SHA:0:7}" "$FIRST_LINE")
+          TEXT=$(printf '✅ <b>Deployed</b> <code>%s</code>\n%s' "${COMMIT_SHA:0:7}" "$(escape_html "$FIRST_LINE")")
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
@@ -144,7 +278,7 @@ jobs:
   notify-failure:
     name: Notify on failure
     needs: [check, deploy]
-    if: always() && (needs.check.result == 'failure' || needs.deploy.result == 'failure')
+    if: always() && (needs.check.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled')
     runs-on: ubuntu-latest
     steps:
       - name: Send failure notification
@@ -154,9 +288,21 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Set by the deploy step when the release did not come up (empty otherwise).
+          FAILED_EVIDENCE: ${{ needs.deploy.outputs.failed_evidence }}
+          FAILURE_NOTE: ${{ needs.deploy.outputs.failure_note }}
         run: |
+          # Telegram's HTML mode rejects a bare <, > or & in free text.
+          escape_html() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
           FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
-          TEXT=$(printf '❌ <b>Deploy failed</b> <code>%s</code>\n%s\n\n<a href="%s">View run</a>' "${COMMIT_SHA:0:7}" "$FIRST_LINE" "$RUN_URL")
+          TEXT=$(printf '❌ <b>Deploy failed</b> <code>%s</code>\n%s' "${COMMIT_SHA:0:7}" "$(escape_html "$FIRST_LINE")")
+          if [ -n "$FAILURE_NOTE" ]; then
+            TEXT+=$(printf '\nVerdict: <code>%s</code>' "$(escape_html "$FAILURE_NOTE")")
+          fi
+          if [ -n "$FAILED_EVIDENCE" ]; then
+            TEXT+=$(printf '\nFailed-release evidence on the odroid: <code>%s</code>' "$(escape_html "$FAILED_EVIDENCE")")
+          fi
+          TEXT+=$(printf '\n\n<a href="%s">View run</a>' "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$TEXT" \
