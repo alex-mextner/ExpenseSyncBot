@@ -11,8 +11,9 @@ forwards `finbot*.mextner.com` to the origin Caddy on odroid.
 3. [Public Ingress (Cloudflare Tunnel)](#public-ingress-cloudflare-tunnel)
 4. [GitHub Actions Setup](#github-actions-setup)
 5. [Automated Deployment](#automated-deployment)
-6. [Manual Operations](#manual-operations)
-7. [Troubleshooting](#troubleshooting)
+6. [Deploy reliability](#deploy-reliability)
+7. [Manual Operations](#manual-operations)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -124,10 +125,13 @@ The repo `Caddyfile` uses `http://` site addresses: TLS lives at Cloudflare. Dep
 ```cron
 0 3 * * * cd /var/www/ExpenseSyncBot && PATH=/var/www/.bun/bin:$PATH ./scripts/backup-db.sh >> logs/backup.log 2>&1
 */2 * * * * /var/www/ExpenseSyncBot/scripts/healthcheck-alert.sh >> /var/www/ExpenseSyncBot/logs/healthcheck.log 2>&1
+17 * * * * /var/www/ExpenseSyncBot/scripts/run-log-retention.sh >/dev/null 2>&1
 ```
 
 The healthcheck probes the public URL (`https://finbot.mextner.com/health`), so it alerts on tunnel or bot failure alike.
 A failed probe is retried 3 times, 15 s apart, before alerting, so a deploy's ~10 s PM2 restart doesn't trigger a false alert. Log lines and alert times are UTC.
+
+The hourly `run-log-retention.sh` is the only thing that ever deletes logs (criteria in [Deploy reliability](#deploy-reliability)); it alerts the admin chat over Telegram, so its output is not kept (run it by hand to see every action, add `--dry-run` to change nothing). A run that overlaps a deploy is harmless: the files the deploy just set aside are protected for 5 minutes, and a lost race only makes the deploy's own `gzip` warn.
 
 ### 7. LAN address
 
@@ -325,15 +329,39 @@ public repo after 60 days without repository activity; re-enable with
 1. Push to `main`
 2. `check` job (ubuntu-latest): typecheck, lint, tests, Mini App build
 3. `deploy` job (odroid runner) in `/var/www/ExpenseSyncBot`:
-   - `git pull origin main`, `git submodule update --init`
+   - take the host deploy lock (after `git fetch`), then `git pull origin main`, `git submodule update --init`
+   - the host deploy lock (waits for any other deploy on the odroid, see [Deploy reliability](#deploy-reliability))
    - `bun install` (root + ZenPlugins), Mini App build
-   - log rotation, `caddy reload`, pm2-logrotate config
-   - `pm2 reload ecosystem.config.cjs --update-env`
-4. Telegram notification to the admin chat
+   - the running release's logs are saved, then the current logs are renamed aside (never deleted), `caddy reload`, pm2-logrotate config
+   - `pm2 reload ecosystem.config.cjs --update-env`, the set-aside logs are compressed
+   - health verdict (processes online, `/health` ok and stable); on failure the job fails and a failed-release bundle is saved
+   - log retention sweep
+4. Telegram notification to the admin chat (a failure alert names the evidence directory and the verdict)
 5. If the stage bot runs from the main checkout (no PR holds the stage slot), it is restarted on
    the new commit; a stage bot running a PR worktree is left alone (`scripts/stage-follow-main.sh`)
 
 `.env` and `data/` are never touched by the deploy. Migrations run on bot startup.
+
+---
+
+## Deploy reliability
+
+One incident, 2026-10-24: a HyperCalendarBot deploy overlapped an ExpenseSyncBot deploy on the odroid (a 16-minute `docker load` next to this repository's install, build and pm2 reload), the box hit 33-62 % iowait, HyperCalendarBot's fixed health poll ran out and it rolled a healthy release back, and the rollback destroyed that release's logs. This repository's deploy ended at `pm2 reload` with no verification at all and kept nothing about the release it replaced. Everything below mirrors HyperCalendarBot's runbook section of the same name (`docs/reference/deploy-runbook.md` there); what differs is pm2 instead of docker, **no automatic rollback** (a failing verdict fails the job loudly with evidence; a blue/green swap is future work), and the runner being `www-data`: **nothing here needs sudo** and nothing has to be installed by hand except the cron line above.
+
+**Host deploy lock.** `scripts/odroid-deploy-lock.sh` is a byte-identical copy of HyperCalendarBot's (keep the two in step; the repository tag is `esb`). It takes an advisory `flock` on `/run/lock/odroid-deploy.lock` (override: `ODROID_DEPLOY_LOCK_FILE`). `deploy.yml` takes it right after `git fetch origin main`, BEFORE `git pull` / `git submodule update` (so a deploy that waits cannot move the checkout under the one that holds the lock; the script is read from the fetched commit with `git show FETCH_HEAD:`), and before `bun install`; `stage-bot.yml` takes it as the first thing its stage step does, from the **main** checkout's copy, never from PR code. It is held until the step's shell exits, so it covers install, build, reload, verdict and retention. A second deploy, from either repository, WAITS (it logs `deploy-lock: ... held by: <repo> pid=... since=...` every 30 s, `ODROID_DEPLOY_LOCK_SLICE`) for up to 2400 s (`ODROID_DEPLOY_LOCK_MAX_WAIT`), then exits **75**: the job fails with "gave up waiting for the host deploy lock" and can simply be re-run. It never breaks a live holder, and the kernel drops the lock when the holder dies, so a crashed or cancelled deploy cannot wedge the host. `<lock>.owner` (repo, pid, process start ticks, start time) is informational and judged stale by pid + start ticks. The lock file is created mode 0666 so `www-data` (this repository) and root (HyperCalendarBot) can both open it. Both jobs have `timeout-minutes: 100` (GitHub's default would be 360): 40 min of waiting, up to 15 min of verdict and room for installs. pm2 runs with the lock's file descriptor closed: a pm2 daemon started from a deploy step would otherwise inherit it and keep the lock after the step ended. A checkout that does not have the script yet (before the first prod deploy that ships it) runs the *stage* step unlocked with a `::warning::`; the prod deploy step has no such fallback. Check by hand: `flock -n /run/lock/odroid-deploy.lock true && echo free || cat /run/lock/odroid-deploy.lock.owner`. Not covered: the short `stage-follow-main.sh` step after a prod deploy, cron jobs and manual `pm2` work.
+
+**Evidence before anything is replaced.** `scripts/deploy-evidence.py` (python3, which the runner needs; HyperCalendarBot's runner needs it on the same host) runs under `timeout 300` and bounds every pm2/host command to 30 s, so it cannot hold a reload up for more than 5 minutes. Its directories are mode 0700 and its files 0600, in `/var/www/ExpenseSyncBot/logs/`:
+
+- `release-<sha12 of the outgoing checkout>-<UTC stamp>/`, saved before the current logs are set aside and before `pm2 reload`: `expensesyncbot.out.log.gz`, `expensesyncbot.err.log.gz`, `bank-sync.out.log.gz`, … (the last 16 MB of each app's current log, raw, from the paths pm2 itself reports) and `processes.json` (an allow-list of pm2 fields: status, restart counts, uptime, memory, log paths; **never** the apps' environment, which holds every production secret). The live files are only read.
+- `failed-<sha12 of the deployed commit>-<UTC stamp>/`, saved when anything fails after the reload was issued (the reload itself or the verdict), before anything else restarts: `state.txt` (per app: status, restart count, uptime, memory, level >= 50 lines in the tail), `processes.json`, `<app>.<out|err>.tail.redacted.log` (last 400 lines, at most 256 KiB), `verdict.log` (the health script's output), `host-load.txt` (`/proc/loadavg`, PSI, `free -m`, `uptime`, `df -h`, `vmstat`) and `logs-index.txt` (names, sizes and times in `logs/`). The job log prints `FAILED_EVIDENCE <dir>`, and the failure alert in Telegram carries the directory and the verdict line.
+- Redaction (tail and verdict files): Telegram bot tokens, JWTs, API keys (`sk-…`, `ghp_…`, …), Google OAuth tokens (`ya29.…`) and API keys (`AIza…`), `Bearer` values, `password` / `secret` / `token` / `api_key` / `encryption_key` / `authorization` / `cookie` assignments, credentials in URLs, and the value of the JSON fields `text`, `caption`, `prompt`, `content`, `query`, `transcript`, `body`, `message_text`, `question`, `answer`, `description`, `merchant`, `comment`, `input`, `reply` (when such a field holds an array or an object, the rest of that log line goes), and the `msg` of the `[MSG]` (incoming chat message), `[VALIDATOR]` and `[ADVICE-VALIDATOR]` log lines. The `release-*` copies are raw (they are the never-delete copy of what the logs already hold) and stay private.
+- Read them as `www-data`: `ls -lt /var/www/ExpenseSyncBot/logs/ | head`, `cat logs/failed-*/state.txt` (a day after a failure the hourly retention gzips the small members too: then `zcat logs/failed-*/state.txt.gz`), `zcat logs/release-*/expensesyncbot.out.log.gz | less`. Clean up only with `scripts/run-log-retention.sh`; do not `rm` evidence by hand while a failure is being investigated.
+
+**Health verdict.** After the reload `scripts/deploy-health.py wait` decides. A slow start is not a failure; a dead or crash-looping app is. It accepts the release when `expensesyncbot` and `bank-sync` are in pm2's list and `online` (not `errored`, `stopped` or `waiting restart`), their restart counts have not climbed by 2 since the reload, `/health` (`http://127.0.0.1:<OAUTH_SERVER_PORT from .env, default 3000; prod 3311>/health`, answers `{"status":"ok"}`) stays ok and the apps stay online for **30 s** (one restart only restarts that window). At the end of the window, log lines written since each app (re)started (older lines never count) fail it on any pino fatal (level >= 60) and on more than 20 lines at level >= 50; fewer are only reported. The budget is **240 s**; past it the wait continues only while the host is saturated (PSI `io` avg10 >= 20 or load1 > 1.5 x cores) AND the apps are alive AND their logs or states changed within 120 s, never past a hard cap of **900 s**. An errored, missing or crash-looping app is `dead` at once, with no waiting; pm2 not answering 3 polls in a row is `dead` too. Output ends with `RESULT verdict=<ok|dead|unhealthy> health=… apps=name:status:restarts,… elapsed=… reason=…`; exit 0 ok, 3 dead, 4 unhealthy. A failing verdict fails the job (`notify-failure` sends it with the evidence directory) and the new release stays up for inspection: **there is no rollback**, so fix forward or revert `main`. Knobs, set in the step's environment (`DEPLOY_HEALTH_POLL` 4, `DEPLOY_HEALTH_STABLE` 30, `DEPLOY_HEALTH_BASE_BUDGET` 240, `DEPLOY_HEALTH_HARD_CAP` 900, `DEPLOY_HEALTH_MAX_ERROR_LOGS` 20); the script's own flags have the same names (`--stable`, `--base-budget`, …).
+
+**Log retention (nothing is deleted by a deploy or a failure).** The deploy step renames `error.log`, `out.log` and `healthcheck.log` aside as `<name>_<stamp>.log` right before the reload (`mv -n`, which never overwrites) and compresses them **after** the reload: the old process keeps writing into the file it holds open until it stops, and compressing earlier would unlink that file under it and lose those lines. `pm2-logrotate` is configured `max_size 20M`, `compress true`, `dateFormat YYYY-MM-DD_HH-mm-ss` and **`retain 100000`** (it deletes the oldest rotated files beyond `retain`, and its README documents only numbers, so this is a count no logs directory reaches; the earlier `retain 14` silently deleted every rotation past the 14th), so pm2 deletes nothing either. The only deleter is `scripts/run-log-retention.sh`, which runs `scripts/log-retention.py` (a byte-identical copy of HyperCalendarBot's; keep the two in step) after every verified deploy (it cannot fail the deploy) and hourly from cron. It manages only rotated files, never the current ones pm2 holds open (`out.log`, `error.log`, `bank-sync-*.log`): `--only-glob` names `*__*.log[.gz]` (pm2-logrotate) and `*_<stamp>.log[.gz]` (the deploy step), plus the `release-*` / `failed-*` directories; `logs/chats/`, `healthcheck.log`, `backup.log` and everything else are untouched and not counted. It first gzips old plain rotated files, then deletes oldest-first, one entry at a time, only while a criterion is violated: managed bytes > **1024 MB**, managed entries > **400**, any file > **200 MB**, or free space on the filesystem < **2048 MB / 5 %**. It never deletes the newest `release-*` (last deploy), the newest `failed-*` (last failure) or anything modified in the last 5 minutes; when only those are left and a criterion is still violated it stops with exit 2 (the wrapper passes the exit status on). Any deletion, free space below the floor (and an early warning at twice the floor) and an unresolved violation send a Telegram message to the admin chat, at most once per kind per 6 hours (state in `logs/.log-retention-state.json`). The script reads `BOT_TOKEN` and `BOT_ADMIN_ID` from an env file; this repository's admin chat is `BOT_ADMIN_CHAT_ID`, so the wrapper hands it a private temporary env file with that value under the name it reads (`.env` itself is only read). To preview: `scripts/run-log-retention.sh --dry-run`; to tighten for a test: `--max-dir-mb 512`.
+
+**Failure drills and troubleshooting.** `exit 75` in a deploy job: another deploy held the lock for 40 minutes; look at the `deploy-lock: ... held by:` lines, re-run when it is done. `verdict=dead` / `unhealthy`: open the evidence directory from the alert, read `state.txt` and the redacted tails, then `pm2 describe expensesyncbot` (its environment section holds secrets: do not paste it). Disk below the floor with only protected entries left: free space by hand (outside `logs/release-*` / `failed-*` of the last deploy and failure), then re-run the sweep.
 
 ---
 

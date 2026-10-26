@@ -554,7 +554,9 @@ Required in `.env` (see [.env.example](.env.example)):
 - **Process Manager:** PM2 (`expensesyncbot`, `bank-sync`, `expensesyncbot-stage`), `TZ=UTC`
 - **Reverse Proxy:** Caddy on odroid, plain HTTP origin; config is the repo `Caddyfile` (symlinked to `/etc/caddy/Caddyfile`)
 - **Auto-deploy:** GitHub Actions on push to main; `deploy` job runs on the self-hosted runner `odroid`. Never bypass with manual deploys.
-- **Logs:** PM2 logs at `/var/www/ExpenseSyncBot/logs/`
+- **Logs:** PM2 logs at `/var/www/ExpenseSyncBot/logs/`. A deploy never deletes logs: it saves the outgoing release's logs (`logs/release-*`), a failed release's redacted evidence (`logs/failed-*`, path in the failure alert) and only `scripts/run-log-retention.sh` deletes, by size and free space.
+- **Deploy lock and verdict:** every deploy on the odroid, this repo's and HyperCalendarBot's, holds `/run/lock/odroid-deploy.lock` (`scripts/odroid-deploy-lock.sh`, byte-identical in both repos); after `pm2 reload` the job waits for a health verdict (`scripts/deploy-health.py`: slow start ≠ failure, dead/crash-looping = failed job, no auto-rollback).
+- Details, thresholds and how to read the evidence: [DEPLOY.md "Deploy reliability"](DEPLOY.md#deploy-reliability).
 
 See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 

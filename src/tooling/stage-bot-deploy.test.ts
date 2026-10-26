@@ -2,15 +2,27 @@
 // odroid runner does: its env is evaluated from a pull_request event with GitHub's expression
 // engine, its script runs under bash with /var/www relocated into a temp dir, and git, bun,
 // pm2 and curl are stand-ins that record their calls. The point under test is WHICH code
-// the stage bot runs: exactly the commit the (guarded) event was about, never a later push.
-import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+// the stage bot runs: exactly the commit the (guarded) event was about, never a later push,
+// and that it runs under the host deploy lock shared with every other deploy on the odroid.
+import { describe, expect, setDefaultTimeout, test } from 'bun:test';
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { data, Evaluator, Lexer, Parser } from '@actions/expressions';
 
+// Each scenario spawns bash + python and holds real time; bun's 5 s default is too tight on a busy box.
+setDefaultTimeout(60_000);
+
 const WORKFLOW = join(import.meta.dir, '../../.github/workflows/stage-bot.yml');
+const LOCK_LIB = join(import.meta.dir, '../../scripts/odroid-deploy-lock.sh');
 const REPO = 'alex-mextner/ExpenseSyncBot';
 const BRANCH = 'feat/some-change';
 const HEAD_SHA = '1111111111111111111111111111111111111111';
@@ -29,10 +41,27 @@ esac
 exit 0
 `;
 // Stand-in bun: `bun -e …` is the pm2-status probe and answers $STAGE_STATUS; everything
-// else (install) succeeds.
+// else (install) succeeds. Each call also notes whether another process holds the host
+// deploy lock at that moment ($CALLS.locks).
 const BUN_STUB = `#!/usr/bin/env bash
+state=free
+if [ -n "\${ODROID_DEPLOY_LOCK_FILE:-}" ] && [ -e "$ODROID_DEPLOY_LOCK_FILE" ] && ! flock -n "$ODROID_DEPLOY_LOCK_FILE" true; then state=held; fi
+echo "bun $* lock=$state" >> "$CALLS.locks"
 echo "bun $*" >> "$CALLS"
 [ "$1" = -e ] && echo "\${STAGE_STATUS:-online}"
+exit 0
+`;
+// Stand-in pm2: logs the call, the calls that saw the runner's job tracking id, and per call
+// whether the host deploy lock is held, whether pm2 inherited its file descriptor and which TZ
+// it got.
+const PM2_STUB = `#!/usr/bin/env bash
+echo "pm2 $*" >> "$CALLS"
+[ -n "\${RUNNER_TRACKING_ID:-}" ] && echo "pm2 $1" >> "$CALLS.tracked"
+state=free
+if [ -n "\${ODROID_DEPLOY_LOCK_FILE:-}" ] && [ -e "$ODROID_DEPLOY_LOCK_FILE" ] && ! flock -n "$ODROID_DEPLOY_LOCK_FILE" true; then state=held; fi
+inherited=no
+for fd in /proc/self/fd/*; do [ "$(readlink "$fd" 2>/dev/null)" = "\${ODROID_DEPLOY_LOCK_FILE:-/nonexistent}" ] && inherited=yes; done
+echo "pm2 $1 lock=$state lock_fd=$inherited tz=\${TZ:-}" >> "$CALLS.locks"
 exit 0
 `;
 const LOGGING_STUB = (name: string) =>
@@ -102,15 +131,23 @@ function evaluateEnv(env: Record<string, string>, context: data.Dictionary) {
   );
 }
 
+interface DeployOptions {
+  worktreeExists: boolean;
+  action?: PullRequestAction;
+  stageStatus?: string;
+  /** Ship scripts/odroid-deploy-lock.sh in the main checkout (default true). */
+  lockLib?: boolean;
+  /** Another process holds the host deploy lock for the whole run. */
+  lockHeldByOther?: boolean;
+}
+
 async function runDeploy({
   worktreeExists,
   action = worktreeExists ? 'synchronize' : 'opened',
   stageStatus = 'online',
-}: {
-  worktreeExists: boolean;
-  action?: PullRequestAction;
-  stageStatus?: string;
-}) {
+  lockLib = true,
+  lockHeldByOther = false,
+}: DeployOptions) {
   const root = mkdtempSync(join(tmpdir(), 'stage-bot-deploy-'));
   const www = join(root, 'var/www');
   const bunBin = join(www, '.bun/bin');
@@ -118,52 +155,76 @@ async function runDeploy({
   const mainDir = join(www, 'ExpenseSyncBot');
   const worktree = join(mainDir, '.claude/worktrees', BRANCH);
   const calls = join(root, 'calls');
+  const lockFile = join(root, 'lock/odroid-deploy.lock');
   mkdirSync(bunBin, { recursive: true });
   mkdirSync(stubs);
-  mkdirSync(mainDir, { recursive: true });
+  mkdirSync(join(mainDir, 'scripts'), { recursive: true });
   if (worktreeExists) mkdirSync(worktree, { recursive: true });
+  if (lockLib) {
+    copyFileSync(LOCK_LIB, join(mainDir, 'scripts/odroid-deploy-lock.sh'));
+  }
   writeFileSync(join(mainDir, '.env'), 'BOT_TOKEN=prod\n');
   writeFileSync(join(mainDir, '.env.stage'), 'BOT_TOKEN=stage\n');
   writeFileSync(join(bunBin, 'bun'), BUN_STUB, { mode: 0o755 });
-  // pm2 stand-in that also records which calls saw the runner's job tracking id
-  writeFileSync(
-    join(bunBin, 'pm2'),
-    `#!/usr/bin/env bash\necho "pm2 $*" >> "$CALLS"\n[ -n "\${RUNNER_TRACKING_ID:-}" ] && echo "pm2 $1" >> "$CALLS.tracked"\nexit 0\n`,
-    { mode: 0o755 },
-  );
+  writeFileSync(join(bunBin, 'pm2'), PM2_STUB, { mode: 0o755 });
   writeFileSync(join(stubs, 'git'), GIT_STUB, { mode: 0o755 });
   writeFileSync(join(stubs, 'curl'), LOGGING_STUB('curl'), { mode: 0o755 });
   writeFileSync(join(stubs, 'sleep'), '#!/bin/sh\n', { mode: 0o755 });
 
-  const step = await deployStep();
-  const script = join(root, 'step.sh');
-  writeFileSync(script, step.run.replaceAll('/var/www', www));
-  const result = spawnSync('bash', [script], {
-    env: {
-      ...evaluateEnv(step.env, eventContext(action)),
-      PATH: `${stubs}:${process.env['PATH']}`,
-      CALLS: calls,
-      // Set by the self-hosted runner on every step; at job end it SIGKILLs any process
-      // still carrying this value ("Terminate orphan process").
-      RUNNER_TRACKING_ID: 'github_test-job',
-      STAGE_STATUS: stageStatus,
-    },
-    encoding: 'utf8',
-    timeout: 20_000,
+  const holder = lockHeldByOther ? await holdLock(lockFile) : null;
+  try {
+    const step = await deployStep();
+    const script = join(root, 'step.sh');
+    writeFileSync(script, step.run.replaceAll('/var/www', www));
+    const result = spawnSync('bash', [script], {
+      env: {
+        ...evaluateEnv(step.env, eventContext(action)),
+        PATH: `${stubs}:${process.env['PATH']}`,
+        CALLS: calls,
+        // Set by the self-hosted runner on every step; at job end it SIGKILLs any process
+        // still carrying this value ("Terminate orphan process").
+        RUNNER_TRACKING_ID: 'github_test-job',
+        STAGE_STATUS: stageStatus,
+        ODROID_DEPLOY_LOCK_FILE: lockFile,
+        ODROID_DEPLOY_LOCK_SLICE: '1',
+        ODROID_DEPLOY_LOCK_MAX_WAIT: lockHeldByOther ? '2' : '30',
+      },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    const lines = (file: string) =>
+      existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+    const log = lines(calls);
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      worktree,
+      mainDir,
+      lockFile,
+      log,
+      locks: lines(`${calls}.locks`),
+      git: log.filter((l) => l.startsWith('git ')),
+      pm2: log.filter((l) => l.startsWith('pm2 ')),
+      pm2Tracked: lines(`${calls}.tracked`),
+    };
+  } finally {
+    if (holder?.pid !== undefined) process.kill(-holder.pid, 'SIGKILL');
+  }
+}
+
+/** Another deploy: a process that holds the flock until killed. Resolves once it does. */
+async function holdLock(lockFile: string) {
+  mkdirSync(dirname(lockFile), { recursive: true });
+  const holder = spawn('flock', ['-x', lockFile, 'bash', '-c', 'echo HELD; sleep 120'], {
+    detached: true,
   });
-  const log = existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(Boolean) : [];
-  return {
-    status: result.status,
-    stderr: result.stderr,
-    worktree,
-    mainDir,
-    log,
-    git: log.filter((l) => l.startsWith('git ')),
-    pm2: log.filter((l) => l.startsWith('pm2 ')),
-    pm2Tracked: existsSync(`${calls}.tracked`)
-      ? readFileSync(`${calls}.tracked`, 'utf8').split('\n').filter(Boolean)
-      : [],
-  };
+  const held = Promise.withResolvers<void>();
+  holder.stdout.on('data', (chunk: Buffer) => {
+    if (chunk.toString().includes('HELD')) held.resolve();
+  });
+  await held.promise;
+  return holder;
 }
 
 describe('stage-bot deploy step', () => {
@@ -236,5 +297,54 @@ describe('stage-bot deploy step', () => {
     const install = r.log.indexOf('bun install --cwd src/services/bank/ZenPlugins');
     expect(install).toBeGreaterThan(update);
     expect(install).toBeLessThan(r.log.findIndex((l) => l.startsWith('pm2 start')));
+  });
+
+  // On 2026-10-24 a stage-sized load (installs, pm2 restarts) next to another repository's deploy
+  // drove the odroid to 33-62 % iowait. Every deploy of both repositories takes one host lock.
+  describe('host deploy lock', () => {
+    test.each([
+      ['PR opened', false, 'opened'],
+      ['PR updated', true, 'synchronize'],
+      ['PR closed, stage back on main', false, 'closed'],
+    ] as const)('%s: every install and every pm2 call runs while the lock is held', async (_name, worktreeExists, action) => {
+      const r = await runDeploy({ worktreeExists, action });
+      expect(r.status).toBe(0);
+      const installs = r.locks.filter((l) => l.startsWith('bun install'));
+      expect(installs.length).toBeGreaterThanOrEqual(2);
+      for (const line of installs) expect(line).toContain('lock=held');
+      const pm2 = r.locks.filter((l) => l.startsWith('pm2 '));
+      expect(pm2.length).toBeGreaterThan(2);
+      for (const line of pm2) expect(line).toContain('lock=held');
+      // The step has ended: nothing it started may still hold the lock.
+      expect(spawnSync('flock', ['-n', r.lockFile, 'true']).status).toBe(0);
+    });
+
+    // A pm2 daemon started from this step would inherit the descriptor and hold the host lock
+    // long after the job ended.
+    test('pm2 does not inherit the lock descriptor and still gets its TZ', async () => {
+      const r = await runDeploy({ worktreeExists: false });
+      const pm2 = r.locks.filter((l) => l.startsWith('pm2 '));
+      for (const line of pm2) expect(line).toContain('lock_fd=no');
+      expect(pm2.find((l) => l.startsWith('pm2 start'))).toContain('tz=UTC');
+    });
+
+    test('another deploy holding the lock makes this one give up with 75 before it touches anything', async () => {
+      const r = await runDeploy({ worktreeExists: false, lockHeldByOther: true });
+      expect(r.status).toBe(75);
+      expect(r.stderr).toContain('gave up');
+      expect(r.log).toEqual([]);
+    });
+
+    // Until the first prod deploy ships scripts/odroid-deploy-lock.sh the main checkout does not
+    // have it; the stage deploy of the very pull request that adds it must not fail for that.
+    test('a checkout that does not have the lock script yet deploys with a warning', async () => {
+      const r = await runDeploy({ worktreeExists: false, lockLib: false });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('::warning::');
+      expect(r.pm2.some((call) => call.startsWith('pm2 start'))).toBe(true);
+      for (const line of r.locks.filter((l) => l.startsWith('pm2 '))) {
+        expect(line).toContain('lock_fd=no');
+      }
+    });
   });
 });
