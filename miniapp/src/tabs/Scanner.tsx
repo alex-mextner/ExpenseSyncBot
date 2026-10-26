@@ -45,18 +45,24 @@ function isExpiredSession(err: unknown): boolean {
 	return err instanceof ApiError && err.code === 'INIT_DATA_EXPIRED';
 }
 
+const API_ERROR_MESSAGES: Record<string, string> = {
+	INIT_DATA_EXPIRED: 'Сессия истекла. Закрой и открой Mini App заново.',
+	INVALID_INIT_DATA: 'Ошибка авторизации. Закрой и открой Mini App заново.',
+	FORBIDDEN_GROUP: 'Группа ещё не подключена к Google Sheets. Запусти /connect в чате с ботом.',
+	SCAN_FAILED: 'Не удалось распознать чек. Попробуй ещё раз.',
+	OCR_FAILED: 'Не удалось распознать фото. Попробуй другое фото.',
+	CONFIRM_FAILED: 'Не удалось сохранить расходы. Попробуй ещё раз.',
+	PAYLOAD_TOO_LARGE: 'Фото слишком большое (макс. 2 МБ).',
+	UNSUPPORTED_MEDIA_TYPE: 'Поддерживается только JPEG.',
+};
+
 /** Map API error codes to user-friendly messages */
 function friendlyErrorMessage(err: unknown): string {
 	if (err instanceof ApiError) {
-		if (err.code === 'INIT_DATA_EXPIRED') return 'Сессия истекла. Закрой и открой Mini App заново.';
-		if (err.code === 'INVALID_INIT_DATA') return 'Ошибка авторизации. Закрой и открой Mini App заново.';
-		if (err.code === 'FORBIDDEN_GROUP')
-			return 'Группа ещё не подключена к Google Sheets. Запусти /connect в чате с ботом.';
-		if (err.code === 'SCAN_FAILED') return 'Не удалось распознать чек. Попробуй ещё раз.';
-		if (err.code === 'OCR_FAILED') return 'Не удалось распознать фото. Попробуй другое фото.';
-		if (err.code === 'CONFIRM_FAILED') return 'Не удалось сохранить расходы. Попробуй ещё раз.';
-		if (err.code === 'PAYLOAD_TOO_LARGE') return 'Фото слишком большое (макс. 2 МБ).';
-		if (err.code === 'UNSUPPORTED_MEDIA_TYPE') return 'Поддерживается только JPEG.';
+		const code = err.code;
+		if (code !== undefined && Object.prototype.hasOwnProperty.call(API_ERROR_MESSAGES, code)) {
+			return API_ERROR_MESSAGES[code] ?? err.message;
+		}
 		return err.message;
 	}
 	if (err instanceof Error) return err.message;

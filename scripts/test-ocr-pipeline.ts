@@ -183,31 +183,57 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.substring(0, n)}...` : s;
 }
 
-function printResult(r: PipelineResult) {
-  const statusIcon =
-    r.stageReached === 'error'
-      ? 'FAIL'
-      : r.itemsCount === 0
-        ? 'EMPTY'
-        : r.sumVerified
-          ? 'VERIFIED'
-          : 'UNVERIFIED';
+function statusLabel(r: PipelineResult): string {
+  if (r.stageReached === 'error') return 'FAIL';
+  if (r.itemsCount === 0) return 'EMPTY';
+  return r.sumVerified ? 'VERIFIED' : 'UNVERIFIED';
+}
 
+function printOcrStage(r: PipelineResult & { ocrText: string }) {
+  const ocrMs = r.timing.ocrMs ?? 0;
+  console.log(`\n  STAGE 1 — OCR (${ocrMs}ms, ${r.ocrText.length} chars)`);
+  console.log('  ────────────────────────────────────────');
+  const lines = r.ocrText.split('\n').slice(0, 30);
+  for (const line of lines) {
+    console.log(`  │ ${truncate(line, 76)}`);
+  }
+  if (r.ocrText.split('\n').length > 30) {
+    console.log(`  │ ... (${r.ocrText.split('\n').length - 30} more lines)`);
+  }
+}
+
+function printItemsDetail(items: NonNullable<PipelineResult['items']>) {
+  console.log('    items detail:');
+  for (const it of items) {
+    console.log(
+      `      - ${truncate(it.name_ru, 40).padEnd(40)}  ${String(it.quantity).padStart(4)} × ${String(it.price).padStart(8)} = ${String(it.total).padStart(8)}`,
+    );
+  }
+}
+
+function printParseStage(r: PipelineResult) {
+  const parseMs = r.timing.parseMs ?? 0;
+  console.log(`\n  STAGE 2 — Parse + validate (${parseMs}ms, via ${r.providerUsed ?? '?'})`);
+  console.log('  ────────────────────────────────────────');
+  console.log(`    items:       ${r.itemsCount}`);
+  console.log(`    currency:    ${r.currency ?? '(none)'}`);
+  console.log(`    date:        ${r.date ?? '(not found)'}`);
+  console.log(`    computedSum: ${r.computedSum}`);
+  console.log(`    claimedTotal: ${r.claimedTotal ?? '(not found)'}`);
+  console.log(`    sumVerified: ${r.sumVerified ? 'YES' : 'NO'}`);
+
+  if (r.items && r.items.length > 0) {
+    printItemsDetail(r.items);
+  }
+}
+
+function printResult(r: PipelineResult) {
   console.log(`\n${'━'.repeat(80)}`);
-  console.log(`[${statusIcon}] ${r.file}  (${Math.round(r.bytes / 1024)}KB)`);
+  console.log(`[${statusLabel(r)}] ${r.file}  (${Math.round(r.bytes / 1024)}KB)`);
   console.log('━'.repeat(80));
 
   if (r.ocrText) {
-    const ocrMs = r.timing.ocrMs ?? 0;
-    console.log(`\n  STAGE 1 — OCR (${ocrMs}ms, ${r.ocrText.length} chars)`);
-    console.log('  ────────────────────────────────────────');
-    const lines = r.ocrText.split('\n').slice(0, 30);
-    for (const line of lines) {
-      console.log(`  │ ${truncate(line, 76)}`);
-    }
-    if (r.ocrText.split('\n').length > 30) {
-      console.log(`  │ ... (${r.ocrText.split('\n').length - 30} more lines)`);
-    }
+    printOcrStage({ ...r, ocrText: r.ocrText });
   }
 
   if (r.stageReached === 'error' && r.error) {
@@ -216,24 +242,7 @@ function printResult(r: PipelineResult) {
   }
 
   if (r.itemsCount !== undefined) {
-    const parseMs = r.timing.parseMs ?? 0;
-    console.log(`\n  STAGE 2 — Parse + validate (${parseMs}ms, via ${r.providerUsed ?? '?'})`);
-    console.log('  ────────────────────────────────────────');
-    console.log(`    items:       ${r.itemsCount}`);
-    console.log(`    currency:    ${r.currency ?? '(none)'}`);
-    console.log(`    date:        ${r.date ?? '(not found)'}`);
-    console.log(`    computedSum: ${r.computedSum}`);
-    console.log(`    claimedTotal: ${r.claimedTotal ?? '(not found)'}`);
-    console.log(`    sumVerified: ${r.sumVerified ? 'YES' : 'NO'}`);
-
-    if (r.items && r.items.length > 0) {
-      console.log('    items detail:');
-      for (const it of r.items) {
-        console.log(
-          `      - ${truncate(it.name_ru, 40).padEnd(40)}  ${String(it.quantity).padStart(4)} × ${String(it.price).padStart(8)} = ${String(it.total).padStart(8)}`,
-        );
-      }
-    }
+    printParseStage(r);
   }
 }
 
