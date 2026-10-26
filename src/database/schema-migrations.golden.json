@@ -1,0 +1,607 @@
+{
+  "migrations": [
+    "001_create_users_table",
+    "002_create_categories_table",
+    "003_create_pending_expenses_table",
+    "004_create_expenses_table",
+    "005_create_groups_and_refactor",
+    "006_rename_usd_to_eur",
+    "007_create_budgets_table",
+    "008_create_chat_messages_table",
+    "009_add_custom_prompt_to_groups",
+    "010_create_photo_processing_queue",
+    "011_create_receipt_items",
+    "012_create_expense_items",
+    "013_add_message_thread_id_to_photo_queue",
+    "014_add_waiting_for_category_input",
+    "015_add_skipped_status_to_receipt_items",
+    "016_add_summary_mode_to_photo_queue",
+    "017_add_active_topic_id_to_groups",
+    "018_add_analytics_indexes_and_advice_log",
+    "019_create_dev_tasks_table",
+    "020_add_failed_at_state_to_dev_tasks",
+    "021_create_bank_connections",
+    "022_create_bank_credentials",
+    "023_create_bank_plugin_state",
+    "024_create_bank_accounts",
+    "025_create_bank_transactions",
+    "026_create_merchant_tables",
+    "028_add_prefill_to_bank_transactions",
+    "027_add_bank_panel_summary_to_groups",
+    "029_create_group_spreadsheets",
+    "030_create_bank_otp_requests",
+    "031_add_awaiting_comment_to_bank_transactions",
+    "032_add_time_to_bank_transactions",
+    "033_add_is_excluded_to_bank_accounts",
+    "034_add_account_id_to_bank_transactions",
+    "035_backfill_account_id_in_bank_transactions",
+    "036_create_recurring_patterns",
+    "037_encrypt_existing_refresh_tokens",
+    "038_create_sync_snapshots",
+    "039_add_composite_indexes",
+    "040_create_dashboard_widgets",
+    "041_add_receipt_file_id_to_expenses",
+    "042_add_oauth_client_to_groups",
+    "043_fix_default_enabled_currencies",
+    "044_add_invoice_to_bank_transactions",
+    "045_fix_corrupted_eur_amounts",
+    "046_create_group_members",
+    "047_create_receipts_table",
+    "048_add_expenses_receipt_id_index",
+    "049_add_bank_transactions_matched_receipt_id",
+    "050_add_bank_cards_enabled_to_groups",
+    "051_scope_chat_history_by_topic",
+    "052_create_agent_trajectories",
+    "053_create_ai_usage_events",
+    "054_add_role_preset_cost_to_ai_usage_events",
+    "055_add_timing_and_prompt_size_to_ai_usage_events"
+  ],
+  "objects": [
+    {
+      "type": "table",
+      "name": "migrations",
+      "tbl_name": "migrations",
+      "sql": "CREATE TABLE migrations (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      name TEXT NOT NULL UNIQUE,\n      applied_at TEXT DEFAULT CURRENT_TIMESTAMP\n    )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_migrations_1",
+      "tbl_name": "migrations",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "sqlite_sequence",
+      "tbl_name": "sqlite_sequence",
+      "sql": "CREATE TABLE sqlite_sequence(name,seq)"
+    },
+    {
+      "type": "table",
+      "name": "pending_expenses",
+      "tbl_name": "pending_expenses",
+      "sql": "CREATE TABLE pending_expenses (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            user_id INTEGER NOT NULL,\n            message_id INTEGER NOT NULL,\n            parsed_amount REAL NOT NULL,\n            parsed_currency TEXT NOT NULL,\n            detected_category TEXT,\n            comment TEXT NOT NULL,\n            status TEXT NOT NULL CHECK(status IN ('pending_category', 'confirmed')),\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_pending_expenses_user_id",
+      "tbl_name": "pending_expenses",
+      "sql": "CREATE INDEX idx_pending_expenses_user_id\n          ON pending_expenses(user_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_pending_expenses_message_id",
+      "tbl_name": "pending_expenses",
+      "sql": "CREATE INDEX idx_pending_expenses_message_id\n          ON pending_expenses(message_id)"
+    },
+    {
+      "type": "table",
+      "name": "groups",
+      "tbl_name": "groups",
+      "sql": "CREATE TABLE groups (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            telegram_group_id INTEGER NOT NULL UNIQUE,\n            google_refresh_token TEXT,\n            default_currency TEXT NOT NULL DEFAULT 'USD',\n            enabled_currencies TEXT NOT NULL DEFAULT '[\"USD\"]',\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n          , custom_prompt TEXT, active_topic_id INTEGER, bank_panel_summary_message_id INTEGER, oauth_client TEXT NOT NULL DEFAULT 'legacy', title TEXT, invite_link TEXT, bank_cards_enabled INTEGER NOT NULL DEFAULT 0)"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_groups_1",
+      "tbl_name": "groups",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "users",
+      "tbl_name": "users",
+      "sql": "CREATE TABLE \"users\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            telegram_id INTEGER NOT NULL UNIQUE,\n            group_id INTEGER,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_users_1",
+      "tbl_name": "users",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "categories",
+      "tbl_name": "categories",
+      "sql": "CREATE TABLE \"categories\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            name TEXT NOT NULL,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,\n            UNIQUE(group_id, name)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_categories_1",
+      "tbl_name": "categories",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_categories_group_id",
+      "tbl_name": "categories",
+      "sql": "CREATE INDEX idx_categories_group_id\n          ON categories(group_id)"
+    },
+    {
+      "type": "table",
+      "name": "expenses",
+      "tbl_name": "expenses",
+      "sql": "CREATE TABLE \"expenses\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            user_id INTEGER NOT NULL,\n            date TEXT NOT NULL,\n            category TEXT NOT NULL,\n            comment TEXT NOT NULL,\n            amount REAL NOT NULL,\n            currency TEXT NOT NULL,\n            eur_amount REAL NOT NULL,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP, receipt_file_id TEXT, receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,\n            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_expenses_group_id",
+      "tbl_name": "expenses",
+      "sql": "CREATE INDEX idx_expenses_group_id\n          ON expenses(group_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_expenses_user_id",
+      "tbl_name": "expenses",
+      "sql": "CREATE INDEX idx_expenses_user_id\n          ON expenses(user_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_expenses_date",
+      "tbl_name": "expenses",
+      "sql": "CREATE INDEX idx_expenses_date\n          ON expenses(date)"
+    },
+    {
+      "type": "table",
+      "name": "budgets",
+      "tbl_name": "budgets",
+      "sql": "CREATE TABLE budgets (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            category TEXT NOT NULL,\n            month TEXT NOT NULL,\n            limit_amount REAL NOT NULL,\n            currency TEXT NOT NULL DEFAULT 'EUR',\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,\n            UNIQUE(group_id, category, month)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_budgets_1",
+      "tbl_name": "budgets",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_budgets_group_id",
+      "tbl_name": "budgets",
+      "sql": "CREATE INDEX idx_budgets_group_id\n          ON budgets(group_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_budgets_month",
+      "tbl_name": "budgets",
+      "sql": "CREATE INDEX idx_budgets_month\n          ON budgets(month)"
+    },
+    {
+      "type": "index",
+      "name": "idx_budgets_group_month",
+      "tbl_name": "budgets",
+      "sql": "CREATE INDEX idx_budgets_group_month\n          ON budgets(group_id, month)"
+    },
+    {
+      "type": "table",
+      "name": "chat_messages",
+      "tbl_name": "chat_messages",
+      "sql": "CREATE TABLE chat_messages (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            user_id INTEGER NOT NULL,\n            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),\n            content TEXT NOT NULL,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP, message_thread_id INTEGER,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,\n            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_chat_messages_group_id",
+      "tbl_name": "chat_messages",
+      "sql": "CREATE INDEX idx_chat_messages_group_id\n          ON chat_messages(group_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_chat_messages_created_at",
+      "tbl_name": "chat_messages",
+      "sql": "CREATE INDEX idx_chat_messages_created_at\n          ON chat_messages(created_at)"
+    },
+    {
+      "type": "table",
+      "name": "photo_processing_queue",
+      "tbl_name": "photo_processing_queue",
+      "sql": "CREATE TABLE photo_processing_queue (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            user_id INTEGER NOT NULL,\n            message_id INTEGER NOT NULL,\n            message_thread_id INTEGER,\n            file_id TEXT NOT NULL,\n            status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'done', 'error')),\n            error_message TEXT,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP, summary_mode INTEGER DEFAULT 0, ai_summary TEXT, correction_history TEXT, waiting_for_bulk_correction INTEGER DEFAULT 0, summary_message_id INTEGER,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,\n            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_photo_queue_status",
+      "tbl_name": "photo_processing_queue",
+      "sql": "CREATE INDEX idx_photo_queue_status\n          ON photo_processing_queue(status)"
+    },
+    {
+      "type": "index",
+      "name": "idx_photo_queue_group_user",
+      "tbl_name": "photo_processing_queue",
+      "sql": "CREATE INDEX idx_photo_queue_group_user\n          ON photo_processing_queue(group_id, user_id)"
+    },
+    {
+      "type": "table",
+      "name": "expense_items",
+      "tbl_name": "expense_items",
+      "sql": "CREATE TABLE expense_items (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            expense_id INTEGER NOT NULL,\n            name_ru TEXT NOT NULL,\n            name_original TEXT,\n            quantity REAL NOT NULL,\n            price REAL NOT NULL,\n            total REAL NOT NULL,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_expense_items_expense_id",
+      "tbl_name": "expense_items",
+      "sql": "CREATE INDEX idx_expense_items_expense_id\n          ON expense_items(expense_id)"
+    },
+    {
+      "type": "table",
+      "name": "receipt_items",
+      "tbl_name": "receipt_items",
+      "sql": "CREATE TABLE \"receipt_items\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            photo_queue_id INTEGER NOT NULL,\n            name_ru TEXT NOT NULL,\n            name_original TEXT,\n            quantity REAL NOT NULL,\n            price REAL NOT NULL,\n            total REAL NOT NULL,\n            currency TEXT NOT NULL,\n            suggested_category TEXT NOT NULL,\n            possible_categories TEXT NOT NULL,\n            status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'skipped')),\n            confirmed_category TEXT,\n            waiting_for_category_input INTEGER DEFAULT 0,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (photo_queue_id) REFERENCES photo_processing_queue(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_receipt_items_queue_id",
+      "tbl_name": "receipt_items",
+      "sql": "CREATE INDEX idx_receipt_items_queue_id\n          ON receipt_items(photo_queue_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_receipt_items_status",
+      "tbl_name": "receipt_items",
+      "sql": "CREATE INDEX idx_receipt_items_status\n          ON receipt_items(status)"
+    },
+    {
+      "type": "index",
+      "name": "idx_expenses_group_date",
+      "tbl_name": "expenses",
+      "sql": "CREATE INDEX idx_expenses_group_date\n          ON expenses(group_id, date)"
+    },
+    {
+      "type": "table",
+      "name": "advice_log",
+      "tbl_name": "advice_log",
+      "sql": "CREATE TABLE advice_log (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            tier TEXT NOT NULL CHECK(tier IN ('quick', 'alert', 'deep')),\n            trigger_type TEXT NOT NULL,\n            trigger_data TEXT,\n            topic TEXT,\n            advice_text TEXT NOT NULL,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_advice_log_group_created",
+      "tbl_name": "advice_log",
+      "sql": "CREATE INDEX idx_advice_log_group_created\n          ON advice_log(group_id, created_at)"
+    },
+    {
+      "type": "table",
+      "name": "dev_tasks",
+      "tbl_name": "dev_tasks",
+      "sql": "CREATE TABLE dev_tasks (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL,\n            user_id INTEGER NOT NULL,\n            state TEXT NOT NULL DEFAULT 'pending',\n            title TEXT,\n            description TEXT NOT NULL,\n            branch_name TEXT,\n            worktree_path TEXT,\n            pr_number INTEGER,\n            pr_url TEXT,\n            design TEXT,\n            plan TEXT,\n            code_review TEXT,\n            error_log TEXT,\n            retry_count INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT DEFAULT CURRENT_TIMESTAMP, failed_at_state TEXT,\n            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,\n            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_dev_tasks_group_id",
+      "tbl_name": "dev_tasks",
+      "sql": "CREATE INDEX idx_dev_tasks_group_id\n          ON dev_tasks(group_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_dev_tasks_state",
+      "tbl_name": "dev_tasks",
+      "sql": "CREATE INDEX idx_dev_tasks_state\n          ON dev_tasks(state)"
+    },
+    {
+      "type": "index",
+      "name": "idx_dev_tasks_user_id",
+      "tbl_name": "dev_tasks",
+      "sql": "CREATE INDEX idx_dev_tasks_user_id\n          ON dev_tasks(user_id)"
+    },
+    {
+      "type": "table",
+      "name": "bank_connections",
+      "tbl_name": "bank_connections",
+      "sql": "CREATE TABLE bank_connections (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            bank_name TEXT NOT NULL,\n            display_name TEXT NOT NULL,\n            status TEXT NOT NULL DEFAULT 'setup'\n              CHECK(status IN ('setup', 'active', 'disconnected')),\n            consecutive_failures INTEGER NOT NULL DEFAULT 0,\n            last_sync_at TEXT,\n            last_error TEXT,\n            panel_message_id INTEGER,\n            panel_message_thread_id INTEGER,\n            created_at TEXT NOT NULL DEFAULT (datetime('now')),\n            UNIQUE(group_id, bank_name)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_bank_connections_1",
+      "tbl_name": "bank_connections",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_connections_group_id",
+      "tbl_name": "bank_connections",
+      "sql": "CREATE INDEX idx_bank_connections_group_id\n          ON bank_connections(group_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_connections_status",
+      "tbl_name": "bank_connections",
+      "sql": "CREATE INDEX idx_bank_connections_status\n          ON bank_connections(status)"
+    },
+    {
+      "type": "table",
+      "name": "bank_credentials",
+      "tbl_name": "bank_credentials",
+      "sql": "CREATE TABLE bank_credentials (\n            connection_id INTEGER PRIMARY KEY\n              REFERENCES bank_connections(id) ON DELETE CASCADE,\n            encrypted_data TEXT NOT NULL\n          )"
+    },
+    {
+      "type": "table",
+      "name": "bank_plugin_state",
+      "tbl_name": "bank_plugin_state",
+      "sql": "CREATE TABLE bank_plugin_state (\n            connection_id INTEGER NOT NULL\n              REFERENCES bank_connections(id) ON DELETE CASCADE,\n            key TEXT NOT NULL,\n            value TEXT NOT NULL,\n            PRIMARY KEY(connection_id, key)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_bank_plugin_state_1",
+      "tbl_name": "bank_plugin_state",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "bank_accounts",
+      "tbl_name": "bank_accounts",
+      "sql": "CREATE TABLE bank_accounts (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            connection_id INTEGER NOT NULL\n              REFERENCES bank_connections(id) ON DELETE CASCADE,\n            account_id TEXT NOT NULL,\n            title TEXT NOT NULL,\n            balance REAL NOT NULL,\n            currency TEXT NOT NULL,\n            type TEXT,\n            updated_at TEXT NOT NULL DEFAULT (datetime('now')), is_excluded INTEGER NOT NULL DEFAULT 0,\n            UNIQUE(connection_id, account_id)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_bank_accounts_1",
+      "tbl_name": "bank_accounts",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_accounts_connection_id",
+      "tbl_name": "bank_accounts",
+      "sql": "CREATE INDEX idx_bank_accounts_connection_id\n          ON bank_accounts(connection_id)"
+    },
+    {
+      "type": "table",
+      "name": "bank_transactions",
+      "tbl_name": "bank_transactions",
+      "sql": "CREATE TABLE bank_transactions (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            connection_id INTEGER NOT NULL\n              REFERENCES bank_connections(id) ON DELETE CASCADE,\n            external_id TEXT NOT NULL,\n            date TEXT NOT NULL,\n            amount REAL NOT NULL,\n            sign_type TEXT NOT NULL DEFAULT 'debit'\n              CHECK(sign_type IN ('debit', 'credit', 'reversal')),\n            currency TEXT NOT NULL,\n            merchant TEXT,\n            merchant_normalized TEXT,\n            mcc INTEGER,\n            raw_data TEXT NOT NULL,\n            matched_expense_id INTEGER REFERENCES expenses(id) ON DELETE SET NULL,\n            telegram_message_id INTEGER,\n            edit_in_progress INTEGER NOT NULL DEFAULT 0,\n            status TEXT NOT NULL DEFAULT 'pending'\n              CHECK(status IN ('pending', 'confirmed', 'skipped', 'skipped_reversal')),\n            created_at TEXT NOT NULL DEFAULT (datetime('now')), prefill_category TEXT, prefill_comment TEXT, awaiting_comment INTEGER NOT NULL DEFAULT 0, time TEXT, account_id TEXT, invoice_amount REAL, invoice_currency TEXT, matched_receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL,\n            UNIQUE(connection_id, external_id)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_bank_transactions_1",
+      "tbl_name": "bank_transactions",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_transactions_connection_id",
+      "tbl_name": "bank_transactions",
+      "sql": "CREATE INDEX idx_bank_transactions_connection_id\n          ON bank_transactions(connection_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_transactions_status",
+      "tbl_name": "bank_transactions",
+      "sql": "CREATE INDEX idx_bank_transactions_status\n          ON bank_transactions(status)"
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_transactions_date",
+      "tbl_name": "bank_transactions",
+      "sql": "CREATE INDEX idx_bank_transactions_date\n          ON bank_transactions(date)"
+    },
+    {
+      "type": "table",
+      "name": "merchant_rules",
+      "tbl_name": "merchant_rules",
+      "sql": "CREATE TABLE merchant_rules (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            pattern TEXT NOT NULL,\n            flags TEXT NOT NULL DEFAULT 'i',\n            replacement TEXT NOT NULL,\n            category TEXT,\n            confidence REAL NOT NULL DEFAULT 1.0,\n            status TEXT NOT NULL DEFAULT 'pending_review'\n              CHECK(status IN ('pending_review', 'approved', 'rejected')),\n            source TEXT NOT NULL DEFAULT 'ai'\n              CHECK(source IN ('ai', 'manual')),\n            created_at TEXT NOT NULL DEFAULT (datetime('now')),\n            updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_merchant_rules_status",
+      "tbl_name": "merchant_rules",
+      "sql": "CREATE INDEX idx_merchant_rules_status\n          ON merchant_rules(status)"
+    },
+    {
+      "type": "table",
+      "name": "merchant_rule_requests",
+      "tbl_name": "merchant_rule_requests",
+      "sql": "CREATE TABLE merchant_rule_requests (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            merchant_raw TEXT NOT NULL,\n            mcc INTEGER,\n            group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,\n            user_category TEXT,\n            user_comment TEXT,\n            processed INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL DEFAULT (datetime('now')),\n            UNIQUE(merchant_raw)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_merchant_rule_requests_1",
+      "tbl_name": "merchant_rule_requests",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_merchant_rule_requests_processed",
+      "tbl_name": "merchant_rule_requests",
+      "sql": "CREATE INDEX idx_merchant_rule_requests_processed\n          ON merchant_rule_requests(processed)"
+    },
+    {
+      "type": "table",
+      "name": "group_spreadsheets",
+      "tbl_name": "group_spreadsheets",
+      "sql": "CREATE TABLE group_spreadsheets (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL REFERENCES groups(id),\n            year INTEGER NOT NULL,\n            spreadsheet_id TEXT NOT NULL,\n            UNIQUE(group_id, year)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_group_spreadsheets_1",
+      "tbl_name": "group_spreadsheets",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_group_spreadsheets_group_year",
+      "tbl_name": "group_spreadsheets",
+      "sql": "CREATE INDEX idx_group_spreadsheets_group_year\n          ON group_spreadsheets(group_id, year)"
+    },
+    {
+      "type": "table",
+      "name": "bank_otp_requests",
+      "tbl_name": "bank_otp_requests",
+      "sql": "CREATE TABLE bank_otp_requests (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            connection_id INTEGER NOT NULL UNIQUE,\n            group_telegram_id INTEGER NOT NULL,\n            code TEXT,\n            status TEXT NOT NULL DEFAULT 'pending',\n            created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n            expires_at TEXT NOT NULL\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_bank_otp_requests_1",
+      "tbl_name": "bank_otp_requests",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "recurring_patterns",
+      "tbl_name": "recurring_patterns",
+      "sql": "CREATE TABLE recurring_patterns (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            category TEXT NOT NULL,\n            expected_amount REAL NOT NULL,\n            currency TEXT NOT NULL DEFAULT 'EUR',\n            interval_days INTEGER NOT NULL DEFAULT 30,\n            expected_day INTEGER,\n            tolerance_days INTEGER NOT NULL DEFAULT 5,\n            last_seen_date TEXT,\n            next_expected_date TEXT,\n            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'dismissed')),\n            created_at TEXT NOT NULL DEFAULT (datetime('now')),\n            updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_recurring_patterns_group",
+      "tbl_name": "recurring_patterns",
+      "sql": "CREATE INDEX idx_recurring_patterns_group\n          ON recurring_patterns(group_id, status)"
+    },
+    {
+      "type": "table",
+      "name": "expense_snapshots",
+      "tbl_name": "expense_snapshots",
+      "sql": "CREATE TABLE expense_snapshots (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            snapshot_id TEXT NOT NULL,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            expense_id INTEGER NOT NULL,\n            user_id INTEGER NOT NULL,\n            date TEXT NOT NULL,\n            category TEXT NOT NULL,\n            comment TEXT NOT NULL,\n            amount REAL NOT NULL,\n            currency TEXT NOT NULL,\n            eur_amount REAL NOT NULL,\n            created_at TEXT NOT NULL DEFAULT (datetime('now'))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_expense_snapshots_snapshot",
+      "tbl_name": "expense_snapshots",
+      "sql": "CREATE INDEX idx_expense_snapshots_snapshot\n          ON expense_snapshots(snapshot_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_expense_snapshots_group",
+      "tbl_name": "expense_snapshots",
+      "sql": "CREATE INDEX idx_expense_snapshots_group\n          ON expense_snapshots(group_id)"
+    },
+    {
+      "type": "table",
+      "name": "budget_snapshots",
+      "tbl_name": "budget_snapshots",
+      "sql": "CREATE TABLE budget_snapshots (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            snapshot_id TEXT NOT NULL,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            budget_id INTEGER NOT NULL,\n            category TEXT NOT NULL,\n            month TEXT NOT NULL,\n            limit_amount REAL NOT NULL,\n            currency TEXT NOT NULL,\n            created_at TEXT NOT NULL DEFAULT (datetime('now'))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_budget_snapshots_snapshot",
+      "tbl_name": "budget_snapshots",
+      "sql": "CREATE INDEX idx_budget_snapshots_snapshot\n          ON budget_snapshots(snapshot_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_budget_snapshots_group",
+      "tbl_name": "budget_snapshots",
+      "sql": "CREATE INDEX idx_budget_snapshots_group\n          ON budget_snapshots(group_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_expenses_group_category",
+      "tbl_name": "expenses",
+      "sql": "CREATE INDEX idx_expenses_group_category ON expenses(group_id, category)"
+    },
+    {
+      "type": "table",
+      "name": "dashboard_widgets",
+      "tbl_name": "dashboard_widgets",
+      "sql": "CREATE TABLE dashboard_widgets (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n            config TEXT NOT NULL,\n            updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_dashboard_widgets_user_group",
+      "tbl_name": "dashboard_widgets",
+      "sql": "CREATE UNIQUE INDEX idx_dashboard_widgets_user_group\n          ON dashboard_widgets(group_id, user_id)"
+    },
+    {
+      "type": "table",
+      "name": "group_members",
+      "tbl_name": "group_members",
+      "sql": "CREATE TABLE group_members (\n            id INTEGER PRIMARY KEY,\n            telegram_id INTEGER NOT NULL,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            UNIQUE(telegram_id, group_id)\n          )"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_group_members_1",
+      "tbl_name": "group_members",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "idx_group_members_telegram_id",
+      "tbl_name": "group_members",
+      "sql": "CREATE INDEX idx_group_members_telegram_id ON group_members(telegram_id)"
+    },
+    {
+      "type": "table",
+      "name": "receipts",
+      "tbl_name": "receipts",
+      "sql": "CREATE TABLE receipts (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            photo_queue_id INTEGER REFERENCES photo_processing_queue(id) ON DELETE SET NULL,\n            image_path TEXT,\n            total_amount REAL NOT NULL,\n            currency TEXT NOT NULL,\n            date TEXT NOT NULL,\n            created_at TEXT NOT NULL DEFAULT (datetime('now'))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_receipts_group_date",
+      "tbl_name": "receipts",
+      "sql": "CREATE INDEX idx_receipts_group_date\n          ON receipts(group_id, date)\n        "
+    },
+    {
+      "type": "index",
+      "name": "idx_expenses_receipt_id",
+      "tbl_name": "expenses",
+      "sql": "CREATE INDEX idx_expenses_receipt_id ON expenses(receipt_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_bank_transactions_matched_receipt_id",
+      "tbl_name": "bank_transactions",
+      "sql": "CREATE INDEX idx_bank_transactions_matched_receipt_id ON bank_transactions(matched_receipt_id)"
+    },
+    {
+      "type": "index",
+      "name": "idx_chat_messages_group_thread_id",
+      "tbl_name": "chat_messages",
+      "sql": "CREATE INDEX idx_chat_messages_group_thread_id\n          ON chat_messages(group_id, message_thread_id, id)\n        "
+    },
+    {
+      "type": "table",
+      "name": "agent_trajectories",
+      "tbl_name": "agent_trajectories",
+      "sql": "CREATE TABLE agent_trajectories (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,\n            started_at INTEGER NOT NULL,\n            finished_at INTEGER NOT NULL,\n            outcome TEXT NOT NULL CHECK (outcome IN ('answered', 'no_answer', 'silent', 'error')),\n            error_kind TEXT,\n            is_mention INTEGER NOT NULL,\n            tool_rounds INTEGER NOT NULL,\n            tool_calls INTEGER NOT NULL,\n            nudges INTEGER NOT NULL,\n            handoffs INTEGER NOT NULL,\n            providers TEXT NOT NULL,\n            answer_provider TEXT,\n            finalize_reason TEXT,\n            follow_up_after_ms INTEGER\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_agent_trajectories_group_finished",
+      "tbl_name": "agent_trajectories",
+      "sql": "CREATE INDEX idx_agent_trajectories_group_finished\n          ON agent_trajectories(group_id, finished_at)\n        "
+    },
+    {
+      "type": "table",
+      "name": "agent_trajectory_rounds",
+      "tbl_name": "agent_trajectory_rounds",
+      "sql": "CREATE TABLE agent_trajectory_rounds (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            trajectory_id INTEGER NOT NULL REFERENCES agent_trajectories(id) ON DELETE CASCADE,\n            round INTEGER NOT NULL,\n            provider TEXT NOT NULL,\n            elapsed_ms INTEGER NOT NULL,\n            calls TEXT NOT NULL,\n            decision TEXT NOT NULL,\n            reason TEXT\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_agent_trajectory_rounds_trajectory",
+      "tbl_name": "agent_trajectory_rounds",
+      "sql": "CREATE INDEX idx_agent_trajectory_rounds_trajectory\n          ON agent_trajectory_rounds(trajectory_id)\n        "
+    },
+    {
+      "type": "table",
+      "name": "ai_usage_events",
+      "tbl_name": "ai_usage_events",
+      "sql": "CREATE TABLE ai_usage_events (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            at INTEGER NOT NULL,\n            provider TEXT NOT NULL,\n            model TEXT NOT NULL,\n            chain TEXT NOT NULL,\n            purpose TEXT NOT NULL,\n            outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'error', 'skipped')),\n            error_class TEXT,\n            http_status INTEGER,\n            duration_ms INTEGER,\n            prompt_tokens INTEGER CHECK (prompt_tokens IS NULL OR prompt_tokens >= 0),\n            completion_tokens INTEGER CHECK (completion_tokens IS NULL OR completion_tokens >= 0),\n            reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),\n            cached_tokens INTEGER CHECK (cached_tokens IS NULL OR cached_tokens >= 0),\n            request_id TEXT, role TEXT, preset TEXT, cost_micro_usd INTEGER CHECK (cost_micro_usd IS NULL OR cost_micro_usd >= 0), first_token_ms INTEGER CHECK (first_token_ms IS NULL OR first_token_ms >= 0), generation_ms INTEGER CHECK (generation_ms IS NULL OR generation_ms >= 0), system_prompt_tokens INTEGER CHECK (system_prompt_tokens IS NULL OR system_prompt_tokens >= 0), tool_catalog_tokens INTEGER CHECK (tool_catalog_tokens IS NULL OR tool_catalog_tokens >= 0), history_tokens INTEGER CHECK (history_tokens IS NULL OR history_tokens >= 0), user_tokens INTEGER CHECK (user_tokens IS NULL OR user_tokens >= 0), tool_count INTEGER CHECK (tool_count IS NULL OR tool_count >= 0), message_count INTEGER CHECK (message_count IS NULL OR message_count >= 0),\n            CHECK (outcome = 'error' OR (error_class IS NULL AND http_status IS NULL))\n          )"
+    },
+    {
+      "type": "index",
+      "name": "idx_ai_usage_events_at",
+      "tbl_name": "ai_usage_events",
+      "sql": "CREATE INDEX idx_ai_usage_events_at ON ai_usage_events(at)"
+    },
+    {
+      "type": "index",
+      "name": "idx_ai_usage_events_provider_at",
+      "tbl_name": "ai_usage_events",
+      "sql": "CREATE INDEX idx_ai_usage_events_provider_at\n          ON ai_usage_events(provider, at)\n        "
+    }
+  ]
+}

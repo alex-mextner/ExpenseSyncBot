@@ -2,63 +2,59 @@
 import { google } from 'googleapis';
 import type { CurrencyCode } from '../../config/constants';
 import { getCurrencySymbol, SPREADSHEET_CONFIG } from '../../config/constants';
-import type { OAuthClientType } from '../../database/types';
 import { OAuthError } from '../../errors';
 import { createLogger } from '../../utils/logger.ts';
-import { convertToEUR } from '../currency/converter';
-import { MONTH_ABBREVS, type MonthAbbr, monthAbbrFromDate } from './month-abbr';
-import { getAuthenticatedClient, isTokenExpiredError } from './oauth';
+import { monthAbbrFromDate } from './month-abbr';
+import { isTokenExpiredError } from './oauth';
+import {
+  authClient,
+  buildEurCalcFormula,
+  colLetter,
+  enqueueSheetWrite,
+  type GoogleConn,
+  nonEurCurrencyColumnIndices,
+  RATE_COLUMN_HEADER,
+  type SheetsClient,
+  withSheetsRetry,
+  writeValueUpdatesInChunks,
+} from './sheets-core';
 
-/**
- * Google connection credentials: refresh token + which OAuth client to use.
- * All sheets functions accept this to route through the correct credentials.
- */
-export interface GoogleConn {
-  refreshToken: string;
-  oauthClient: OAuthClientType;
-}
+export type { GoogleConn } from './sheets-core';
+export {
+  chunkArray,
+  enqueueSheetWrite,
+  GOOGLE_SHEETS_LIMITS,
+  googleConn,
+  isCurrencyColumnHeader,
+  isRateLimitError,
+  nonEurCurrencyColumnIndices,
+  withSheetsRetry,
+} from './sheets-core';
 
-function authClient(conn: GoogleConn) {
-  return getAuthenticatedClient(conn.refreshToken, conn.oauthClient);
-}
+import { createEmptyMonthTab } from './sheets-month-tabs';
 
-/** Build GoogleConn from a group-like object with refresh token and oauth_client */
-export function googleConn(group: {
-  google_refresh_token: string | null;
-  oauth_client: OAuthClientType;
-}): GoogleConn {
-  if (!group.google_refresh_token) {
-    throw new Error('Group has no Google refresh token');
-  }
-  return {
-    refreshToken: group.google_refresh_token,
-    oauthClient: group.oauth_client,
-  };
-}
+export {
+  cloneMonthTab,
+  createEmptyMonthTab,
+  listMonthTabs,
+  monthTabExists,
+  readMonthBudget,
+  writeMonthBudgetRow,
+} from './sheets-month-tabs';
+export type { EurMismatchWarning, MultiCurrencyRowError, SheetRow } from './sheets-read';
+export { readExpensesFromSheet } from './sheets-read';
+export { repairDateSerials, repairEurFormulas } from './sheets-repair';
+export {
+  appendExpenseRowsRaw,
+  deleteExpenseRowsByIndex,
+  findAndDeleteExpenseRow,
+  readExpenseHeaders,
+  readExpenseRowsRaw,
+  renameSpreadsheet,
+  sortExpensesTab,
+} from './sheets-rows';
 
 const logger = createLogger('sheets');
-
-/**
- * Row data from spreadsheet
- */
-export interface SheetRow {
-  date: string;
-  amounts: Record<string, number>; // currency -> amount
-  eurAmount: number;
-  rate: number | null; // exchange rate stored at write time (1 CURRENCY = rate EUR)
-  category: string;
-  comment: string;
-}
-
-/**
- * Error describing a row with amounts in multiple currency columns
- */
-export interface MultiCurrencyRowError {
-  row: number; // 1-based spreadsheet row
-  date: string;
-  currencies: string[]; // e.g. ["USD", "RSD"]
-  category: string;
-}
 
 /**
  * Create a new expense tracking spreadsheet
@@ -164,256 +160,6 @@ export async function createExpenseSpreadsheet(
   return { spreadsheetId, spreadsheetUrl };
 }
 
-/**
- * Append expense row to spreadsheet
- */
-/**
- * Column letter for a 0-based index (0=A, 1=B, ..., 25=Z, 26=AA)
- */
-function colLetter(index: number): string {
-  let letter = '';
-  let n = index;
-  while (n >= 0) {
-    letter = String.fromCharCode(65 + (n % 26)) + letter;
-    n = Math.floor(n / 26) - 1;
-  }
-  return letter;
-}
-
-/**
- * Rate column header constant
- */
-const RATE_COLUMN_HEADER = 'Rate (→EUR)';
-
-/**
- * Build the self-positioning EUR(calc) formula: amount × rate.
- *
- * `INDIRECT("<col>"&ROW())` resolves the cell from the formula's OWN row, so
- * the formula text is identical for every data row and needs no absolute row
- * number — which lets `append()` bake it inline instead of a second write
- * round-trip (see appendExpenseRowsImpl for the quota rationale). The flip side
- * is that the column letters live inside a string Google can't see into, so a
- * column insert/move does NOT auto-adjust them: any caller that shifts columns
- * must recompute these formulas itself (see rewriteEurFormulasForLayout).
- */
-function buildEurCalcFormula(amountColIdx: number, rateColIdx: number): string {
-  return `=INDIRECT("${colLetter(amountColIdx)}"&ROW())*INDIRECT("${colLetter(rateColIdx)}"&ROW())`;
-}
-
-/**
- * True when a sheet header names a currency AMOUNT column: a 3-letter currency
- * code followed by a parenthesised symbol, e.g. "USD ($)", "RSD (дин.)",
- * "EUR (€)". Excludes the computed "EUR (calc)" column and the "Rate (→EUR)"
- * column — both share the CODE-then-paren shape but hold a derived value, not a
- * user-entered amount. The EUR *currency* column IS a currency column here;
- * callers that must also skip EUR (formula repair, rate derivation) use
- * nonEurCurrencyColumnIndices, which layers the EUR exclusion on top. This is
- * the single detector shared with scripts/repair-all-sheets.ts (#112) so the
- * script's untestable copy can't drift from the tested one.
- */
-export function isCurrencyColumnHeader(header: string): boolean {
-  return (
-    /^[A-Z]{3}\s*\(/.test(header) &&
-    header !== SPREADSHEET_CONFIG.eurColumnHeader &&
-    header !== RATE_COLUMN_HEADER
-  );
-}
-
-/**
- * Indices of non-EUR currency amount columns (e.g. "USD ($)") in header order.
- * Excludes the computed "EUR (calc)" column, the Rate column, and the EUR
- * currency column — EUR rows keep a static EUR(calc), never a formula.
- */
-export function nonEurCurrencyColumnIndices(headers: string[]): number[] {
-  const indices: number[] = [];
-  for (let i = 0; i < headers.length; i++) {
-    const header = headers[i];
-    if (header && isCurrencyColumnHeader(header) && !header.startsWith('EUR')) {
-      indices.push(i);
-    }
-  }
-  return indices;
-}
-
-/** A cell value Sheets treats as empty (no value / cleared). */
-function isEmptyCell(value: unknown): boolean {
-  return value === '' || value === undefined || value === null;
-}
-
-/**
- * True when a cell's COMPUTED value is a Google Sheets formula error
- * (#VALUE!, #REF!, #N/A, #NAME?, …). Read with a value render option, not
- * FORMULA — under FORMULA render an erroring cell returns its formula text, not
- * the error. Only meaningful for cells that actually hold a formula.
- */
-function isFormulaError(computedValue: unknown): boolean {
-  return typeof computedValue === 'string' && computedValue.startsWith('#');
-}
-
-/**
- * Max ValueRange entries per spreadsheets.values.batchUpdate request. A single
- * unbounded batchUpdate on a multi-thousand-row sheet can exceed the API's
- * request payload limit and fail the whole repair atomically; chunking keeps
- * each request bounded and re-runnable (a failed chunk leaves earlier chunks
- * written). Matches the 300-row chunk used by scripts/repair-all-sheets.ts.
- */
-const SHEETS_VALUE_BATCH_CHUNK = 300;
-
-/** Split an array into fixed-size chunks (the final chunk may be smaller). */
-export function chunkArray<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
-  }
-  return chunks;
-}
-
-/**
- * Write value-range updates via spreadsheets.values.batchUpdate, split into
- * bounded chunks so a large repair can't exceed the API payload limit. One
- * shared path for every chunked value write (rewrite-on-insert + repair).
- */
-async function writeValueUpdatesInChunks(
-  sheets: ReturnType<typeof google.sheets>,
-  spreadsheetId: string,
-  data: { range: string; values: (string | number)[][] }[],
-  retryLabel: string,
-): Promise<void> {
-  for (const chunk of chunkArray(data, SHEETS_VALUE_BATCH_CHUNK)) {
-    await withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId,
-          requestBody: { valueInputOption: 'USER_ENTERED', data: chunk },
-        }),
-      retryLabel,
-    );
-  }
-}
-
-/**
- * Google Sheets API hard limits (write side — this bot's hot path).
- * Source: https://developers.google.com/workspace/sheets/api/limits
- *
- * Per-user and per-project limits are both enforced. We care about the
- * per-user limit because a single OAuth user writing a 70-item receipt can
- * exhaust it on its own without touching the project budget.
- */
-export const GOOGLE_SHEETS_LIMITS = {
-  writeRequestsPerMinutePerUser: 60,
-  writeRequestsPerMinutePerProject: 300,
-  readRequestsPerMinutePerUser: 60,
-  readRequestsPerMinutePerProject: 300,
-  /** Google's own recommended maximum backoff for 429 retries */
-  maxBackoffMs: 32_000,
-  /** Give up after this many attempts (original + retries) */
-  maxAttempts: 6,
-} as const;
-
-/**
- * Sleep helper — isolated so tests can mock `setTimeout` without touching
- * the global loop
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Check if a caught error is a Google API 429 (rate limit exceeded)
- */
-export function isRateLimitError(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const e = err as {
-    code?: unknown;
-    status?: unknown;
-    message?: unknown;
-    response?: {
-      status?: unknown;
-      data?: {
-        error?: {
-          status?: unknown;
-          errors?: Array<{ reason?: unknown }>;
-        };
-      };
-    };
-  };
-  // Top-level code/status (most common path for googleapis SDK)
-  if (e.code === 429 || e.code === '429' || e.status === 429 || e.status === '429') return true;
-  // Nested response.status (GaxiosError wraps the HTTP response)
-  if (e.response?.status === 429 || e.response?.status === '429') return true;
-  // Nested response.data.error.status (Google JSON error body)
-  if (e.response?.data?.error?.status === 'RESOURCE_EXHAUSTED') return true;
-  // Google returns quota exhaustion as 403 with a rate-limit reason code —
-  // not just 429. Must detect this shape so callers don't misclassify a
-  // throttled request as a real permission-denied error.
-  const reasons = e.response?.data?.error?.errors;
-  if (Array.isArray(reasons)) {
-    for (const entry of reasons) {
-      if (entry?.reason === 'rateLimitExceeded' || entry?.reason === 'userRateLimitExceeded') {
-        return true;
-      }
-    }
-  }
-  // Message-based fallback
-  if (typeof e.message === 'string') {
-    return e.message.includes('Quota exceeded') || e.message.includes('rateLimitExceeded');
-  }
-  return false;
-}
-
-/**
- * Wrap a Google Sheets API call with exponential backoff on 429. Retries
- * follow Google's recommended formula: `min(2^n * 1000 + jitter, maxBackoffMs)`.
- * Non-429 errors are rethrown immediately — we don't want to mask auth or
- * validation failures.
- *
- * The random jitter (`randomFn`) is injectable so tests are deterministic.
- */
-export async function withSheetsRetry<T>(
-  fn: () => Promise<T>,
-  label: string,
-  opts?: { sleepFn?: (ms: number) => Promise<void>; randomFn?: () => number },
-): Promise<T> {
-  const sleepFn = opts?.sleepFn ?? sleep;
-  const randomFn = opts?.randomFn ?? Math.random;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < GOOGLE_SHEETS_LIMITS.maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (!isRateLimitError(err)) throw err;
-      if (attempt === GOOGLE_SHEETS_LIMITS.maxAttempts - 1) break;
-      const base = Math.min(2 ** attempt * 1000, GOOGLE_SHEETS_LIMITS.maxBackoffMs);
-      const jitter = Math.floor(randomFn() * 1000);
-      const waitMs = base + jitter;
-      logger.warn({ label, attempt: attempt + 1, waitMs }, '[SHEETS] 429 rate limit, backing off');
-      await sleepFn(waitMs);
-    }
-  }
-  throw lastErr;
-}
-
-// Per-spreadsheet write queue — serializes appends so EUR formula row references are correct
-const sheetWriteQueues = new Map<string, Promise<void>>();
-
-/** Exported for testing — serializes async operations per spreadsheet */
-export function enqueueSheetWrite(spreadsheetId: string, fn: () => Promise<void>): Promise<void> {
-  const prev = sheetWriteQueues.get(spreadsheetId) ?? Promise.resolve();
-  // Chain runs fn after prev settles (success or failure)
-  const chain = prev.catch(() => {}).then(fn);
-  // Store the settled chain (never rejects) so next enqueue can chain off it
-  const settled = chain.catch(() => {});
-  sheetWriteQueues.set(spreadsheetId, settled);
-  settled.then(() => {
-    if (sheetWriteQueues.get(spreadsheetId) === settled) {
-      sheetWriteQueues.delete(spreadsheetId);
-    }
-  });
-  // Return the chain that DOES reject on fn failure — caller gets the error
-  return chain;
-}
-
 export interface ExpenseRowData {
   date: string;
   category: string;
@@ -446,6 +192,84 @@ export async function appendExpenseRows(
   );
 }
 
+/** Currency of the first non-null amount in the row, if any. */
+function expenseCurrencyOf(data: ExpenseRowData): string | undefined {
+  return Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
+}
+
+/** Read the header row of the Expenses sheet (empty when the sheet has no header). */
+async function readSheetHeaders(
+  sheets: SheetsClient,
+  spreadsheetId: string,
+  label: string,
+): Promise<string[]> {
+  const headersResponse = await withSheetsRetry(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
+      }),
+    label,
+  );
+  return headersResponse.data.values?.[0] || [];
+}
+
+function hasCurrencyColumn(headers: string[], currency: string): boolean {
+  return headers.some((h) => h.startsWith(`${currency} (`));
+}
+
+/**
+ * Build one sheet row in header order. EUR formulas for non-EUR rows are baked
+ * in via `=INDIRECT("<amountCol>"&ROW())*INDIRECT("<rateCol>"&ROW())` — a
+ * self-positioning formula that doesn't need to know its absolute row
+ * number. This lets us put the formula inside the first append call
+ * instead of doing a second values.batchUpdate, halving write quota usage.
+ *
+ * Trade-off: INDIRECT is volatile — it recalculates on any sheet change.
+ * Immeasurable on the few-thousand rows an expense tracker accumulates.
+ */
+function buildExpenseRow(headers: string[], data: ExpenseRowData): (string | number)[] {
+  const expenseCurrency = expenseCurrencyOf(data);
+  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
+  const amountColIdx = headers.findIndex((h) => h.split(' ')[0] === expenseCurrency);
+
+  const needsFormula =
+    expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
+  const eurFormula = needsFormula ? buildEurCalcFormula(amountColIdx, rateColIdx) : null;
+
+  return headers.map((header) => {
+    if (header === SPREADSHEET_CONFIG.headers[0]) return data.date;
+    if (header === SPREADSHEET_CONFIG.headers[1]) return data.category;
+    if (header === SPREADSHEET_CONFIG.headers[2]) return data.comment;
+    // Formula when we can derive EUR from amount*rate, otherwise literal
+    if (header === SPREADSHEET_CONFIG.eurColumnHeader) return eurFormula ?? data.eurAmount;
+    if (header === RATE_COLUMN_HEADER) return data.rate ?? '';
+    const currencyCode = header?.split(' ')[0] as CurrencyCode;
+    return data.amounts[currencyCode] ?? '';
+  });
+}
+
+/** Insert the currency columns the rows need, then the Rate column; returns the final headers. */
+async function ensureColumnsForCurrencies(
+  sheets: SheetsClient,
+  spreadsheetId: string,
+  initialHeaders: string[],
+  currencies: Iterable<string>,
+): Promise<string[]> {
+  let headers = initialHeaders;
+  for (const curr of currencies) {
+    if (!hasCurrencyColumn(headers, curr)) {
+      headers = await insertCurrencyColumn(sheets, spreadsheetId, headers, curr as CurrencyCode);
+    }
+  }
+
+  // Ensure Rate column exists
+  if (!headers.includes(RATE_COLUMN_HEADER)) {
+    headers = await ensureRateColumn(sheets, spreadsheetId, headers);
+  }
+  return headers;
+}
+
 async function appendExpenseRowsImpl(
   conn: GoogleConn,
   spreadsheetId: string,
@@ -455,86 +279,29 @@ async function appendExpenseRowsImpl(
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Get headers once
-  const headersResponse = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
-      }),
+  const initialHeaders = await readSheetHeaders(
+    sheets,
+    spreadsheetId,
     'appendExpenseRows.readHeaders',
   );
-
-  let headers: string[] = headersResponse.data.values?.[0] || [];
-  logger.info({ data: headers }, '[SHEETS-BATCH] Headers from spreadsheet');
+  logger.info({ data: initialHeaders }, '[SHEETS-BATCH] Headers from spreadsheet');
 
   // Collect all unique currencies that need columns
   const allCurrencies = new Set<string>();
   for (const data of dataList) {
-    const curr = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
+    const curr = expenseCurrencyOf(data);
     if (curr) allCurrencies.add(curr);
   }
 
   // Insert missing currency columns (once per unique currency)
-  for (const curr of allCurrencies) {
-    const hasCurrencyCol = headers.some((h) => h.startsWith(`${curr} (`));
-    if (!hasCurrencyCol) {
-      headers = await insertCurrencyColumn(sheets, spreadsheetId, headers, curr as CurrencyCode);
-    }
-  }
+  const headers = await ensureColumnsForCurrencies(
+    sheets,
+    spreadsheetId,
+    initialHeaders,
+    allCurrencies,
+  );
 
-  // Ensure Rate column exists
-  if (!headers.includes(RATE_COLUMN_HEADER)) {
-    headers = await ensureRateColumn(sheets, spreadsheetId, headers);
-  }
-
-  // Find column indices
-  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
-
-  // Build all rows. EUR formulas for non-EUR rows are baked in via
-  // `=INDIRECT("<amountCol>"&ROW())*INDIRECT("<rateCol>"&ROW())` — a
-  // self-positioning formula that doesn't need to know its absolute row
-  // number. This lets us put the formula inside the first append call
-  // instead of doing a second values.batchUpdate, halving write quota usage.
-  //
-  // Trade-off: INDIRECT is volatile — it recalculates on any sheet change.
-  // Immeasurable on the few-thousand rows an expense tracker accumulates.
-  const rows: (string | number | string)[][] = [];
-
-  for (const data of dataList) {
-    const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
-    let amountColIdx = -1;
-    for (let i = 0; i < headers.length; i++) {
-      if (headers[i]?.split(' ')[0] === expenseCurrency) {
-        amountColIdx = i;
-        break;
-      }
-    }
-
-    const needsFormula =
-      expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
-    const eurFormula = needsFormula ? buildEurCalcFormula(amountColIdx, rateColIdx) : null;
-
-    const row: (string | number)[] = [];
-    for (let colIdx = 0; colIdx < headers.length; colIdx++) {
-      const header = headers[colIdx];
-      if (header === SPREADSHEET_CONFIG.headers[0]) {
-        row.push(data.date);
-      } else if (header === SPREADSHEET_CONFIG.headers[1]) {
-        row.push(data.category);
-      } else if (header === SPREADSHEET_CONFIG.headers[2]) {
-        row.push(data.comment);
-      } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-        // Formula when we can derive EUR from amount*rate, otherwise literal
-        row.push(eurFormula ?? data.eurAmount);
-      } else if (header === RATE_COLUMN_HEADER) {
-        row.push(data.rate ?? '');
-      } else {
-        const currencyCode = header?.split(' ')[0] as CurrencyCode;
-        row.push(data.amounts[currencyCode] ?? '');
-      }
-    }
-    rows.push(row);
-  }
+  const rows = dataList.map((data) => buildExpenseRow(headers, data));
 
   // Single append call — rows contain their own EUR formulas (no second round-trip)
   const response = await withSheetsRetry(
@@ -567,76 +334,25 @@ async function appendExpenseRowImpl(
   const sheets = google.sheets({ version: 'v4', auth });
 
   // Get headers to determine column order
-  const headersResponse = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${SPREADSHEET_CONFIG.sheetName}!1:1`,
-      }),
+  const initialHeaders = await readSheetHeaders(
+    sheets,
+    spreadsheetId,
     'appendExpenseRow.readHeaders',
   );
-
-  let headers: string[] = headersResponse.data.values?.[0] || [];
-  logger.info({ data: headers }, `[SHEETS] Headers from spreadsheet`);
+  logger.info({ data: initialHeaders }, `[SHEETS] Headers from spreadsheet`);
 
   // Check if expense currency has a column; if not, insert one
-  const expenseCurrency = Object.entries(data.amounts).find(([, v]) => v !== null)?.[0];
-  if (expenseCurrency) {
-    const hasCurrencyCol = headers.some((h) => h.startsWith(`${expenseCurrency} (`));
-    if (!hasCurrencyCol) {
-      headers = await insertCurrencyColumn(
-        sheets,
-        spreadsheetId,
-        headers,
-        expenseCurrency as CurrencyCode,
-      );
-    }
-  }
+  const expenseCurrency = expenseCurrencyOf(data);
+  const headers = await ensureColumnsForCurrencies(
+    sheets,
+    spreadsheetId,
+    initialHeaders,
+    expenseCurrency ? [expenseCurrency] : [],
+  );
 
-  // Ensure Rate column exists
-  if (!headers.includes(RATE_COLUMN_HEADER)) {
-    headers = await ensureRateColumn(sheets, spreadsheetId, headers);
-  }
-
-  // Find column indices for formula generation
-  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
-  let amountColIdx = -1;
-  for (let i = 0; i < headers.length; i++) {
-    const code = headers[i]?.split(' ')[0];
-    if (code === expenseCurrency) {
-      amountColIdx = i;
-      break;
-    }
-  }
-
-  const needsFormula =
-    expenseCurrency !== 'EUR' && !!data.rate && amountColIdx !== -1 && rateColIdx !== -1;
-
-  // Self-positioning EUR formula — see appendExpenseRowsImpl for rationale.
+  // Self-positioning EUR formula — see buildExpenseRow for rationale.
   // One append call, no second round-trip to attach the formula afterwards.
-  const eurFormula = needsFormula ? buildEurCalcFormula(amountColIdx, rateColIdx) : null;
-
-  // Build row values based on header order
-  const row: (string | number)[] = [];
-
-  for (let colIdx = 0; colIdx < headers.length; colIdx++) {
-    const header = headers[colIdx];
-    if (header === SPREADSHEET_CONFIG.headers[0]) {
-      row.push(data.date);
-    } else if (header === SPREADSHEET_CONFIG.headers[1]) {
-      row.push(data.category);
-    } else if (header === SPREADSHEET_CONFIG.headers[2]) {
-      row.push(data.comment);
-    } else if (header === SPREADSHEET_CONFIG.eurColumnHeader) {
-      row.push(eurFormula ?? data.eurAmount);
-    } else if (header === RATE_COLUMN_HEADER) {
-      row.push(data.rate ?? '');
-    } else {
-      const currencyCode = header?.split(' ')[0] as CurrencyCode;
-      const value = data.amounts[currencyCode] ?? '';
-      row.push(value);
-    }
-  }
+  const row = buildExpenseRow(headers, data);
 
   logger.info({ data: row }, `[SHEETS] Final row`);
 
@@ -673,7 +389,7 @@ async function appendExpenseRowImpl(
  * Returns the updated headers array.
  */
 async function insertCurrencyColumn(
-  sheets: ReturnType<typeof google.sheets>,
+  sheets: SheetsClient,
   spreadsheetId: string,
   currentHeaders: string[],
   currency: CurrencyCode,
@@ -770,7 +486,7 @@ async function insertCurrencyColumn(
  * on every insert, preserving the single-write append optimisation.
  */
 async function rewriteEurFormulasForLayout(
-  sheets: ReturnType<typeof google.sheets>,
+  sheets: SheetsClient,
   spreadsheetId: string,
   headers: string[],
 ): Promise<void> {
@@ -829,7 +545,7 @@ async function rewriteEurFormulasForLayout(
  * Returns the updated headers array.
  */
 async function ensureRateColumn(
-  sheets: ReturnType<typeof google.sheets>,
+  sheets: SheetsClient,
   spreadsheetId: string,
   currentHeaders: string[],
 ): Promise<string[]> {
@@ -956,1077 +672,4 @@ export async function verifySpreadsheetAccess(
     logger.error({ err }, 'Failed to verify spreadsheet access');
     return false;
   }
-}
-
-// ── Monthly budget tab functions ────────────────────────────────────────────
-
-export interface BudgetRow {
-  category: string;
-  limit: number;
-  currency: CurrencyCode;
-}
-
-const MONTH_TAB_HEADERS = ['Category', 'Limit', 'Currency'];
-
-/**
- * Check if a monthly budget tab (e.g. "Mar") exists in the spreadsheet
- */
-export async function monthTabExists(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  month: MonthAbbr,
-): Promise<boolean> {
-  try {
-    const auth = authClient(conn);
-    const sheets = google.sheets({ version: 'v4', auth });
-    const spreadsheet = await withSheetsRetry(
-      () => sheets.spreadsheets.get({ spreadsheetId }),
-      `monthTabExists ${month}`,
-    );
-    return !!spreadsheet.data.sheets?.find((s) => s.properties?.title === month);
-  } catch (err) {
-    logger.error({ err }, `[SHEETS] monthTabExists failed for ${month}`);
-    return false;
-  }
-}
-
-/**
- * Fetch all month-abbreviation tabs (e.g. "Jan", "Feb", …) present in the
- * spreadsheet with a single `spreadsheets.get` call. Used to avoid the N× per-
- * month `monthTabExists` probe that hits Sheets quota in bulk-sync loops.
- *
- * Rethrows underlying errors (including 429/403) so the caller can classify
- * or retry at a higher level — this is deliberate, unlike the defensive
- * catch in `monthTabExists`.
- */
-export async function listMonthTabs(conn: GoogleConn, spreadsheetId: string): Promise<MonthAbbr[]> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-  const spreadsheet = await withSheetsRetry(
-    () => sheets.spreadsheets.get({ spreadsheetId }),
-    'listMonthTabs',
-  );
-  const titles = new Set(
-    spreadsheet.data.sheets
-      ?.map((s) => s.properties?.title)
-      .filter((t): t is string => typeof t === 'string') ?? [],
-  );
-  return MONTH_ABBREVS.filter((abbr) => titles.has(abbr));
-}
-
-/**
- * Create an empty monthly budget tab with header row (Category | Limit | Currency)
- */
-export async function createEmptyMonthTab(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  month: MonthAbbr,
-): Promise<void> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const addResponse = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              addSheet: {
-                properties: {
-                  title: month,
-                  gridProperties: { frozenRowCount: 1 },
-                },
-              },
-            },
-          ],
-        },
-      }),
-    `createEmptyMonthTab.addSheet ${month}`,
-  );
-
-  const sheetId = addResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
-  if (sheetId === undefined || sheetId === null) {
-    throw new Error(
-      `Failed to get sheetId for new month tab "${month}" in spreadsheet ${spreadsheetId}`,
-    );
-  }
-
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              updateCells: {
-                rows: [
-                  {
-                    values: MONTH_TAB_HEADERS.map((header) => ({
-                      userEnteredValue: { stringValue: header },
-                      userEnteredFormat: {
-                        textFormat: { bold: true },
-                        backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
-                      },
-                    })),
-                  },
-                ],
-                fields: 'userEnteredValue,userEnteredFormat',
-                start: { sheetId, rowIndex: 0, columnIndex: 0 },
-              },
-            },
-            {
-              autoResizeDimensions: {
-                dimensions: {
-                  sheetId,
-                  dimension: 'COLUMNS',
-                  startIndex: 0,
-                  endIndex: 3,
-                },
-              },
-            },
-          ],
-        },
-      }),
-    `createEmptyMonthTab.format ${month}`,
-  );
-
-  logger.info(`[SHEETS] Created empty month tab: ${month}`);
-}
-
-/**
- * Read all budget rows from a monthly tab
- */
-export async function readMonthBudget(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  month: MonthAbbr,
-): Promise<BudgetRow[]> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  try {
-    const response = await withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `${month}!A2:C`,
-        }),
-      `readMonthBudget ${month}`,
-    );
-
-    const rows = response.data.values ?? [];
-    return rows
-      .filter((r) => r.length >= 2)
-      .map(([category, limitStr, currencyStr]) => ({
-        category: (category as string).trim(),
-        limit: parseFloat(limitStr as string),
-        currency: ((currencyStr as string | undefined)?.trim() || 'EUR') as CurrencyCode,
-      }))
-      .filter((r) => r.category && !Number.isNaN(r.limit));
-  } catch (err) {
-    logger.error({ err }, `[SHEETS] readMonthBudget failed for ${month}`);
-    return [];
-  }
-}
-
-/**
- * Write or update a single budget row in a monthly tab (upsert by category).
- *
- * By default, defensively ensures the month tab exists before writing —
- * costs one extra `spreadsheets.get`. Callers that already guaranteed the
- * tab (e.g. via a single upfront `listMonthTabs` + selective
- * `createEmptyMonthTab`) should pass `{ ensureTab: false }` to skip the
- * redundant probe; this is what keeps the 60/min read quota from being
- * burned during bulk budget sync.
- */
-export async function writeMonthBudgetRow(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  month: MonthAbbr,
-  row: BudgetRow,
-  options?: { ensureTab?: boolean },
-): Promise<void> {
-  const ensureTab = options?.ensureTab ?? true;
-  if (ensureTab) {
-    const tabExists = await monthTabExists(conn, spreadsheetId, month);
-    if (!tabExists) {
-      await createEmptyMonthTab(conn, spreadsheetId, month);
-    }
-  }
-
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const response = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${month}!A2:C`,
-      }),
-    `writeMonthBudgetRow.get ${month}`,
-  );
-
-  const existingRows = response.data.values ?? [];
-  let targetRow = -1;
-  for (let i = 0; i < existingRows.length; i++) {
-    if (
-      (existingRows[i]?.[0] as string | undefined)?.toLowerCase() === row.category.toLowerCase()
-    ) {
-      targetRow = i + 2; // 1-indexed + header row
-      break;
-    }
-  }
-
-  const values = [[row.category, row.limit, row.currency]];
-
-  if (targetRow !== -1) {
-    await withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${month}!A${targetRow}:C${targetRow}`,
-          valueInputOption: 'RAW',
-          requestBody: { values },
-        }),
-      `writeMonthBudgetRow.update ${month}`,
-    );
-  } else {
-    await withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: `${month}!A2:C`,
-          valueInputOption: 'RAW',
-          requestBody: { values },
-        }),
-      `writeMonthBudgetRow.append ${month}`,
-    );
-  }
-}
-
-/**
- * Clone a monthly tab from one spreadsheet to another (cross-spreadsheet supported).
- * Uses the Google Sheets copyTo API, then renames the resulting sheet.
- */
-export async function cloneMonthTab(
-  conn: GoogleConn,
-  sourceSpreadsheetId: string,
-  sourceMonth: MonthAbbr,
-  targetSpreadsheetId: string,
-  targetMonth: MonthAbbr,
-): Promise<void> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  // Find source sheet ID
-  const sourceSpreadsheet = await withSheetsRetry(
-    () => sheets.spreadsheets.get({ spreadsheetId: sourceSpreadsheetId }),
-    `cloneMonthTab.getSource ${sourceMonth}`,
-  );
-  const sourceSheet = sourceSpreadsheet.data.sheets?.find(
-    (s) => s.properties?.title === sourceMonth,
-  );
-  const sourceSheetId = sourceSheet?.properties?.sheetId;
-  if (sourceSheetId === undefined || sourceSheetId === null) {
-    throw new Error(`Source tab "${sourceMonth}" not found in ${sourceSpreadsheetId}`);
-  }
-
-  // Copy sheet to target spreadsheet
-  const copyResponse = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.sheets.copyTo({
-        spreadsheetId: sourceSpreadsheetId,
-        sheetId: sourceSheetId,
-        requestBody: { destinationSpreadsheetId: targetSpreadsheetId },
-      }),
-    `cloneMonthTab.copyTo ${sourceMonth}`,
-  );
-
-  const newSheetId = copyResponse.data.sheetId;
-  if (newSheetId === undefined || newSheetId === null) {
-    throw new Error('copyTo did not return a sheetId');
-  }
-
-  // Rename the copied sheet to targetMonth
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.batchUpdate({
-        spreadsheetId: targetSpreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              updateSheetProperties: {
-                properties: { sheetId: newSheetId, title: targetMonth },
-                fields: 'title',
-              },
-            },
-          ],
-        },
-      }),
-    `cloneMonthTab.rename ${targetMonth}`,
-  );
-
-  logger.info(`[SHEETS] Cloned ${sourceMonth} → ${targetMonth}`);
-}
-
-// ── Raw expense row helpers (used by year-split migration) ──────────────────
-
-const EXPENSES_TAB = 'Expenses';
-
-/**
- * Read all data rows from the Expenses tab as raw string arrays.
- * Skips the header row. Uses UNFORMATTED_VALUE to capture calculated values, not formulas.
- * Note: formula cells (e.g. EUR calc column) become static values after a migration roundtrip.
- * Row-relative formula references would break in the destination sheet anyway, so this is intentional.
- */
-export async function readExpenseRowsRaw(
-  conn: GoogleConn,
-  spreadsheetId: string,
-): Promise<string[][]> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-  const response = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!A2:Z`,
-        valueRenderOption: 'UNFORMATTED_VALUE',
-      }),
-    'readExpenseRowsRaw',
-  );
-  return (response.data.values ?? []).map((row) =>
-    row.map((cell, colIdx) => {
-      const str = String(cell ?? '');
-      // Column 0 is always the date. Sheets stores date cells as serial numbers
-      // (days since Dec 30, 1899) when read with UNFORMATTED_VALUE.
-      // Convert back to ISO yyyy-MM-dd so the migration roundtrip preserves date format.
-      if (colIdx === 0) {
-        const serial = Number(str);
-        // 25569 = days between Sheets epoch (Dec 30, 1899) and Unix epoch (Jan 1, 1970)
-        if (!Number.isNaN(serial) && serial > 25569 && serial < 99999) {
-          const date = new Date((serial - 25569) * 86400 * 1000);
-          const y = date.getUTCFullYear();
-          const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
-          const d = String(date.getUTCDate()).padStart(2, '0');
-          return `${y}-${mo}-${d}`;
-        }
-      }
-      return str;
-    }),
-  );
-}
-
-/**
- * Sort the Expenses tab by column A (date) ascending, preserving the header row.
- */
-export async function sortExpensesTab(conn: GoogleConn, spreadsheetId: string): Promise<void> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const spreadsheet = await withSheetsRetry(
-    () => sheets.spreadsheets.get({ spreadsheetId }),
-    'sortExpensesTab.getSheetId',
-  );
-  const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
-  const sheetId = expensesSheet?.properties?.sheetId;
-  if (sheetId === undefined) return;
-
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              sortRange: {
-                range: {
-                  sheetId,
-                  startRowIndex: 1, // skip header
-                  startColumnIndex: 0,
-                },
-                sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }],
-              },
-            },
-          ],
-        },
-      }),
-    'sortExpensesTab.sort',
-  );
-}
-
-/** Rename a spreadsheet's title. */
-export async function renameSpreadsheet(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  title: string,
-): Promise<void> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              updateSpreadsheetProperties: {
-                properties: { title },
-                fields: 'title',
-              },
-            },
-          ],
-        },
-      }),
-    'renameSpreadsheet',
-  );
-}
-
-/**
- * Scan the Expenses tab for date cells stored as serial numbers (migration artifact)
- * and rewrite them as ISO yyyy-MM-dd strings. Returns the number of cells fixed.
- */
-export async function repairDateSerials(conn: GoogleConn, spreadsheetId: string): Promise<number> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const response = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!A2:A`,
-        valueRenderOption: 'UNFORMATTED_VALUE',
-      }),
-    'repairDateSerials.read',
-  );
-
-  const rows = response.data.values ?? [];
-  const updates: { row: number; isoDate: string }[] = [];
-
-  for (let i = 0; i < rows.length; i++) {
-    const cell = String(rows[i]?.[0] ?? '');
-    const serial = Number(cell);
-    if (!Number.isNaN(serial) && serial > 25569 && serial < 99999) {
-      const date = new Date((serial - 25569) * 86400 * 1000);
-      const y = date.getUTCFullYear();
-      const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
-      const d = String(date.getUTCDate()).padStart(2, '0');
-      updates.push({ row: i + 2, isoDate: `${y}-${mo}-${d}` }); // +2: 1-based row + skip header
-    }
-  }
-
-  if (updates.length === 0) return 0;
-
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          valueInputOption: 'USER_ENTERED',
-          data: updates.map(({ row, isoDate }) => ({
-            range: `${EXPENSES_TAB}!A${row}`,
-            values: [[isoDate]],
-          })),
-        },
-      }),
-    'repairDateSerials.write',
-  );
-
-  return updates.length;
-}
-
-/** Column positions repairEurFormulas needs to plan a single row's repair. */
-interface EurRepairColumns {
-  eurColIdx: number;
-  rateColIdx: number;
-  amountColIndices: number[];
-}
-
-/** One planned repair: a rebuilt EUR(calc) formula, plus a derived rate when one was missing. */
-interface EurRowRepair {
-  rate?: number;
-  formula: string;
-}
-
-/**
- * Decide what (if anything) to fix for one Expenses data row, given its FORMULA
- * render and its computed (value) render:
- *   - a stale self-positioning EUR(calc) formula whose baked-in INDIRECT letters
- *     no longer match the live layout → rebuild; the rate was stored at append
- *     time. A shift makes such a formula either ERROR (#VALUE!) or — when the
- *     shifted letter lands on an empty/numeric cell — silently compute a WRONG
- *     number, so a text comparison against the expected formula catches both;
- *   - a static EUR(calc) number (migration artifact) → derive the rate if absent,
- *     then attach a formula;
- *   - a correct formula, an auto-adjusting relative-ref formula, or an empty cell
- *     → leave untouched.
- */
-function planEurRowRepair(
-  formulaRow: (string | number | null | undefined)[],
-  computedRow: (string | number | null | undefined)[],
-  cols: EurRepairColumns,
-): EurRowRepair | null {
-  const amountColIdx = cols.amountColIndices.find((idx) => Number(formulaRow[idx]) > 0);
-  if (amountColIdx === undefined) return null;
-
-  const formula = buildEurCalcFormula(amountColIdx, cols.rateColIdx);
-  const eurCell = formulaRow[cols.eurColIdx];
-  const hasFormula = typeof eurCell === 'string' && eurCell.startsWith('=');
-
-  if (hasFormula) {
-    // Already the correct formula for the live layout — nothing to do.
-    if (eurCell === formula) return null;
-    // Rebuild when the formula ERRORS, or when it is a self-positioning
-    // (INDIRECT) formula whose letters drifted from the layout — the latter can
-    // compute a wrong number without ever raising #VALUE!. Plain relative refs
-    // auto-adjust on a column shift, so a non-INDIRECT formula that computes a
-    // number is left alone.
-    const stale = isFormulaError(computedRow[cols.eurColIdx]) || eurCell.includes('INDIRECT');
-    if (!stale) return null;
-    // Without a rate we can't produce a correct value (the rebuilt formula would
-    // just multiply by an empty cell) → skip.
-    if (isEmptyCell(formulaRow[cols.rateColIdx])) return null;
-    return { formula };
-  }
-
-  // Static EUR(calc) number (migration artifact) — needs a formula.
-  if (isEmptyCell(eurCell)) return null;
-  if (!isEmptyCell(formulaRow[cols.rateColIdx])) return { formula };
-
-  // Rate missing: derive it from EUR / amount (preserves that day's rate).
-  const eurNum = Number(eurCell);
-  const amountNum = Number(formulaRow[amountColIdx]);
-  if (amountNum > 0 && eurNum > 0) {
-    return { rate: Math.round((eurNum / amountNum) * 1_000_000) / 1_000_000, formula };
-  }
-  return null; // Can't derive rate — skip
-}
-
-/**
- * Scan the Expenses tab and repair broken EUR (calc) cells, rewriting each as a
- * self-positioning amount × rate formula (see buildEurCalcFormula). Heals:
- *   - static numbers left by a sheet migration;
- *   - formulas that ERROR (#VALUE!/#REF!) because a column insert shifted the
- *     columns their baked-in INDIRECT letters reference.
- * Correct formulas and EUR-denominated rows are left untouched. Returns the
- * number of EUR(calc) cells rewritten.
- */
-export async function repairEurFormulas(conn: GoogleConn, spreadsheetId: string): Promise<number> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const headerResponse = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!1:1`,
-        valueRenderOption: 'FORMATTED_VALUE',
-      }),
-    'repairEurFormulas.readHeaders',
-  );
-  const headers = (headerResponse.data.values?.[0] ?? []) as string[];
-
-  const eurColIdx = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
-  const rateColIdx = headers.indexOf(RATE_COLUMN_HEADER);
-  if (eurColIdx === -1 || rateColIdx === -1) return 0;
-
-  const amountColIndices = nonEurCurrencyColumnIndices(headers);
-  if (amountColIndices.length === 0) return 0;
-
-  const lastCol = colLetter(headers.length - 1);
-  // Read formulas AND computed values. Under FORMULA render a broken cell
-  // returns its (stale) formula text; under a value render it returns the
-  // #VALUE!/#REF! error — both are needed to tell a correct formula from a
-  // stale one without clobbering working formulas.
-  const [formulaResp, valueResp] = await Promise.all([
-    withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `${EXPENSES_TAB}!A2:${lastCol}`,
-          valueRenderOption: 'FORMULA',
-        }),
-      'repairEurFormulas.readFormulas',
-    ),
-    withSheetsRetry(
-      () =>
-        sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `${EXPENSES_TAB}!A2:${lastCol}`,
-          valueRenderOption: 'FORMATTED_VALUE',
-        }),
-      'repairEurFormulas.readValues',
-    ),
-  ]);
-  const formulaRows = formulaResp.data.values ?? [];
-  const valueRows = valueResp.data.values ?? [];
-
-  const cols: EurRepairColumns = { eurColIdx, rateColIdx, amountColIndices };
-  const eurFormulaUpdates: { row: number; formula: string }[] = [];
-  const rateUpdates: { row: number; rate: number }[] = [];
-
-  for (let i = 0; i < formulaRows.length; i++) {
-    const formulaRow = formulaRows[i] as (string | number | null | undefined)[];
-    if (!formulaRow || formulaRow.length === 0) continue;
-    const computedRow = (valueRows[i] ?? []) as (string | number | null | undefined)[];
-
-    const plan = planEurRowRepair(formulaRow, computedRow, cols);
-    if (!plan) continue;
-
-    const sheetRow = i + 2; // 1-based row + skip header
-    if (plan.rate !== undefined) rateUpdates.push({ row: sheetRow, rate: plan.rate });
-    eurFormulaUpdates.push({ row: sheetRow, formula: plan.formula });
-  }
-
-  if (eurFormulaUpdates.length === 0 && rateUpdates.length === 0) return 0;
-
-  // Write derived rates first, then replace EUR values with formulas
-  const batchData = [
-    ...rateUpdates.map(({ row, rate }) => ({
-      range: `${EXPENSES_TAB}!${colLetter(rateColIdx)}${row}`,
-      values: [[rate]],
-    })),
-    ...eurFormulaUpdates.map(({ row, formula }) => ({
-      range: `${EXPENSES_TAB}!${colLetter(eurColIdx)}${row}`,
-      values: [[formula]],
-    })),
-  ];
-
-  await writeValueUpdatesInChunks(sheets, spreadsheetId, batchData, 'repairEurFormulas.write');
-
-  logger.info(
-    `[SHEETS] repairEurFormulas: ${eurFormulaUpdates.length} formulas, ${rateUpdates.length} rates derived`,
-  );
-
-  return eurFormulaUpdates.length;
-}
-
-/**
- * Read the header row from the Expenses tab.
- */
-export async function readExpenseHeaders(
-  conn: GoogleConn,
-  spreadsheetId: string,
-): Promise<string[]> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-  const response = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!1:1`,
-      }),
-    'readExpenseHeaders',
-  );
-  return (response.data.values?.[0] ?? []) as string[];
-}
-
-/**
- * Append raw rows to the Expenses tab.
- * When sourceHeaders and targetHeaders are provided, remaps columns by header name
- * so data from a differently-ordered source sheet lands in the correct columns.
- */
-export async function appendExpenseRowsRaw(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  rows: string[][],
-  sourceHeaders?: string[],
-  targetHeaders?: string[],
-): Promise<void> {
-  if (rows.length === 0) return;
-
-  let outputRows = rows;
-
-  // Remap columns if headers are provided and differ
-  if (
-    sourceHeaders &&
-    targetHeaders &&
-    JSON.stringify(sourceHeaders) !== JSON.stringify(targetHeaders)
-  ) {
-    logger.info(
-      `[SHEETS] Remapping columns: source=${JSON.stringify(sourceHeaders)} → target=${JSON.stringify(targetHeaders)}`,
-    );
-    outputRows = rows.map((row) => {
-      const newRow: string[] = [];
-      for (const th of targetHeaders) {
-        const srcIdx = sourceHeaders.indexOf(th);
-        newRow.push(srcIdx >= 0 ? (row[srcIdx] ?? '') : '');
-      }
-      return newRow;
-    });
-  }
-
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!A2`,
-        // USER_ENTERED so numeric strings are parsed as numbers (not stored as text).
-        // Formulas are not preserved (see readExpenseRowsRaw doc for rationale).
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: outputRows },
-      }),
-    'appendExpenseRowsRaw',
-  );
-}
-
-/**
- * Delete rows from the Expenses tab by their 1-based sheet row indices.
- * Sorted and processed in reverse order to avoid index shifting.
- * Uses the Expenses tab's sheetId (resolved from spreadsheet metadata).
- */
-/**
- * Convert a sheet date cell to ISO yyyy-MM-dd. Handles two storage shapes:
- *   - UNFORMATTED_VALUE: the date is a Sheets serial number (days since 1899-12-30)
- *   - formatted string: already ISO-shaped (e.g. "2026-04-15")
- */
-function normalizeSheetDate(cell: unknown): string {
-  if (typeof cell === 'number' && Number.isFinite(cell) && cell > 25569 && cell < 99999) {
-    const date = new Date((cell - 25569) * 86400 * 1000);
-    const y = date.getUTCFullYear();
-    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(date.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  return String(cell ?? '');
-}
-
-/**
- * Find the FIRST sheet row matching all criteria fields, delete it, and return
- * the 1-based row index. Returns `{ deletedRowIndex: null }` if no row matches.
- *
- * Matching uses (date, category, comment, amount-in-currency-column). Multiple
- * matches are intentional: caller deletes one row per call, so repeated calls
- * naturally clean up duplicates.
- */
-export async function findAndDeleteExpenseRow(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  criteria: {
-    date: string;
-    category: string;
-    comment: string;
-    amount: number;
-    currency: string;
-  },
-): Promise<{ deletedRowIndex: number | null }> {
-  // Serialize with other operations on this spreadsheet. Without this, two
-  // concurrent deletes can both read the same pre-delete row indices; the
-  // first deleteDimension shifts row numbers, and the second batchUpdate
-  // ends up targeting a stale index — removing the wrong row. Appends use
-  // the same queue for the same reason (row-relative EUR formulas).
-  let capturedResult: { deletedRowIndex: number | null } = { deletedRowIndex: null };
-  await enqueueSheetWrite(spreadsheetId, async () => {
-    capturedResult = await findAndDeleteExpenseRowImpl(conn, spreadsheetId, criteria);
-  });
-  return capturedResult;
-}
-
-async function findAndDeleteExpenseRowImpl(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  criteria: {
-    date: string;
-    category: string;
-    comment: string;
-    amount: number;
-    currency: string;
-  },
-): Promise<{ deletedRowIndex: number | null }> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  // UNFORMATTED_VALUE so amounts come as numbers (not locale-formatted strings)
-  // and dates as serial numbers (which we normalize back to ISO).
-  const response = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${EXPENSES_TAB}!A:Z`,
-        valueRenderOption: 'UNFORMATTED_VALUE',
-      }),
-    'findAndDeleteExpenseRow.read',
-  );
-
-  const rows = response.data.values ?? [];
-  if (rows.length < 2) return { deletedRowIndex: null };
-
-  const headers = (rows[0] ?? []) as string[];
-  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? '');
-  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? '');
-  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? '');
-  // `startsWith("EUR ")` alone would also match "EUR (calc)" — the computed
-  // EUR column, not the EUR currency column. Exclude it explicitly so the
-  // match is column-order-independent.
-  const currencyCol = headers.findIndex(
-    (h) => h.startsWith(`${criteria.currency} `) && h !== SPREADSHEET_CONFIG.eurColumnHeader,
-  );
-
-  if (dateCol === -1 || categoryCol === -1 || commentCol === -1 || currencyCol === -1) {
-    logger.warn(
-      {
-        dateCol,
-        categoryCol,
-        commentCol,
-        currencyCol,
-        currency: criteria.currency,
-      },
-      '[SHEETS] findAndDeleteExpenseRow: required column not found',
-    );
-    return { deletedRowIndex: null };
-  }
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i] as unknown[];
-    if (!row) continue;
-
-    const rowDate = normalizeSheetDate(row[dateCol]);
-    if (rowDate !== criteria.date) continue;
-    if (String(row[categoryCol] ?? '') !== criteria.category) continue;
-    if (String(row[commentCol] ?? '') !== criteria.comment) continue;
-
-    const cellAmount = row[currencyCol];
-    const numAmount =
-      typeof cellAmount === 'number' ? cellAmount : Number.parseFloat(String(cellAmount ?? ''));
-    // Epsilon 0.005 = half of the smallest unit for 2-decimal currencies
-    // (cents/копейки). Float round-trip through Sheets can drift by ~1e-14
-    // for fractional values like $12.34; strict equality here would miss
-    // those rows and leave them in the sheet, re-importable via /sync.
-    // The gap between any two realistic neighboring sums (12.34 vs 12.35)
-    // is 0.01 > 0.005, so false positives are impossible.
-    if (!Number.isFinite(numAmount) || Math.abs(numAmount - criteria.amount) > 0.005) continue;
-
-    // Match — delete this row (1-based for the public interface).
-    const oneBasedRowIndex = i + 1;
-    await deleteExpenseRowsByIndex(conn, spreadsheetId, [oneBasedRowIndex]);
-    logger.info(
-      { spreadsheetId, rowIndex: oneBasedRowIndex, criteria },
-      '[SHEETS] findAndDeleteExpenseRow: deleted row',
-    );
-    return { deletedRowIndex: oneBasedRowIndex };
-  }
-
-  return { deletedRowIndex: null };
-}
-
-export async function deleteExpenseRowsByIndex(
-  conn: GoogleConn,
-  spreadsheetId: string,
-  rowIndices: number[],
-): Promise<void> {
-  if (rowIndices.length === 0) return;
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const spreadsheet = await withSheetsRetry(
-    () => sheets.spreadsheets.get({ spreadsheetId }),
-    'deleteExpenseRowsByIndex.getSheetId',
-  );
-  const expensesSheet = spreadsheet.data.sheets?.find((s) => s.properties?.title === EXPENSES_TAB);
-  const sheetId = expensesSheet?.properties?.sheetId;
-  if (sheetId === undefined) throw new Error(`"${EXPENSES_TAB}" tab not found in ${spreadsheetId}`);
-
-  // Process in reverse order to avoid row-index shifting
-  const sorted = [...rowIndices].sort((a, b) => b - a);
-
-  const requests = sorted.map((rowIdx) => ({
-    deleteDimension: {
-      range: {
-        sheetId,
-        dimension: 'ROWS' as const,
-        startIndex: rowIdx - 1, // 0-based
-        endIndex: rowIdx, // exclusive
-      },
-    },
-  }));
-
-  await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: { requests },
-      }),
-    'deleteExpenseRowsByIndex.delete',
-  );
-}
-
-export interface EurMismatchWarning {
-  row: number;
-  date: string;
-  category: string;
-  sheetEur: number;
-  recalcEur: number;
-}
-
-/**
- * Read all expenses from Google Sheet.
- * Returns expenses, multi-currency errors, and EUR mismatch warnings.
- * EUR amounts are always recalculated from amount × Rate — sheet EUR(calc) is not trusted.
- */
-export async function readExpensesFromSheet(
-  conn: GoogleConn,
-  spreadsheetId: string,
-): Promise<{
-  expenses: SheetRow[];
-  errors: MultiCurrencyRowError[];
-  eurMismatches: EurMismatchWarning[];
-}> {
-  const auth = authClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const response = await withSheetsRetry(
-    () =>
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${SPREADSHEET_CONFIG.sheetName}!A:Z`,
-      }),
-    'readExpensesFromSheet',
-  );
-
-  const rows = response.data.values || [];
-
-  if (rows.length === 0) {
-    return { expenses: [], errors: [], eurMismatches: [] };
-  }
-
-  const headers = rows[0] as string[];
-  logger.info({ data: headers }, `[SHEETS] Headers`);
-
-  const dateCol = headers.indexOf(SPREADSHEET_CONFIG.headers[0] ?? '');
-  const categoryCol = headers.indexOf(SPREADSHEET_CONFIG.headers[1] ?? '');
-  const commentCol = headers.indexOf(SPREADSHEET_CONFIG.headers[2] ?? '');
-  const eurCol = headers.indexOf(SPREADSHEET_CONFIG.eurColumnHeader);
-  const rateCol = headers.indexOf(RATE_COLUMN_HEADER);
-
-  if (dateCol === -1 || categoryCol === -1 || commentCol === -1) {
-    throw new Error('Required columns not found in spreadsheet');
-  }
-
-  // Find currency columns
-  const currencyColumns: Array<{ index: number; currency: string }> = [];
-  for (let i = 0; i < headers.length; i++) {
-    const header = headers[i] ?? '';
-    if (
-      header &&
-      header !== SPREADSHEET_CONFIG.headers[0] &&
-      header !== SPREADSHEET_CONFIG.headers[1] &&
-      header !== SPREADSHEET_CONFIG.headers[2] &&
-      header !== SPREADSHEET_CONFIG.eurColumnHeader &&
-      header !== RATE_COLUMN_HEADER
-    ) {
-      const match = header.match(/^([A-Z]{3})\s*\(/);
-      if (match?.[1]) {
-        currencyColumns.push({ index: i, currency: match[1] });
-      }
-    }
-  }
-
-  const expenses: SheetRow[] = [];
-  const errors: MultiCurrencyRowError[] = [];
-  const eurMismatchRows: EurMismatchWarning[] = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i] as string[];
-    if (!row || row.length === 0 || !row[dateCol]) continue;
-
-    const date = row[dateCol] ?? '';
-    const category = row[categoryCol] || 'Без категории';
-    const comment = row[commentCol] || '';
-    const eurAmountStr = eurCol !== -1 ? row[eurCol] : null;
-
-    // Parse amounts for each currency
-    const amounts: Record<string, number> = {};
-    const foundCurrencies: string[] = [];
-
-    for (const { index, currency } of currencyColumns) {
-      const value = row[index];
-      if (value && value.trim() !== '') {
-        const parsed = parseFloat(value);
-        if (!Number.isNaN(parsed) && parsed > 0) {
-          amounts[currency] = parsed;
-          foundCurrencies.push(currency);
-        }
-      }
-    }
-
-    // Flag rows with amounts in multiple currency columns
-    if (foundCurrencies.length > 1) {
-      errors.push({
-        row: i + 1, // 1-based for spreadsheet display
-        date,
-        currencies: foundCurrencies,
-        category,
-      });
-      continue; // skip this row — data is ambiguous
-    }
-
-    // No currency amount found — fall back to EUR(calc) as EUR amount
-    // (happens when expense was in a currency without a column in the sheet)
-    if (foundCurrencies.length === 0) {
-      const eurCalcVal = eurAmountStr ? parseFloat(eurAmountStr) : 0;
-      if (!eurCalcVal || eurCalcVal <= 0) continue; // truly empty row
-
-      amounts['EUR'] = eurCalcVal;
-      foundCurrencies.push('EUR');
-    }
-
-    // Read stored exchange rate
-    let rate: number | null = null;
-    if (rateCol !== -1) {
-      const rateStr = row[rateCol];
-      if (rateStr && rateStr.trim() !== '') {
-        const parsed = parseFloat(rateStr);
-        if (!Number.isNaN(parsed) && parsed > 0) {
-          rate = parsed;
-        }
-      }
-    }
-
-    // EUR amount: prefer recalculated value; fall back to sheet only for EUR expenses
-    const [firstCurr, firstAmt] = Object.entries(amounts)[0] ?? [];
-    let eurAmount: number;
-
-    if (firstCurr === 'EUR') {
-      // EUR expenses: amount IS eur_amount
-      eurAmount = firstAmt ?? 0;
-    } else if (rate && firstAmt) {
-      // Non-EUR with Rate column: recalculate (Rate stores "1 CURRENCY = rate EUR")
-      eurAmount = Math.round(firstAmt * rate * 100) / 100;
-    } else if (firstCurr && firstAmt) {
-      // No Rate column: use runtime converter
-      eurAmount = convertToEUR(firstAmt, firstCurr as CurrencyCode);
-    } else {
-      eurAmount = 0;
-    }
-
-    // Warn if sheet EUR(calc) diverges significantly from recalculated value
-    if (eurAmountStr && eurAmountStr.trim() !== '' && eurAmount > 0) {
-      const sheetEur = parseFloat(eurAmountStr);
-      if (!Number.isNaN(sheetEur) && sheetEur > 0) {
-        const ratio = sheetEur / eurAmount;
-        if (ratio < 0.5 || ratio > 2.0) {
-          eurMismatchRows.push({
-            row: i + 1,
-            date,
-            category,
-            sheetEur,
-            recalcEur: eurAmount,
-          });
-        }
-      }
-    }
-
-    expenses.push({ date, amounts, eurAmount, rate, category, comment });
-  }
-
-  if (eurMismatchRows.length > 0) {
-    logger.warn(
-      `[SHEETS] ${eurMismatchRows.length} rows have EUR mismatch (sheet formula vs recalculated)`,
-    );
-  }
-
-  return { expenses, errors, eurMismatches: eurMismatchRows };
 }
