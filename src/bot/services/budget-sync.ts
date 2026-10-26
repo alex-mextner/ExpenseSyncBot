@@ -64,6 +64,33 @@ type BudgetNotifyMessage = {
   reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
 };
 
+interface BudgetSection {
+  items: Array<{ category: string; limit: number; currency: CurrencyCode; oldLimit?: number }>;
+  heading: string;
+  moreLabel: (n: number) => string;
+  suffix: string;
+}
+
+function renderBudgetSection(
+  section: BudgetSection,
+  cacheKey: string,
+  lines: string[],
+  buttons: Array<{ text: string; callback_data: string }>,
+): void {
+  const { items } = section;
+  if (items.length === 0) return;
+  lines.push(`\n${section.heading}: ${items.length}`);
+  for (const e of items.slice(0, BUDGET_PAGE_SIZE)) {
+    lines.push(`  ${fmtBudgetItem(e)}`);
+  }
+  if (items.length > BUDGET_PAGE_SIZE) {
+    buttons.push({
+      text: section.moreLabel(items.length - BUDGET_PAGE_SIZE),
+      callback_data: `bsync_more:${cacheKey}:${section.suffix}`,
+    });
+  }
+}
+
 function buildAutoSyncBudgetsMessage(
   result: BudgetSyncResult,
   cacheKey: string,
@@ -76,44 +103,27 @@ function buildAutoSyncBudgetsMessage(
   const lines: string[] = [`🔄 Авто-синк бюджетов: ${counts.join(', ')}`];
   const buttons: Array<{ text: string; callback_data: string }> = [];
 
-  if (result.added.length > 0) {
-    lines.push(`\n➕ Добавлено: ${result.added.length}`);
-    for (const e of result.added.slice(0, BUDGET_PAGE_SIZE)) {
-      lines.push(`  ${fmtBudgetItem(e)}`);
-    }
-    if (result.added.length > BUDGET_PAGE_SIZE) {
-      buttons.push({
-        text: `➕ ещё ${result.added.length - BUDGET_PAGE_SIZE} добавлено`,
-        callback_data: `bsync_more:${cacheKey}:a`,
-      });
-    }
-  }
-
-  if (result.deleted.length > 0) {
-    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
-    for (const e of result.deleted.slice(0, BUDGET_PAGE_SIZE)) {
-      lines.push(`  ${fmtBudgetItem(e)}`);
-    }
-    if (result.deleted.length > BUDGET_PAGE_SIZE) {
-      buttons.push({
-        text: `🗑 ещё ${result.deleted.length - BUDGET_PAGE_SIZE} удалено`,
-        callback_data: `bsync_more:${cacheKey}:d`,
-      });
-    }
-  }
-
-  if (result.updated.length > 0) {
-    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
-    for (const e of result.updated.slice(0, BUDGET_PAGE_SIZE)) {
-      lines.push(`  ${fmtBudgetItem(e)}`);
-    }
-    if (result.updated.length > BUDGET_PAGE_SIZE) {
-      buttons.push({
-        text: `✏️ ещё ${result.updated.length - BUDGET_PAGE_SIZE} обновлено`,
-        callback_data: `bsync_more:${cacheKey}:u`,
-      });
-    }
-  }
+  const sections: BudgetSection[] = [
+    {
+      items: result.added,
+      heading: '➕ Добавлено',
+      moreLabel: (n) => `➕ ещё ${n} добавлено`,
+      suffix: 'a',
+    },
+    {
+      items: result.deleted,
+      heading: '🗑 Удалено',
+      moreLabel: (n) => `🗑 ещё ${n} удалено`,
+      suffix: 'd',
+    },
+    {
+      items: result.updated,
+      heading: '✏️ Обновлено',
+      moreLabel: (n) => `✏️ ещё ${n} обновлено`,
+      suffix: 'u',
+    },
+  ];
+  for (const section of sections) renderBudgetSection(section, cacheKey, lines, buttons);
 
   if (result.multiWordWarnings.length > 0) {
     lines.push('\n⚠️ Категории с пробелами:');
@@ -146,6 +156,65 @@ export interface BudgetSyncResult {
   createdCategories: string[];
   /** Warnings about multi-word categories found in sheet */
   multiWordWarnings: string[];
+}
+
+/** Import one sheet budget row: create category/budget when missing, update when changed. */
+function applySheetBudget(
+  groupId: number,
+  currentMonth: string,
+  b: { category: string; limit: number; currency: CurrencyCode },
+  result: BudgetSyncResult,
+): void {
+  const mgr = getBudgetManager();
+  if (!database.categories.exists(groupId, b.category)) {
+    database.categories.create({ group_id: groupId, name: b.category });
+    result.createdCategories.push(b.category);
+  }
+
+  const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
+  const changed =
+    existing && (existing.limit_amount !== b.limit || existing.currency !== b.currency);
+  if (existing && !changed) {
+    result.unchanged++;
+    return;
+  }
+
+  const { multiWordWarning } = mgr.importFromSheet({
+    groupId,
+    category: b.category,
+    month: currentMonth,
+    amount: b.limit,
+    currency: b.currency,
+  });
+  if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
+  const added = { month: currentMonth, category: b.category, limit: b.limit, currency: b.currency };
+  if (existing) {
+    result.updated.push({ ...added, oldLimit: existing.limit_amount });
+  } else {
+    result.added.push(added);
+  }
+}
+
+/** Delete local budgets for the month whose category no longer appears in the sheet. */
+function deleteBudgetsMissingFromSheet(
+  groupId: number,
+  currentMonth: string,
+  sheetCategories: Set<string>,
+  result: BudgetSyncResult,
+): void {
+  const mgr = getBudgetManager();
+  const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+  for (const db of dbBudgets) {
+    if (!sheetCategories.has(db.category)) {
+      mgr.deleteLocal(db.id);
+      result.deleted.push({
+        month: db.month,
+        category: db.category,
+        limit: db.limit_amount,
+        currency: db.currency,
+      });
+    }
+  }
 }
 
 /**
@@ -187,66 +256,12 @@ export async function syncBudgetsDiff(groupId: number): Promise<BudgetSyncResult
 
   const sheetCategories = new Set<string>(sheetBudgets.map((b) => b.category));
 
-  const mgr = getBudgetManager();
-
   // Wrap all DB reads+writes in a transaction for atomicity
   database.transaction(() => {
     for (const b of sheetBudgets) {
-      if (!database.categories.exists(groupId, b.category)) {
-        database.categories.create({ group_id: groupId, name: b.category });
-        result.createdCategories.push(b.category);
-      }
-
-      const existing = database.budgets.findByGroupCategoryMonth(groupId, b.category, currentMonth);
-
-      if (!existing) {
-        const { multiWordWarning } = mgr.importFromSheet({
-          groupId,
-          category: b.category,
-          month: currentMonth,
-          amount: b.limit,
-          currency: b.currency,
-        });
-        if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
-        result.added.push({
-          month: currentMonth,
-          category: b.category,
-          limit: b.limit,
-          currency: b.currency,
-        });
-      } else if (existing.limit_amount !== b.limit || existing.currency !== b.currency) {
-        const { multiWordWarning } = mgr.importFromSheet({
-          groupId,
-          category: b.category,
-          month: currentMonth,
-          amount: b.limit,
-          currency: b.currency,
-        });
-        if (multiWordWarning) result.multiWordWarnings.push(multiWordWarning);
-        result.updated.push({
-          month: currentMonth,
-          category: b.category,
-          limit: b.limit,
-          currency: b.currency,
-          oldLimit: existing.limit_amount,
-        });
-      } else {
-        result.unchanged++;
-      }
+      applySheetBudget(groupId, currentMonth, b, result);
     }
-
-    const dbBudgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
-    for (const db of dbBudgets) {
-      if (!sheetCategories.has(db.category)) {
-        mgr.deleteLocal(db.id);
-        result.deleted.push({
-          month: db.month,
-          category: db.category,
-          limit: db.limit_amount,
-          currency: db.currency,
-        });
-      }
-    }
+    deleteBudgetsMissingFromSheet(groupId, currentMonth, sheetCategories, result);
   });
 
   logger.info(

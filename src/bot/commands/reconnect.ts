@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import { google } from 'googleapis';
 import { InlineKeyboard } from 'gramio';
 import { database } from '../../database';
-import type { Expense, Group } from '../../database/types';
+import type { Budget, Expense, Group } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { getExchangeRate } from '../../services/currency/converter';
@@ -103,7 +103,7 @@ interface FullSyncReport {
   yearCreated: number | null;
   sheetToDbExpenses: number;
   dbToSheetExpenses: number;
-  sheetToDbBudgets: number;
+  sheetToBudgets: number;
   budgetTabsCreated: string[];
   budgetRowsWritten: number;
   audit: AuditEntry[];
@@ -206,7 +206,7 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
     yearCreated: null,
     sheetToDbExpenses: 0,
     dbToSheetExpenses: 0,
-    sheetToDbBudgets: 0,
+    sheetToBudgets: 0,
     budgetTabsCreated: [],
     budgetRowsWritten: 0,
     audit: [],
@@ -288,7 +288,7 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
     report.dbToSheetExpenses = await pushMissingExpensesToSheet(freshGroup);
 
     // Step 5: Sheet → DB budgets (import from all month tabs)
-    report.sheetToDbBudgets = await importBudgetsFromSheet(freshGroup);
+    report.sheetToBudgets = await importBudgetsFromSheet(freshGroup);
 
     // Step 6: DB → Sheet budgets (ensure tabs + write rows)
     const budgetResult = await syncBudgetsToSheet(freshGroup);
@@ -524,6 +524,54 @@ async function importBudgetsFromSheet(group: Group): Promise<number> {
   return imported;
 }
 
+function groupBudgetsByMonthAbbr(budgets: Budget[], year: number): Map<MonthAbbr, Budget[]> {
+  const budgetsByMonth = new Map<MonthAbbr, Budget[]>();
+  for (const budget of budgets) {
+    const monthIndex = Number.parseInt(budget.month.slice(5, 7), 10) - 1;
+    const abbr = monthAbbrFromDate(new Date(year, monthIndex, 1));
+    const arr = budgetsByMonth.get(abbr);
+    if (arr) {
+      arr.push(budget);
+    } else {
+      budgetsByMonth.set(abbr, [budget]);
+    }
+  }
+  return budgetsByMonth;
+}
+
+/**
+ * Write each budget row (upserts by category); returns how many succeeded.
+ * ensureTab: false — the tab is guaranteed by the caller's listMonthTabs /
+ * createEmptyMonthTab guard, so skip the redundant per-row monthTabExists read.
+ */
+async function writeBudgetRows(
+  conn: GoogleConn,
+  spreadsheetId: string,
+  monthAbbr: MonthAbbr,
+  budgets: Budget[],
+): Promise<number> {
+  let written = 0;
+  for (const budget of budgets) {
+    try {
+      await writeMonthBudgetRow(
+        conn,
+        spreadsheetId,
+        monthAbbr,
+        {
+          category: budget.category,
+          limit: budget.limit_amount,
+          currency: budget.currency,
+        },
+        { ensureTab: false },
+      );
+      written++;
+    } catch (err) {
+      logger.error({ err }, `[RECONNECT] Failed to write budget ${budget.category}/${monthAbbr}`);
+    }
+  }
+  return written;
+}
+
 /**
  * Ensure budget month tabs exist in the current-year spreadsheet and push DB budgets.
  */
@@ -540,23 +588,12 @@ async function syncBudgetsToSheet(
     database.groupSpreadsheets.getByYear(group.id, currentYear) ?? group.spreadsheet_id;
 
   // Get all DB budgets for current year
-  const allBudgets = database.budgets.findByGroupId(group.id);
-  const currentYearBudgets = allBudgets.filter((b) => b.month.startsWith(`${currentYear}-`));
+  const currentYearBudgets = database.budgets
+    .findByGroupId(group.id)
+    .filter((b) => b.month.startsWith(`${currentYear}-`));
   if (currentYearBudgets.length === 0) return { tabsCreated: [], rowsWritten: 0 };
 
-  // Group budgets by month abbreviation
-  const budgetsByMonth = new Map<MonthAbbr, typeof currentYearBudgets>();
-  for (const budget of currentYearBudgets) {
-    const monthIndex = Number.parseInt(budget.month.slice(5, 7), 10) - 1;
-    const monthDate = new Date(currentYear, monthIndex, 1);
-    const abbr = monthAbbrFromDate(monthDate);
-    const arr = budgetsByMonth.get(abbr);
-    if (arr) {
-      arr.push(budget);
-    } else {
-      budgetsByMonth.set(abbr, [budget]);
-    }
-  }
+  const budgetsByMonth = groupBudgetsByMonthAbbr(currentYearBudgets, currentYear);
 
   const tabsCreated: string[] = [];
   let rowsWritten = 0;
@@ -573,86 +610,65 @@ async function syncBudgetsToSheet(
       tabsCreated.push(monthAbbr);
       logger.info(`[RECONNECT] Created budget tab ${monthAbbr} for group ${group.id}`);
     }
-
-    // Write each budget row (upserts by category). ensureTab: false — the tab
-    // is guaranteed by the listMonthTabs/createEmptyMonthTab guard above, so
-    // skip the redundant per-row monthTabExists read.
-    for (const budget of budgets) {
-      try {
-        await writeMonthBudgetRow(
-          conn,
-          spreadsheetId,
-          monthAbbr,
-          {
-            category: budget.category,
-            limit: budget.limit_amount,
-            currency: budget.currency,
-          },
-          { ensureTab: false },
-        );
-        rowsWritten++;
-      } catch (err) {
-        logger.error({ err }, `[RECONNECT] Failed to write budget ${budget.category}/${monthAbbr}`);
-      }
-    }
+    rowsWritten += await writeBudgetRows(conn, spreadsheetId, monthAbbr, budgets);
   }
 
   return { tabsCreated, rowsWritten };
 }
 
-function formatFullSyncReport(report: FullSyncReport): string {
-  const lines: string[] = ['✅ Синхронизация завершена!\n'];
-
-  // Backup info
-  if (report.snapshotId || report.sheetBackupUrl) {
-    lines.push('💾 Бекапы:');
-    if (report.snapshotId) {
-      lines.push(
-        `  БД: ${report.snapshotExpenses} ${pluralize(report.snapshotExpenses, 'расход', 'расхода', 'расходов')} + ${report.snapshotBudgets} ${pluralize(report.snapshotBudgets, 'бюджет', 'бюджета', 'бюджетов')}`,
-      );
-    }
-    if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
-    lines.push('');
-  }
-
-  // Audit + recreate report
-  if (report.recreated.length > 0) {
-    const lostStatuses = new Set(
-      report.audit.filter((a) => a.status !== 'ok').map((a) => a.status),
+function formatBackupSection(report: FullSyncReport): string[] {
+  if (!report.snapshotId && !report.sheetBackupUrl) return [];
+  const lines: string[] = ['💾 Бекапы:'];
+  if (report.snapshotId) {
+    lines.push(
+      `  БД: ${report.snapshotExpenses} ${pluralize(report.snapshotExpenses, 'расход', 'расхода', 'расходов')} + ${report.snapshotBudgets} ${pluralize(report.snapshotBudgets, 'бюджет', 'бюджета', 'бюджетов')}`,
     );
-    const reasonHints: string[] = [];
-    if (lostStatuses.has('not_found')) {
-      reasonHints.push(
-        '• таблица удалена/в Корзине',
-        '• новый набор разрешений Google не видит старую таблицу',
-      );
-    }
-    if (lostStatuses.has('forbidden')) {
-      reasonHints.push('• бот лишился доступа (отозван в Google Account)');
-    }
-
-    lines.push('🔧 <b>Восстановление таблиц</b>');
-    if (reasonHints.length > 0) {
-      lines.push('Возможные причины:');
-      for (const h of reasonHints) lines.push(h);
-    }
-    lines.push('');
-    for (const r of report.recreated) {
-      lines.push(
-        `🆕 ${r.year}: новая таблица создана\n` +
-          `   ${r.newSpreadsheetUrl}\n` +
-          `   Залито: ${r.expensesCopied} ${pluralize(r.expensesCopied, 'расход', 'расхода', 'расходов')}, ${r.budgetsCopied} ${pluralize(r.budgetsCopied, 'бюджет', 'бюджета', 'бюджетов')}`,
-      );
-    }
-    lines.push('');
-    lines.push('ℹ️ Старые таблицы остались в твоём Google Drive — удали их вручную, если нужно.');
-    lines.push('');
   }
+  if (report.sheetBackupUrl) lines.push(`  Таблица: ${report.sheetBackupUrl}`);
+  lines.push('');
+  return lines;
+}
 
-  if (report.yearCreated) {
-    lines.push(`📅 Создана таблица за ${report.yearCreated}`);
+/** Why spreadsheets were lost, inferred from the audit statuses. */
+function lostSpreadsheetReasonHints(audit: FullSyncReport['audit']): string[] {
+  const lostStatuses = new Set(audit.filter((a) => a.status !== 'ok').map((a) => a.status));
+  const reasonHints: string[] = [];
+  if (lostStatuses.has('not_found')) {
+    reasonHints.push(
+      '• таблица удалена/в Корзине',
+      '• новый набор разрешений Google не видит старую таблицу',
+    );
   }
+  if (lostStatuses.has('forbidden')) {
+    reasonHints.push('• бот лишился доступа (отозван в Google Account)');
+  }
+  return reasonHints;
+}
 
+function formatRecreatedSection(report: FullSyncReport): string[] {
+  if (report.recreated.length === 0) return [];
+  const reasonHints = lostSpreadsheetReasonHints(report.audit);
+  const lines: string[] = ['🔧 <b>Восстановление таблиц</b>'];
+  if (reasonHints.length > 0) {
+    lines.push('Возможные причины:');
+    for (const h of reasonHints) lines.push(h);
+  }
+  lines.push('');
+  for (const r of report.recreated) {
+    lines.push(
+      `🆕 ${r.year}: новая таблица создана\n` +
+        `   ${r.newSpreadsheetUrl}\n` +
+        `   Залито: ${r.expensesCopied} ${pluralize(r.expensesCopied, 'расход', 'расхода', 'расходов')}, ${r.budgetsCopied} ${pluralize(r.budgetsCopied, 'бюджет', 'бюджета', 'бюджетов')}`,
+    );
+  }
+  lines.push('');
+  lines.push('ℹ️ Старые таблицы остались в твоём Google Drive — удали их вручную, если нужно.');
+  lines.push('');
+  return lines;
+}
+
+function formatExpenseSyncSection(report: FullSyncReport): string[] {
+  const lines: string[] = [];
   // Sheet → DB expenses
   if (report.sheetToDbExpenses > 0) {
     lines.push(
@@ -670,10 +686,14 @@ function formatFullSyncReport(report: FullSyncReport): string {
   } else {
     lines.push('📤 БД → Таблица: всё синхронизировано');
   }
+  return lines;
+}
 
+function formatBudgetSyncSection(report: FullSyncReport): string[] {
+  const lines: string[] = [];
   // Budgets Sheet → DB
-  if (report.sheetToDbBudgets > 0) {
-    lines.push(`\n📥 Бюджеты из таблицы: +${report.sheetToDbBudgets} импортировано`);
+  if (report.sheetToBudgets > 0) {
+    lines.push(`\n📥 Бюджеты из таблицы: +${report.sheetToBudgets} импортировано`);
   }
 
   // Budgets DB → Sheet
@@ -686,7 +706,18 @@ function formatFullSyncReport(report: FullSyncReport): string {
       lines.push(`  Записано: ${report.budgetRowsWritten} записей`);
     }
   }
+  return lines;
+}
 
+function formatFullSyncReport(report: FullSyncReport): string {
+  const lines: string[] = ['✅ Синхронизация завершена!\n'];
+  lines.push(...formatBackupSection(report));
+  lines.push(...formatRecreatedSection(report));
+  if (report.yearCreated) {
+    lines.push(`📅 Создана таблица за ${report.yearCreated}`);
+  }
+  lines.push(...formatExpenseSyncSection(report));
+  lines.push(...formatBudgetSyncSection(report));
   lines.push('\nВсё готово! Бот снова синхронизирует расходы с таблицей.');
 
   return lines.join('\n');

@@ -1,4 +1,7 @@
-// /bank command — setup wizard, status panel, and confirmation flow handlers.
+// /bank command — status panel, account/settings/disconnect callbacks and letter navigation.
+// The setup wizard (./bank/wizard-*.ts) and the transaction confirmation flow
+// (./bank/confirm-callbacks.ts) were split out; they are re-exported here so existing
+// importers and `mock.module('../commands/bank')` seams keep working.
 import { database } from '../../database';
 import type { BankConnection, Group } from '../../database/types';
 import {
@@ -8,26 +11,32 @@ import {
   buildCombinedBankStatusText,
   timeSince,
 } from '../../services/bank/panel-builder';
-import type { CredentialField } from '../../services/bank/registry';
-import { BANK_REGISTRY, getBankList, lookupBank } from '../../services/bank/registry';
-import { activateNewConnection, triggerManualSync } from '../../services/bank/sync-service';
-import { editMessageText, sendMessage } from '../../services/bank/telegram-sender';
-import { convertAnyToEUR, formatAmount } from '../../services/currency/converter';
-import { decryptData, encryptData } from '../../utils/crypto';
+import { getBankList, lookupBank } from '../../services/bank/registry';
+import { triggerManualSync } from '../../services/bank/sync-service';
+import { sendMessage } from '../../services/bank/telegram-sender';
+import { convertAnyToEUR } from '../../services/currency/converter';
 import { createLogger } from '../../utils/logger.ts';
 import type { BotInstance, Ctx } from '../types';
+import { clearStaleSetupSessions, handleWizardCancel, startWizard } from './bank/wizard-callbacks';
+
+export {
+  handleBankConfirmCallback,
+  handleBankEditCallback,
+  handleBankEditReply,
+  handleBankMergeCallback,
+  handleBankNewCallback,
+  handleBankNoCommentCallback,
+  handleBankReceiptCallback,
+} from './bank/confirm-callbacks';
+export {
+  handleBankReconnectCallback,
+  handleBankSetupCallback,
+  handleBankWizardCancelCallback,
+  handleBankWizardStartCallback,
+} from './bank/wizard-callbacks';
+export { handleWizardInput } from './bank/wizard-input';
 
 const logger = createLogger('bank-command');
-
-// ─── Wizard prompt tracking ───────────────────────────────────────────────────
-// Maps connectionId → last sent prompt info so we can mask sensitive inputs.
-
-type WizardPromptEntry = {
-  messageId: number;
-  sensitive: boolean; // whether this prompt was for a sensitive field
-  fieldPrompt: string; // prompt label, e.g. "Пароль TBC"
-};
-const wizardPromptMessages = new Map<number, WizardPromptEntry>();
 
 // ─── /bank command entry point ───────────────────────────────────────────────
 
@@ -37,9 +46,7 @@ export async function handleBankCommand(
   bot: BotInstance,
 ): Promise<void> {
   // Clean up stale setup sessions
-  for (const id of database.bankConnections.deleteStaleSetup(group.id)) {
-    wizardPromptMessages.delete(id);
-  }
+  clearStaleSetupSessions(group.id);
 
   // Parse argument, e.g. /bank tbc or /bank tbc-ge
   const arg = ctx.text?.split(' ')[1]?.trim().toLowerCase();
@@ -95,188 +102,31 @@ async function showNoBanksPanel(): Promise<void> {
   });
 }
 
-async function startWizard(bankKey: string): Promise<void> {
-  const plugin = BANK_REGISTRY[bankKey];
-  if (!plugin) return;
-
-  // Show info screen first — the user clicks "🔓 Подключить" to proceed.
-  await sendMessage(buildWizardInfoText(plugin.name), {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          {
-            text: '🔓 Подключить',
-            callback_data: `bank_wizard_start:${bankKey}`,
-          },
-        ],
-      ],
-    },
-    link_preview_options: { is_disabled: true },
-  });
-}
-
-async function handleWizardCancel(groupId: number): Promise<void> {
-  const setupConn = database.bankConnections.findSetupByGroupId(groupId);
-
-  if (setupConn) {
-    wizardPromptMessages.delete(setupConn.id);
-    database.bankConnections.deleteById(setupConn.id);
-    await sendMessage('Подключение банка отменено.');
-  } else {
-    await sendMessage('Нет активного подключения для отмены.');
-  }
-}
-
-/**
- * Called from message.handler.ts when a message arrives and a setup wizard is active.
- * Returns true if the message was consumed by the wizard.
- */
-export async function handleWizardInput(
-  ctx: Ctx['Message'],
-  groupId: number,
-  text: string,
-  bot: BotInstance,
-): Promise<boolean> {
-  const setupConn = database.bankConnections.findSetupByGroupId(groupId);
-
-  if (!setupConn) return false;
-
-  const bankFound = lookupBank(setupConn.bank_name);
-  if (!bankFound) return false;
-  const [, plugin] = bankFound;
-
-  // Determine which credential field we're currently collecting
-  const credentials = database.bankCredentials.findByConnectionId(setupConn.id);
-  const collectedFields: Record<string, string> = credentials
-    ? (JSON.parse(decryptData(credentials.encrypted_data)) as Record<string, string>)
-    : {};
-
-  const remainingFields = plugin.fields.filter((f) => {
-    const name = resolveFieldName(f);
-    return !collectedFields[name];
-  });
-
-  if (remainingFields.length === 0) return false;
-
-  const currentField = remainingFields[0];
-  const fieldName = resolveFieldName(currentField);
-  const chatId = ctx.chat?.id;
-
-  // If this was a sensitive field, delete the user's message and mask the prompt
-  const storedPrompt = wizardPromptMessages.get(setupConn.id);
-  if (storedPrompt?.sensitive && chatId) {
-    try {
-      await bot.api.deleteMessage({ chat_id: chatId, message_id: ctx.id });
-    } catch {
-      // bot may lack delete permission or message already gone
-    }
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: storedPrompt.messageId,
-        text: `🔒 ${storedPrompt.fieldPrompt}: ${'•'.repeat(text.length)}${SECURITY_NOTE}`,
-        link_preview_options: { is_disabled: true },
-      });
-    } catch {
-      // message may be too old or already edited
-    }
-  }
-
-  collectedFields[fieldName] = text;
-
-  // Persist partial credentials
-  database.bankCredentials.upsert(setupConn.id, encryptData(JSON.stringify(collectedFields)));
-
-  // Check if all fields collected
-  const nextFields = plugin.fields.filter((f) => !collectedFields[resolveFieldName(f)]);
-
-  if (nextFields.length > 0) {
-    const nextField = nextFields[0];
-    if (chatId) {
-      const sent = await sendMessage(buildFieldPromptText(nextField), {
-        reply_markup: {
-          inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
-        },
-        link_preview_options: { is_disabled: true },
-      });
-      if (sent) {
-        wizardPromptMessages.set(setupConn.id, {
-          messageId: sent.message_id,
-          sensitive: isPasswordField(nextField),
-          fieldPrompt: resolveFieldPrompt(nextField),
-        });
-      }
-    }
-    return true;
-  }
-
-  // Wizard complete — merge auto-fill defaults, then activate connection.
-  if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
-    const merged = { ...plugin.defaults, ...collectedFields };
-    database.bankCredentials.upsert(setupConn.id, encryptData(JSON.stringify(merged)));
-  }
-
-  wizardPromptMessages.delete(setupConn.id);
-  database.bankConnections.update(setupConn.id, { status: 'active' });
-
-  // Send the "connecting" panel and store its message ID so sync-service can update it.
-  const panelThreadId = (ctx.update?.message?.message_thread_id as number | undefined) ?? null;
-  if (chatId) {
-    if (setupConn.panel_message_id) {
-      // Reconnect path: edit the existing panel.
-      await bot.api
-        .editMessageText({
-          chat_id: chatId,
-          message_id: setupConn.panel_message_id,
-          text: buildConnectingText(plugin.name),
-        })
-        .catch(() => {});
-    } else {
-      // Fresh connection: send a new panel message.
-      const panelMsg = await sendMessage(buildConnectingText(plugin.name));
-      if (panelMsg) {
-        database.bankConnections.update(setupConn.id, {
-          panel_message_id: panelMsg.message_id,
-          panel_message_thread_id: panelThreadId,
-        });
-      }
-    }
-  }
-
-  activateNewConnection(setupConn.id).catch((err) =>
-    logger.error({ err, connectionId: setupConn.id }, 'Background activation failed'),
-  );
-
-  logger.info({ connectionId: setupConn.id, bank: setupConn.bank_name }, 'Bank wizard completed');
-  return true;
-}
-
 // ─── Status panel ─────────────────────────────────────────────────────────────
 
-async function showBanksPanel(
-  ctx: Ctx['Message'],
+async function deleteMessageQuietly(
+  bot: BotInstance,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  try {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  } catch {
+    // silently ignore if already gone
+  }
+}
+
+/** Delete old panel messages (each connection's and the group's summary) before resending. */
+async function deleteOldPanelMessages(
   bot: BotInstance,
   connections: BankConnection[],
   group: Group,
 ): Promise<void> {
-  if (connections.length === 1 && connections[0]) {
-    await showBankStatus(ctx, bot, connections[0], group);
-    return;
-  }
-
-  // Delete old panel messages before resending
   const seenMessageIds = new Set<number>();
   for (const conn of connections) {
     if (conn.panel_message_id && !seenMessageIds.has(conn.panel_message_id)) {
       seenMessageIds.add(conn.panel_message_id);
-      try {
-        await bot.api.deleteMessage({
-          chat_id: group.telegram_group_id,
-          message_id: conn.panel_message_id,
-        });
-      } catch {
-        // silently ignore if already gone
-      }
+      await deleteMessageQuietly(bot, group.telegram_group_id, conn.panel_message_id);
     }
   }
 
@@ -284,17 +134,12 @@ async function showBanksPanel(
     group.bank_panel_summary_message_id &&
     !seenMessageIds.has(group.bank_panel_summary_message_id)
   ) {
-    try {
-      await bot.api.deleteMessage({
-        chat_id: group.telegram_group_id,
-        message_id: group.bank_panel_summary_message_id,
-      });
-    } catch {
-      // ignore
-    }
+    await deleteMessageQuietly(bot, group.telegram_group_id, group.bank_panel_summary_message_id);
   }
+}
 
-  // Send one combined message for all banks
+/** Send one combined message for all banks and remember its id for sync-service edits. */
+async function sendCombinedPanel(connections: BankConnection[], group: Group): Promise<void> {
   const accounts = database.bankAccounts.findByGroupId(group.id);
   const totalEur = accounts.reduce((sum, a) => sum + convertAnyToEUR(a.balance, a.currency), 0);
   const text = buildCombinedBankStatusText(connections, totalEur);
@@ -313,6 +158,21 @@ async function showBanksPanel(
       bank_panel_summary_message_id: sent.message_id,
     });
   }
+}
+
+async function showBanksPanel(
+  ctx: Ctx['Message'],
+  bot: BotInstance,
+  connections: BankConnection[],
+  group: Group,
+): Promise<void> {
+  if (connections.length === 1 && connections[0]) {
+    await showBankStatus(ctx, bot, connections[0], group);
+    return;
+  }
+
+  await deleteOldPanelMessages(bot, connections, group);
+  await sendCombinedPanel(connections, group);
 }
 
 async function showBankStatus(
@@ -345,485 +205,7 @@ async function showBankStatus(
   }
 }
 
-// ─── Confirmation flow callbacks ──────────────────────────────────────────────
-
-export async function handleBankConfirmCallback(
-  ctx: Ctx['CallbackQuery'],
-  txId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  if (!ctx.from) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
-    return;
-  }
-
-  const user = database.users.findByTelegramId(ctx.from.id);
-  if (!user) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
-    return;
-  }
-
-  // Atomically claim the transaction — prevent double-claiming.
-  const claimed = database.transaction(() => {
-    const freshTx = database.bankTransactions.findById(txId, group.id);
-    if (!freshTx) return null;
-    if (freshTx.status !== 'pending') return false;
-    if (freshTx.edit_in_progress === 1) return 'edit'; // someone's editing it
-    database.bankTransactions.setEditInProgress(txId, true);
-    return freshTx;
-  });
-
-  if (claimed === null) {
-    await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });
-    return;
-  }
-  if (claimed === false) {
-    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
-    return;
-  }
-  if (claimed === 'edit') {
-    await ctx.answerCallbackQuery({ text: 'Сначала заверши текущее исправление' });
-    return;
-  }
-
-  // Check for duplicate expenses before asking for a comment.
-  const { exact, fuzzy } = database.expenses.findPotentialDuplicates(
-    group.id,
-    claimed.date,
-    claimed.amount,
-    claimed.currency,
-  );
-
-  if (exact.length > 0) {
-    // Auto-link: bind the bank transaction to the existing expense silently.
-    const existing = exact[0];
-    if (!existing) return; // length > 0 guarantees this, but TypeScript needs it
-    mergeTransactionWithExpense(claimed, group.id, existing.id);
-    database.bankTransactions.setEditInProgress(txId, false);
-
-    await ctx.answerCallbackQuery({ text: '✅ Связано с существующим расходом' });
-    const messageId = ctx.message?.id;
-    if (messageId) {
-      await editMessageText(
-        messageId,
-        `✅ Связано: ${existing.category} (${formatAmount(existing.amount, existing.currency)})`,
-      );
-    }
-    return;
-  }
-
-  if (fuzzy.length > 0) {
-    // Show link-or-new prompt — let the user decide.
-    const match = fuzzy[0];
-    if (!match) return; // length > 0 guarantees this, but TypeScript needs it
-    const commentPart = match.comment ? ` — ${match.comment}` : '';
-    await ctx.answerCallbackQuery();
-
-    const replyToMsgId = claimed.telegram_message_id ?? undefined;
-    await sendMessage(
-      `🔄 Найден похожий расход:\n📅 ${match.date} | ${match.amount} ${match.currency} | ${match.category}${commentPart}\n\nСвязать или создать новый?`,
-      {
-        ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '🔗 Связать', callback_data: `bank_merge:${txId}:${match.id}` },
-              { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
-            ],
-          ],
-        },
-      },
-    );
-    return;
-  }
-
-  // Check for matching receipts (same amount ±5%, date, currency)
-  const receiptMatches = database.receipts.findPotentialMatches(
-    group.id,
-    claimed.date,
-    claimed.amount,
-    claimed.currency,
-  );
-  const receiptMatch = receiptMatches.exact[0] ?? receiptMatches.fuzzy[0];
-  if (receiptMatch) {
-    const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptMatch.id);
-    const categorySummary = receiptExpenses.map((e) => e.category).join(', ') || 'без категорий';
-    await ctx.answerCallbackQuery();
-
-    const replyToMsgId = claimed.telegram_message_id ?? undefined;
-    await sendMessage(
-      `🧾 Найден чек на ${formatAmount(receiptMatch.total_amount, receiptMatch.currency)} от ${receiptMatch.date}\n📋 Категории: ${categorySummary}\n\nСвязать транзакцию с чеком или создать новый расход?`,
-      {
-        ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '🧾 Связать с чеком',
-                callback_data: `bank_receipt:${txId}:${receiptMatch.id}`,
-              },
-              { text: '➕ Новый расход', callback_data: `bank_new:${txId}` },
-            ],
-          ],
-        },
-      },
-    );
-    return;
-  }
-
-  // No duplicates — ask user to enter a comment or skip it.
-  database.bankTransactions.setAwaitingComment(txId, true);
-  await ctx.answerCallbackQuery();
-
-  const replyToMsgId = claimed.telegram_message_id ?? undefined;
-  const promptMsg = await sendMessage(
-    `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
-    {
-      ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
-      reply_markup: {
-        inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
-      },
-    },
-  );
-
-  if (promptMsg?.message_id) {
-    // Store prompt message id so handleBankEditReply can match the reply
-    database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
-  }
-}
-
-/**
- * Handles "Связать" button — links bank transaction to an existing expense.
- */
-export async function handleBankMergeCallback(
-  ctx: Ctx['CallbackQuery'],
-  txId: number,
-  expenseId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  // Atomically claim: verify tx is still pending, expense not yet linked, then merge.
-  const mergeResult = database.transaction(() => {
-    const tx = database.bankTransactions.findById(txId, group.id);
-    if (!tx || tx.status !== 'pending') return 'tx_done' as const;
-
-    const expense = database.expenses.findById(expenseId);
-    if (!expense || expense.group_id !== group.id) return 'expense_missing' as const;
-
-    // Block if another bank_tx already claims this expense directly,
-    // or via the expense's parent receipt (Variant A: receipt-linked txs only
-    // set matched_receipt_id, so we must check that path too).
-    const alreadyLinked = database.queryOne<{ n: number }>(
-      `SELECT COUNT(*) as n FROM bank_transactions
-       WHERE matched_expense_id = ?
-          OR (matched_receipt_id IS NOT NULL AND matched_receipt_id = ?)`,
-      expenseId,
-      expense.receipt_id ?? -1,
-    );
-    if (alreadyLinked && alreadyLinked.n > 0) return 'expense_taken' as const;
-
-    mergeTransactionWithExpense(tx, group.id, expense.id);
-    database.bankTransactions.setEditInProgress(txId, false);
-    return expense;
-  });
-
-  if (mergeResult === 'tx_done') {
-    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
-    return;
-  }
-  if (mergeResult === 'expense_missing') {
-    await ctx.answerCallbackQuery({ text: 'Расход не найден' });
-    return;
-  }
-  if (mergeResult === 'expense_taken') {
-    await ctx.answerCallbackQuery({ text: 'Расход уже привязан к другой транзакции' });
-    return;
-  }
-
-  const expense = mergeResult;
-
-  await ctx.answerCallbackQuery({ text: '✅ Связано' });
-  const messageId = ctx.message?.id;
-  if (messageId) {
-    await editMessageText(
-      messageId,
-      `✅ Связано: ${expense.category} (${formatAmount(expense.amount, expense.currency)})`,
-    );
-  }
-}
-
-/**
- * Handles "Связать с чеком" button — links bank transaction to all expenses from a receipt.
- */
-export async function handleBankReceiptCallback(
-  ctx: Ctx['CallbackQuery'],
-  txId: number,
-  receiptId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  const linkResult = database.transaction(() => {
-    const tx = database.bankTransactions.findById(txId, group.id);
-    if (!tx || tx.status !== 'pending') return 'tx_done' as const;
-
-    const receipt = database.receipts.findById(receiptId);
-    if (!receipt || receipt.group_id !== group.id) return 'receipt_missing' as const;
-
-    const receiptExpenses = database.receipts.findExpensesByReceiptId(receiptId);
-    if (receiptExpenses.length === 0) return 'no_expenses' as const;
-
-    // 1:N link — bank_tx → receipt → N expenses (via expenses.receipt_id).
-    // We set matched_receipt_id only; matched_expense_id stays null because
-    // a single FK cannot express the receipt's multi-expense relationship.
-    database.bankTransactions.updateStatus(tx.id, group.id, 'confirmed');
-    database.bankTransactions.setMatchedReceipt(tx.id, group.id, receiptId);
-    database.bankTransactions.setEditInProgress(txId, false);
-    return { receipt, expenses: receiptExpenses };
-  });
-
-  if (linkResult === 'tx_done') {
-    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
-    return;
-  }
-  if (linkResult === 'receipt_missing') {
-    await ctx.answerCallbackQuery({ text: 'Чек не найден' });
-    return;
-  }
-  if (linkResult === 'no_expenses') {
-    await ctx.answerCallbackQuery({ text: 'У чека нет связанных расходов' });
-    return;
-  }
-
-  const { receipt, expenses } = linkResult;
-  const categorySummary = expenses.map((e) => e.category).join(', ');
-
-  await ctx.answerCallbackQuery({ text: '✅ Связано с чеком' });
-  const messageId = ctx.message?.id;
-  if (messageId) {
-    await editMessageText(
-      messageId,
-      `✅ Связано с чеком: ${formatAmount(receipt.total_amount, receipt.currency)} (${categorySummary})`,
-    );
-  }
-}
-
-/**
- * Handles "Новый расход" button after a fuzzy-match prompt — proceeds to the comment step.
- */
-export async function handleBankNewCallback(
-  ctx: Ctx['CallbackQuery'],
-  txId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  const tx = database.bankTransactions.findById(txId, group.id);
-  if (!tx || tx.status !== 'pending' || tx.edit_in_progress !== 1) {
-    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
-    return;
-  }
-
-  database.bankTransactions.setAwaitingComment(txId, true);
-  await ctx.answerCallbackQuery();
-
-  const replyToMsgId = tx.telegram_message_id ?? undefined;
-  const promptMsg = await sendMessage(
-    `💬 Добавь комментарий к расходу или нажми «Без комментария».`,
-    {
-      ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
-      reply_markup: {
-        inline_keyboard: [[{ text: 'Без комментария', callback_data: `bank_nocomment:${txId}` }]],
-      },
-    },
-  );
-
-  if (promptMsg?.message_id) {
-    database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
-  }
-}
-
-export async function handleBankEditCallback(
-  ctx: Ctx['CallbackQuery'],
-  txId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  const tx = database.bankTransactions.findById(txId, group.id);
-  if (!tx) {
-    await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });
-    return;
-  }
-
-  if (!ctx.from) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
-    return;
-  }
-
-  // Check if another edit is in progress
-  const pendingTxs = database.bankTransactions.findPendingByConnectionId(tx.connection_id);
-  const otherEdit = pendingTxs.find((t) => t.id !== txId && t.edit_in_progress === 1);
-  if (otherEdit) {
-    await ctx.answerCallbackQuery({
-      text: 'Сначала заверши текущее исправление',
-    });
-    return;
-  }
-
-  database.bankTransactions.setEditInProgress(txId, true);
-  await ctx.answerCallbackQuery();
-
-  const replyToMsgId = tx.telegram_message_id ?? undefined;
-  const promptMsg = await sendMessage(
-    `✏️ Ответь на это сообщение и напиши что исправить.\n\nФормат: категория — комментарий\nИли только категория.`,
-    {
-      ...(replyToMsgId !== undefined ? { reply_parameters: { message_id: replyToMsgId } } : {}),
-    },
-  );
-  // Store the prompt's message_id so handleBankEditReply can verify the reply is to this message
-  if (promptMsg?.message_id) {
-    database.bankTransactions.setTelegramMessageId(txId, promptMsg.message_id);
-  }
-}
-
-export async function handleBankEditReply(
-  ctx: Ctx['Message'],
-  chatId: number,
-  text: string,
-  replyToMessageId: number,
-): Promise<boolean> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) return false;
-
-  if (!ctx.from) return false;
-
-  // Find the transaction with edit_in_progress=1 that the user is replying to
-  const connections = database.bankConnections.findActiveByGroupId(group.id);
-  let editTx: import('../../database/types').BankTransaction | null = null;
-
-  for (const conn of connections) {
-    const pending = database.bankTransactions.findPendingByConnectionId(conn.id);
-    editTx =
-      pending.find((t) => t.edit_in_progress === 1 && t.telegram_message_id === replyToMessageId) ??
-      null;
-    if (editTx) break;
-  }
-
-  if (!editTx) return false;
-
-  const user = database.users.findByTelegramId(ctx.from.id);
-  if (!user) {
-    database.bankTransactions.setEditInProgress(editTx.id, false);
-    database.bankTransactions.setAwaitingComment(editTx.id, false);
-    return false;
-  }
-
-  let category: string;
-  let comment: string;
-
-  if (editTx.awaiting_comment === 1) {
-    // "Принять" flow: user types a comment; category comes from pre-fill
-    category = editTx.prefill_category ?? editTx.merchant_normalized ?? editTx.merchant ?? 'прочее';
-    comment = text.trim();
-  } else {
-    // "Исправить" flow: user types "категория — комментарий"
-    const parts = text.split('—').map((s) => s.trim());
-    category = parts[0] ?? 'прочее';
-    comment = parts[1] ?? editTx.merchant_normalized ?? editTx.merchant ?? '';
-  }
-
-  await saveConfirmedTransaction(editTx, group.id, user.id, category, comment);
-  database.bankTransactions.setEditInProgress(editTx.id, false);
-  database.bankTransactions.setAwaitingComment(editTx.id, false);
-
-  await sendMessage(
-    `✅ Расход записан: ${category}${comment ? ` — ${comment}` : ''} (${editTx.amount} ${editTx.currency})`,
-  );
-  return true;
-}
-
-/**
- * Handles "Без комментария" button — confirms transaction with empty comment.
- */
-export async function handleBankNoCommentCallback(
-  ctx: Ctx['CallbackQuery'],
-  txId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  if (!ctx.from) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
-    return;
-  }
-
-  const user = database.users.findByTelegramId(ctx.from.id);
-  if (!user) {
-    await ctx.answerCallbackQuery({ text: 'Пользователь не найден' });
-    return;
-  }
-
-  const confirmed = database.transaction(() => {
-    const freshTx = database.bankTransactions.findById(txId, group.id);
-    if (!freshTx) return null;
-    if (freshTx.status !== 'pending') return false;
-    return freshTx;
-  });
-
-  if (confirmed === null) {
-    await ctx.answerCallbackQuery({ text: 'Транзакция не найдена' });
-    return;
-  }
-  if (confirmed === false) {
-    await ctx.answerCallbackQuery({ text: 'Транзакция уже обработана' });
-    return;
-  }
-
-  const tx = confirmed;
-  const category = tx.prefill_category ?? tx.merchant_normalized ?? tx.merchant ?? 'прочее';
-
-  saveConfirmedTransaction(tx, group.id, user.id, category, '');
-  database.bankTransactions.setEditInProgress(tx.id, false);
-  database.bankTransactions.setAwaitingComment(tx.id, false);
-
-  await ctx.answerCallbackQuery({ text: '✅ Расход записан' });
-
-  const messageId = ctx.message?.id;
-  if (messageId) {
-    await editMessageText(
-      messageId,
-      `✅ Записано: ${category} (${formatAmount(tx.amount, tx.currency)})`,
-    );
-  }
-}
+// ─── Account and settings callbacks ───────────────────────────────────────────
 
 /**
  * Shows the list of accounts for a connection with exclude/include toggles.
@@ -903,284 +285,6 @@ export async function handleBankAccountToggleCallback(
 
   // Refresh the accounts list
   await handleBankAccountsCallback(ctx, bot, connectionId, chatId);
-}
-
-/**
- * Link a bank transaction to an existing expense without creating a new one.
- */
-function mergeTransactionWithExpense(
-  tx: import('../../database/types').BankTransaction,
-  groupId: number,
-  expenseId: number,
-): void {
-  database.bankTransactions.updateStatus(tx.id, groupId, 'confirmed');
-  database.bankTransactions.setMatchedExpense(tx.id, groupId, expenseId);
-}
-
-/**
- * Confirm a bank transaction as an expense and create the corresponding merchant rule request.
- */
-function saveConfirmedTransaction(
-  tx: import('../../database/types').BankTransaction,
-  groupId: number,
-  userId: number,
-  category: string,
-  comment: string,
-): void {
-  const txCurrency = tx.currency as import('../../config/constants').CurrencyCode;
-  const expense = database.expenses.create({
-    group_id: groupId,
-    user_id: userId,
-    date: tx.date,
-    category,
-    comment,
-    amount: tx.amount,
-    currency: txCurrency,
-    eur_amount: convertAnyToEUR(tx.amount, tx.currency),
-  });
-
-  database.bankTransactions.updateStatus(tx.id, groupId, 'confirmed');
-  database.bankTransactions.setMatchedExpense(tx.id, groupId, expense.id);
-
-  if (tx.merchant) {
-    database.merchantRules.insertRuleRequest({
-      merchant_raw: tx.merchant,
-      mcc: tx.mcc,
-      group_id: groupId,
-      user_category: category,
-      user_comment: comment,
-    });
-  }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function resolveFieldName(field: CredentialField | undefined): string {
-  if (!field) return '';
-  return typeof field === 'string' ? field : field.name;
-}
-
-function resolveFieldPrompt(field: CredentialField | undefined): string {
-  if (!field) return '';
-  if (typeof field === 'string') return field;
-  return field.prompt ?? field.name;
-}
-
-function isPasswordField(field: CredentialField | undefined): boolean {
-  return (
-    typeof field !== 'string' && !!field && (field.type === 'password' || field.type === 'otp')
-  );
-}
-
-const SECURITY_NOTE =
-  '\n\n🔒 Пароль шифруется алгоритмом AES-256-GCM и хранится только на сервере бота — никуда не передаётся. Транзакции получаем через открытую библиотеку ZenPlugins: github.com/zenmoney/ZenPlugins';
-
-function buildFieldPromptText(field: CredentialField | undefined): string {
-  const prompt = resolveFieldPrompt(field);
-  return `${prompt}:${isPasswordField(field) ? SECURITY_NOTE : ''}`;
-}
-
-function buildWizardInfoText(bankName: string): string {
-  return (
-    `🏦 ${bankName}\n\n` +
-    `После подключения бот будет автоматически синхронизировать баланс каждые 30 минут.\n\n` +
-    `Синхронизация транзакций и карточки в чате (предложить категорию через ИИ, дождаться ` +
-    `твоего подтверждения и записать расход в Google Sheets) по умолчанию выключены — ` +
-    `включи их в /settings, когда будешь готов.\n\n` +
-    `Транзакции получаем через ZenPlugins — open-source: github.com/zenmoney/ZenPlugins`
-  );
-}
-
-function buildWizardStartText(bankName: string, firstField: CredentialField | undefined): string {
-  return `🏦 ${bankName} — данные для входа\n\n${buildFieldPromptText(firstField)}`;
-}
-
-function buildConnectingText(bankName: string): string {
-  return `⏳ ${bankName} — подключаем...\n\nПервая синхронизация запущена. Статус появится здесь.`;
-}
-
-// ─── Callback entry points ────────────────────────────────────────────────────
-
-/**
- * Called when user clicks a bank_setup button from the "no banks" panel.
- * Starts the setup wizard for the selected bank.
- */
-export async function handleBankSetupCallback(
-  ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
-  bankKey: string,
-  chatId: number,
-): Promise<void> {
-  const plugin = BANK_REGISTRY[bankKey];
-  if (!plugin) {
-    await ctx.answerCallbackQuery({ text: 'Банк не найден' });
-    return;
-  }
-
-  await ctx.answerCallbackQuery();
-
-  // Show info screen — the user clicks "🔓 Подключить" to actually start the wizard.
-  const infoText = buildWizardInfoText(plugin.name);
-  const keyboard = {
-    inline_keyboard: [
-      [
-        {
-          text: '🔓 Подключить',
-          callback_data: `bank_wizard_start:${bankKey}`,
-        },
-        { text: '← Назад', callback_data: 'bank_letter_nav' },
-      ],
-    ],
-  };
-
-  const messageId = ctx.message?.id;
-  if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: infoText,
-        reply_markup: keyboard,
-        link_preview_options: { is_disabled: true },
-      });
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  await sendMessage(infoText, { reply_markup: keyboard });
-}
-
-/**
- * Called when user clicks "🔓 Подключить" on the bank info screen.
- * Creates the connection and starts credential entry.
- */
-export async function handleBankWizardStartCallback(
-  ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
-  bankKey: string,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  const plugin = BANK_REGISTRY[bankKey];
-  if (!plugin) {
-    await ctx.answerCallbackQuery({ text: 'Банк не найден' });
-    return;
-  }
-
-  // Clean up stale setup sessions before starting a new one
-  for (const id of database.bankConnections.deleteStaleSetup(group.id)) {
-    wizardPromptMessages.delete(id);
-  }
-
-  // Only replace setup connections — active/disconnected connections require explicit disconnect
-  const existing = database.bankConnections.findByGroupAndBank(group.id, bankKey);
-  if (existing) {
-    if (existing.status !== 'setup') {
-      await ctx.answerCallbackQuery({ text: `${plugin.name} уже подключён` });
-      return;
-    }
-    wizardPromptMessages.delete(existing.id);
-    database.bankConnections.deleteById(existing.id);
-  }
-
-  await ctx.answerCallbackQuery();
-
-  const newConn = database.bankConnections.create({
-    group_id: group.id,
-    bank_name: bankKey,
-    display_name: plugin.name,
-    status: 'setup',
-  });
-
-  const messageId = ctx.message?.id;
-  const threadId =
-    (ctx.update?.callback_query?.message as { message_thread_id?: number } | undefined)
-      ?.message_thread_id ?? null;
-
-  if (plugin.fields.length === 0) {
-    // No credential fields — activate immediately and show connecting panel.
-    if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
-      database.bankCredentials.upsert(newConn.id, encryptData(JSON.stringify(plugin.defaults)));
-    }
-    database.bankConnections.update(newConn.id, { status: 'active' });
-
-    let panelMsgId: number | null = null;
-    if (messageId) {
-      try {
-        await bot.api.editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          text: buildConnectingText(plugin.name),
-        });
-        panelMsgId = messageId;
-      } catch {
-        // fall through
-      }
-    }
-    if (panelMsgId === null) {
-      const sent = await sendMessage(buildConnectingText(plugin.name));
-      if (sent) {
-        panelMsgId = sent.message_id;
-      }
-    }
-
-    database.bankConnections.update(newConn.id, {
-      panel_message_id: panelMsgId,
-      panel_message_thread_id: threadId,
-    });
-
-    activateNewConnection(newConn.id).catch((err) =>
-      logger.error({ err, connectionId: newConn.id }, 'Background activation failed'),
-    );
-    return;
-  }
-
-  // Has credential fields — edit info screen to show the first field prompt.
-  const firstField = plugin.fields[0];
-  const firstFieldText = buildWizardStartText(plugin.name, firstField);
-
-  if (messageId) {
-    try {
-      await bot.api.editMessageText({
-        chat_id: chatId,
-        message_id: messageId,
-        text: firstFieldText,
-        reply_markup: {
-          inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
-        },
-        link_preview_options: { is_disabled: true },
-      });
-      wizardPromptMessages.set(newConn.id, {
-        messageId,
-        sensitive: isPasswordField(firstField),
-        fieldPrompt: resolveFieldPrompt(firstField),
-      });
-      return;
-    } catch {
-      // fall through
-    }
-  }
-
-  // Fallback: send new message
-  const sent = await sendMessage(firstFieldText, {
-    reply_markup: {
-      inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
-    },
-    link_preview_options: { is_disabled: true },
-  });
-  if (sent) {
-    wizardPromptMessages.set(newConn.id, {
-      messageId: sent.message_id,
-      sensitive: isPasswordField(firstField),
-      fieldPrompt: resolveFieldPrompt(firstField),
-    });
-  }
 }
 
 // ─── New action handlers ──────────────────────────────────────────────────────
@@ -1427,121 +531,6 @@ export async function handleBankDisconnectCancelCallback(
       });
     } catch {
       // ignore
-    }
-  }
-}
-
-/**
- * Reconnect an existing active bank connection — resets credentials and restarts the wizard.
- * Unlike bank_setup, this always replaces the connection even if it's active.
- */
-export async function handleBankReconnectCallback(
-  ctx: Ctx['CallbackQuery'],
-  bot: BotInstance,
-  connId: number,
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  const conn = database.bankConnections.findById(connId);
-  if (!conn || conn.group_id !== group.id) {
-    await ctx.answerCallbackQuery({ text: 'Подключение не найдено' });
-    return;
-  }
-
-  const reconnectFound = lookupBank(conn.bank_name);
-  if (!reconnectFound) {
-    await ctx.answerCallbackQuery({ text: 'Банк не найден' });
-    return;
-  }
-  const [, plugin] = reconnectFound;
-
-  await ctx.answerCallbackQuery();
-
-  // Reset the connection: wipe credentials, set status back to setup
-  wizardPromptMessages.delete(conn.id);
-  database.bankCredentials.deleteByConnectionId(conn.id);
-  database.bankConnections.update(conn.id, {
-    status: 'setup',
-    consecutive_failures: 0,
-    last_error: null,
-  });
-
-  if (plugin.fields.length === 0) {
-    if (plugin.defaults && Object.keys(plugin.defaults).length > 0) {
-      database.bankCredentials.upsert(conn.id, encryptData(JSON.stringify(plugin.defaults)));
-    }
-    database.bankConnections.update(conn.id, { status: 'active' });
-
-    // Edit the existing panel to "connecting" state — sync-service will update it on completion.
-    if (conn.panel_message_id) {
-      await bot.api
-        .editMessageText({
-          chat_id: chatId,
-          message_id: conn.panel_message_id,
-          text: buildConnectingText(plugin.name),
-        })
-        .catch(() => {});
-    }
-
-    activateNewConnection(conn.id).catch((err) =>
-      logger.error({ err, connectionId: conn.id }, 'Background reconnect failed'),
-    );
-    return;
-  }
-
-  const firstField = plugin.fields[0];
-  const sent = await sendMessage(buildWizardStartText(plugin.name, firstField), {
-    reply_markup: {
-      inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'bank_wizard_cancel' }]],
-    },
-    link_preview_options: { is_disabled: true },
-  });
-  if (sent) {
-    wizardPromptMessages.set(conn.id, {
-      messageId: sent.message_id,
-      sensitive: isPasswordField(firstField),
-      fieldPrompt: resolveFieldPrompt(firstField),
-    });
-  }
-}
-
-/** Cancel the active wizard for this group. */
-export async function handleBankWizardCancelCallback(
-  ctx: Ctx['CallbackQuery'],
-  chatId: number,
-): Promise<void> {
-  const group = database.groups.findByTelegramGroupId(chatId);
-  if (!group) {
-    await ctx.answerCallbackQuery({ text: 'Группа не найдена' });
-    return;
-  }
-
-  const setupConn = database.bankConnections.findSetupByGroupId(group.id);
-  if (setupConn) {
-    wizardPromptMessages.delete(setupConn.id);
-    if (setupConn.last_sync_at !== null) {
-      // Was an active connection being reconnected — preserve the row and linked data,
-      // just mark it disconnected (credentials already wiped by handleBankReconnectCallback).
-      database.bankConnections.update(setupConn.id, { status: 'disconnected' });
-    } else {
-      // Fresh new connection being set up — nothing to preserve, delete entirely.
-      database.bankConnections.deleteById(setupConn.id);
-    }
-  }
-
-  await ctx.answerCallbackQuery({ text: 'Отменено' });
-
-  const messageId = ctx.message?.id;
-  if (messageId) {
-    try {
-      await ctx.editText('Подключение банка отменено.');
-    } catch {
-      // message too old
     }
   }
 }

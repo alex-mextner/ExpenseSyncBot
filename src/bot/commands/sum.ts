@@ -5,8 +5,10 @@ import { getCategoryEmoji } from '../../config/category-emojis';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import { computeBudgetProgress } from '../../database/repositories/budget.repository';
-import type { Group } from '../../database/types';
+import type { Expense, Group } from '../../database/types';
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
+import type { CategoryTaAnalysis } from '../../services/analytics/ta/analyzer';
+import type { TechnicalAnalysis } from '../../services/analytics/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
 import { googleConn } from '../../services/google/sheets';
@@ -18,6 +20,190 @@ import type { Ctx } from '../types';
 import { maybeSmartAdvice } from './ask';
 
 const logger = createLogger('sum');
+
+interface SumExpense {
+  date: string;
+  category: string;
+  eur_amount: number;
+}
+
+interface CategoryDifference {
+  category: string;
+  diff: number;
+  percent: number;
+}
+
+/** Average EUR spend over complete past months (0 when there are none). */
+function computeMonthlyAverage(pastExpenses: SumExpense[]): {
+  monthsCount: number;
+  averagePerMonth: number;
+} {
+  const monthlyTotals: Record<string, number> = {};
+  for (const expense of pastExpenses) {
+    const monthKey = expense.date.substring(0, 7); // YYYY-MM
+    monthlyTotals[monthKey] = (monthlyTotals[monthKey] ?? 0) + expense.eur_amount;
+  }
+  const monthsCount = Object.keys(monthlyTotals).length;
+  const averagePerMonth =
+    monthsCount > 0
+      ? Object.values(monthlyTotals).reduce((sum, val) => sum + val, 0) / monthsCount
+      : 0;
+  return { monthsCount, averagePerMonth };
+}
+
+function sumByCategory(expenses: SumExpense[]): Record<string, number> {
+  const totals: Record<string, number> = {};
+  for (const expense of expenses) {
+    totals[expense.category] = (totals[expense.category] ?? 0) + expense.eur_amount;
+  }
+  return totals;
+}
+
+/** Number of distinct months in which each category has spending. */
+function countMonthsPerCategory(expenses: SumExpense[]): Record<string, number> {
+  const months: Record<string, Set<string>> = {};
+  for (const expense of expenses) {
+    const set = months[expense.category] ?? new Set<string>();
+    set.add(expense.date.substring(0, 7));
+    months[expense.category] = set;
+  }
+  return Object.fromEntries(Object.entries(months).map(([category, set]) => [category, set.size]));
+}
+
+/**
+ * Current-month total vs. the category's average over the months it appeared in,
+ * sorted by absolute percent difference. Categories without history are skipped.
+ */
+function computeCategoryDifferences(
+  currentExpenses: SumExpense[],
+  pastExpenses: SumExpense[],
+): CategoryDifference[] {
+  const categoryTotals = sumByCategory(currentExpenses);
+  const pastTotals = sumByCategory(pastExpenses);
+  const monthsPerCategory = countMonthsPerCategory(pastExpenses);
+
+  const differences: CategoryDifference[] = [];
+  for (const [category, currentTotal] of Object.entries(categoryTotals)) {
+    const monthsWithCategory = monthsPerCategory[category] || 0;
+    const pastTotal = pastTotals[category];
+    const avgForCategory =
+      monthsWithCategory > 0 && pastTotal !== undefined ? pastTotal / monthsWithCategory : 0;
+
+    if (avgForCategory > 0) {
+      const diff = currentTotal - avgForCategory;
+      differences.push({ category, diff, percent: (diff / avgForCategory) * 100 });
+    }
+  }
+
+  differences.sort((a, b) => Math.abs(b.percent) - Math.abs(a.percent));
+  return differences;
+}
+
+function renderAverageComparison(
+  averagePerMonth: number,
+  currentMonthTotal: number,
+  displayCurrency: CurrencyCode,
+): string {
+  const difference = currentMonthTotal - averagePerMonth;
+  const percentDifference = averagePerMonth > 0 ? (difference / averagePerMonth) * 100 : 0;
+  const averageDisplay = convertCurrency(averagePerMonth, BASE_CURRENCY, displayCurrency);
+  const differenceDisplay = convertCurrency(difference, BASE_CURRENCY, displayCurrency);
+
+  let text = `📈 Средняя: ${formatAmount(averageDisplay, displayCurrency)}\n`;
+  if (difference > 0) {
+    text += `📊 Разница: +${formatAmount(differenceDisplay, displayCurrency)} (+${percentDifference.toFixed(1)}%)\n`;
+  } else if (difference < 0) {
+    text += `📊 Разница: ${formatAmount(differenceDisplay, displayCurrency)} (${percentDifference.toFixed(1)}%)\n`;
+  } else {
+    text += `📊 Разница: точно в среднем\n`;
+  }
+  return text;
+}
+
+/** Up to 3 categories as bullet lines; sign is the sign prefix for positive diffs ('+' or ''). */
+function renderCategoryDeltaLines(
+  entries: CategoryDifference[],
+  positiveSign: string,
+  displayCurrency: CurrencyCode,
+): string {
+  if (entries.length === 0) return `  • Нет категорий\n`;
+  let text = '';
+  for (const { category, diff, percent } of entries.slice(0, 3)) {
+    const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
+    text += `  • ${category}: ${positiveSign}${formatAmount(diffDisplay, displayCurrency)} (${positiveSign}${percent.toFixed(1)}%)\n`;
+  }
+  return text;
+}
+
+/** Top categories above/below their own average (±5% dead zone). */
+function renderCategoryDifferences(
+  categoryDifferences: CategoryDifference[],
+  displayCurrency: CurrencyCode,
+): string {
+  if (categoryDifferences.length === 0) return '';
+
+  const above = categoryDifferences.filter((c) => c.percent > 5);
+  // Sort by percent ascending (most negative first)
+  const below = categoryDifferences
+    .filter((c) => c.percent < -5)
+    .sort((a, b) => a.percent - b.percent);
+
+  let text = `\n🔥 Больше среднего:\n`;
+  text += renderCategoryDeltaLines(above, '+', displayCurrency);
+  text += `\n❄️ Меньше среднего:\n`;
+  text += renderCategoryDeltaLines(below, '', displayCurrency);
+  return text;
+}
+
+function describeTrendSignals(cat: CategoryTaAnalysis): string[] {
+  const signals: string[] = [];
+  if (cat.anomaly.isAnomaly) signals.push('⚠️ необычный расход');
+  if (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6) signals.push('↑ растут');
+  else if (cat.trend.direction === 'falling' && cat.trend.confidence >= 0.6)
+    signals.push('↓ снижаются');
+  if (cat.trend.macd.crossover === 'bullish') signals.push('📈 начали расти');
+  else if (cat.trend.macd.crossover === 'bearish') signals.push('📉 пошли на спад');
+  if (cat.volatility.donchian.isBreakoutHigh) signals.push('🚨 рекорд');
+  return signals;
+}
+
+/**
+ * Trend summary for top spending categories — cap at 10 entries so the
+ * message still fits Telegram's 4096-char limit alongside budget info. Per
+ * the N+2 rule, only emit "и ещё N..." when N ≥ 3.
+ */
+function renderTrendSummary(analysis: TechnicalAnalysis, displayCurrency: CurrencyCode): string {
+  const taLines: string[] = [];
+  for (const cat of analysis.categories) {
+    const signals = describeTrendSignals(cat);
+    if (signals.length === 0) continue;
+    const forecast = convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, displayCurrency);
+    const emoji = getCategoryEmoji(cat.category);
+    taLines.push(
+      `  ${emoji} ${cat.category}: ${signals.join(', ')} (прогноз ${formatAmount(forecast, displayCurrency)})`,
+    );
+  }
+  if (taLines.length === 0) return '';
+
+  const MAX_TA_LINES = 10;
+  const hidden = taLines.length - MAX_TA_LINES;
+  const visibleLines = hidden >= 3 ? taLines.slice(0, MAX_TA_LINES) : taLines;
+  let text = `\n📈 Тренды:\n${visibleLines.join('\n')}\n`;
+  if (hidden >= 3) {
+    text += `  … и ещё ${hidden}\n`;
+  }
+  return text;
+}
+
+function logCurrentMonthExpenses(currentMonthExpenses: Expense[]): void {
+  logger.info(`[SUM] Current month expenses: ${currentMonthExpenses.length}`);
+  logger.info(`[SUM] Current month expenses details:`);
+  currentMonthExpenses.forEach((exp) => {
+    logger.info(
+      `  - ${exp.date}: ${exp.amount} ${exp.currency} = ${exp.eur_amount} EUR (${exp.category})`,
+    );
+  });
+}
 
 /**
  * /sum and /total command handler - show current month expenses summary
@@ -48,50 +234,22 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
     return;
   }
 
-  // Filter current month expenses
   const currentMonthExpenses = allExpenses.filter(
     (expense) => expense.date >= currentMonthStart && expense.date <= currentMonthEnd,
   );
-
-  logger.info(`[SUM] Current month expenses: ${currentMonthExpenses.length}`);
-  logger.info(`[SUM] Current month expenses details:`);
-  currentMonthExpenses.forEach((exp) => {
-    logger.info(
-      `  - ${exp.date}: ${exp.amount} ${exp.currency} = ${exp.eur_amount} EUR (${exp.category})`,
-    );
-  });
+  logCurrentMonthExpenses(currentMonthExpenses);
 
   if (currentMonthExpenses.length === 0) {
     await sendMessage(`📊 В ${format(now, 'LLLL yyyy')} пока нет расходов`);
     return;
   }
 
-  // Calculate current month total in EUR
   const currentMonthTotal = currentMonthExpenses.reduce((sum, exp) => sum + exp.eur_amount, 0);
   logger.info(`[SUM] Current month total: €${currentMonthTotal.toFixed(2)}`);
 
-  // Calculate average per month (for all complete months)
-  const expenses = allExpenses.filter((exp) => exp.date < currentMonthStart);
-
-  const monthlyAverages: Record<string, number> = {};
-
-  for (const expense of expenses) {
-    const monthKey = expense.date.substring(0, 7); // YYYY-MM
-    if (!monthlyAverages[monthKey]) {
-      monthlyAverages[monthKey] = 0;
-    }
-    monthlyAverages[monthKey] += expense.eur_amount;
-  }
-
-  const monthsCount = Object.keys(monthlyAverages).length;
-  const averagePerMonth =
-    monthsCount > 0
-      ? Object.values(monthlyAverages).reduce((sum, val) => sum + val, 0) / monthsCount
-      : 0;
-
-  // Calculate difference
-  const difference = currentMonthTotal - averagePerMonth;
-  const percentDifference = averagePerMonth > 0 ? (difference / averagePerMonth) * 100 : 0;
+  // Averages are based on all complete months before the current one
+  const pastExpenses = allExpenses.filter((exp) => exp.date < currentMonthStart);
+  const { monthsCount, averagePerMonth } = computeMonthlyAverage(pastExpenses);
 
   // Convert EUR totals to group's display currency for user output
   const displayCurrency = group.default_currency;
@@ -100,145 +258,22 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
     BASE_CURRENCY,
     displayCurrency,
   );
-  const averagePerMonthDisplay = convertCurrency(averagePerMonth, BASE_CURRENCY, displayCurrency);
-  const differenceDisplay = convertCurrency(difference, BASE_CURRENCY, displayCurrency);
 
-  // Calculate category statistics for current month
-  const categoryTotals: Record<string, number> = {};
-  for (const expense of currentMonthExpenses) {
-    if (!categoryTotals[expense.category]) {
-      categoryTotals[expense.category] = 0;
-    }
-    categoryTotals[expense.category] = (categoryTotals[expense.category] ?? 0) + expense.eur_amount;
-  }
-
-  // Calculate category averages from previous months
-  const categoryAverages: Record<string, { sum: number; count: number }> = {};
-  for (const expense of expenses) {
-    if (!categoryAverages[expense.category]) {
-      categoryAverages[expense.category] = { sum: 0, count: 0 };
-    }
-  }
-
-  // Count unique months per category
-  const categoryMonths: Record<string, Set<string>> = {};
-  for (const expense of expenses) {
-    const monthKey = expense.date.substring(0, 7);
-    if (!categoryMonths[expense.category]) {
-      categoryMonths[expense.category] = new Set();
-    }
-    categoryMonths[expense.category]?.add(monthKey);
-  }
-
-  // Calculate average per category
-  for (const expense of expenses) {
-    if (!categoryAverages[expense.category]) {
-      categoryAverages[expense.category] = { sum: 0, count: 0 };
-    }
-    const avgEntry = categoryAverages[expense.category];
-    if (avgEntry) avgEntry.sum += expense.eur_amount;
-  }
-
-  // Calculate category differences
-  const categoryDifferences: Array<{
-    category: string;
-    diff: number;
-    percent: number;
-  }> = [];
-
-  for (const [category, currentTotal] of Object.entries(categoryTotals)) {
-    const monthsWithCategory = categoryMonths[category]?.size || 0;
-    const categoryAvg = categoryAverages[category];
-    const avgForCategory =
-      monthsWithCategory > 0 && categoryAvg ? categoryAvg.sum / monthsWithCategory : 0;
-
-    if (avgForCategory > 0) {
-      const diff = currentTotal - avgForCategory;
-      const percent = (diff / avgForCategory) * 100;
-      categoryDifferences.push({ category, diff, percent });
-    }
-  }
-
-  // Sort by absolute percent difference
-  categoryDifferences.sort((a, b) => Math.abs(b.percent) - Math.abs(a.percent));
-
-  // Build message
   let message = `📊 Расходы за ${format(now, 'LLLL yyyy')}\n\n`;
   message += `💰 Всего: ${formatAmount(currentMonthTotalDisplay, displayCurrency)}\n`;
 
   if (monthsCount > 0) {
-    message += `📈 Средняя: ${formatAmount(averagePerMonthDisplay, displayCurrency)}\n`;
-
-    if (difference > 0) {
-      message += `📊 Разница: +${formatAmount(differenceDisplay, displayCurrency)} (+${percentDifference.toFixed(1)}%)\n`;
-    } else if (difference < 0) {
-      message += `📊 Разница: ${formatAmount(differenceDisplay, displayCurrency)} (${percentDifference.toFixed(1)}%)\n`;
-    } else {
-      message += `📊 Разница: точно в среднем\n`;
-    }
+    message += renderAverageComparison(averagePerMonth, currentMonthTotal, displayCurrency);
   }
 
-  // Show top categories above/below average
-  if (categoryDifferences.length > 0) {
-    message += `\n🔥 Больше среднего:\n`;
+  message += renderCategoryDifferences(
+    computeCategoryDifferences(currentMonthExpenses, pastExpenses),
+    displayCurrency,
+  );
 
-    const above = categoryDifferences.filter((c) => c.percent > 5);
-    if (above.length > 0) {
-      for (const { category, diff, percent } of above.slice(0, 3)) {
-        const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
-        message += `  • ${category}: +${formatAmount(diffDisplay, displayCurrency)} (+${percent.toFixed(1)}%)\n`;
-      }
-    } else {
-      message += `  • Нет категорий\n`;
-    }
-
-    message += `\n❄️ Меньше среднего:\n`;
-    const below = categoryDifferences.filter((c) => c.percent < -5);
-    if (below.length > 0) {
-      // Sort by percent ascending (most negative first)
-      below.sort((a, b) => a.percent - b.percent);
-      for (const { category, diff, percent } of below.slice(0, 3)) {
-        const diffDisplay = convertCurrency(diff, BASE_CURRENCY, displayCurrency);
-        message += `  • ${category}: ${formatAmount(diffDisplay, displayCurrency)} (${percent.toFixed(1)}%)\n`;
-      }
-    } else {
-      message += `  • Нет категорий\n`;
-    }
-  }
-
-  // Add trend summary for top spending categories — cap at 10 entries so the
-  // message still fits Telegram's 4096-char limit alongside budget info. Per
-  // the N+2 rule, only emit "и ещё N..." when N ≥ 3.
   const snapshot = spendingAnalytics.getFinancialSnapshot(group.id);
   if (snapshot.technicalAnalysis && snapshot.technicalAnalysis.categories.length > 0) {
-    const taLines: string[] = [];
-    for (const cat of snapshot.technicalAnalysis.categories) {
-      const signals: string[] = [];
-      if (cat.anomaly.isAnomaly) signals.push('⚠️ необычный расход');
-      if (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6) signals.push('↑ растут');
-      else if (cat.trend.direction === 'falling' && cat.trend.confidence >= 0.6)
-        signals.push('↓ снижаются');
-      if (cat.trend.macd.crossover === 'bullish') signals.push('📈 начали расти');
-      else if (cat.trend.macd.crossover === 'bearish') signals.push('📉 пошли на спад');
-      if (cat.volatility.donchian.isBreakoutHigh) signals.push('🚨 рекорд');
-
-      if (signals.length > 0) {
-        const forecast = convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, displayCurrency);
-        const emoji = getCategoryEmoji(cat.category);
-        taLines.push(
-          `  ${emoji} ${cat.category}: ${signals.join(', ')} (прогноз ${formatAmount(forecast, displayCurrency)})`,
-        );
-      }
-    }
-    if (taLines.length > 0) {
-      const MAX_TA_LINES = 10;
-      const hidden = taLines.length - MAX_TA_LINES;
-      const visibleLines = hidden >= 3 ? taLines.slice(0, MAX_TA_LINES) : taLines;
-      message += `\n📈 Тренды:\n${visibleLines.join('\n')}\n`;
-      if (hidden >= 3) {
-        message += `  … и ещё ${hidden}\n`;
-      }
-    }
+    message += renderTrendSummary(snapshot.technicalAnalysis, displayCurrency);
   }
 
   // Add budget information

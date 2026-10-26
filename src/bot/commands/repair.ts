@@ -62,63 +62,48 @@ export async function handleRepairCommand(
   }
 }
 
-function formatRepairReport(audit: AuditEntry[], recreated: RecreateResult[]): string {
-  const lines: string[] = ['🔧 <b>Проверка таблиц</b>\n'];
+const STATUS_ICON: Record<AuditEntry['status'], string> = {
+  ok: '✅',
+  not_found: '❌',
+  forbidden: '🔒',
+  token_expired: '🔑',
+  rate_limited: '⏳',
+  unknown_error: '⚠️',
+};
 
-  // Audit summary by year
-  lines.push('Состояние:');
-  for (const entry of audit) {
-    const icon =
-      entry.status === 'ok'
-        ? '✅'
-        : entry.status === 'not_found'
-          ? '❌'
-          : entry.status === 'forbidden'
-            ? '🔒'
-            : entry.status === 'token_expired'
-              ? '🔑'
-              : entry.status === 'rate_limited'
-                ? '⏳'
-                : '⚠️';
-    const statusText =
-      entry.status === 'ok'
-        ? 'доступна'
-        : entry.status === 'not_found'
-          ? 'не найдена'
-          : entry.status === 'forbidden'
-            ? 'нет прав доступа'
-            : entry.status === 'token_expired'
-              ? 'токен отозван'
-              : entry.status === 'rate_limited'
-                ? 'квота Google исчерпана'
-                : 'ошибка';
-    lines.push(`  ${icon} ${entry.year} — ${statusText}`);
+const STATUS_TEXT: Record<AuditEntry['status'], string> = {
+  ok: 'доступна',
+  not_found: 'не найдена',
+  forbidden: 'нет прав доступа',
+  token_expired: 'токен отозван',
+  rate_limited: 'квота Google исчерпана',
+  unknown_error: 'ошибка',
+};
+
+/** Closing line when nothing was recreated; picks the most actionable reason first. */
+function formatNothingRecreatedVerdict(audit: AuditEntry[]): string {
+  if (audit.every((a) => a.status === 'ok')) {
+    return '\n✅ Все таблицы на месте, ничего пересоздавать не нужно.';
   }
-
-  if (recreated.length === 0) {
-    if (audit.every((a) => a.status === 'ok')) {
-      lines.push('\n✅ Все таблицы на месте, ничего пересоздавать не нужно.');
-    } else if (audit.some((a) => a.status === 'token_expired')) {
-      lines.push('\n🔑 Токен Google отозван — используй /reconnect.');
-    } else if (audit.some((a) => a.status === 'rate_limited')) {
-      lines.push(
-        '\n⏳ Квота Google Sheets временно исчерпана. Бот уже ждал и ретраил — не помогло. Повтори /repair через 1–2 минуты.',
-      );
-    } else {
-      lines.push(
-        '\n⚠️ Часть таблиц недоступна, но автоматически пересоздать не получилось. Используй /reconnect.',
-      );
-    }
-    return lines.join('\n');
+  if (audit.some((a) => a.status === 'token_expired')) {
+    return '\n🔑 Токен Google отозван — используй /reconnect.';
   }
+  if (audit.some((a) => a.status === 'rate_limited')) {
+    return '\n⏳ Квота Google Sheets временно исчерпана. Бот уже ждал и ретраил — не помогло. Повтори /repair через 1–2 минуты.';
+  }
+  return '\n⚠️ Часть таблиц недоступна, но автоматически пересоздать не получилось. Используй /reconnect.';
+}
 
-  lines.push('');
-  lines.push('Возможные причины проблемы:');
-  lines.push('• таблица удалена/в Корзине');
-  lines.push('• после смены конфигурации Google новые разрешения не видят старые таблицы');
-  lines.push('• бот лишился доступа в настройках Google аккаунта');
-  lines.push('');
-  lines.push('🆕 Пересоздано:');
+function formatRecreatedSection(recreated: RecreateResult[]): string[] {
+  const lines: string[] = [
+    '',
+    'Возможные причины проблемы:',
+    '• таблица удалена/в Корзине',
+    '• после смены конфигурации Google новые разрешения не видят старые таблицы',
+    '• бот лишился доступа в настройках Google аккаунта',
+    '',
+    '🆕 Пересоздано:',
+  ];
   for (const r of recreated) {
     lines.push(
       `  ${r.year}: ${r.newSpreadsheetUrl}\n` +
@@ -127,6 +112,22 @@ function formatRepairReport(audit: AuditEntry[], recreated: RecreateResult[]): s
   }
   lines.push('');
   lines.push('ℹ️ Старые таблицы остались в твоём Google Drive — удали их вручную, если нужно.');
+  return lines;
+}
 
+function formatRepairReport(audit: AuditEntry[], recreated: RecreateResult[]): string {
+  const lines: string[] = ['🔧 <b>Проверка таблиц</b>\n'];
+
+  // Audit summary by year
+  lines.push('Состояние:');
+  for (const entry of audit) {
+    lines.push(`  ${STATUS_ICON[entry.status]} ${entry.year} — ${STATUS_TEXT[entry.status]}`);
+  }
+
+  if (recreated.length === 0) {
+    lines.push(formatNothingRecreatedVerdict(audit));
+  } else {
+    lines.push(...formatRecreatedSection(recreated));
+  }
   return lines.join('\n');
 }

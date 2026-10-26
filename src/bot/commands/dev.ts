@@ -543,6 +543,104 @@ async function handleLogs(ctx: Ctx['Command'], args: string[], _groupId: number)
   }
 }
 
+/** Pipeline actions that answer the callback with a fixed text and then remove the button message. */
+const SIMPLE_DEV_ACTIONS = new Map<
+  string,
+  { run: (pl: DevPipeline, taskId: number) => Promise<unknown>; reply: string }
+>([
+  ['approve', { run: (pl, id) => pl.approveTask(id), reply: 'Approved!' }],
+  ['reject', { run: (pl, id) => pl.cancelTask(id), reply: 'Cancelled' }],
+  ['cancel', { run: (pl, id) => pl.cancelTask(id), reply: 'Cancelled' }],
+  ['accept_review', { run: (pl, id) => pl.acceptReview(id), reply: 'Fixing review issues...' }],
+  ['merge', { run: (pl, id) => pl.mergeTask(id), reply: 'Merging...' }],
+]);
+
+/** Whether the callback's button message should be deleted once the action finished. */
+type ButtonFate = 'delete' | 'keep';
+
+/** Set once the callback query has been answered, so the error path never answers twice. */
+type AnswerTracker = { answered: boolean };
+
+async function deleteButtonMessage(
+  bot: BotInstance,
+  chatId: number | undefined,
+  messageId: number | undefined,
+): Promise<void> {
+  if (!messageId || !chatId) return;
+  try {
+    await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  } catch {
+    // Expected: message may already be deleted
+  }
+}
+
+/** "Edit" button: remember the task and ask the user (force-reply) what to change. */
+async function handleDevEditAction(
+  ctx: Ctx['CallbackQuery'],
+  taskId: number,
+  chatId: number | undefined,
+  ack: AnswerTracker,
+): Promise<void> {
+  if (!chatId) {
+    await ctx.answerCallbackQuery({ text: 'No chat context' });
+    return;
+  }
+  const editTask = database.devTasks.findById(taskId);
+  logger.info(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
+  pendingDesignEdits.set(chatId, taskId);
+  await ctx.answerCallbackQuery({ text: 'Опишите правки' });
+  ack.answered = true;
+
+  const isDesignEdit = editTask?.state === DevTaskState.APPROVAL;
+  const promptText = isDesignEdit
+    ? `✏️ Опишите, что изменить в дизайне задачи #${taskId}:`
+    : `✏️ Опишите, что изменить в коде задачи #${taskId}:`;
+
+  await sendMessage(promptText, {
+    reply_markup: { force_reply: true, selective: true },
+  });
+  logger.info(`[DEV-CB] Edit force_reply sent for task #${taskId}`);
+}
+
+type DevCallbackTarget = {
+  ctx: Ctx['CallbackQuery'];
+  bot: BotInstance;
+  pipeline: DevPipeline;
+  subAction: string;
+  taskId: number;
+  chatId: number | undefined;
+  messageId: number | undefined;
+};
+
+/** Run one dev callback action; the returned fate says whether to delete the button message. */
+async function runDevAction(target: DevCallbackTarget, ack: AnswerTracker): Promise<ButtonFate> {
+  const { ctx, bot, pipeline, subAction, taskId, chatId, messageId } = target;
+
+  const simple = SIMPLE_DEV_ACTIONS.get(subAction);
+  if (simple) {
+    await simple.run(pipeline, taskId);
+    await ctx.answerCallbackQuery({ text: simple.reply });
+    ack.answered = true;
+    return 'delete';
+  }
+
+  if (subAction === 'hide_plan') {
+    await ctx.answerCallbackQuery({ text: 'OK' });
+    ack.answered = true;
+    await deleteButtonMessage(bot, chatId, messageId);
+    return 'keep';
+  }
+
+  if (subAction === 'edit') {
+    await handleDevEditAction(ctx, taskId, chatId, ack);
+    return 'keep'; // Don't delete the button message
+  }
+
+  await ctx.answerCallbackQuery({ text: 'Unknown action' });
+  ack.answered = true;
+  return 'delete';
+}
+
 /**
  * Handle dev task callback queries (approval buttons etc.)
  */
@@ -579,76 +677,16 @@ export async function handleDevCallback(
     return;
   }
 
-  let answered = false;
+  const ack: AnswerTracker = { answered: false };
+  let fate: ButtonFate = 'delete';
   try {
-    switch (subAction) {
-      case 'approve':
-        await pl.approveTask(taskId);
-        await ctx.answerCallbackQuery({ text: 'Approved!' });
-        answered = true;
-        break;
-
-      case 'reject':
-      case 'cancel':
-        await pl.cancelTask(taskId);
-        await ctx.answerCallbackQuery({ text: 'Cancelled' });
-        answered = true;
-        break;
-
-      case 'hide_plan':
-        await ctx.answerCallbackQuery({ text: 'OK' });
-        answered = true;
-        if (messageId && chatId) {
-          try {
-            await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-          } catch {
-            // Expected: message may already be deleted
-          }
-        }
-        return;
-
-      case 'accept_review':
-        await pl.acceptReview(taskId);
-        await ctx.answerCallbackQuery({ text: 'Fixing review issues...' });
-        answered = true;
-        break;
-
-      case 'merge':
-        await pl.mergeTask(taskId);
-        await ctx.answerCallbackQuery({ text: 'Merging...' });
-        answered = true;
-        break;
-
-      case 'edit': {
-        if (!chatId) {
-          await ctx.answerCallbackQuery({ text: 'No chat context' });
-          return;
-        }
-        const editTask = database.devTasks.findById(taskId);
-        logger.info(`[DEV-CB] Edit task #${taskId}, state: ${editTask?.state}, chatId: ${chatId}`);
-        pendingDesignEdits.set(chatId, taskId);
-        await ctx.answerCallbackQuery({ text: 'Опишите правки' });
-        answered = true;
-
-        const isDesignEdit = editTask?.state === DevTaskState.APPROVAL;
-        const promptText = isDesignEdit
-          ? `✏️ Опишите, что изменить в дизайне задачи #${taskId}:`
-          : `✏️ Опишите, что изменить в коде задачи #${taskId}:`;
-
-        await sendMessage(promptText, {
-          reply_markup: { force_reply: true, selective: true },
-        });
-        logger.info(`[DEV-CB] Edit force_reply sent for task #${taskId}`);
-        return; // Don't delete the button message
-      }
-
-      default:
-        await ctx.answerCallbackQuery({ text: 'Unknown action' });
-        answered = true;
-    }
+    fate = await runDevAction(
+      { ctx, bot, pipeline: pl, subAction, taskId, chatId, messageId },
+      ack,
+    );
   } catch (error) {
     logger.error({ err: error }, `[DEV-CB] Error handling dev:${subAction}:${taskIdStr}`);
-    if (!answered) {
+    if (!ack.answered) {
       try {
         await ctx.answerCallbackQuery({
           text: `Error: ${getErrorMessage(error)}`,
@@ -659,12 +697,7 @@ export async function handleDevCallback(
     }
   }
 
-  // Delete the button message
-  if (messageId && chatId) {
-    try {
-      await bot.api.deleteMessage({ chat_id: chatId, message_id: messageId });
-    } catch {
-      // Expected: message may already be deleted
-    }
+  if (fate === 'delete') {
+    await deleteButtonMessage(bot, chatId, messageId);
   }
 }

@@ -48,6 +48,44 @@ function makeDbExpenseKey(expense: Expense): string {
   return makeExpenseKey(expense.date, expense.category, expense.amount, expense.currency);
 }
 
+/** Keys of all single-currency rows already present in the sheet. */
+function collectExistingSheetKeys(rows: SheetRow[]): Set<string> {
+  const existingKeys = new Set<string>();
+  for (const row of rows) {
+    const key = makeSheetRowKey(row);
+    if (key) {
+      existingKeys.add(key);
+    }
+  }
+  return existingKeys;
+}
+
+/** Push each expense one by one; a failure on one does not stop the rest. */
+async function pushExpensesToSheet(
+  groupId: number,
+  expensesToAdd: Expense[],
+): Promise<{ addedCount: number; errorCount: number }> {
+  const recorder = getExpenseRecorder();
+  let addedCount = 0;
+  let errorCount = 0;
+
+  for (const expense of expensesToAdd) {
+    try {
+      await recorder.pushToSheet(groupId, [expense]);
+      addedCount++;
+
+      // Log progress every 10 items
+      if (addedCount % 10 === 0) {
+        logger.info(`[PUSH] Progress: ${addedCount}/${expensesToAdd.length}`);
+      }
+    } catch (err) {
+      errorCount++;
+      logger.error({ err: err }, `[PUSH] Failed to add expense ${expense.id}`);
+    }
+  }
+  return { addedCount, errorCount };
+}
+
 /**
  * /push command handler - push expenses from database to Google Sheet
  */
@@ -74,23 +112,12 @@ export async function handlePushCommand(
       logger.warn(`[PUSH] ${sheetExpenses.errors.length} rows with multi-currency amounts skipped`);
     }
 
-    // Create set of existing keys in sheet
-    const existingKeys = new Set<string>();
-    for (const row of sheetExpenses.expenses) {
-      const key = makeSheetRowKey(row);
-      if (key) {
-        existingKeys.add(key);
-      }
-    }
+    const existingKeys = collectExistingSheetKeys(sheetExpenses.expenses);
 
     // Filter DB expenses that don't exist in sheet
-    const expensesToAdd: Expense[] = [];
-    for (const expense of dbExpenses) {
-      const key = makeDbExpenseKey(expense);
-      if (!existingKeys.has(key)) {
-        expensesToAdd.push(expense);
-      }
-    }
+    const expensesToAdd = dbExpenses.filter(
+      (expense) => !existingKeys.has(makeDbExpenseKey(expense)),
+    );
 
     logger.info(
       `[PUSH] ${expensesToAdd.length} expenses to add (${dbExpenses.length - expensesToAdd.length} already in sheet)`,
@@ -108,25 +135,7 @@ export async function handlePushCommand(
 
     await sendMessage(`📤 Добавляю ${expensesToAdd.length} записей в таблицу...`);
 
-    // Push expenses to sheet via ExpenseRecorder
-    const recorder = getExpenseRecorder();
-    let addedCount = 0;
-    let errorCount = 0;
-
-    for (const expense of expensesToAdd) {
-      try {
-        await recorder.pushToSheet(group.id, [expense]);
-        addedCount++;
-
-        // Log progress every 10 items
-        if (addedCount % 10 === 0) {
-          logger.info(`[PUSH] Progress: ${addedCount}/${expensesToAdd.length}`);
-        }
-      } catch (err) {
-        errorCount++;
-        logger.error({ err: err }, `[PUSH] Failed to add expense ${expense.id}`);
-      }
-    }
+    const { addedCount, errorCount } = await pushExpensesToSheet(group.id, expensesToAdd);
 
     logger.info(`[PUSH] ✅ Push completed: ${addedCount} added, ${errorCount} errors`);
 
