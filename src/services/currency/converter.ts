@@ -85,6 +85,60 @@ interface ExchangeRateAPIResponse {
   rates: Record<string, number>;
 }
 
+/** Currencies listed in the fetch log, with the decimals used to print each rate. */
+const LOGGED_RATE_DECIMALS: ReadonlyArray<[CurrencyCode, number]> = [
+  ['USD', 4],
+  ['RSD', 6],
+  ['RUB', 6],
+  ['GBP', 4],
+  ['BYN', 4],
+  ['CHF', 4],
+  ['JPY', 6],
+  ['CNY', 4],
+  ['INR', 6],
+  ['LKR', 6],
+  ['AED', 4],
+  ['EGP', 6],
+];
+
+/** Supported currencies other than the base, in the order rate tables are built. */
+const NON_BASE_CURRENCIES = SUPPORTED_CURRENCIES.filter(
+  (currency): currency is Exclude<CurrencyCode, 'EUR'> => currency !== 'EUR',
+);
+
+/** API gives "1 EUR = X currency"; invert to "1 currency = 1/X EUR" (missing rate → 1). */
+function buildEurRates(apiRates: Record<string, number>): Record<CurrencyCode, number> {
+  const rates = { EUR: 1.0 } as Record<CurrencyCode, number>;
+  for (const currency of NON_BASE_CURRENCIES) {
+    rates[currency] = 1 / (apiRates[currency] || 1);
+  }
+  return rates;
+}
+
+/**
+ * String-precision rates for Big.js arithmetic: "1 currency = 1/X EUR" computed via Big.js
+ * division to avoid float imprecision in convertCurrencyBig.
+ */
+function buildRateStrings(apiRates: Record<string, number>): Record<CurrencyCode, string> {
+  const rates = { EUR: '1' } as Record<CurrencyCode, string>;
+  for (const currency of NON_BASE_CURRENCIES) {
+    rates[currency] = new Big(1).div(new Big(String(apiRates[currency] || 1))).toFixed(15);
+  }
+  return rates;
+}
+
+/** Rates for known currencies only — populated lazily as new currencies are encountered. */
+function buildKnownRates(apiRates: Record<string, number>): Record<string, number> {
+  const allRates: Record<string, number> = { EUR: 1.0 };
+  for (const currency of knownCurrencies) {
+    const apiRate = apiRates[currency];
+    if (typeof apiRate === 'number' && apiRate > 0) {
+      allRates[currency] = 1 / apiRate;
+    }
+  }
+  return allRates;
+}
+
 /**
  * Fetch exchange rates from API
  * Using exchangerate-api.com (free, no API key required)
@@ -110,67 +164,15 @@ async function fetchExchangeRates(): Promise<Record<CurrencyCode, number> | null
     }
 
     // Convert from "1 EUR = X OTHER" to "1 OTHER = X EUR"
-    const rates: Record<CurrencyCode, number> = {
-      EUR: 1.0,
-      USD: 1 / (data.rates['USD'] || 1),
-      RUB: 1 / (data.rates['RUB'] || 1),
-      RSD: 1 / (data.rates['RSD'] || 1),
-      GBP: 1 / (data.rates['GBP'] || 1),
-      BYN: 1 / (data.rates['BYN'] || 1),
-      CHF: 1 / (data.rates['CHF'] || 1),
-      JPY: 1 / (data.rates['JPY'] || 1),
-      CNY: 1 / (data.rates['CNY'] || 1),
-      INR: 1 / (data.rates['INR'] || 1),
-      LKR: 1 / (data.rates['LKR'] || 1),
-      AED: 1 / (data.rates['AED'] || 1),
-      EGP: 1 / (data.rates['EGP'] || 1),
-    };
-
-    // Build string-precision rates for Big.js arithmetic.
-    // API gives "1 EUR = X currency" → we compute "1 currency = 1/X EUR" via Big.js division
-    // to avoid float imprecision in convertCurrencyBig.
-    const toRateStr = (apiKey: string): string =>
-      new Big(1).div(new Big(String(data.rates[apiKey] || 1))).toFixed(15);
-    cachedRatesStr = {
-      EUR: '1',
-      USD: toRateStr('USD'),
-      RUB: toRateStr('RUB'),
-      RSD: toRateStr('RSD'),
-      GBP: toRateStr('GBP'),
-      BYN: toRateStr('BYN'),
-      CHF: toRateStr('CHF'),
-      JPY: toRateStr('JPY'),
-      CNY: toRateStr('CNY'),
-      INR: toRateStr('INR'),
-      LKR: toRateStr('LKR'),
-      AED: toRateStr('AED'),
-      EGP: toRateStr('EGP'),
-    };
-
-    // Store rates for known currencies only — populated lazily as new currencies are encountered.
-    const allRates: Record<string, number> = { EUR: 1.0 };
-    for (const currency of knownCurrencies) {
-      const apiRate = data.rates[currency];
-      if (typeof apiRate === 'number' && apiRate > 0) {
-        allRates[currency] = 1 / apiRate;
-      }
-    }
-    cachedAllRates = allRates;
+    const rates = buildEurRates(data.rates);
+    cachedRatesStr = buildRateStrings(data.rates);
+    cachedAllRates = buildKnownRates(data.rates);
 
     logger.info('[CURRENCY] ✅ Successfully fetched exchange rates from API');
     logger.info('[CURRENCY] Exchange rates (to EUR):');
-    logger.info(`  /1 USD = €${(1 / rates.USD).toFixed(4)}`);
-    logger.info(`  /1 RSD = €${(1 / rates.RSD).toFixed(6)}`);
-    logger.info(`  /1 RUB = €${(1 / rates.RUB).toFixed(6)}`);
-    logger.info(`  /1 GBP = €${(1 / rates.GBP).toFixed(4)}`);
-    logger.info(`  /1 BYN = €${(1 / rates.BYN).toFixed(4)}`);
-    logger.info(`  /1 CHF = €${(1 / rates.CHF).toFixed(4)}`);
-    logger.info(`  /1 JPY = €${(1 / rates.JPY).toFixed(6)}`);
-    logger.info(`  /1 CNY = €${(1 / rates.CNY).toFixed(4)}`);
-    logger.info(`  /1 INR = €${(1 / rates.INR).toFixed(6)}`);
-    logger.info(`  /1 LKR = €${(1 / rates.LKR).toFixed(6)}`);
-    logger.info(`  /1 AED = €${(1 / rates.AED).toFixed(4)}`);
-    logger.info(`  /1 EGP = €${(1 / rates.EGP).toFixed(6)}`);
+    for (const [currency, decimals] of LOGGED_RATE_DECIMALS) {
+      logger.info(`  /1 ${currency} = €${(1 / rates[currency]).toFixed(decimals)}`);
+    }
 
     return rates;
   } catch (error) {

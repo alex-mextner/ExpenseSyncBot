@@ -26,15 +26,24 @@ function isOperator(t: string): t is MathOperator {
  * Returns null if the expression is structurally invalid.
  */
 function tokenize(expr: string): MathToken[] | null {
+  const tokens = scanTokens(expr);
+  if (!tokens) return null;
+
+  // Must alternate number-operator-number: minimum 3 tokens, always odd count
+  if (tokens.length < 3 || tokens.length % 2 === 0) return null;
+  return tokens.every((tok, i) => (i % 2 === 0 ? !isOperator(tok) : isOperator(tok)))
+    ? tokens
+    : null;
+}
+
+/** Split into number strings (comma → dot) and operators (× → *); null on an unparseable number. */
+function scanTokens(expr: string): MathToken[] | null {
   const tokens: MathToken[] = [];
   const regex = /(\d+(?:[.,]\d+)?)|([+\-*×/])/g;
 
   for (const match of expr.matchAll(regex)) {
     if (match[1]) {
-      let numStr = match[1];
-      if (numStr.includes(',')) {
-        numStr = numStr.replace(',', '.');
-      }
+      const numStr = match[1].includes(',') ? match[1].replace(',', '.') : match[1];
       if (Number.isNaN(parseFloat(numStr))) return null;
       tokens.push(numStr);
     } else if (match[2]) {
@@ -42,20 +51,8 @@ function tokenize(expr: string): MathToken[] | null {
       tokens.push(op as MathToken);
     }
   }
-
-  // Must alternate number-operator-number: minimum 3 tokens, always odd count
-  if (tokens.length < 3 || tokens.length % 2 === 0) return null;
-
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i] as string;
-    const isNum = i % 2 === 0;
-    if (isNum && isOperator(tok)) return null;
-    if (!isNum && !isOperator(tok)) return null;
-  }
-
   return tokens;
 }
-
 /**
  * Evaluate tokens with standard operator precedence (* / before + -).
  * Returns null on division by zero or Big.js error.
@@ -64,43 +61,52 @@ function evaluateTokens(tokens: MathToken[]): Big | null {
   if (!tokens || tokens.length === 0) return null;
 
   try {
-    // Phase 1: apply * and / immediately (higher precedence)
-    const values: Big[] = [new Big(tokens[0] as string)];
-    const ops: string[] = [];
-
-    let i = 1;
-    while (i < tokens.length - 1) {
-      const op = tokens[i] as string;
-      const right = new Big(tokens[i + 1] as string);
-
-      if (op === '*' || op === '/') {
-        const left = values[values.length - 1] as Big;
-        if (op === '/') {
-          if (right.eq(0)) return null;
-          values[values.length - 1] = left.div(right);
-        } else {
-          values[values.length - 1] = left.times(right);
-        }
-      } else {
-        ops.push(op);
-        values.push(right);
-      }
-      i += 2;
-    }
-
-    // Phase 2: apply + and - (lower precedence, left to right)
-    let result = values[0] as Big;
-    for (let j = 0; j < ops.length; j++) {
-      const op = ops[j] as string;
-      const right = values[j + 1] as Big;
-      if (op === '+') result = result.plus(right);
-      else if (op === '-') result = result.minus(right);
-    }
-
-    return result;
+    const reduced = applyMultiplicativeOperators(tokens);
+    if (reduced === null) return null;
+    return applyAdditiveOperators(reduced.values, reduced.ops);
   } catch {
     return null;
   }
+}
+
+/**
+ * Phase 1: apply * and / immediately (higher precedence), leaving the + / - operators and the
+ * operands between them. Returns null on division by zero.
+ */
+function applyMultiplicativeOperators(
+  tokens: MathToken[],
+): { values: Big[]; ops: string[] } | null {
+  const values: Big[] = [new Big(tokens[0] as string)];
+  const ops: string[] = [];
+
+  for (let i = 1; i < tokens.length - 1; i += 2) {
+    const op = tokens[i] as string;
+    const right = new Big(tokens[i + 1] as string);
+
+    if (op !== '*' && op !== '/') {
+      ops.push(op);
+      values.push(right);
+      continue;
+    }
+
+    const left = values[values.length - 1] as Big;
+    if (op === '/' && right.eq(0)) return null;
+    values[values.length - 1] = op === '/' ? left.div(right) : left.times(right);
+  }
+
+  return { values, ops };
+}
+
+/** Phase 2: apply + and - (lower precedence, left to right). */
+function applyAdditiveOperators(values: Big[], ops: string[]): Big {
+  let result = values[0] as Big;
+  for (let j = 0; j < ops.length; j++) {
+    const op = ops[j] as string;
+    const right = values[j + 1] as Big;
+    if (op === '+') result = result.plus(right);
+    else if (op === '-') result = result.minus(right);
+  }
+  return result;
 }
 
 /**
@@ -172,96 +178,67 @@ export function parseExpenseMessage(
     return null;
   }
 
-  // Pattern 1: Currency symbol before amount ($190, €100, ₽500, $10*3)
-  const pattern1 = /^([$€£₽¥])\s*([\d\s,.+*×/]+)\s*(.+)?$/;
-  const match1 = trimmed.match(pattern1);
+  return (
+    parseSymbolBeforeAmount(trimmed) ??
+    parseCurrencyAfterAmount(trimmed) ??
+    parseAmountOnly(trimmed, defaultCurrency) ??
+    parseCyrillicLetterCurrency(trimmed)
+  );
+}
 
-  if (match1) {
-    const [, currencySymbol, amountStr, rest] = match1;
-    if (!currencySymbol || !amountStr) return null;
-    const normalizedCurrency = normalizeCurrency(currencySymbol);
+/** Assemble a ParsedExpense from the matched pieces; null if amount or currency is invalid. */
+function buildParsedExpense(
+  raw: string,
+  amountStr: string,
+  currency: CurrencyCode | null,
+  rest: string,
+): ParsedExpense | null {
+  if (!currency) return null;
+  const amount = parseAmount(amountStr);
+  if (amount === null) return null;
 
-    if (normalizedCurrency) {
-      const amount = parseAmount(amountStr);
-      if (amount !== null) {
-        const { category, comment } = parseRest(rest || '');
-        return {
-          amount,
-          currency: normalizedCurrency,
-          category,
-          comment,
-          raw: trimmed,
-        };
-      }
-    }
-  }
+  const { category, comment } = parseRest(rest);
+  return { amount, currency, category, comment, raw };
+}
 
-  // Pattern 2: Amount with currency symbol/code after (190€, 100$, 1900RSD, 190 евро, 10*3$)
-  const pattern2 = /^([\d\s,.+*×/]+)\s*([а-яА-ЯёЁa-zA-Z$€£₽¥]+)\s+(.+)$/;
-  const match2 = trimmed.match(pattern2);
+// Pattern 1: Currency symbol before amount ($190, €100, ₽500, $10*3)
+function parseSymbolBeforeAmount(trimmed: string): ParsedExpense | null {
+  const match = trimmed.match(/^([$€£₽¥])\s*([\d\s,.+*×/]+)\s*(.+)?$/);
+  if (!match) return null;
 
-  if (match2) {
-    const [, amountStr, currencyStr, rest] = match2;
-    if (!amountStr || !currencyStr || !rest) return null;
-    const amount = parseAmount(amountStr);
-    const normalizedCurrency = normalizeCurrency(currencyStr);
+  const [, currencySymbol, amountStr, rest] = match;
+  if (!currencySymbol || !amountStr) return null;
+  return buildParsedExpense(trimmed, amountStr, normalizeCurrency(currencySymbol), rest || '');
+}
 
-    if (amount !== null && normalizedCurrency) {
-      const { category, comment } = parseRest(rest);
-      return {
-        amount,
-        currency: normalizedCurrency,
-        category,
-        comment,
-        raw: trimmed,
-      };
-    }
-  }
+// Pattern 2: Amount with currency symbol/code after (190€, 100$, 1900RSD, 190 евро, 10*3$)
+function parseCurrencyAfterAmount(trimmed: string): ParsedExpense | null {
+  const match = trimmed.match(/^([\d\s,.+*×/]+)\s*([а-яА-ЯёЁa-zA-Z$€£₽¥]+)\s+(.+)$/);
+  if (!match) return null;
 
-  // Pattern 3: Amount only (use default currency), must start with digit
-  const pattern3 = /^(\d[\d\s,.+*×/]*)\s+(.+)$/;
-  const match3 = trimmed.match(pattern3);
+  const [, amountStr, currencyStr, rest] = match;
+  if (!amountStr || !currencyStr || !rest) return null;
+  return buildParsedExpense(trimmed, amountStr, normalizeCurrency(currencyStr), rest);
+}
 
-  if (match3) {
-    const [, amountStr, rest] = match3;
-    if (!amountStr || !rest) return null;
-    const amount = parseAmount(amountStr);
+// Pattern 3: Amount only (use default currency), must start with digit
+function parseAmountOnly(trimmed: string, defaultCurrency: CurrencyCode): ParsedExpense | null {
+  const match = trimmed.match(/^(\d[\d\s,.+*×/]*)\s+(.+)$/);
+  if (!match) return null;
 
-    if (amount !== null) {
-      const { category, comment } = parseRest(rest);
-      return {
-        amount,
-        currency: defaultCurrency,
-        category,
-        comment,
-        raw: trimmed,
-      };
-    }
-  }
+  const [, amountStr, rest] = match;
+  if (!amountStr || !rest) return null;
+  return buildParsedExpense(trimmed, amountStr, defaultCurrency, rest);
+}
 
-  // Pattern 4: Currency symbol after, no space (190е, 100д, 10*3д)
-  const pattern4 = /^([\d\s,.+*×/]+)([а-яА-ЯёЁ])\s+(.+)$/;
-  const match4 = trimmed.match(pattern4);
+// Pattern 4: Currency symbol after, no space (190е, 100д, 10*3д)
+function parseCyrillicLetterCurrency(trimmed: string): ParsedExpense | null {
+  const match = trimmed.match(/^([\d\s,.+*×/]+)([а-яА-ЯёЁ])\s+(.+)$/);
+  if (!match) return null;
 
-  if (match4) {
-    const [, amountStr, currencyLetter, rest] = match4;
-    if (!amountStr || !currencyLetter || !rest) return null;
-    const amount = parseAmount(amountStr);
-    const normalizedCurrency = normalizeCurrency(currencyLetter);
-
-    if (amount !== null && normalizedCurrency) {
-      const { category, comment } = parseRest(rest);
-      return {
-        amount,
-        currency: normalizedCurrency,
-        category,
-        comment,
-        raw: trimmed,
-      };
-    }
-  }
-
-  return null;
+  const [, amountStr, currencyLetter, rest] = match;
+  if (!amountStr || !currencyLetter || !rest) return null;
+  return buildParsedExpense(trimmed, amountStr, normalizeCurrency(currencyLetter), rest);
 }
 
 /**

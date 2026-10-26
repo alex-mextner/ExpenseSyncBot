@@ -7,6 +7,124 @@ import { createLogger } from '../../utils/logger.ts';
 
 const logger = createLogger('qr-scanner');
 
+interface ImageVariant {
+  name: string;
+  process: (img: Sharp) => Sharp;
+}
+
+// Image processing variants tried in order; QR detection is sensitive to size and contrast.
+const IMAGE_VARIANTS: ImageVariant[] = [
+  // 1. Small with high contrast and sharpening
+  {
+    name: '500px+sharp+contrast',
+    process: (img: Sharp) =>
+      img
+        .resize(500, 500, { fit: 'inside', withoutEnlargement: true })
+        .sharpen()
+        .normalize()
+        .grayscale(),
+  },
+  // 2. Medium with sharpening
+  {
+    name: '800px+sharp',
+    process: (img: Sharp) =>
+      img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }).sharpen().normalize(),
+  },
+  // 3. Original with sharpening
+  {
+    name: 'original+sharp',
+    process: (img: Sharp) => img.sharpen().normalize(),
+  },
+  // 4. Medium size basic
+  {
+    name: '800px',
+    process: (img: Sharp) => img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }),
+  },
+  // 5. Small size basic
+  {
+    name: '500px',
+    process: (img: Sharp) => img.resize(500, 500, { fit: 'inside', withoutEnlargement: true }),
+  },
+  // 6. Extreme contrast
+  {
+    name: 'extreme-contrast',
+    process: (img: Sharp) =>
+      img
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .grayscale()
+        .normalize()
+        .linear(1.5, -(128 * 0.5)), // Increase contrast
+  },
+  // 7. Original size
+  {
+    name: 'original',
+    process: (img: Sharp) => img,
+  },
+];
+
+/** Log a successful decode: length and a 200-char preview of the payload. */
+function logQRFound(source: string, qrData: string): void {
+  logger.info(`[QR_SCANNER] ✅ QR code found with ${source}! Length: ${qrData.length} chars`);
+  logger.info(
+    `[QR_SCANNER] QR data preview: ${qrData.substring(0, 200)}${qrData.length > 200 ? '...' : ''}`,
+  );
+}
+
+/** Run one image variant through sharp + the qr decoder; null when no QR could be decoded. */
+async function decodeVariant(imageBuffer: Buffer, variant: ImageVariant): Promise<string | null> {
+  logger.info(`[QR_SCANNER] Trying variant: ${variant.name}`);
+
+  // Process image
+  const { data, info } = await variant
+    .process(sharp(imageBuffer))
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  logger.info(
+    `[QR_SCANNER] Image converted: ${info.width}x${info.height}, ${info.channels} channels`,
+  );
+
+  // Create Uint8ClampedArray for qr library
+  const imageData = new Uint8ClampedArray(data.buffer);
+
+  // Scan for QR code with debug callbacks
+  let patternsDetected = false;
+  let qrExtracted = false;
+
+  const opts: DecodeOpts = {
+    pointsOnDetect: (points: FinderPoints) => {
+      patternsDetected = true;
+      logger.info(
+        `[QR_SCANNER] 🎯 Patterns detected at: ${points.map((p) => `(${p.x},${p.y})`).join(', ')}`,
+      );
+    },
+    imageOnDetect: (img: Image) => {
+      qrExtracted = true;
+      logger.info(`[QR_SCANNER] 📦 QR image extracted: ${img.width}x${img.height}`);
+    },
+  };
+
+  const qrData = decodeQR({ width: info.width, height: info.height, data: imageData }, opts);
+
+  if (qrData) {
+    logQRFound(`variant: ${variant.name}`, qrData);
+    return qrData;
+  }
+
+  // Enhanced error reporting
+  if (patternsDetected) {
+    logger.info(`[QR_SCANNER] ⚠️ Patterns detected but decoding failed (${variant.name})`);
+  } else {
+    logger.info(`[QR_SCANNER] ❌ No QR patterns found (${variant.name})`);
+  }
+
+  if (qrExtracted) {
+    logger.info(`[QR_SCANNER] ⚠️ QR image extracted but data decoding failed (${variant.name})`);
+  }
+  return null;
+}
+
 /**
  * Scan QR code from image buffer
  * @param imageBuffer - Image buffer (from Telegram file download)
@@ -15,120 +133,10 @@ const logger = createLogger('qr-scanner');
 export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | null> {
   logger.info(`[QR_SCANNER] Processing image buffer: ${imageBuffer.length} bytes`);
 
-  // Try multiple image processing variants
-  const variants = [
-    // 1. Small with high contrast and sharpening
-    {
-      name: '500px+sharp+contrast',
-      process: (img: Sharp) =>
-        img
-          .resize(500, 500, { fit: 'inside', withoutEnlargement: true })
-          .sharpen()
-          .normalize()
-          .grayscale(),
-    },
-    // 2. Medium with sharpening
-    {
-      name: '800px+sharp',
-      process: (img: Sharp) =>
-        img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }).sharpen().normalize(),
-    },
-    // 3. Original with sharpening
-    {
-      name: 'original+sharp',
-      process: (img: Sharp) => img.sharpen().normalize(),
-    },
-    // 4. Medium size basic
-    {
-      name: '800px',
-      process: (img: Sharp) => img.resize(800, 800, { fit: 'inside', withoutEnlargement: true }),
-    },
-    // 5. Small size basic
-    {
-      name: '500px',
-      process: (img: Sharp) => img.resize(500, 500, { fit: 'inside', withoutEnlargement: true }),
-    },
-    // 6. Extreme contrast
-    {
-      name: 'extreme-contrast',
-      process: (img: Sharp) =>
-        img
-          .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-          .grayscale()
-          .normalize()
-          .linear(1.5, -(128 * 0.5)), // Increase contrast
-    },
-    // 7. Original size
-    {
-      name: 'original',
-      process: (img: Sharp) => img,
-    },
-  ];
-
-  for (const variant of variants) {
+  for (const variant of IMAGE_VARIANTS) {
     try {
-      logger.info(`[QR_SCANNER] Trying variant: ${variant.name}`);
-
-      // Process image
-      const { data, info } = await variant
-        .process(sharp(imageBuffer))
-        .ensureAlpha()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-      logger.info(
-        `[QR_SCANNER] Image converted: ${info.width}x${info.height}, ${info.channels} channels`,
-      );
-
-      // Create Uint8ClampedArray for qr library
-      const imageData = new Uint8ClampedArray(data.buffer);
-
-      // Scan for QR code with debug callbacks
-      let patternsDetected = false;
-      let qrExtracted = false;
-
-      const opts: DecodeOpts = {
-        pointsOnDetect: (points: FinderPoints) => {
-          patternsDetected = true;
-          logger.info(
-            `[QR_SCANNER] 🎯 Patterns detected at: ${points.map((p) => `(${p.x},${p.y})`).join(', ')}`,
-          );
-        },
-        imageOnDetect: (img: Image) => {
-          qrExtracted = true;
-          logger.info(`[QR_SCANNER] 📦 QR image extracted: ${img.width}x${img.height}`);
-        },
-      };
-
-      const qrData = decodeQR(
-        {
-          width: info.width,
-          height: info.height,
-          data: imageData,
-        },
-        opts,
-      );
-
-      if (qrData) {
-        logger.info(
-          `[QR_SCANNER] ✅ QR code found with variant: ${variant.name}! Length: ${qrData.length} chars`,
-        );
-        logger.info(
-          `[QR_SCANNER] QR data preview: ${qrData.substring(0, 200)}${qrData.length > 200 ? '...' : ''}`,
-        );
-        return qrData;
-      }
-
-      // Enhanced error reporting
-      if (patternsDetected) {
-        logger.info(`[QR_SCANNER] ⚠️ Patterns detected but decoding failed (${variant.name})`);
-      } else {
-        logger.info(`[QR_SCANNER] ❌ No QR patterns found (${variant.name})`);
-      }
-
-      if (qrExtracted) {
-        logger.info(`[QR_SCANNER] ⚠️ QR image extracted but data decoding failed (${variant.name})`);
-      }
+      const qrData = await decodeVariant(imageBuffer, variant);
+      if (qrData) return qrData;
     } catch (error) {
       const errorMsg = getErrorMessage(error);
       logger.info(`[QR_SCANNER] Variant ${variant.name} failed: ${errorMsg}`);
@@ -142,12 +150,7 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
   try {
     const apiResult = await scanQRWithExternalAPI(imageBuffer);
     if (apiResult) {
-      logger.info(
-        `[QR_SCANNER] ✅ QR code found with external API! Length: ${apiResult.length} chars`,
-      );
-      logger.info(
-        `[QR_SCANNER] QR data preview: ${apiResult.substring(0, 200)}${apiResult.length > 200 ? '...' : ''}`,
-      );
+      logQRFound('external API', apiResult);
       return apiResult;
     }
   } catch (error) {
@@ -156,7 +159,7 @@ export async function scanQRFromImage(imageBuffer: Buffer): Promise<string | nul
   }
 
   logger.info(
-    `[QR_SCANNER] ❌ No QR code found after trying all ${variants.length} local variants + external API`,
+    `[QR_SCANNER] ❌ No QR code found after trying all ${IMAGE_VARIANTS.length} local variants + external API`,
   );
   return null;
 }

@@ -169,6 +169,30 @@ interface ZeroShotResponse {
   scores: number[];
 }
 
+/** Count a classifier failure and open the circuit breaker once the threshold is reached. */
+function recordClassifierFailure(): void {
+  circuitFailures++;
+  if (circuitFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+    circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+    logger.warn(
+      { failures: circuitFailures },
+      `classifier circuit breaker opened for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`,
+    );
+  }
+}
+
+/** Highest-scored label, if its score clears CLASSIFIER_MIN_SCORE. */
+function pickTopLabel(input: string, result: ZeroShotResponse): string | null {
+  const topLabel = result.labels[0];
+  const topScore = result.scores[0];
+
+  if (topLabel && topScore !== undefined && topScore >= CLASSIFIER_MIN_SCORE) {
+    logger.debug({ input, match: topLabel, score: topScore }, 'classifier match');
+    return topLabel;
+  }
+  return null;
+}
+
 /**
  * Zero-shot classifier fallback via HF Inference API (direct fetch, no SDK).
  * Calls XNLI model entailment endpoint; returns the highest-scored label above threshold.
@@ -223,39 +247,17 @@ async function classifyCategory(input: string, categories: string[]): Promise<st
           { status: response.status, errorText, input },
           'zero-shot classifier HTTP error',
         );
-        circuitFailures++;
-        if (circuitFailures >= CIRCUIT_BREAKER_THRESHOLD) {
-          circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
-          logger.warn(
-            { failures: circuitFailures },
-            `classifier circuit breaker opened for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`,
-          );
-        }
+        recordClassifierFailure();
         return null;
       }
 
       // Success — reset circuit breaker
       circuitFailures = 0;
 
-      const result = (await response.json()) as ZeroShotResponse;
-      const topLabel = result.labels[0];
-      const topScore = result.scores[0];
-
-      if (topLabel && topScore !== undefined && topScore >= CLASSIFIER_MIN_SCORE) {
-        logger.debug({ input, match: topLabel, score: topScore }, 'classifier match');
-        return topLabel;
-      }
-      return null;
+      return pickTopLabel(input, (await response.json()) as ZeroShotResponse);
     } catch (err) {
       logger.warn({ err, input, attempt }, 'zero-shot classifier failed');
-      circuitFailures++;
-      if (circuitFailures >= CIRCUIT_BREAKER_THRESHOLD) {
-        circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
-        logger.warn(
-          { failures: circuitFailures },
-          `classifier circuit breaker opened for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`,
-        );
-      }
+      recordClassifierFailure();
       return null;
     } finally {
       clearTimeout(timeout);

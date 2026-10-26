@@ -35,6 +35,57 @@ export interface CurrencyExpressionResult {
   hasCurrency: boolean;
 }
 
+const PLAIN_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
+/**
+ * Convert one regex match of AMOUNT_RE to targetCurrency (as a plain decimal string).
+ * Returns null when the alias/amount is not convertible so the caller keeps the original text.
+ */
+function convertAmountMatch(
+  currBefore: string | undefined,
+  numAfterCurr: string,
+  numBeforeCurr: string,
+  currAfter: string,
+  targetCurrency: CurrencyCode,
+): string | null {
+  // Pattern: CURR NUM (e.g. $100) or NUM CURR (e.g. 100$ or 100 EUR)
+  const currencyAlias = currBefore !== undefined ? currBefore : currAfter;
+  const rawAmount = currBefore !== undefined ? numAfterCurr : numBeforeCurr;
+
+  const fromCurrency = CURRENCY_ALIASES[currencyAlias.toLowerCase()] as CurrencyCode | undefined;
+  if (!fromCurrency) return null;
+
+  const amountStr = rawAmount.replace(',', '.');
+  if (Number.isNaN(parseFloat(amountStr))) return null;
+
+  // Use Big for exact decimal arithmetic — no intermediate 2-decimal rounding
+  return convertCurrencyBig(new Big(amountStr), fromCurrency, targetCurrency).toString();
+}
+
+/**
+ * Handle percentage: "EXPR [+-] N%" → evaluate EXPR, then apply percentage.
+ * `pctMatch` is the match of the percentage pattern against the converted expression.
+ */
+function applyPercentage(
+  pctMatch: RegExpMatchArray,
+  hasCurrency: boolean,
+): CurrencyExpressionResult | null {
+  const baseExpr = pctMatch[1]?.trim() ?? '';
+  const op = pctMatch[2];
+  const pctStr = (pctMatch[3] ?? '0').replace(',', '.');
+  if (Number.isNaN(parseFloat(pctStr))) return null;
+
+  // Evaluate base — could be a single converted amount or a full expression
+  const baseValue = PLAIN_NUMBER_RE.test(baseExpr)
+    ? new Big(baseExpr)
+    : evaluateMathExpressionBig(baseExpr);
+  if (baseValue === null) return null;
+
+  const delta = baseValue.times(new Big(pctStr)).div(100);
+  const result = op === '+' ? baseValue.plus(delta) : baseValue.minus(delta);
+  return { value: result, hasCurrency };
+}
+
 /**
  * Evaluate a math expression containing optional currency amounts.
  * All currency amounts are converted to targetCurrency before evaluation.
@@ -60,60 +111,26 @@ export function evaluateCurrencyExpression(
   const converted = expr.replace(
     AMOUNT_RE,
     (match, currBefore, numAfterCurr, numBeforeCurr, currAfter) => {
-      let rawAmount: string;
-      let currencyAlias: string;
-
-      if (currBefore !== undefined) {
-        // Pattern: CURR NUM (e.g. $100)
-        currencyAlias = currBefore;
-        rawAmount = numAfterCurr;
-      } else {
-        // Pattern: NUM CURR (e.g. 100$ or 100 EUR)
-        rawAmount = numBeforeCurr;
-        currencyAlias = currAfter;
-      }
-
-      const fromCurrency = CURRENCY_ALIASES[currencyAlias.toLowerCase()] as
-        | CurrencyCode
-        | undefined;
-      if (!fromCurrency) return match;
-
-      const amountStr = rawAmount.replace(',', '.');
-      if (Number.isNaN(parseFloat(amountStr))) return match;
-
+      const replacement = convertAmountMatch(
+        currBefore,
+        numAfterCurr,
+        numBeforeCurr,
+        currAfter,
+        targetCurrency,
+      );
+      if (replacement === null) return match;
       anyCurrencyReplaced = true;
-      // Use Big for exact decimal arithmetic — no intermediate 2-decimal rounding
-      return convertCurrencyBig(new Big(amountStr), fromCurrency, targetCurrency).toString();
+      return replacement;
     },
   );
 
-  // Handle percentage: "EXPR [+-] N%" → evaluate EXPR, then apply percentage
   const pctMatch = converted.match(/^(.+?)\s*([+-])\s*(\d+(?:[.,]\d+)?)%\s*$/);
-  if (pctMatch) {
-    const baseExpr = pctMatch[1]?.trim() ?? '';
-    const op = pctMatch[2];
-    const pctStr = (pctMatch[3] ?? '0').replace(',', '.');
-    if (Number.isNaN(parseFloat(pctStr))) return null;
-
-    // Evaluate base — could be a single converted amount or a full expression
-    let baseValue: Big | null;
-    if (/^\d+(?:\.\d+)?$/.test(baseExpr)) {
-      baseValue = new Big(baseExpr);
-    } else {
-      baseValue = evaluateMathExpressionBig(baseExpr);
-    }
-    if (baseValue === null) return null;
-
-    const pct = new Big(pctStr);
-    const delta = baseValue.times(pct).div(100);
-    const result = op === '+' ? baseValue.plus(delta) : baseValue.minus(delta);
-    return { value: result, hasCurrency: anyCurrencyReplaced };
-  }
+  if (pctMatch) return applyPercentage(pctMatch, anyCurrencyReplaced);
 
   const trimmed = converted.trim();
 
   // Single currency amount (e.g. "100$", "70 EUR") → plain conversion, no operator needed
-  if (anyCurrencyReplaced && /^\d+(?:\.\d+)?$/.test(trimmed)) {
+  if (anyCurrencyReplaced && PLAIN_NUMBER_RE.test(trimmed)) {
     return { value: new Big(trimmed), hasCurrency: true };
   }
 

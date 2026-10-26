@@ -13,7 +13,12 @@
 import type OpenAI from 'openai';
 import type { CurrencyCode } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
-import { aiStreamRound, stripThinkingTags } from '../ai/streaming';
+import {
+  aiStreamRound,
+  type StreamRoundResult,
+  type StreamToolCall,
+  stripThinkingTags,
+} from '../ai/streaming';
 import {
   type AIExtractionResult,
   type AIReceiptItem,
@@ -238,51 +243,138 @@ function looksLikePromptLeak(nameRu: string): boolean {
 
 // ── Main parser ─────────────────────────────────────────────────────────────
 
-export async function parseReceipt(
-  receiptData: string,
-  existingCategories: string[],
-  categoryExamples?: Map<string, CategoryExample[]>,
-  onProgress?: ParseProgress,
-): Promise<ParseResult> {
-  // Extract text from HTML once
-  const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
-  const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
+/** Arguments of the model's emit_items tool call. */
+interface EmitItemsArgs {
+  items?: AIReceiptItem[];
+  currency?: CurrencyCode;
+  claimed_total?: number;
+  date?: string;
+}
 
-  if (isHTML) {
-    logger.info(
-      `[RECEIPT_PARSER] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`,
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Mutable accumulator for what the model produced across tool rounds. */
+interface ParseState {
+  emittedItems: AIReceiptItem[];
+  emittedCurrency: CurrencyCode | undefined;
+  emittedDate: string | undefined;
+  claimedTotal: number | undefined;
+  computedSum: number;
+  sumCallCount: number;
+  emitCalled: boolean;
+  providerUsed: string;
+}
+
+function emptyParseResult(): ParseResult {
+  return {
+    items: [],
+    sumVerified: false,
+    computedSum: 0,
+    providerUsed: 'none',
+    calculateSumRounds: 0,
+  };
+}
+
+/** Model returned items as plain text instead of a tool call — try the legacy JSON repair. */
+function recoverItemsFromText(result: StreamRoundResult, round: number, state: ParseState): void {
+  logger.warn(`[RECEIPT_PARSER] No tool calls in round ${round + 1}, attempting legacy JSON parse`);
+  const cleaned = stripThinkingTags(result.text);
+  try {
+    const legacy = parseLegacyJsonResponse(cleaned, result.finishReason);
+    state.emittedItems = legacy.items;
+    state.emittedCurrency = legacy.currency;
+    // Preserve date from legacy JSON fallback — providers that ignore
+    // tool calling still dump it in the plain JSON response, and dropping
+    // it breaks the bank-transaction matching this parser promises.
+    if (legacy.date && ISO_DATE_RE.test(legacy.date)) {
+      state.emittedDate = legacy.date;
+    }
+  } catch (err) {
+    logger.warn(
+      `[RECEIPT_PARSER] Legacy JSON parse failed: ${err instanceof Error ? err.message : 'unknown'}`,
     );
+    // Nothing to do — model gave up.
+  }
+}
+
+function executeCalculateSumCall(
+  tc: StreamToolCall,
+  args: CalculateSumArgs,
+  state: ParseState,
+  messages: OpenAI.ChatCompletionMessageParam[],
+): void {
+  state.sumCallCount++;
+  const sumResult = executeCalculateSum(args);
+  state.computedSum = sumResult.sum;
+  logger.info(
+    `[RECEIPT_PARSER] calculate_sum called: count=${sumResult.count}, sum=${sumResult.sum} (${sumResult.label})`,
+  );
+  messages.push({
+    role: 'tool',
+    tool_call_id: tc.id,
+    content: JSON.stringify(sumResult),
+  });
+}
+
+function recordEmittedItems(
+  tc: StreamToolCall,
+  args: EmitItemsArgs,
+  state: ParseState,
+  messages: OpenAI.ChatCompletionMessageParam[],
+): void {
+  state.emitCalled = true;
+  state.emittedItems = args.items ?? [];
+  state.emittedCurrency = args.currency;
+  state.claimedTotal = args.claimed_total;
+  // Validate date format: strict YYYY-MM-DD, drop otherwise
+  if (args.date && ISO_DATE_RE.test(args.date)) {
+    state.emittedDate = args.date;
+  } else if (args.date) {
+    logger.warn(`[RECEIPT_PARSER] Invalid date format "${args.date}" from model, discarding`);
+  }
+  logger.info(
+    `[RECEIPT_PARSER] emit_items called: ${state.emittedItems.length} items, currency=${state.emittedCurrency}, claimed=${state.claimedTotal}, date=${state.emittedDate ?? 'none'}`,
+  );
+  messages.push({
+    role: 'tool',
+    tool_call_id: tc.id,
+    content: JSON.stringify({ received: true, count: state.emittedItems.length }),
+  });
+}
+
+/** Execute one tool call and append its result to the conversation. */
+function executeToolCall(
+  tc: StreamToolCall,
+  state: ParseState,
+  messages: OpenAI.ChatCompletionMessageParam[],
+): void {
+  let parsedArgs: unknown;
+  try {
+    parsedArgs = JSON.parse(tc.arguments || '{}');
+  } catch {
+    parsedArgs = {};
   }
 
-  // Detect explicit "no text" marker from OCR step
-  if (text.trim() === 'NO_TEXT' || text.trim().length < 10) {
-    logger.warn('[RECEIPT_PARSER] Receipt text is empty or NO_TEXT marker — no items possible');
-    return {
-      items: [],
-      sumVerified: false,
-      computedSum: 0,
-      providerUsed: 'none',
-      calculateSumRounds: 0,
-    };
+  if (tc.name === 'calculate_sum') {
+    executeCalculateSumCall(tc, parsedArgs as CalculateSumArgs, state, messages);
+  } else if (tc.name === 'emit_items') {
+    recordEmittedItems(tc, parsedArgs as EmitItemsArgs, state, messages);
+  } else {
+    logger.warn(`[RECEIPT_PARSER] Unknown tool call: ${tc.name}`);
+    messages.push({
+      role: 'tool',
+      tool_call_id: tc.id,
+      content: JSON.stringify({ error: `Unknown tool: ${tc.name}` }),
+    });
   }
+}
 
-  const systemPrompt = buildSystemPrompt(existingCategories.length > 0);
-  const userPrompt = buildUserPrompt(text, existingCategories, categoryExamples);
-
-  const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ];
-
-  let emittedItems: AIReceiptItem[] = [];
-  let emittedCurrency: CurrencyCode | undefined;
-  let emittedDate: string | undefined;
-  let claimedTotal: number | undefined;
-  let computedSum = 0;
-  let sumCallCount = 0;
-  let emitCalled = false;
-  let providerUsed = 'unknown';
-
+/** Drive the model through up to MAX_TOOL_ROUNDS of tool calling until it emits items. */
+async function runToolRounds(
+  messages: OpenAI.ChatCompletionMessageParam[],
+  state: ParseState,
+  onProgress?: ParseProgress,
+): Promise<void> {
   const callbacks = onProgress ? { onTextDelta: onProgress } : undefined;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -298,7 +390,7 @@ export async function parseReceipt(
       },
       callbacks,
     );
-    providerUsed = result.providerUsed;
+    state.providerUsed = result.providerUsed;
 
     logger.info(
       `[RECEIPT_PARSER] Round ${round + 1} (${result.providerUsed}): text=${result.text.length} chars, toolCalls=${result.toolCalls.length}, finish=${result.finishReason}`,
@@ -306,120 +398,52 @@ export async function parseReceipt(
 
     // No tool calls → either final answer or malformed response
     if (result.toolCalls.length === 0) {
-      if (emitCalled) {
-        // Model already emitted items, this round is just a closing message — done
-        break;
-      }
-
-      // Model tried to return items as text instead of tool call — try legacy JSON repair
-      logger.warn(
-        `[RECEIPT_PARSER] No tool calls in round ${round + 1}, attempting legacy JSON parse`,
-      );
-      const cleaned = stripThinkingTags(result.text);
-      try {
-        const legacy = parseLegacyJsonResponse(cleaned, result.finishReason);
-        emittedItems = legacy.items;
-        emittedCurrency = legacy.currency;
-        // Preserve date from legacy JSON fallback — providers that ignore
-        // tool calling still dump it in the plain JSON response, and dropping
-        // it breaks the bank-transaction matching this parser promises.
-        if (legacy.date && /^\d{4}-\d{2}-\d{2}$/.test(legacy.date)) {
-          emittedDate = legacy.date;
-        }
-        break;
-      } catch (err) {
-        logger.warn(
-          `[RECEIPT_PARSER] Legacy JSON parse failed: ${err instanceof Error ? err.message : 'unknown'}`,
-        );
-        // Nothing to do — model gave up. Exit loop.
-        break;
-      }
+      // If the model already emitted items, this round is just a closing message — done
+      if (!state.emitCalled) recoverItemsFromText(result, round, state);
+      break;
     }
 
     // Append assistant message + execute tools
     messages.push(result.assistantMessage);
 
     for (const tc of result.toolCalls) {
-      let parsedArgs: unknown;
-      try {
-        parsedArgs = JSON.parse(tc.arguments || '{}');
-      } catch {
-        parsedArgs = {};
-      }
-
-      if (tc.name === 'calculate_sum') {
-        sumCallCount++;
-        const sumResult = executeCalculateSum(parsedArgs as CalculateSumArgs);
-        computedSum = sumResult.sum;
-        logger.info(
-          `[RECEIPT_PARSER] calculate_sum called: count=${sumResult.count}, sum=${sumResult.sum} (${sumResult.label})`,
-        );
-        messages.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: JSON.stringify(sumResult),
-        });
-      } else if (tc.name === 'emit_items') {
-        emitCalled = true;
-        const args = parsedArgs as {
-          items?: AIReceiptItem[];
-          currency?: CurrencyCode;
-          claimed_total?: number;
-          date?: string;
-        };
-        emittedItems = args.items ?? [];
-        emittedCurrency = args.currency;
-        claimedTotal = args.claimed_total;
-        // Validate date format: strict YYYY-MM-DD, drop otherwise
-        if (args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
-          emittedDate = args.date;
-        } else if (args.date) {
-          logger.warn(`[RECEIPT_PARSER] Invalid date format "${args.date}" from model, discarding`);
-        }
-        logger.info(
-          `[RECEIPT_PARSER] emit_items called: ${emittedItems.length} items, currency=${emittedCurrency}, claimed=${claimedTotal}, date=${emittedDate ?? 'none'}`,
-        );
-        messages.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: JSON.stringify({ received: true, count: emittedItems.length }),
-        });
-      } else {
-        logger.warn(`[RECEIPT_PARSER] Unknown tool call: ${tc.name}`);
-        messages.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: JSON.stringify({ error: `Unknown tool: ${tc.name}` }),
-        });
-      }
+      executeToolCall(tc, state, messages);
     }
 
-    if (emitCalled) {
+    if (state.emitCalled) {
       break;
     }
   }
+}
 
-  // Post-process
-  await validateAndNormalizeItems(emittedItems, existingCategories);
-
-  // Determine if sum was verified. Requires:
-  //  - at least one item (meaningless to "verify" an empty receipt)
-  //  - calculate_sum was called at least once (forces the model to use the tool)
-  //  - claimed total was found on the receipt AND is non-zero
-  //  - sum of ACTUAL emitted items matches claimed total within 1% tolerance
-  //
-  // Critically: we compare against `actualSum` (sum of what the model finally
-  // emitted), not `computedSum` (the last value the model passed to the tool).
-  // A malicious/confused model could calculate_sum([100, 50]) → 150 and then
-  // emit_items([{total: 200}, {total: 200}]) — the tool result is stale and
-  // must not be trusted as proof that the emitted items match.
-  const actualSum = Math.round(emittedItems.reduce((a, it) => a + (it.total ?? 0), 0) * 100) / 100;
-  const sumVerified =
+/**
+ * Whether the emitted items add up to the claimed total. Requires:
+ *  - at least one item (meaningless to "verify" an empty receipt)
+ *  - calculate_sum was called at least once (forces the model to use the tool)
+ *  - claimed total was found on the receipt AND is non-zero
+ *  - sum of ACTUAL emitted items matches claimed total within 1% tolerance
+ *
+ * Critically: we compare against `actualSum` (sum of what the model finally
+ * emitted), not `computedSum` (the last value the model passed to the tool).
+ * A malicious/confused model could calculate_sum([100, 50]) → 150 and then
+ * emit_items([{total: 200}, {total: 200}]) — the tool result is stale and
+ * must not be trusted as proof that the emitted items match.
+ */
+function isSumVerified(state: ParseState, actualSum: number): boolean {
+  const { emittedItems, sumCallCount, claimedTotal } = state;
+  return (
     emittedItems.length > 0 &&
     sumCallCount > 0 &&
     claimedTotal !== undefined &&
     claimedTotal > 0 &&
-    Math.abs(actualSum - claimedTotal) <= Math.max(claimedTotal * 0.01, 0.5);
+    Math.abs(actualSum - claimedTotal) <= Math.max(claimedTotal * 0.01, 0.5)
+  );
+}
+
+function buildParseResult(state: ParseState): ParseResult {
+  const { emittedItems, emittedCurrency, emittedDate, claimedTotal, sumCallCount } = state;
+  const actualSum = Math.round(emittedItems.reduce((a, it) => a + (it.total ?? 0), 0) * 100) / 100;
+  const sumVerified = isSumVerified(state, actualSum);
 
   if (sumCallCount === 0 && emittedItems.length > 0) {
     logger.warn(
@@ -428,14 +452,14 @@ export async function parseReceipt(
   }
 
   logger.info(
-    `[RECEIPT_PARSER] Done: ${emittedItems.length} items, computedSum=${computedSum}, actualSum=${actualSum}, claimed=${claimedTotal}, verified=${sumVerified}`,
+    `[RECEIPT_PARSER] Done: ${emittedItems.length} items, computedSum=${state.computedSum}, actualSum=${actualSum}, claimed=${claimedTotal}, verified=${sumVerified}`,
   );
 
   const result: ParseResult = {
     items: emittedItems,
     sumVerified,
     computedSum: actualSum,
-    providerUsed,
+    providerUsed: state.providerUsed,
     calculateSumRounds: sumCallCount,
   };
   // Only record currency + claimedTotal when we actually extracted items —
@@ -455,6 +479,55 @@ export async function parseReceipt(
     result.date = emittedDate;
   }
   return result;
+}
+
+export async function parseReceipt(
+  receiptData: string,
+  existingCategories: string[],
+  categoryExamples?: Map<string, CategoryExample[]>,
+  onProgress?: ParseProgress,
+): Promise<ParseResult> {
+  // Extract text from HTML once
+  const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
+  const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
+
+  if (isHTML) {
+    logger.info(
+      `[RECEIPT_PARSER] Extracted text from HTML: ${receiptData.length} -> ${text.length} chars`,
+    );
+  }
+
+  // Detect explicit "no text" marker from OCR step
+  if (text.trim() === 'NO_TEXT' || text.trim().length < 10) {
+    logger.warn('[RECEIPT_PARSER] Receipt text is empty or NO_TEXT marker — no items possible');
+    return emptyParseResult();
+  }
+
+  const systemPrompt = buildSystemPrompt(existingCategories.length > 0);
+  const userPrompt = buildUserPrompt(text, existingCategories, categoryExamples);
+
+  const messages: OpenAI.ChatCompletionMessageParam[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+
+  const state: ParseState = {
+    emittedItems: [],
+    emittedCurrency: undefined,
+    emittedDate: undefined,
+    claimedTotal: undefined,
+    computedSum: 0,
+    sumCallCount: 0,
+    emitCalled: false,
+    providerUsed: 'unknown',
+  };
+
+  await runToolRounds(messages, state, onProgress);
+
+  // Post-process
+  await validateAndNormalizeItems(state.emittedItems, existingCategories);
+
+  return buildParseResult(state);
 }
 
 // ── Legacy JSON fallback (for models that ignore tool calling) ──────────────
@@ -498,56 +571,72 @@ function parseLegacyJsonResponse(
 
 // ── Post-processing ─────────────────────────────────────────────────────────
 
+/** Throw instead of skipping — see the comment at the call site. */
+function assertValidItemStructure(item: AIReceiptItem): void {
+  if (
+    !item.name_ru ||
+    typeof item.quantity !== 'number' ||
+    typeof item.price !== 'number' ||
+    typeof item.total !== 'number' ||
+    !item.category
+  ) {
+    // Throw instead of continue — leaving a half-formed item in the array
+    // would later crash in saveExtractedItems() where the DB columns are
+    // NOT NULL. Better to fail the parse cleanly here.
+    throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
+  }
+}
+
+/** Replace a name_ru that echoes the prompt with the original name (or a generic label). */
+function replacePromptLeakName(item: AIReceiptItem): void {
+  if (!looksLikePromptLeak(item.name_ru)) return;
+
+  const safeOriginal =
+    item.name_original && !looksLikePromptLeak(item.name_original) ? item.name_original : null;
+  logger.warn(
+    `[RECEIPT_PARSER] Prompt leak in name_ru: "${item.name_ru}", fallback: ${safeOriginal ?? 'generic'}`,
+  );
+  item.name_ru = safeOriginal || `Товар (${item.total})`;
+}
+
+/** Snap the item's category (and its alternatives) onto the group's existing categories. */
+async function snapToExistingCategories(
+  item: AIReceiptItem,
+  possibleCategories: string[],
+  existingCategories: string[],
+): Promise<void> {
+  const { findBestCategoryMatchAsync } = await import('../../utils/fuzzy-search');
+
+  if (!existingCategories.includes(item.category)) {
+    const closestMatch = await findBestCategoryMatchAsync(item.category, existingCategories);
+    if (closestMatch) {
+      item.category = closestMatch;
+    } else {
+      const fallback =
+        existingCategories.find((c) => c === 'Разное') || existingCategories[0] || 'Разное';
+      item.category = fallback;
+    }
+  }
+
+  if (possibleCategories.length > 0) {
+    item.possible_categories = possibleCategories.filter((cat) => existingCategories.includes(cat));
+  }
+}
+
 async function validateAndNormalizeItems(
   items: AIReceiptItem[],
   existingCategories: string[],
 ): Promise<void> {
   for (const item of items) {
-    if (
-      !item.name_ru ||
-      typeof item.quantity !== 'number' ||
-      typeof item.price !== 'number' ||
-      typeof item.total !== 'number' ||
-      !item.category
-    ) {
-      // Throw instead of continue — leaving a half-formed item in the array
-      // would later crash in saveExtractedItems() where the DB columns are
-      // NOT NULL. Better to fail the parse cleanly here.
-      throw new Error(`Invalid item structure: ${JSON.stringify(item)}`);
-    }
-
-    if (looksLikePromptLeak(item.name_ru)) {
-      const safeOriginal =
-        item.name_original && !looksLikePromptLeak(item.name_original) ? item.name_original : null;
-      logger.warn(
-        `[RECEIPT_PARSER] Prompt leak in name_ru: "${item.name_ru}", fallback: ${safeOriginal ?? 'generic'}`,
-      );
-      item.name_ru = safeOriginal || `Товар (${item.total})`;
-    }
+    assertValidItemStructure(item);
+    replacePromptLeakName(item);
 
     if (!item.possible_categories || !Array.isArray(item.possible_categories)) {
       item.possible_categories = [];
     }
 
     if (existingCategories.length > 0) {
-      const { findBestCategoryMatchAsync } = await import('../../utils/fuzzy-search');
-
-      if (!existingCategories.includes(item.category)) {
-        const closestMatch = await findBestCategoryMatchAsync(item.category, existingCategories);
-        if (closestMatch) {
-          item.category = closestMatch;
-        } else {
-          const fallback =
-            existingCategories.find((c) => c === 'Разное') || existingCategories[0] || 'Разное';
-          item.category = fallback;
-        }
-      }
-
-      if (item.possible_categories.length > 0) {
-        item.possible_categories = item.possible_categories.filter((cat) =>
-          existingCategories.includes(cat),
-        );
-      }
+      await snapToExistingCategories(item, item.possible_categories, existingCategories);
     }
   }
 }

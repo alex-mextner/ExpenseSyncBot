@@ -96,54 +96,40 @@ function redactFreeformText(text: string): string {
   return redactSensitive(text).replace(STRONG_SECRET_REGEX, '$1 [REDACTED]');
 }
 
-/** Walk a value and return a redacted copy. Values under sensitive keys are
- *  replaced with `'[REDACTED]'` regardless of their nested type. Handles
- *  plain objects, arrays, Maps, Sets, Errors, and circular references. */
-export function redactObject(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value !== 'object') return value;
+/** Redact an Error into a plain object; message and stack get free-form scrubbing. */
+function redactError(value: Error): Record<string, unknown> {
+  return {
+    name: value.name,
+    message: redactFreeformText(value.message),
+    stack: value.stack ? redactFreeformText(value.stack) : undefined,
+  };
+}
 
-  if (seen.has(value as object)) return '[Circular]';
-  seen.add(value as object);
-
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: redactFreeformText(value.message),
-      stack: value.stack ? redactFreeformText(value.stack) : undefined,
-    };
+/** Object keys are never inspected (could leak secrets via key text).
+ *  Each non-primitive key gets a unique placeholder so multiple object
+ *  keys don't collide and overwrite each other. */
+function mapKeyToString(key: unknown, nextObjectKeyIndex: () => number): string {
+  if (typeof key === 'string') return key;
+  if (typeof key === 'number' || typeof key === 'boolean' || typeof key === 'bigint') {
+    return String(key);
   }
+  return `[ObjectKey:${nextObjectKeyIndex()}]`;
+}
 
-  if (Array.isArray(value)) {
-    return value.map((v) => redactObject(v, seen));
+function redactMap(value: Map<unknown, unknown>, seen: WeakSet<object>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  let objectKeyIndex = 0;
+  for (const [k, v] of value) {
+    const keyStr = mapKeyToString(k, () => objectKeyIndex++);
+    out[keyStr] = isSensitiveKey(keyStr) ? '[REDACTED]' : redactObject(v, seen);
   }
+  return out;
+}
 
-  if (value instanceof Map) {
-    const out: Record<string, unknown> = {};
-    let objectKeyIndex = 0;
-    for (const [k, v] of value) {
-      // Object keys are never inspected (could leak secrets via key text).
-      // Each non-primitive key gets a unique placeholder so multiple object
-      // keys don't collide and overwrite each other.
-      let keyStr: string;
-      if (typeof k === 'string') keyStr = k;
-      else if (typeof k === 'number' || typeof k === 'boolean' || typeof k === 'bigint') {
-        keyStr = String(k);
-      } else {
-        keyStr = `[ObjectKey:${objectKeyIndex++}]`;
-      }
-      out[keyStr] = isSensitiveKey(keyStr) ? '[REDACTED]' : redactObject(v, seen);
-    }
-    return out;
-  }
-
-  if (value instanceof Set) {
-    return [...value].map((v) => redactObject(v, seen));
-  }
-
-  // Plain object: walk own enumerable property descriptors. We check
-  // descriptors (not Object.entries) so getters aren't invoked — a getter
-  // could have side effects or return a sensitive value.
+/** Walk own enumerable property descriptors. We check
+ *  descriptors (not Object.entries) so getters aren't invoked — a getter
+ *  could have side effects or return a sensitive value. */
+function redactPlainObject(value: object, seen: WeakSet<object>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const descriptors = Object.getOwnPropertyDescriptors(value);
   for (const [k, desc] of Object.entries(descriptors)) {
@@ -155,6 +141,23 @@ export function redactObject(value: unknown, seen: WeakSet<object> = new WeakSet
     out[k] = isSensitiveKey(k) ? '[REDACTED]' : redactObject(desc.value, seen);
   }
   return out;
+}
+
+/** Walk a value and return a redacted copy. Values under sensitive keys are
+ *  replaced with `'[REDACTED]'` regardless of their nested type. Handles
+ *  plain objects, arrays, Maps, Sets, Errors, and circular references. */
+export function redactObject(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== 'object') return value;
+
+  if (seen.has(value as object)) return '[Circular]';
+  seen.add(value as object);
+
+  if (value instanceof Error) return redactError(value);
+  if (Array.isArray(value)) return value.map((v) => redactObject(v, seen));
+  if (value instanceof Map) return redactMap(value, seen);
+  if (value instanceof Set) return [...value].map((v) => redactObject(v, seen));
+  return redactPlainObject(value, seen);
 }
 
 // ── Free-form regex patterns (for bare strings that don't go through the
