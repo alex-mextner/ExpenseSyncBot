@@ -60,35 +60,32 @@ export function startOAuthServer(): void {
   logger.info(`✓ OAuth server running on http://localhost:${server.port}`);
 }
 
-/**
- * Handle OAuth callback
- */
-async function handleOAuthCallback(url: URL): Promise<Response> {
-  const code = url.searchParams.get('code');
-  const state = url.searchParams.get('state'); // UUID token
-  const error = url.searchParams.get('error');
+type PageTone = 'error' | 'success';
 
-  // Handle OAuth error from Google
-  if (error) {
-    const errorDescription = url.searchParams.get('error_description') || 'Unknown error';
-    logger.error({ error, errorDescription }, '[OAuth] Google returned error');
+const TONE_COLORS: Record<PageTone, string> = {
+  error: '#dc3545',
+  success: '#28a745',
+};
 
-    if (state) {
-      const groupId = resolveOAuthState(state);
-      if (groupId !== null) {
-        notifyTelegramError(groupId, errorDescription).catch((notifyErr) => {
-          logger.error({ err: notifyErr }, '[OAuth] Failed to send error to Telegram');
-        });
-      }
-    }
+interface ResultPage {
+  status: number;
+  title: string;
+  tone: PageTone;
+  heading: string;
+  /** Already-escaped inner HTML of each paragraph. */
+  paragraphs: string[];
+}
 
-    return new Response(
-      `
+/** Renders the standalone HTML page shown in the browser tab after the OAuth redirect. */
+function renderResultPage(page: ResultPage): Response {
+  const paragraphs = page.paragraphs.map((p) => `            <p>${p}</p>`).join('\n');
+  return new Response(
+    `
       <!DOCTYPE html>
       <html>
         <head>
           <meta charset="utf-8">
-          <title>Authorization Error</title>
+          <title>${page.title}</title>
           <style>
             body {
               font-family: system-ui, -apple-system, sans-serif;
@@ -107,24 +104,72 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
               max-width: 400px;
               text-align: center;
             }
-            .error { color: #dc3545; }
+            .${page.tone} { color: ${TONE_COLORS[page.tone]}; }
           </style>
         </head>
         <body>
           <div class="container">
-            <h1 class="error">❌ Authorization Failed</h1>
-            <p>${escapeHtml(errorDescription)}</p>
-            <p>Please return to Telegram and try again.</p>
+            <h1 class="${page.tone}">${page.heading}</h1>
+${paragraphs}
           </div>
         </body>
       </html>
       `,
-      {
-        status: 400,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      },
-    );
+    {
+      status: page.status,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    },
+  );
+}
+
+/** Failure page with the "return to Telegram" hint shared by every error branch. */
+function renderErrorPage(
+  status: number,
+  title: string,
+  heading: string,
+  detailHtml: string,
+): Response {
+  return renderResultPage({
+    status,
+    title,
+    tone: 'error',
+    heading,
+    paragraphs: [detailHtml, 'Please return to Telegram and try again.'],
+  });
+}
+
+/** Google redirected back with `error=...` — notify the chat (if the state is known) and show the failure page. */
+function handleGoogleAuthError(url: URL, state: string | null, error: string): Response {
+  const errorDescription = url.searchParams.get('error_description') || 'Unknown error';
+  logger.error({ error, errorDescription }, '[OAuth] Google returned error');
+
+  if (state) {
+    const groupId = resolveOAuthState(state);
+    if (groupId !== null) {
+      notifyTelegramError(groupId, errorDescription).catch((notifyErr) => {
+        logger.error({ err: notifyErr }, '[OAuth] Failed to send error to Telegram');
+      });
+    }
   }
+
+  return renderErrorPage(
+    400,
+    'Authorization Error',
+    '❌ Authorization Failed',
+    escapeHtml(errorDescription),
+  );
+}
+
+/**
+ * Handle OAuth callback
+ */
+async function handleOAuthCallback(url: URL): Promise<Response> {
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state'); // UUID token
+  const error = url.searchParams.get('error');
+
+  // Handle OAuth error from Google
+  if (error) return handleGoogleAuthError(url, state, error);
 
   // Validate required parameters
   if (!code || !state) {
@@ -135,127 +180,26 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
   const groupId = resolveOAuthState(state);
   if (groupId === null) {
     logger.error('[OAuth] Invalid or expired state token');
-    return new Response(
-      `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Authorization Error</title>
-          <style>
-            body {
-              font-family: system-ui, -apple-system, sans-serif;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              min-height: 100vh;
-              margin: 0;
-              background: #f5f5f5;
-            }
-            .container {
-              background: white;
-              padding: 2rem;
-              border-radius: 8px;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-              max-width: 400px;
-              text-align: center;
-            }
-            .error { color: #dc3545; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1 class="error">❌ Authorization Failed</h1>
-            <p>Invalid or expired authorization request.</p>
-            <p>Please return to Telegram and try again.</p>
-          </div>
-        </body>
-      </html>
-      `,
-      {
-        status: 400,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      },
+    return renderErrorPage(
+      400,
+      'Authorization Error',
+      '❌ Authorization Failed',
+      'Invalid or expired authorization request.',
     );
   }
 
   try {
-    // Exchange code for tokens
-    const tokens = await getTokensFromCode(code);
-
-    // Update group in database
-    const group = database.groups.findById(groupId);
-
-    if (!group) {
-      throw new Error('Group not found');
-    }
-
-    const encryptedToken = encryptToken(tokens.refresh_token, env.ENCRYPTION_KEY);
-    database.groups.update(group.telegram_group_id, {
-      google_refresh_token: encryptedToken,
-      oauth_client: 'current',
+    await completeAuthorization(code, groupId);
+    return renderResultPage({
+      status: 200,
+      title: 'Authorization Successful',
+      tone: 'success',
+      heading: '✅ Authorization Successful!',
+      paragraphs: [
+        'You can now close this window and return to Telegram.',
+        'The bot will continue the setup process.',
+      ],
     });
-
-    logger.info(`✓ OAuth successful for group ${groupId}`);
-
-    // Branch on whether a spreadsheet already exists:
-    //   - no spreadsheet → /connect flow (new group), send currency picker
-    //   - has spreadsheet → /reconnect flow, run full bidirectional sync
-    // Both run as background operations so the HTTP response is not blocked.
-    if (group.spreadsheet_id) {
-      withChatContext(group.telegram_group_id, group.active_topic_id, () =>
-        fullSyncAfterReconnect(group.id),
-      ).catch((syncErr) => {
-        logger.error({ err: syncErr, groupId: group.id }, '[OAuth] fullSyncAfterReconnect failed');
-      });
-    } else {
-      notifyTelegramSuccess(group.telegram_group_id, group.active_topic_id).catch((notifyErr) => {
-        logger.error({ err: notifyErr }, '[OAuth] Failed to send success message to Telegram');
-      });
-    }
-
-    return new Response(
-      `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Authorization Successful</title>
-          <style>
-            body {
-              font-family: system-ui, -apple-system, sans-serif;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              min-height: 100vh;
-              margin: 0;
-              background: #f5f5f5;
-            }
-            .container {
-              background: white;
-              padding: 2rem;
-              border-radius: 8px;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-              max-width: 400px;
-              text-align: center;
-            }
-            .success { color: #28a745; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1 class="success">✅ Authorization Successful!</h1>
-            <p>You can now close this window and return to Telegram.</p>
-            <p>The bot will continue the setup process.</p>
-          </div>
-        </body>
-      </html>
-      `,
-      {
-        status: 200,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      },
-    );
   } catch (err) {
     logger.error({ err }, 'Error handling OAuth callback');
 
@@ -265,48 +209,49 @@ async function handleOAuthCallback(url: URL): Promise<Response> {
       },
     );
 
-    return new Response(
-      `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Authorization Error</title>
-          <style>
-            body {
-              font-family: system-ui, -apple-system, sans-serif;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              min-height: 100vh;
-              margin: 0;
-              background: #f5f5f5;
-            }
-            .container {
-              background: white;
-              padding: 2rem;
-              border-radius: 8px;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-              max-width: 400px;
-              text-align: center;
-            }
-            .error { color: #dc3545; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1 class="error">❌ Error</h1>
-            <p>${escapeHtml(err instanceof Error ? err.message : 'Unknown error occurred')}</p>
-            <p>Please return to Telegram and try again.</p>
-          </div>
-        </body>
-      </html>
-      `,
-      {
-        status: 500,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      },
+    return renderErrorPage(
+      500,
+      'Authorization Error',
+      '❌ Error',
+      escapeHtml(err instanceof Error ? err.message : 'Unknown error occurred'),
     );
+  }
+}
+
+/** Exchanges the code for tokens, stores the encrypted refresh token and kicks off the follow-up flow. */
+async function completeAuthorization(code: string, groupId: number): Promise<void> {
+  // Exchange code for tokens
+  const tokens = await getTokensFromCode(code);
+
+  // Update group in database
+  const group = database.groups.findById(groupId);
+
+  if (!group) {
+    throw new Error('Group not found');
+  }
+
+  const encryptedToken = encryptToken(tokens.refresh_token, env.ENCRYPTION_KEY);
+  database.groups.update(group.telegram_group_id, {
+    google_refresh_token: encryptedToken,
+    oauth_client: 'current',
+  });
+
+  logger.info(`✓ OAuth successful for group ${groupId}`);
+
+  // Branch on whether a spreadsheet already exists:
+  //   - no spreadsheet → /connect flow (new group), send currency picker
+  //   - has spreadsheet → /reconnect flow, run full bidirectional sync
+  // Both run as background operations so the HTTP response is not blocked.
+  if (group.spreadsheet_id) {
+    withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+      fullSyncAfterReconnect(group.id),
+    ).catch((syncErr) => {
+      logger.error({ err: syncErr, groupId: group.id }, '[OAuth] fullSyncAfterReconnect failed');
+    });
+  } else {
+    notifyTelegramSuccess(group.telegram_group_id, group.active_topic_id).catch((notifyErr) => {
+      logger.error({ err: notifyErr }, '[OAuth] Failed to send success message to Telegram');
+    });
   }
 }
 
