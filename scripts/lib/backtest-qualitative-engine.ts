@@ -34,6 +34,7 @@ import {
   SEVERITY_ORDER,
   type Severity,
 } from './backtest-qualitative-metrics';
+import { printLine } from './print-line';
 
 // ═══════════════════════════════════════════════════════════════
 // Interval-based cycle detection (refueling, salon, subscriptions)
@@ -368,9 +369,7 @@ function processOld(ctx: CheckContext, state: EngineState): void {
   const oldKind = classifyKind(ctx.spentSoFar, ctx.budget);
   if (process.env['DEBUG_OLD'] && oldKind === 'prognostic' && (oldSev === 'critical' || oldSev === 'exceeded')) {
     const correct = ctx.actual > ctx.budget;
-    console.log(
-      `OLD PROG ${correct ? 'TP' : 'FP'}: ${ctx.cat.name} m${ctx.month} d${ctx.day} spent=${ctx.spentSoFar.toFixed(0)} proj=${oldProj.toFixed(0)} budget=${ctx.budget} actual=${ctx.actual.toFixed(0)}`,
-    );
+    printLine(`OLD PROG ${correct ? 'TP' : 'FP'}: ${ctx.cat.name} m${ctx.month} d${ctx.day} spent=${ctx.spentSoFar.toFixed(0)} proj=${oldProj.toFixed(0)} budget=${ctx.budget} actual=${ctx.actual.toFixed(0)}`,);
   }
   state.oldAlerts.push(makeAlert(ctx, oldSev, oldProj, oldKind));
 }

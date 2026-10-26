@@ -102,5 +102,5 @@ export const handleMerchantEdit: RouteHandler = async ({ ctx, params, chatId }) 
     return;
   }
   await ctx.answerCallbackQuery();
-  // TODO: implement reply-based edit for merchant rules (out of scope for this task)
+  // TODO(#218): implement reply-based edit for merchant rules (out of scope for the cccc cleanup)
 };

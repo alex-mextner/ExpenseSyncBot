@@ -26,7 +26,7 @@ DEVELOPMENT RULES (follow strictly):
 - Names describe PURPOSE, not implementation (getUserById, not fetchDataFromDB).
 - One change at a time. Never bundle unrelated fixes.
 - No speculative generality — don't add features "just in case".
-- No dead code, no commented-out code, no TODO placeholders.
+- No dead code, no commented-out code, no to-do placeholders.
 - When fixing bugs: find root cause FIRST. Read error messages carefully. Form a hypothesis, verify it, then fix.
 - After a fix, verify you haven't broken anything else.
 - Keep functions small and focused. If a function does two things, split it.
@@ -174,7 +174,7 @@ export function buildFirstRunPrompt(task: DevTask): AgentPrompt {
 IMPORTANT RULES:
 1. Use tools to read existing code BEFORE writing. Understand patterns first.
 2. Follow TDD: write tests FIRST (*.test.ts next to source), confirm they fail, then implement.
-3. Write complete files — no partial snippets or TODOs.
+3. Write complete files — no partial snippets or to-dos.
 4. Follow existing code style and patterns in the project.
 5. After writing all files, use the commit tool to save your work.
 ${DEV_RULES}

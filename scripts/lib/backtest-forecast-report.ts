@@ -13,6 +13,7 @@ import {
   type Status,
 } from './backtest-forecast-types';
 import { CHECK_DAYS } from './backtest-shared';
+import { printLine } from './print-line';
 
 interface AlertStats {
   totalRaw: number;
@@ -247,17 +248,15 @@ const STAT_TABLE_SECTIONS: StatRow[][] = [
 ];
 
 function printStatTable(oldStats: AlertStats, hybridStats: AlertStats): void {
-  console.log('┌──────────────────────────────┬──────────────┬────────────────┐');
-  console.log('│ Метрика                      │ Old (prod)   │ Hybrid         │');
+  printLine('┌──────────────────────────────┬──────────────┬────────────────┐');
+  printLine('│ Метрика                      │ Old (prod)   │ Hybrid         │');
   for (const section of STAT_TABLE_SECTIONS) {
-    console.log(STAT_TABLE_SEPARATOR);
+    printLine(STAT_TABLE_SEPARATOR);
     for (const row of section) {
-      console.log(
-        `│ ${row.label.padEnd(28)} │ ${row.format(oldStats).padStart(12)} │ ${row.format(hybridStats).padStart(14)} │`,
-      );
+      printLine(`│ ${row.label.padEnd(28)} │ ${row.format(oldStats).padStart(12)} │ ${row.format(hybridStats).padStart(14)} │`,);
     }
   }
-  console.log('└──────────────────────────────┴──────────────┴────────────────┘\n');
+  printLine('└──────────────────────────────┴──────────────┴────────────────┘\n');
 }
 
 /** Percentage reduction from `before` to `after`; 0 when there was nothing to reduce. */
@@ -268,15 +267,11 @@ function reductionPercent(before: number, after: number): number {
 function printNoiseReduction(oldStats: AlertStats, hybridStats: AlertStats): void {
   if (oldStats.totalRaw > 0) {
     const showReduction = reductionPercent(oldStats.totalRaw, hybridStats.totalRaw);
-    console.log(
-      `→ Показов пользователю: ${oldStats.totalRaw} → ${hybridStats.totalRaw} (−${showReduction.toFixed(0)}%)`,
-    );
+    printLine(`→ Показов пользователю: ${oldStats.totalRaw} → ${hybridStats.totalRaw} (−${showReduction.toFixed(0)}%)`,);
   }
   if (oldStats.prognosticFP > 0) {
     const fpReduction = reductionPercent(oldStats.prognosticFP, hybridStats.prognosticFP);
-    console.log(
-      `→ Ложных прогнозов: ${oldStats.prognosticFP} → ${hybridStats.prognosticFP} (−${fpReduction.toFixed(0)}%)`,
-    );
+    printLine(`→ Ложных прогнозов: ${oldStats.prognosticFP} → ${hybridStats.prognosticFP} (−${fpReduction.toFixed(0)}%)`,);
   }
 }
 
@@ -285,20 +280,20 @@ function printCategoryTable(
   oldStats: AlertStats,
   hybridStats: AlertStats,
 ): void {
-  console.log('\n┌───────────────────────────────────────────────────────────────────┐');
-  console.log('│ ПО КАТЕГОРИЯМ (prognostic alerts: TP / FP)                       │');
-  console.log('├──────────────┬───────────────────┬────────────────────────────────┤');
-  console.log('│ Категория    │ Old (TP / FP)     │ Hybrid (TP / FP)              │');
-  console.log('├──────────────┼───────────────────┼────────────────────────────────┤');
+  printLine('\n┌───────────────────────────────────────────────────────────────────┐');
+  printLine('│ ПО КАТЕГОРИЯМ (prognostic alerts: TP / FP)                       │');
+  printLine('├──────────────┬───────────────────┬────────────────────────────────┤');
+  printLine('│ Категория    │ Old (TP / FP)     │ Hybrid (TP / FP)              │');
+  printLine('├──────────────┼───────────────────┼────────────────────────────────┤');
 
   for (const cat of categories) {
     if (cat.budget <= 0) continue;
     const oldCat = oldStats.byCat[cat.name] ?? { tp: 0, fp: 0, total: 0 };
     const hybridCat = hybridStats.byCat[cat.name] ?? { tp: 0, fp: 0, total: 0 };
     const label = cat.name.padEnd(12);
-    console.log(`│ ${label} │ ${`${oldCat.tp} / ${oldCat.fp}`.padStart(17)} │ ${`${hybridCat.tp} / ${hybridCat.fp}`.padStart(30)} │`);
+    printLine(`│ ${label} │ ${`${oldCat.tp} / ${oldCat.fp}`.padStart(17)} │ ${`${hybridCat.tp} / ${hybridCat.fp}`.padStart(30)} │`);
   }
-  console.log('└──────────────┴───────────────────┴────────────────────────────────┘\n');
+  printLine('└──────────────┴───────────────────┴────────────────────────────────┘\n');
 }
 
 function printNoBudgetSummary(result: BacktestResult, categories: CategoryConfig[], months: number): void {
@@ -306,21 +301,21 @@ function printNoBudgetSummary(result: BacktestResult, categories: CategoryConfig
   if (noBudgetCats.length === 0) return;
 
   const noBudgetHybridAlerts = result.hybridAlerts.filter((a) => a.kind === 'no_budget');
-  console.log(`Budget recommendation alerts (budget=0 categories): ${noBudgetHybridAlerts.length}`);
+  printLine(`Budget recommendation alerts (budget=0 categories): ${noBudgetHybridAlerts.length}`);
   for (const cat of noBudgetCats) {
     const catAlerts = noBudgetHybridAlerts.filter((a) => a.category === cat.name);
-    console.log(`  ${cat.name}: ${catAlerts.length} alerts across ${months} months`);
+    printLine(`  ${cat.name}: ${catAlerts.length} alerts across ${months} months`);
   }
-  console.log('');
+  printLine('');
 }
 
 /** Prints MAPE per checkpoint day and returns the overall MAPE (percent) for both algorithms. */
 function printMapeTable(accuracy: AccuracyPoint[]): { overallOldMAPE: number; overallHybridMAPE: number } {
-  console.log('┌─────────────────────────────────────────────────────────┐');
-  console.log('│ ТОЧНОСТЬ ПРОГНОЗА (MAPE — средняя абсолютная ошибка %) │');
-  console.log('├────────────────────────┬──────────────┬────────────────┤');
-  console.log('│ День месяца            │ Old (linear) │ Hybrid         │');
-  console.log('├────────────────────────┼──────────────┼────────────────┤');
+  printLine('┌─────────────────────────────────────────────────────────┐');
+  printLine('│ ТОЧНОСТЬ ПРОГНОЗА (MAPE — средняя абсолютная ошибка %) │');
+  printLine('├────────────────────────┬──────────────┬────────────────┤');
+  printLine('│ День месяца            │ Old (linear) │ Hybrid         │');
+  printLine('├────────────────────────┼──────────────┼────────────────┤');
 
   let totalOldError = 0;
   let totalHybridError = 0;
@@ -334,14 +329,14 @@ function printMapeTable(accuracy: AccuracyPoint[]): { overallOldMAPE: number; ov
     totalOldError += points.reduce((s, p) => s + p.oldError, 0);
     totalHybridError += points.reduce((s, p) => s + p.hybridError, 0);
     totalCount += points.length;
-    console.log(`│ Day ${String(cp).padEnd(18)} │ ${oldMAPE.toFixed(1).padStart(11)}% │ ${hybridMAPE.toFixed(1).padStart(13)}% │`);
+    printLine(`│ Day ${String(cp).padEnd(18)} │ ${oldMAPE.toFixed(1).padStart(11)}% │ ${hybridMAPE.toFixed(1).padStart(13)}% │`);
   }
 
   const overallOldMAPE = totalCount > 0 ? (totalOldError / totalCount) * 100 : 0;
   const overallHybridMAPE = totalCount > 0 ? (totalHybridError / totalCount) * 100 : 0;
-  console.log('├────────────────────────┼──────────────┼────────────────┤');
-  console.log(`│ Overall MAPE           │ ${overallOldMAPE.toFixed(1).padStart(11)}% │ ${overallHybridMAPE.toFixed(1).padStart(13)}% │`);
-  console.log('└────────────────────────┴──────────────┴────────────────┘\n');
+  printLine('├────────────────────────┼──────────────┼────────────────┤');
+  printLine(`│ Overall MAPE           │ ${overallOldMAPE.toFixed(1).padStart(11)}% │ ${overallHybridMAPE.toFixed(1).padStart(13)}% │`);
+  printLine('└────────────────────────┴──────────────┴────────────────┘\n');
 
   return { overallOldMAPE, overallHybridMAPE };
 }
@@ -352,19 +347,19 @@ function printVerdict(
   overallOldMAPE: number,
   overallHybridMAPE: number,
 ): void {
-  console.log('══════════════════════════════');
-  console.log('  ВЕРДИКТ');
-  console.log('══════════════════════════════\n');
+  printLine('══════════════════════════════');
+  printLine('  ВЕРДИКТ');
+  printLine('══════════════════════════════\n');
 
   const mapeChange = overallOldMAPE > 0 ? ((overallOldMAPE - overallHybridMAPE) / overallOldMAPE * 100) : 0;
   const totalReduction = reductionPercent(oldStats.totalRaw, hybridStats.totalRaw);
 
-  console.log(`Signal Quality: Old=${oldStats.signalQuality.toFixed(3)} → Hybrid=${hybridStats.signalQuality.toFixed(3)}`);
-  console.log(`Prognostic precision: ${(oldStats.prognosticPrecision * 100).toFixed(0)}% → ${(hybridStats.prognosticPrecision * 100).toFixed(0)}%`);
-  console.log(`Total alerts: ${oldStats.totalRaw} → ${hybridStats.totalRaw} (−${totalReduction.toFixed(0)}%)`);
-  console.log(`Useful alert rate: ${(oldStats.usefulAlertRate * 100).toFixed(0)}% → ${(hybridStats.usefulAlertRate * 100).toFixed(0)}%`);
-  console.log(`Range coverage: ${(oldStats.rangeCoverage * 100).toFixed(0)}% → ${(hybridStats.rangeCoverage * 100).toFixed(0)}%`);
-  console.log(`MAPE: ${mapeChange > 0 ? '−' : '+'}${Math.abs(mapeChange).toFixed(0)}% (${overallOldMAPE.toFixed(1)}% → ${overallHybridMAPE.toFixed(1)}%)`);
+  printLine(`Signal Quality: Old=${oldStats.signalQuality.toFixed(3)} → Hybrid=${hybridStats.signalQuality.toFixed(3)}`);
+  printLine(`Prognostic precision: ${(oldStats.prognosticPrecision * 100).toFixed(0)}% → ${(hybridStats.prognosticPrecision * 100).toFixed(0)}%`);
+  printLine(`Total alerts: ${oldStats.totalRaw} → ${hybridStats.totalRaw} (−${totalReduction.toFixed(0)}%)`);
+  printLine(`Useful alert rate: ${(oldStats.usefulAlertRate * 100).toFixed(0)}% → ${(hybridStats.usefulAlertRate * 100).toFixed(0)}%`);
+  printLine(`Range coverage: ${(oldStats.rangeCoverage * 100).toFixed(0)}% → ${(hybridStats.rangeCoverage * 100).toFixed(0)}%`);
+  printLine(`MAPE: ${mapeChange > 0 ? '−' : '+'}${Math.abs(mapeChange).toFixed(0)}% (${overallOldMAPE.toFixed(1)}% → ${overallHybridMAPE.toFixed(1)}%)`);
 }
 
 export function printReport(
@@ -372,10 +367,10 @@ export function printReport(
   categories: CategoryConfig[],
   months: number,
 ) {
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('  BACKTEST: Old (raw production) vs Hybrid (all improvements)');
-  console.log(`  ${months} months × ${categories.length} categories × ${DAYS_PER_MONTH} days`);
-  console.log('═══════════════════════════════════════════════════════════\n');
+  printLine('═══════════════════════════════════════════════════════════');
+  printLine('  BACKTEST: Old (raw production) vs Hybrid (all improvements)');
+  printLine(`  ${months} months × ${categories.length} categories × ${DAYS_PER_MONTH} days`);
+  printLine('═══════════════════════════════════════════════════════════\n');
 
   const budgetedCats = categories.filter((c) => c.budget > 0);
   const totalCatMonths = months * budgetedCats.length;

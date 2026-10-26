@@ -36,6 +36,7 @@ import {
   dedupeByCategoryMonth,
   type ExtendedMetrics,
 } from './lib/backtest-qualitative-metrics';
+import { printLine } from './lib/print-line';
 
 // ═══════════════════════════════════════════════════════════════
 // Spending simulation
@@ -99,19 +100,19 @@ type ReportRow = [label: string, old: string, hybrid: string];
 type AlgorithmResult = QualitativeResult['old'];
 
 function printTable(title: string, rows: ReportRow[]): void {
-  console.log(TABLE_TOP);
-  console.log(`│ ${title.padEnd(28)} │ Old (prod)   │ Hybrid       │`);
-  console.log(TABLE_MID);
+  printLine(TABLE_TOP);
+  printLine(`│ ${title.padEnd(28)} │ Old (prod)   │ Hybrid       │`);
+  printLine(TABLE_MID);
   for (const [label, v1, v2] of rows) {
-    console.log(`│ ${label.padEnd(28)} │ ${pad(v1, 12)} │ ${pad(v2, 12)} │`);
+    printLine(`│ ${label.padEnd(28)} │ ${pad(v1, 12)} │ ${pad(v2, 12)} │`);
   }
-  console.log(TABLE_BOTTOM);
+  printLine(TABLE_BOTTOM);
 }
 
 function printSectionTitle(title: string): void {
-  console.log(HEAVY_RULE);
-  console.log(`  ${title}`);
-  console.log(`${HEAVY_RULE}\n`);
+  printLine(HEAVY_RULE);
+  printLine(`  ${title}`);
+  printLine(`${HEAVY_RULE}\n`);
 }
 
 function densityPenalty(m: ExtendedMetrics): number {
@@ -156,9 +157,9 @@ function printAlertBreakdown(old: AlgorithmResult, hybrid: AlgorithmResult): voi
 }
 
 function printNoisyCategories(old: AlgorithmResult, hybrid: AlgorithmResult): void {
-  console.log('Зашумлённые категории (>50% prognostic FP):');
-  console.log(`  Old:    ${old.metrics.noisyCategories.join(', ') || '—'}`);
-  console.log(`  Hybrid: ${hybrid.metrics.noisyCategories.join(', ') || '—'}`);
+  printLine('Зашумлённые категории (>50% prognostic FP):');
+  printLine(`  Old:    ${old.metrics.noisyCategories.join(', ') || '—'}`);
+  printLine(`  Hybrid: ${hybrid.metrics.noisyCategories.join(', ') || '—'}`);
 }
 
 function formatRange(a: Alert): string {
@@ -167,19 +168,19 @@ function formatRange(a: Alert): string {
 
 function printFalsePrognostics(progFP: Alert[]): void {
   if (progFP.length === 0) return;
-  console.log('  False prognostic alerts:');
+  printLine('  False prognostic alerts:');
   for (const a of progFP) {
     const sign = a.overshootPercent > 0 ? '+' : '';
-    console.log(`    Мес ${a.month + 1} день ${a.day}: прогноз ${a.projected}${formatRange(a)}, бюджет ${a.budget}, факт ${a.actualMonthEnd} (${sign}${a.overshootPercent.toFixed(0)}%)`);
+    printLine(`    Мес ${a.month + 1} день ${a.day}: прогноз ${a.projected}${formatRange(a)}, бюджет ${a.budget}, факт ${a.actualMonthEnd} (${sign}${a.overshootPercent.toFixed(0)}%)`);
   }
 }
 
 function printLateTruePositives(progTP: Alert[]): void {
   const lateTP = progTP.filter((a) => a.day > 20);
   if (lateTP.length === 0) return;
-  console.log('  Late true positives (день > 20):');
+  printLine('  Late true positives (день > 20):');
   for (const a of lateTP) {
-    console.log(`    Мес ${a.month + 1} день ${a.day}: прогноз ${a.projected}${formatRange(a)}, факт ${a.actualMonthEnd}`);
+    printLine(`    Мес ${a.month + 1} день ${a.day}: прогноз ${a.projected}${formatRange(a)}, факт ${a.actualMonthEnd}`);
   }
 }
 
@@ -187,9 +188,9 @@ function printLateTruePositives(progTP: Alert[]): void {
 function printNoBudgetCategory(cat: CategoryConfig, hybrid: AlgorithmResult): void {
   const noBudgetAlerts = hybrid.alerts.filter((a) => a.category === cat.name && a.kind === 'no_budget');
   if (noBudgetAlerts.length === 0) return;
-  console.log(`${cat.name} (budget=0, avg ${cat.monthlyAvg}±${cat.monthlyStddev}):`);
-  console.log(`  Budget recommendation alerts: ${noBudgetAlerts.length}`);
-  console.log('');
+  printLine(`${cat.name} (budget=0, avg ${cat.monthlyAvg}±${cat.monthlyStddev}):`);
+  printLine(`  Budget recommendation alerts: ${noBudgetAlerts.length}`);
+  printLine('');
 }
 
 function printBudgetedCategory(cat: CategoryConfig, deduped: Alert[]): void {
@@ -200,14 +201,14 @@ function printBudgetedCategory(cat: CategoryConfig, deduped: Alert[]): void {
   const actionable = deduped.filter((a) => a.daysRemaining > 5).length;
   const avgDetectionDay = progTP.length > 0 ? progTP.reduce((s, a) => s + a.day, 0) / progTP.length : 0;
 
-  console.log(`${cat.name} (budget ${cat.budget}, avg ${cat.monthlyAvg}±${cat.monthlyStddev}):`);
-  console.log(`  Factual: ${factual.length}, Prognostic TP: ${progTP.length}, Prognostic FP: ${progFP.length}`);
-  console.log(`  Prognostic precision: ${pct(prognostic.length > 0 ? progTP.length / prognostic.length : 0)}`);
-  console.log(`  Actionable: ${actionable}/${deduped.length}, Avg prognostic TP day: ${avgDetectionDay.toFixed(0)}`);
+  printLine(`${cat.name} (budget ${cat.budget}, avg ${cat.monthlyAvg}±${cat.monthlyStddev}):`);
+  printLine(`  Factual: ${factual.length}, Prognostic TP: ${progTP.length}, Prognostic FP: ${progFP.length}`);
+  printLine(`  Prognostic precision: ${pct(prognostic.length > 0 ? progTP.length / prognostic.length : 0)}`);
+  printLine(`  Actionable: ${actionable}/${deduped.length}, Avg prognostic TP day: ${avgDetectionDay.toFixed(0)}`);
 
   printFalsePrognostics(progFP);
   printLateTruePositives(progTP);
-  console.log('');
+  printLine('');
 }
 
 function printCategoryDetail(cat: CategoryConfig, hybrid: AlgorithmResult): void {
@@ -231,40 +232,40 @@ function printVerdict(old: AlgorithmResult, hybrid: AlgorithmResult): void {
   const sqHybrid = h.signalQuality;
   const best = sqHybrid >= sqOld ? 'Hybrid' : 'Old';
 
-  console.log(`Signal Quality: Old=${sqOld.toFixed(3)} → Hybrid=${sqHybrid.toFixed(3)}`);
-  console.log(`Best algorithm: ${best}`);
+  printLine(`Signal Quality: Old=${sqOld.toFixed(3)} → Hybrid=${sqHybrid.toFixed(3)}`);
+  printLine(`Best algorithm: ${best}`);
 
   const improvementVsOld = sqOld > 0 ? ((sqHybrid - sqOld) / sqOld * 100).toFixed(1) : 'N/A';
-  console.log(`Hybrid vs Old: ${Number(improvementVsOld) > 0 ? '+' : ''}${improvementVsOld}%`);
+  printLine(`Hybrid vs Old: ${Number(improvementVsOld) > 0 ? '+' : ''}${improvementVsOld}%`);
 
   const showReduction = old.alerts.length > 0
     ? ((old.alerts.length - hybrid.alerts.length) / old.alerts.length * 100)
     : 0;
-  console.log(`Alerts shown: Old=${old.alerts.length} → Hybrid=${hybrid.alerts.length} (−${showReduction.toFixed(0)}%)`);
+  printLine(`Alerts shown: Old=${old.alerts.length} → Hybrid=${hybrid.alerts.length} (−${showReduction.toFixed(0)}%)`);
 
-  console.log(`\nPrognostic precision: ${pct(o.prognosticPrecision)} → ${pct(h.prognosticPrecision)}`);
-  console.log(`Actionability: ${pct(o.actionabilityRate)} → ${pct(h.actionabilityRate)}`);
-  console.log(`FP penalty: ${o.fpPenalty.toFixed(3)} → ${h.fpPenalty.toFixed(3)}`);
-  console.log(`Severity accuracy: ${pct(o.severityAccuracy)} → ${pct(h.severityAccuracy)}`);
-  console.log(`Useful alert rate: ${pct(o.usefulAlertRate)} → ${pct(h.usefulAlertRate)}`);
-  console.log(`Range coverage: ${pct(o.rangeCoverage)} → ${pct(h.rangeCoverage)}`);
-  console.log(`Noise: ${o.noisyCategories.length} → ${h.noisyCategories.length} noisy categories`);
+  printLine(`\nPrognostic precision: ${pct(o.prognosticPrecision)} → ${pct(h.prognosticPrecision)}`);
+  printLine(`Actionability: ${pct(o.actionabilityRate)} → ${pct(h.actionabilityRate)}`);
+  printLine(`FP penalty: ${o.fpPenalty.toFixed(3)} → ${h.fpPenalty.toFixed(3)}`);
+  printLine(`Severity accuracy: ${pct(o.severityAccuracy)} → ${pct(h.severityAccuracy)}`);
+  printLine(`Useful alert rate: ${pct(o.usefulAlertRate)} → ${pct(h.usefulAlertRate)}`);
+  printLine(`Range coverage: ${pct(o.rangeCoverage)} → ${pct(h.rangeCoverage)}`);
+  printLine(`Noise: ${o.noisyCategories.length} → ${h.noisyCategories.length} noisy categories`);
 }
 
 function printQualitativeReport(result: QualitativeResult): void {
   const { old, hybrid, categories, months } = result;
 
-  console.log(HEAVY_RULE);
-  console.log('  КАЧЕСТВЕННЫЙ БЭКТЕСТ: Old (raw production) vs Hybrid (all improvements)');
-  console.log(`  ${months} months × ${categories.length} categories × ${DAYS_PER_MONTH} days`);
-  console.log(`${HEAVY_RULE}\n`);
+  printLine(HEAVY_RULE);
+  printLine('  КАЧЕСТВЕННЫЙ БЭКТЕСТ: Old (raw production) vs Hybrid (all improvements)');
+  printLine(`  ${months} months × ${categories.length} categories × ${DAYS_PER_MONTH} days`);
+  printLine(`${HEAVY_RULE}\n`);
 
   printMainMetrics(old, hybrid);
   printAlertBreakdown(old, hybrid);
   printNoisyCategories(old, hybrid);
 
   // Per-category detail (hybrid)
-  console.log('');
+  printLine('');
   printSectionTitle('ПО КАТЕГОРИЯМ (Hybrid детализация)');
   for (const cat of categories) {
     printCategoryDetail(cat, hybrid);
@@ -380,29 +381,29 @@ if (isRealMode) {
   const groupId = groupIdArg ? Number.parseInt(groupIdArg.split('=')[1] ?? '1') : 1;
   const dbPath = dbPathArg ? dbPathArg.split('=')[1] ?? './data/expenses.db' : './data/expenses.db';
 
-  console.log(`Loading real data from ${dbPath} for group ${groupId}...\n`);
+  printLine(`Loading real data from ${dbPath} for group ${groupId}...\n`);
   const { expenses, categories, months, budgetByMonth } = loadRealData(dbPath, groupId);
-  console.log(`Loaded ${expenses.length} expenses, ${categories.length} categories, ${months} months\n`);
+  printLine(`Loaded ${expenses.length} expenses, ${categories.length} categories, ${months} months\n`);
 
   const result = runQualitativeBacktest(expenses, categories, months, budgetByMonth);
   printQualitativeReport(result);
 } else {
-  console.log('Generating spending data with 5 random seeds...\n');
-  console.log('Tip: use --real --group-id=N --db=path/to/expenses.db for real data\n');
+  printLine('Generating spending data with 5 random seeds...\n');
+  printLine('Tip: use --real --group-id=N --db=path/to/expenses.db for real data\n');
 
   const seeds = [42, 137, 256, 1001, 7777];
   let allOldAlerts: Alert[] = [];
   let allHybridAlerts: Alert[] = [];
 
   for (const seed of seeds) {
-    console.log(`  Seed ${seed}...`);
+    printLine(`  Seed ${seed}...`);
     const data = generateSpendingData(seed);
     const result = runQualitativeBacktest(data, SYNTH_CATEGORIES, SYNTH_MONTHS);
     allOldAlerts = allOldAlerts.concat(result.old.alerts);
     allHybridAlerts = allHybridAlerts.concat(result.hybrid.alerts);
   }
 
-  console.log('');
+  printLine('');
 
   const budgetedCats = SYNTH_CATEGORIES.filter((c) => c.budget > 0);
   const totalCatMonths = SYNTH_MONTHS * budgetedCats.length * seeds.length;

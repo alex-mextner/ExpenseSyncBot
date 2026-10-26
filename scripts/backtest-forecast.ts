@@ -48,6 +48,7 @@ import {
   type DailyExpense,
   normalizeMonth,
 } from './lib/backtest-shared';
+import { printLine } from './lib/print-line';
 
 // ═══════════════════════════════════════════════════════════════
 // Interval-based cycle detection (refueling, salon, subscriptions)
@@ -751,15 +752,15 @@ if (isRealMode) {
   const groupId = groupIdArg ? Number.parseInt(groupIdArg.split('=')[1] ?? '1') : 1;
   const dbPath = dbPathArg ? dbPathArg.split('=')[1] ?? './data/expenses.db' : './data/expenses.db';
 
-  console.log(`Loading real data from ${dbPath} for group ${groupId}...\n`);
+  printLine(`Loading real data from ${dbPath} for group ${groupId}...\n`);
   const { expenses, categories, months, budgetByMonth } = loadRealData(dbPath, groupId);
-  console.log(`Loaded ${expenses.length} expenses, ${categories.length} categories, ${months} months\n`);
+  printLine(`Loaded ${expenses.length} expenses, ${categories.length} categories, ${months} months\n`);
 
   const result = runBacktest(expenses, categories, months, DAYS_PER_MONTH, budgetByMonth);
   printReport(result, categories, months);
 } else {
-  console.log('Generating spending data with 5 random seeds...\n');
-  console.log('Tip: use --real --group-id=N --db=path/to/expenses.db for real data\n');
+  printLine('Generating spending data with 5 random seeds...\n');
+  printLine('Tip: use --real --group-id=N --db=path/to/expenses.db for real data\n');
 
   const seeds = [42, 137, 256, 1001, 7777];
   let allOldAlerts: AlertEvent[] = [];
