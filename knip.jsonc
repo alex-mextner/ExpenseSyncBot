@@ -21,12 +21,7 @@
   // ZenPlugins is a third-party git submodule — excluded here exactly like in
   // biome.jsonc ("!src/services/bank/ZenPlugins"). Not checked out in CI, and
   // the types the bot needs are mirrored locally in zenmoney-types.ts.
-  "project": [
-    "src/**/*.ts",
-    "!src/services/bank/ZenPlugins/**",
-    "libs/**/*.ts",
-    "*.ts"
-  ],
+  "project": ["src/**/*.ts", "!src/services/bank/ZenPlugins/**", "libs/**/*.ts", "*.ts"],
   "ignore": [
     // Deliberately-complete local mirror of ZenMoney submodule types (see the
     // file header + CLAUDE.md "types maintained locally"). Some members are not
