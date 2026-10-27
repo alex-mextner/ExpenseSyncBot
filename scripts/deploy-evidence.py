@@ -53,9 +53,12 @@ SECRET_PATTERNS = [
     (re.compile(r"\bya29\.[A-Za-z0-9_-]{16,}"), "[google-token]"),
     (re.compile(r"\bAIza[A-Za-z0-9_-]{30,}"), "[google-key]"),
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [redacted]"),
-    (re.compile(
-        r"""(?i)(["']?(?:password|passwd|secret|token|api[_-]?key|encryption[_-]?key|private[_-]?key|authorization|cookie|session[_-]?string)["']?\s*[:=]\s*)(["']?)[^\s"',}&]+"""
-    ), r"\1\2[redacted]"),
+    (
+        re.compile(
+            r"""(?i)(["']?(?:password|passwd|secret|token|api[_-]?key|encryption[_-]?key|private[_-]?key|authorization|cookie|session[_-]?string)["']?\s*[:=]\s*)(["']?)[^\s"',}&]+"""
+        ),
+        r"\1\2[redacted]",
+    ),
     (re.compile(r"://([^/\s:@]*):[^/\s@]+@"), r"://\1:[redacted]@"),
 ]
 # Message content must not be copied: blank the value of these JSON string fields.
@@ -70,7 +73,9 @@ CONTENT_STRUCTURE = re.compile(
 )
 # pino's own `msg` carries user text where the handlers log it in the message: the raw text of every
 # incoming chat message (message.handler.ts) and the validators' verdict over a user's reply.
-MESSAGE_WITH_USER_TEXT = re.compile(r'("msg"\s*:\s*)"\[(?:MSG|VALIDATOR|ADVICE-VALIDATOR)\](?:[^"\\]|\\.)*"')
+MESSAGE_WITH_USER_TEXT = re.compile(
+    r'("msg"\s*:\s*)"\[(?:MSG|VALIDATOR|ADVICE-VALIDATOR)\](?:[^"\\]|\\.)*"'
+)
 HIGH_LEVEL = re.compile(r'"level"\s*:\s*(?:5\d|[6-9]\d)\b')
 
 
@@ -123,10 +128,14 @@ def copy_tail_gz(source, target, max_bytes):
             src.seek(skipped - 1)
             src.readline()  # finish the line the cut landed in; a cut exactly on a boundary loses nothing
             if src.tell() >= size:
-                src.seek(skipped)  # the whole window is one giant line: keep its raw bytes rather than nothing
+                src.seek(
+                    skipped
+                )  # the whole window is one giant line: keep its raw bytes rather than nothing
         remaining = size - src.tell()
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", compresslevel=6) as out:
+        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(
+            filename="", fileobj=raw, mode="wb", compresslevel=6
+        ) as out:
             while remaining > 0:
                 chunk = src.read(min(remaining, COPY_CHUNK))
                 if not chunk:
@@ -142,7 +151,9 @@ def tail_lines(path, count):
         size = os.fstat(handle.fileno()).st_size
         start = max(0, size - TAIL_READ_BYTES)
         handle.seek(start)
-        lines = handle.read(TAIL_READ_BYTES).decode("utf-8", errors="replace").splitlines(keepends=True)
+        lines = (
+            handle.read(TAIL_READ_BYTES).decode("utf-8", errors="replace").splitlines(keepends=True)
+        )
     if start and lines:
         lines = lines[1:]  # the first line is cut in the middle
     return lines[-count:]
@@ -164,20 +175,30 @@ def log_sources(processes, apps):
 
 
 def summaries(processes, apps):
-    return [deploy_pm2.summarize(p) for p in (deploy_pm2.find(processes, name) for name in apps) if p]
+    return [
+        deploy_pm2.summarize(p) for p in (deploy_pm2.find(processes, name) for name in apps) if p
+    ]
 
 
 def host_snapshot(logs_root, timeout):
     parts = []
-    for label, path in (("loadavg", "/proc/loadavg"), ("pressure/io", "/proc/pressure/io"),
-                        ("pressure/memory", "/proc/pressure/memory"), ("pressure/cpu", "/proc/pressure/cpu")):
+    for label, path in (
+        ("loadavg", "/proc/loadavg"),
+        ("pressure/io", "/proc/pressure/io"),
+        ("pressure/memory", "/proc/pressure/memory"),
+        ("pressure/cpu", "/proc/pressure/cpu"),
+    ):
         try:
             parts.append(f"## {label}\n{Path(path).read_text()}")
         except OSError:
             parts.append(f"## {label}\n(unavailable)\n")
-    for label, cmd in (("free -m", ["free", "-m"]), ("uptime", ["uptime"]),
-                       (f"df -h {logs_root}", ["df", "-h", str(logs_root)]), ("df -h /", ["df", "-h", "/"]),
-                       ("vmstat 1 2", ["vmstat", "1", "2"])):
+    for label, cmd in (
+        ("free -m", ["free", "-m"]),
+        ("uptime", ["uptime"]),
+        (f"df -h {logs_root}", ["df", "-h", str(logs_root)]),
+        ("df -h /", ["df", "-h", "/"]),
+        ("vmstat 1 2", ["vmstat", "1", "2"]),
+    ):
         _, out, err = deploy_pm2.run(cmd, timeout)
         parts.append(f"## {label}\n{out or err}")
     return "\n".join(parts)
@@ -189,7 +210,9 @@ def logs_index(logs_root):
     with os.scandir(logs_root) as it:
         for item in sorted(it, key=lambda entry: entry.name):
             info = item.stat(follow_symlinks=False)
-            when = datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            when = datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             kind = "dir " if item.is_dir(follow_symlinks=False) else "file"
             rows.append(f"{kind} {info.st_size:>12} {when}Z {item.name}")
     return "\n".join(rows) + "\n"
@@ -197,7 +220,11 @@ def logs_index(logs_root):
 
 def state_line(summary, level50plus):
     uptime = summary.get("pm_uptime")
-    up_seconds = int(datetime.datetime.now().timestamp() - uptime / 1000) if isinstance(uptime, (int, float)) else "?"
+    up_seconds = (
+        int(datetime.datetime.now().timestamp() - uptime / 1000)
+        if isinstance(uptime, (int, float))
+        else "?"
+    )
     memory = summary.get("memory")
     memory_mb = int(memory / 1024 / 1024) if isinstance(memory, (int, float)) else "?"
     return (
@@ -212,14 +239,23 @@ def cmd_release_logs(args):
     processes = deploy_pm2.pm2_processes(args.pm2, args.command_timeout)
     total = 0
     if processes is None:
-        write_private(directory / "note.txt", "pm2 unavailable: its log paths are unknown, no log was copied\n")
+        write_private(
+            directory / "note.txt",
+            "pm2 unavailable: its log paths are unknown, no log was copied\n",
+        )
     else:
-        write_private(directory / "processes.json", json.dumps(summaries(processes, args.app), indent=2) + "\n")
+        write_private(
+            directory / "processes.json",
+            json.dumps(summaries(processes, args.app), indent=2) + "\n",
+        )
         max_bytes = int(args.tail_mb * 1024 * 1024)
         for app, stream, path in log_sources(processes, args.app):
             if not os.path.isfile(path) or os.path.getsize(path) == 0:
                 continue
-            copied = best_effort(f"{app} {stream} log", lambda: copy_tail_gz(path, directory / f"{app}.{stream}.log.gz", max_bytes))
+            copied = best_effort(
+                f"{app} {stream} log",
+                lambda: copy_tail_gz(path, directory / f"{app}.{stream}.log.gz", max_bytes),
+            )
             total += copied or 0
     print(f"RELEASE_LOGS dir={directory} bytes={total}")
 
@@ -231,22 +267,45 @@ def cmd_failed(args):
     if processes is None:
         state.append("pm2 unavailable: process state and log paths could not be read")
     else:
-        write_private(directory / "processes.json", json.dumps(summaries(processes, args.app), indent=2) + "\n")
+        write_private(
+            directory / "processes.json",
+            json.dumps(summaries(processes, args.app), indent=2) + "\n",
+        )
         tails = {}
         for app, stream, path in log_sources(processes, args.app):
+
             def save(app=app, stream=stream, path=path):
                 text = redact("".join(tail_lines(path, args.tail_lines)))[-TAIL_MAX_BYTES:]
                 write_private(directory / f"{app}.{stream}.tail.redacted.log", text)
                 return len(HIGH_LEVEL.findall(text))
+
             tails[app] = tails.get(app, 0) + (best_effort(f"{app} {stream} log tail", save) or 0)
         for app in args.app:
             process = deploy_pm2.find(processes, app)
-            state.append(state_line(deploy_pm2.summarize(process), tails.get(app, 0)) if process else f"{app} missing from the pm2 list")
+            state.append(
+                state_line(deploy_pm2.summarize(process), tails.get(app, 0))
+                if process
+                else f"{app} missing from the pm2 list"
+            )
     write_private(directory / "state.txt", "\n".join(state) + "\n")
     if args.verdict_log and Path(args.verdict_log).is_file():
-        best_effort("verdict log", lambda: write_private(directory / "verdict.log", redact(Path(args.verdict_log).read_text(errors="replace"))))
-    best_effort("logs index", lambda: write_private(directory / "logs-index.txt", logs_index(args.logs_root)))
-    best_effort("host load", lambda: write_private(directory / "host-load.txt", redact(host_snapshot(args.logs_root, args.command_timeout))))
+        best_effort(
+            "verdict log",
+            lambda: write_private(
+                directory / "verdict.log",
+                redact(Path(args.verdict_log).read_text(errors="replace")),
+            ),
+        )
+    best_effort(
+        "logs index",
+        lambda: write_private(directory / "logs-index.txt", logs_index(args.logs_root)),
+    )
+    best_effort(
+        "host load",
+        lambda: write_private(
+            directory / "host-load.txt", redact(host_snapshot(args.logs_root, args.command_timeout))
+        ),
+    )
     print(f"EVIDENCE_DIR={directory}")
 
 
@@ -257,22 +316,38 @@ def main(argv=None):
         command = sub.add_parser(name)
         command.add_argument("--pm2", default="pm2", help="pm2 binary")
         command.add_argument("--logs-root", required=True)
-        command.add_argument("--app", action="append", required=True, help="pm2 app name; repeatable")
-        command.add_argument("--command-timeout", type=float, default=30.0, help="seconds each pm2/host command may take")
+        command.add_argument(
+            "--app", action="append", required=True, help="pm2 app name; repeatable"
+        )
+        command.add_argument(
+            "--command-timeout",
+            type=float,
+            default=30.0,
+            help="seconds each pm2/host command may take",
+        )
     release = sub.choices["release-logs"]
     release.add_argument("--label", required=True, help="short revision of the outgoing release")
-    release.add_argument("--tail-mb", type=float, default=16.0, help="keep at most this much of the end of each log")
+    release.add_argument(
+        "--tail-mb", type=float, default=16.0, help="keep at most this much of the end of each log"
+    )
     failed = sub.choices["failed"]
     failed.add_argument("--sha", required=True)
     failed.add_argument("--tail-lines", type=int, default=TAIL_LINES)
-    failed.add_argument("--verdict-log", default="", help="file with the health verdict's output, saved redacted")
+    failed.add_argument(
+        "--verdict-log", default="", help="file with the health verdict's output, saved redacted"
+    )
     args = parser.parse_args(argv)
-    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", getattr(args, "label", None) or getattr(args, "sha", None) or ""):
+    if not re.fullmatch(
+        r"[A-Za-z0-9._:-]{1,80}", getattr(args, "label", None) or getattr(args, "sha", None) or ""
+    ):
         parser.error("label/sha must be a short plain token")
     try:
         {"release-logs": cmd_release_logs, "failed": cmd_failed}[args.command](args)
     except Exception as error:  # evidence is best effort and must never block a reload
-        print(f"deploy-evidence: command {args.command} failed ({type(error).__name__})", file=sys.stderr)
+        print(
+            f"deploy-evidence: command {args.command} failed ({type(error).__name__})",
+            file=sys.stderr,
+        )
     return 0
 
 

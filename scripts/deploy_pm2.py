@@ -19,8 +19,16 @@ import os
 import subprocess
 
 PM2_ENV_KEEP = (
-    "status", "restart_time", "unstable_restarts", "pm_uptime", "created_at", "exec_mode",
-    "pm_exec_path", "pm_cwd", "pm_out_log_path", "pm_err_log_path",
+    "status",
+    "restart_time",
+    "unstable_restarts",
+    "pm_uptime",
+    "created_at",
+    "exec_mode",
+    "pm_exec_path",
+    "pm_cwd",
+    "pm_out_log_path",
+    "pm_err_log_path",
 )
 
 
@@ -32,8 +40,13 @@ def run(cmd, timeout=30):
     """(returncode, stdout, stderr). A missing binary or a timeout is a failed run, not an exception."""
     try:
         done = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, errors="replace",
-            env=child_env(), stdin=subprocess.DEVNULL,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            errors="replace",
+            env=child_env(),
+            stdin=subprocess.DEVNULL,
             # Explicit on purpose: a pm2 daemon started from here must not inherit the host deploy
             # lock's file descriptor (it would keep the lock after the deploy step ended).
             close_fds=True,

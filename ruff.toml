@@ -1,0 +1,10 @@
+# Ruff settings for the deploy helper scripts in scripts/ (the only Python in this repository).
+# Everything else keeps Ruff's defaults; no rule is ignored here.
+
+# The lowest Python the scripts are written for (`vermin scripts/*.py` reports 3.8). The odroid's
+# python3 is not pinned anywhere in this repository, so do not let Ruff assume a newer one
+# (e.g. rewriting datetime.timezone.utc to datetime.UTC, which needs 3.11).
+target-version = "py38"
+
+# Same width as Biome's lineWidth in biome.jsonc.
+line-length = 100

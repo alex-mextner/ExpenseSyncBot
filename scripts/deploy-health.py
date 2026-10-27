@@ -54,7 +54,9 @@ LOG_READ_BYTES = 1024 * 1024
 # reaches a line older than the release's start, up to this cap.
 LOG_READ_MAX_BYTES = 64 * 1024 * 1024
 
-STAMP = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:[.,]\d+)?\s*(Z|[+-]\d{2}:?\d{2})?")
+STAMP = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:[.,]\d+)?\s*(Z|[+-]\d{2}:?\d{2})?"
+)
 LEVEL = re.compile(r'"level"\s*:\s*(\d+)')
 
 
@@ -63,7 +65,9 @@ def sanitize(text):
 
 
 def probe(url, timeout):
-    code, out, _ = deploy_pm2.run(["curl", "-fsS", "--max-time", str(min(20, timeout)), url], timeout)
+    code, out, _ = deploy_pm2.run(
+        ["curl", "-fsS", "--max-time", str(min(20, timeout)), url], timeout
+    )
     return out.strip() if code == 0 else ""
 
 
@@ -92,7 +96,9 @@ def line_time(line):
         digits = zone[1:].replace(":", "")
         offset = datetime.timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
         offset = -offset if zone[0] == "-" else offset
-    stamp = datetime.datetime(year, month, day, hour, minute, second, tzinfo=datetime.timezone(offset))
+    stamp = datetime.datetime(
+        year, month, day, hour, minute, second, tzinfo=datetime.timezone(offset)
+    )
     return stamp.timestamp()
 
 
@@ -110,7 +116,11 @@ def read_log_window(path, since):
                     lines = lines[1:]  # cut in the middle
                 first = next((t for t in map(line_time, lines) if t is not None), None)
                 # Done when the window starts at the file's start, or already reaches back before the release.
-                if start == 0 or window >= LOG_READ_MAX_BYTES or (first is not None and first < since - START_TOLERANCE_SECONDS):
+                if (
+                    start == 0
+                    or window >= LOG_READ_MAX_BYTES
+                    or (first is not None and first < since - START_TOLERANCE_SECONDS)
+                ):
                     return lines
                 window *= 2
     except OSError:
@@ -172,12 +182,19 @@ def host_saturated(proc_dir, io_threshold, load_factor):
 
 
 def describe(apps):
-    return ",".join(f"{sanitize(name)}:{sanitize(status)}:{restarts}" for name, status, restarts in apps) or "<none>"
+    return (
+        ",".join(
+            f"{sanitize(name)}:{sanitize(status)}:{restarts}" for name, status, restarts in apps
+        )
+        or "<none>"
+    )
 
 
 def result(code, verdict, health, apps, reason, started):
     elapsed = int(time.monotonic() - started)
-    print(f"RESULT verdict={verdict} health={sanitize(health)} apps={describe(apps)} elapsed={elapsed}s reason={reason}")
+    print(
+        f"RESULT verdict={verdict} health={sanitize(health)} apps={describe(apps)} elapsed={elapsed}s reason={reason}"
+    )
     return code
 
 
@@ -207,7 +224,9 @@ def parse_baseline(pairs):
     for pair in pairs:
         name, _, value = pair.rpartition("=")
         if not name or not value.isdigit():
-            raise SystemExit(f"deploy-health: --baseline wants <app>=<restart count>, got {sanitize(pair)!r}")
+            raise SystemExit(
+                f"deploy-health: --baseline wants <app>=<restart count>, got {sanitize(pair)!r}"
+            )
         baseline[name] = int(value)
     return baseline
 
@@ -251,9 +270,15 @@ def scan_apps(args, state, processes):
         if status in DEAD_STATUSES:
             return state.verdict(3, "dead", f"{sanitize(name)} is {sanitize(status)}")
         if restarts - state.baseline[name] >= 2:
-            return state.verdict(3, "dead", f"crash loop: {sanitize(name)} restart count {state.baseline[name]}->{restarts}")
+            return state.verdict(
+                3,
+                "dead",
+                f"crash loop: {sanitize(name)} restart count {state.baseline[name]}->{restarts}",
+            )
         if restarts != state.seen[name]:
-            state.ok_since = None  # one restart is not yet a loop, but it restarts the stability window
+            state.ok_since = (
+                None  # one restart is not yet a loop, but it restarts the stability window
+            )
             state.seen[name] = restarts
     return None
 
@@ -270,7 +295,11 @@ def stable_verdict(args, state):
     if fatal:
         return state.verdict(3, "dead", f"{fatal} fatal (level>=60) log lines since start")
     if errors > args.max_error_logs:
-        return state.verdict(4, "unhealthy", f"{errors} level>=50 log lines since start (limit {args.max_error_logs})")
+        return state.verdict(
+            4,
+            "unhealthy",
+            f"{errors} level>=50 log lines since start (limit {args.max_error_logs})",
+        )
     note = f"{errors} level>=50 log lines since start" if errors else "no level>=50 log lines"
     return state.verdict(0, "ok", f"stable for {args.stable:g}s, {note}")
 
@@ -284,10 +313,20 @@ def budget_verdict(args, state, now, elapsed):
     if elapsed >= args.hard_cap:
         return state.verdict(4, "unhealthy", f"hard cap {args.hard_cap:g}s reached")
     if not (saturated and progressing):
-        why = "host not saturated" if not saturated else f"no progress for {int(now - state.last_progress)}s"
-        return state.verdict(4, "unhealthy", f"not healthy after {int(elapsed)}s of {args.base_budget:g}s budget ({why})")
+        why = (
+            "host not saturated"
+            if not saturated
+            else f"no progress for {int(now - state.last_progress)}s"
+        )
+        return state.verdict(
+            4,
+            "unhealthy",
+            f"not healthy after {int(elapsed)}s of {args.base_budget:g}s budget ({why})",
+        )
     if elapsed - state.last_report >= 20 or state.last_report == 0:
-        print(f"HEALTH extended past the {args.base_budget:g}s budget at {int(elapsed)}s: host saturated, apps alive and progressing")
+        print(
+            f"HEALTH extended past the {args.base_budget:g}s budget at {int(elapsed)}s: host saturated, apps alive and progressing"
+        )
         state.last_report = elapsed
     return None
 
@@ -315,7 +354,9 @@ def judge_poll(args, state, now, elapsed):
     if verdict is not None:
         return verdict
     if elapsed - state.last_report >= 20:
-        print(f"HEALTH t={int(elapsed)}s health={sanitize(state.health)} apps={describe(state.apps)}")
+        print(
+            f"HEALTH t={int(elapsed)}s health={sanitize(state.health)} apps={describe(state.apps)}"
+        )
         state.last_report = elapsed
     return None
 
@@ -327,7 +368,9 @@ def poll_once(args, state):
     if processes is None:
         state.unreachable += 1
         if state.unreachable >= args.pm2_failures:
-            return state.verdict(3, "dead", f"pm2 did not answer {state.unreachable} polls in a row")
+            return state.verdict(
+                3, "dead", f"pm2 did not answer {state.unreachable} polls in a row"
+            )
         return None
     state.unreachable = 0
     verdict = scan_apps(args, state, processes)
@@ -349,10 +392,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=["wait", "counts"])
     parser.add_argument("--pm2", default="pm2", help="pm2 binary")
-    parser.add_argument("--app", action="append", required=True, help="pm2 app that must come up; repeatable")
+    parser.add_argument(
+        "--app", action="append", required=True, help="pm2 app that must come up; repeatable"
+    )
     parser.add_argument("--url", help="the bot's /health URL (wait)")
-    parser.add_argument("--baseline", action="append", default=[],
-                        help="<app>=<restart count> taken right after the reload (see `counts`); repeatable")
+    parser.add_argument(
+        "--baseline",
+        action="append",
+        default=[],
+        help="<app>=<restart count> taken right after the reload (see `counts`); repeatable",
+    )
     parser.add_argument("--base-budget", type=float, default=240.0)
     parser.add_argument("--hard-cap", type=float, default=900.0)
     parser.add_argument("--poll", type=float, default=4.0)
@@ -362,7 +411,9 @@ def main(argv=None):
     parser.add_argument("--io-psi-threshold", type=float, default=20.0)
     parser.add_argument("--load-factor", type=float, default=1.5)
     parser.add_argument("--pm2-failures", type=int, default=3)
-    parser.add_argument("--command-timeout", type=float, default=30.0, help="seconds one pm2/curl call may take")
+    parser.add_argument(
+        "--command-timeout", type=float, default=30.0, help="seconds one pm2/curl call may take"
+    )
     parser.add_argument("--proc-dir", default="/proc")
     args = parser.parse_args(argv)
     if args.command == "counts":
