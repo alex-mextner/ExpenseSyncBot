@@ -314,14 +314,20 @@ describe.skipIf(!HAVE_FLOCK)('host deploy lock (scripts/odroid-deploy-lock.sh)',
       const box = sandbox();
       const comm = 'a) b (c d) 9';
       const binary = join(box.dir, comm);
-      const sleepPath = spawnSync('bash', ['-c', 'command -v sleep'], { encoding: 'utf8' });
-      copyFileSync(sleepPath.stdout.trim(), binary);
-      const sleeper = spawn(binary, ['30']);
+      const bashPath = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' });
+      copyFileSync(bashPath.stdout.trim(), binary);
+      // A copy of bash under the odd name: once it prints READY it has certainly exec'd, so the
+      // kernel reports the odd comm. (The 'spawn' event alone is not proof of exec on every runtime.)
+      const sleeper = spawn(binary, ['-c', 'echo READY; read -r _']);
       try {
-        // 'spawn' fires once exec succeeded, so the kernel already reports the new comm.
         await new Promise<void>((resolve, reject) => {
-          sleeper.once('spawn', () => resolve());
+          let seen = '';
+          sleeper.stdout.on('data', (chunk: Buffer) => {
+            seen += chunk.toString();
+            if (seen.includes('READY')) resolve();
+          });
           sleeper.once('error', reject);
+          sleeper.once('close', () => reject(new Error('the process exited before READY')));
         });
         const pid = sleeper.pid;
         if (pid === undefined) throw new Error('the sleeper did not start');
