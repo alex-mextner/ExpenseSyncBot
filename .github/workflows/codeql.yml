@@ -19,11 +19,20 @@
 # contiguous comment block directly above it carries `// codeql[<exact-rule-id>]` (a
 # multi-line justification works; the walk stops at the first blank/non-comment line so a
 # marker can't leak across statements). Keeps suppressions greppable, reviewable, and
-# reasoned — not a silent baseline. (When `upload:false`, codeql-action does NOT run its
-# own alert-suppression queries, so this gate implements suppression itself.)
+# reasoned — not a silent baseline. (The CLI's `database analyze` runs no alert-suppression
+# queries, so this gate implements suppression itself.)
 #
-# LANGUAGES / PINNING: same as ci/codeql/workflow.yml — edit the matrix; codeql-action is
-# pinned by major tag per GitHub convention.
+# ENGINE — the CodeQL CLI, not github/codeql-action: the action calls GitHub's code-scanning /
+# feature-flag API while it initializes, so on a Forgejo / Gitea runner it dies with "404 page
+# not found" before any analysis. This gate never uploads anyway, so it runs the same engine
+# directly: the pinned CodeQL release bundle (CODEQL_VERSION below; the ~100 MB per-language
+# bundle when `zstd` is on the runner, else the full one), `codeql database create`, then
+# `codeql database analyze` with the QUERY_SUITE suite into sarif-results/. Runs the same on
+# GitHub-hosted and self-hosted runners; needs only bash, curl, tar and python3.
+#
+# LANGUAGES / PINNING: edit the matrix; bump CODEQL_VERSION deliberately (a CodeQL bundle
+# release, https://github.com/github/codeql-action/releases). CODEQL_CONFIG_FILE optionally
+# names a code-scanning config (e.g. `paths-ignore`) applied at database creation.
 #
 # LANGUAGE NOT PRESENT IN THE REPO (resilience): the matrix ships with a broad default set
 # (javascript-typescript + actions). If a repo has NO source for a matrix language (e.g. a
@@ -58,6 +67,11 @@ permissions:
 env:
   # Severity floor — which SARIF levels fail the job. See header.
   GATE_LEVELS: 'error warning'
+  # Pinned CodeQL bundle (the engine) and the query suite it runs.
+  CODEQL_VERSION: '2.27.1'
+  QUERY_SUITE: 'security-extended'
+  # Optional code-scanning config (paths / paths-ignore) — empty = scan the whole repo.
+  CODEQL_CONFIG_FILE: ''
 
 jobs:
   analyze:
@@ -115,16 +129,15 @@ jobs:
             echo "::error::CodeQL detect: 'git ls-files' failed for ${LANGUAGE} — cannot determine source presence. Failing closed." >&2
             exit 1
           }
-          # grep WITHOUT -q and WITHOUT a pipe: feed the file list as a here-string so nothing
-          # can die of SIGPIPE, and read grep's own exit code (0 = matched, 1 = no match, >1 =
-          # grep error). `|| match_rc=$?` keeps `set -e` from aborting on the no-match case.
-          match_rc=0
-          grep -qiE "$pattern" <<<"$tracked" || match_rc=$?
-          if [ "$match_rc" -gt 1 ]; then
-            echo "::error::CodeQL detect: grep errored (rc=$match_rc) for ${LANGUAGE} — cannot determine source presence. Failing closed." >&2
+          # Count matches from the materialized list; rc still distinguishes no-match from
+          # grep error.
+          grep_rc=0
+          match_count="$(grep -ciE "$pattern" <<<"$tracked")" || grep_rc=$?
+          if [ "$grep_rc" -gt 1 ]; then
+            echo "::error::CodeQL detect: grep errored (rc=$grep_rc) for ${LANGUAGE} — cannot determine source presence. Failing closed." >&2
             exit 1
           fi
-          if [ "$match_rc" -eq 0 ]; then
+          if [ "${match_count:-0}" -gt 0 ]; then
             echo "has_source=true" >> "$GITHUB_OUTPUT"
             echo "Found ${LANGUAGE} source — running CodeQL."
           else
@@ -132,27 +145,61 @@ jobs:
             echo "::notice title=CodeQL ${LANGUAGE} skipped::No ${LANGUAGE} source found in this repo — skipping CodeQL for this language (nothing to scan). This is a clean skip, not a failure. Remove '${LANGUAGE}' from the matrix to drop this notice, or add source to enable the gate."
           fi
 
-      - name: Initialize CodeQL
-        if: steps.detect.outputs.has_source == 'true'
-        uses: github/codeql-action/init@v4
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-          queries: security-extended
 
-      - name: Perform CodeQL Analysis
+      - name: Install the CodeQL CLI (pinned release bundle)
         if: steps.detect.outputs.has_source == 'true'
-        uses: github/codeql-action/analyze@v4
-        with:
-          category: '/language:${{ matrix.language }}'
-          # No GHAS → the dashboard upload 403s. Keep the SARIF, gate on it below.
-          upload: false
-          output: sarif-results
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -euo pipefail
+          case "$LANGUAGE" in
+            javascript-typescript) pack=javascript ;; java-kotlin) pack=java ;; c-cpp) pack=cpp ;;
+            *) pack="$LANGUAGE" ;;
+          esac
+          dest="${RUNNER_TEMP:-$(mktemp -d)}/codeql-bundle"
+          mkdir -p "$dest"
+          base="https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VERSION}"
+          # Prefer the per-language bundle (~100 MB, zstd); fall back to the full one (~660 MB).
+          if command -v zstd >/dev/null 2>&1 \
+             && curl -fsSL -o "$dest.tar.zst" "$base/codeql-bundle-${pack}-linux64.tar.zst"; then
+            zstd -dcq "$dest.tar.zst" | tar -x -C "$dest"
+            rm -f "$dest.tar.zst"
+          else
+            curl -fsSL "$base/codeql-bundle-linux64.tar.gz" | tar -xz -C "$dest"
+          fi
+          echo "$dest/codeql" >> "$GITHUB_PATH"
+          "$dest/codeql/codeql" version --format=terse
+
+      - name: Perform CodeQL Analysis (CodeQL CLI)
+        if: steps.detect.outputs.has_source == 'true'
+        env:
+          LANGUAGE: ${{ matrix.language }}
+          BUILD_MODE: ${{ matrix.build-mode }}
+        run: |
+          set -euo pipefail
+          case "$LANGUAGE" in
+            javascript-typescript) pack=javascript ;; java-kotlin) pack=java ;; c-cpp) pack=cpp ;;
+            *) pack="$LANGUAGE" ;;
+          esac
+          db="${RUNNER_TEMP:-$(mktemp -d)}/codeql-db-${pack}"
+          create=(codeql database create "$db" --language="$pack" --source-root=. --overwrite)
+          [ -n "${BUILD_MODE:-}" ] && create+=(--build-mode="$BUILD_MODE")
+          [ -n "${CODEQL_CONFIG_FILE:-}" ] && create+=(--codescanning-config="$CODEQL_CONFIG_FILE")
+          "${create[@]}"
+          # No dashboard upload (no GHAS / not GitHub): keep the SARIF, gate on it below.
+          mkdir -p sarif-results
+          codeql database analyze "$db" "codeql/${pack}-queries:codeql-suites/${pack}-${QUERY_SUITE}.qls" \
+            --format=sarif-latest --output="sarif-results/${LANGUAGE}.sarif" \
+            --sarif-category="/language:${LANGUAGE}" --threads=0
 
       - name: Upload SARIF artifact
         # Publish the raw SARIF even on a gate failure, so it's downloadable
         # (`gh run download`) for triage. Skipped when the language wasn't analyzed.
+        # Best effort: upload-artifact@v4 refuses non-github.com servers (it treats a Forgejo /
+        # Gitea host as GHES), and a triage copy must not fail the gate — the gate step
+        # below decides pass/fail from the SARIF on disk.
         if: always() && steps.detect.outputs.has_source == 'true'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: codeql-sarif-${{ matrix.language }}
@@ -193,9 +240,11 @@ jobs:
           # at the first non-comment / blank line so a marker can't leak across steps. Keeps
           # suppressions greppable + reviewable — not a silent baseline.
           is_source_suppressed() {
-            local rid="$1" src="$2" line="$3" n txt
+            local rid="$1" src="$2" line="$3" n txt re escaped_rid
             # Match `//` or `#` (with optional indent), then `codeql[<exact rule id>]`.
-            local re="(//|#)[[:space:]]*codeql\[$(printf '%s' "$rid" | sed 's/[][\.*^$/]/\\&/g')\]"
+            # `local x="$(cmd)"` masks cmd's exit status (shellcheck SC2155), so declare, then assign.
+            escaped_rid="$(printf '%s' "$rid" | sed 's/[][\.*^$/]/\\&/g')"
+            re="(//|#)[[:space:]]*codeql\[${escaped_rid}\]"
             # Any line whose first non-space char is `#` or `//` counts as a comment line.
             local comment_re='^[[:space:]]*(#|//)'
             [ -f "$src" ] || return 1
@@ -220,21 +269,28 @@ jobs:
             # Resolve each result's effective level (per-result level overrides the rule
             # default; default to "warning" per the SARIF spec when unspecified).
             # TSV: <sarifSuppressed>\t<level>\t<ruleId>\t<uri>\t<startLine>\t<msg>
-            jq -r '
-              .runs[] as $run
-              | ( [ $run.tool.driver.rules[]?
-                    | { key: .id, value: ( .defaultConfiguration.level // "warning" ) } ]
-                  | from_entries ) as $ruleLevel
-              | $run.results[]?
-              | ( .level // $ruleLevel[.ruleId] // "warning" ) as $lvl
-              | ( ( ( .suppressions // [] ) | length > 0 ) | tostring ) as $sarifSup
-              | ( .locations[0].physicalLocation as $pl
-                  | [ $sarifSup, $lvl, (.ruleId // "?"),
-                      ( $pl.artifactLocation.uri // "?" ),
-                      ( ($pl.region.startLine // 0) | tostring ),
-                      ( .message.text // "" | gsub("[\t\n]"; " ") ) ] )
-              | @tsv
-            ' "$f" > findings.tsv || { echo "::error::Failed to parse $f" >&2; exit 1; }
+            # Parsed with stdlib python3 (jq is not on every runner image). Rule defaults come
+            # from the driver AND the query-pack extensions (where the CodeQL CLI puts them).
+            python3 - "$f" > findings.tsv <<'PY' || { echo "::error::Failed to parse $f" >&2; exit 1; }
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              sarif = json.load(fh)
+          for run in sarif.get("runs") or []:
+              tool = run.get("tool") or {}
+              rule_level = {}
+              for comp in [tool.get("driver") or {}] + list(tool.get("extensions") or []):
+                  for rule in comp.get("rules") or []:
+                      rule_level.setdefault(rule.get("id"), (rule.get("defaultConfiguration") or {}).get("level") or "warning")
+              for res in run.get("results") or []:
+                  rid = res.get("ruleId") or (res.get("rule") or {}).get("id") or "?"
+                  lvl = res.get("level") or rule_level.get(rid) or "warning"
+                  sup = "true" if res.get("suppressions") else "false"
+                  loc = (res.get("locations") or [{}])[0].get("physicalLocation") or {}
+                  uri = (loc.get("artifactLocation") or {}).get("uri") or "?"
+                  line = str((loc.get("region") or {}).get("startLine") or 0)
+                  msg = ((res.get("message") or {}).get("text") or "").replace("\t", " ").replace("\n", " ")
+                  print("\t".join([sup, lvl, rid, uri, line, msg]))
+          PY
 
             while IFS=$'\t' read -r sarifSup lvl rule uri line msg; do
               [ -z "${lvl:-}" ] && continue
