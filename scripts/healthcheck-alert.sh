@@ -24,8 +24,8 @@ HEALTH_URL="${HEALTH_URL:-https://finbot.mextner.com/health}"
 ENV_FILE="${ENV_FILE:-/var/www/ExpenseSyncBot/.env}"
 STATE_FILE="${STATE_FILE:-/tmp/expensesyncbot-down}"
 TIMEOUT=10
-HEALTH_RETRIES=3                       # extra probes after a failed one
-RETRY_DELAY="${RETRY_DELAY:-15}"       # seconds between probes
+HEALTH_RETRIES=3                 # extra probes after a failed one
+RETRY_DELAY="${RETRY_DELAY:-15}" # seconds between probes
 # A malformed override would make `sleep` fail under set -e and silence every alert.
 [[ "$RETRY_DELAY" =~ ^[0-9]+$ ]] || RETRY_DELAY=15
 

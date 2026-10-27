@@ -1,0 +1,11 @@
+# Read by shfmt (and any editor). Shell scripts in this repository are indented with two spaces,
+# indent `case` branches under `case`, and start a continued pipeline / `||` / `&&` line with its
+# operator; without this file shfmt falls back to tabs and rewrites every script.
+# Scoped to *.sh on purpose: TypeScript is formatted by Biome (biome.jsonc) and Python by Ruff.
+root = true
+
+[*.sh]
+indent_style = space
+indent_size = 2
+switch_case_indent = true
+binary_next_line = true

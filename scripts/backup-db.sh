@@ -37,7 +37,7 @@ src.exec('VACUUM INTO \"${TEMP_BACKUP}\"');
 src.close();
 "
 
-gzip -c "$TEMP_BACKUP" > "$BACKUP_FILE"
+gzip -c "$TEMP_BACKUP" >"$BACKUP_FILE"
 rm -f "$TEMP_BACKUP"
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)

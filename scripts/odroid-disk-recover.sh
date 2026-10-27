@@ -129,8 +129,8 @@ send_alert() {
   # A description is not a verdict: Telegram answers {"ok": false, "description": ...}.
   local body delivered reason
   for ((attempt = 1; attempt <= ALERT_ATTEMPTS; attempt++)); do
-    response=$(printf '%s\n' "$config" |
-      curl -K - -s -w '\n%{http_code}' --max-time 15 -X POST \
+    response=$(printf '%s\n' "$config" \
+      | curl -K - -s -w '\n%{http_code}' --max-time 15 -X POST \
         -H 'Content-Type: application/json' -d "$payload")
     status=${response##*$'\n'}
     body=${response%$'\n'*}
@@ -153,9 +153,9 @@ if [[ $MODE == test-alert ]]; then
   exit 1
 fi
 
-started=()  # units the boot left down and this run brought up
-failed=()   # units that would not start
-missing=()  # "<disk> (<uuid>)" that never appeared
+started=()   # units the boot left down and this run brought up
+failed=()    # units that would not start
+missing=()   # "<disk> (<uuid>)" that never appeared
 unstarted=() # units left down because their disk is missing
 
 declare -A uuid_of=([wd500]="$WD500_UUID" [storage]="$STORAGE_UUID")
