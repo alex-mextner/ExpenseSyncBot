@@ -99,6 +99,10 @@ jobs:
             git fetch origin main
             LOCK_LIB="$(mktemp)"
             git show FETCH_HEAD:scripts/odroid-deploy-lock.sh > "$LOCK_LIB"
+            # The file sourced here is a mktemp copy of scripts/odroid-deploy-lock.sh taken from the
+            # commit being deployed (FETCH_HEAD), so no static path exists for shellcheck to follow;
+            # that script is linted separately, as a file of its own.
+            # shellcheck source=/dev/null
             source "$LOCK_LIB"
             rm -f "$LOCK_LIB"
             odroid_deploy_lock_acquire esb || {

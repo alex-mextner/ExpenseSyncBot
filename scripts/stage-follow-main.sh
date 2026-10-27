@@ -29,7 +29,7 @@ warn_admin() {
   curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg chat_id "$ADMIN_CHAT_ID" --arg text "$text" \
-      '{chat_id: $chat_id, text: $text, parse_mode: "HTML"}')" > /dev/null \
+      '{chat_id: $chat_id, text: $text, parse_mode: "HTML"}')" >/dev/null \
     || echo "⚠️  Telegram notification failed"
 }
 
@@ -46,12 +46,15 @@ fi
 case "$STAGE_CMD" in
   "")
     echo "ℹ️  Stage bot is not running — nothing to do"
-    exit 0 ;;
+    exit 0
+    ;;
   *" $MAIN_DIR/index.ts" | "$MAIN_DIR/start-stage.sh"*)
-    echo "🔄 Stage bot runs main — restarting it on $SHORT_SHA" ;;
+    echo "🔄 Stage bot runs main — restarting it on $SHORT_SHA"
+    ;;
   *)
     echo "ℹ️  Stage bot runs a PR worktree — left untouched: $STAGE_CMD"
-    exit 0 ;;
+    exit 0
+    ;;
 esac
 
 # No --update-env: keep the env the stage bot was started with (bun re-reads its merged

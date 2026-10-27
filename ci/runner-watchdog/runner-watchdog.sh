@@ -121,14 +121,14 @@ else
 fi
 
 if [ "$state" = offline ]; then
-  echo "offline=true" >> "$GITHUB_OUTPUT"
+  echo "offline=true" >>"$GITHUB_OUTPUT"
 else
-  echo "offline=false" >> "$GITHUB_OUTPUT"
+  echo "offline=false" >>"$GITHUB_OUTPUT"
 fi
 
 if [ "$state" = "$announced" ]; then
   echo "Admin already knows the runner is $state — no message"
-  echo "state_changed=false" >> "$GITHUB_OUTPUT"
+  echo "state_changed=false" >>"$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -142,6 +142,6 @@ else
   send_telegram "✅ <b>Self-hosted runner <code>${WATCHED_RUNNER}</code> is back online</b>
 Queued deploys and stage jobs will run now."
 fi
-echo "$state" > "$STATE_FILE"
-echo "state_changed=true" >> "$GITHUB_OUTPUT"
+echo "$state" >"$STATE_FILE"
+echo "state_changed=true" >>"$GITHUB_OUTPUT"
 echo "Announced: runner is $state"

@@ -9,7 +9,15 @@
 // guessing a delay, so the only real durations left are the ones under test.
 import { describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -273,5 +281,94 @@ describe.skipIf(!HAVE_FLOCK)('host deploy lock (scripts/odroid-deploy-lock.sh)',
     } finally {
       box.cleanup();
     }
+  });
+
+  // `_odl_start_ticks` is what tells a live holder from a recycled pid, so it must return the
+  // kernel's own starttime (field 22 of /proc/<pid>/stat) whatever the process is called and
+  // whatever the caller's shell state is.
+  describe('process start ticks (_odl_start_ticks)', () => {
+    /** Independent reference: the comm field may hold spaces and ")", so cut at the LAST ")". */
+    function referenceStartTicks(pid: number): string {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const afterComm = stat.slice(stat.lastIndexOf(')') + 2).trimEnd();
+      return afterComm.split(' ')[19] ?? '';
+    }
+
+    function bashStartTicks(pid: number, prelude = ':'): { status: number | null; stdout: string } {
+      const out = spawnSync(
+        'bash',
+        ['-c', `source "${LOCK_LIB}"; ${prelude}; _odl_start_ticks ${pid}`],
+        { encoding: 'utf8' },
+      );
+      return { status: out.status, stdout: out.stdout };
+    }
+
+    test('returns the kernel starttime of a live process', () => {
+      const ticks = bashStartTicks(process.pid);
+      expect(ticks.status).toBe(0);
+      expect(ticks.stdout).toMatch(/^[0-9]+$/);
+      expect(ticks.stdout).toBe(referenceStartTicks(process.pid));
+    });
+
+    test('is not thrown off by a comm holding spaces and parentheses', async () => {
+      const box = sandbox();
+      const comm = 'a) b (c d) 9';
+      const binary = join(box.dir, comm);
+      const bashPath = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' });
+      copyFileSync(bashPath.stdout.trim(), binary);
+      // A copy of bash under the odd name: once it prints READY it has certainly exec'd, so the
+      // kernel reports the odd comm. (The 'spawn' event alone is not proof of exec on every runtime.)
+      const sleeper = spawn(binary, ['-c', 'echo READY; read -r _']);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let seen = '';
+          sleeper.stdout.on('data', (chunk: Buffer) => {
+            seen += chunk.toString();
+            if (seen.includes('READY')) resolve();
+          });
+          sleeper.once('error', reject);
+          sleeper.once('close', () => reject(new Error('the process exited before READY')));
+        });
+        const pid = sleeper.pid;
+        if (pid === undefined) throw new Error('the sleeper did not start');
+        expect(readFileSync(`/proc/${pid}/stat`, 'utf8')).toContain(`(${comm})`);
+        const ticks = bashStartTicks(pid);
+        expect(ticks.status).toBe(0);
+        expect(ticks.stdout).toBe(referenceStartTicks(pid));
+      } finally {
+        sleeper.kill('SIGKILL');
+        box.cleanup();
+      }
+    });
+
+    test('does not depend on the caller IFS or glob settings', () => {
+      const expected = referenceStartTicks(process.pid);
+      for (const prelude of ["IFS=''", "IFS=':'", "IFS=$'\\n'", 'set -f']) {
+        const ticks = bashStartTicks(process.pid, prelude);
+        expect({ prelude, status: ticks.status, stdout: ticks.stdout }).toEqual({
+          prelude,
+          status: 0,
+          stdout: expected,
+        });
+      }
+    });
+
+    test('does not clobber the callers positional parameters', () => {
+      const out = spawnSync(
+        'bash',
+        [
+          '-c',
+          `source "${LOCK_LIB}"; set -- keep these; _odl_start_ticks ${process.pid} >/dev/null; printf '%s|' "$@"`,
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(out.stdout).toBe('keep|these|');
+    });
+
+    test('fails with no output for a process that is gone', () => {
+      const ticks = bashStartTicks(999_999_999);
+      expect(ticks.status).not.toBe(0);
+      expect(ticks.stdout).toBe('');
+    });
   });
 });

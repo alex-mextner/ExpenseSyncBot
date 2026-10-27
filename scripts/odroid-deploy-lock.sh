@@ -25,25 +25,36 @@ ODROID_DEPLOY_LOCK_FD=""
 # Process start time in clock ticks since boot (field 22 of /proc/<pid>/stat); empty when gone.
 _odl_start_ticks() {
   local stat rest
+  local -a fields
   stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  # comm (field 2) may hold spaces and ")", so cut after the LAST ")" rather than splitting the line.
   rest="${stat##*) }"
-  # After the ")" that closes comm, field 3 is the first word; starttime is field 22 => 20th word.
-  set -- $rest
-  printf '%s' "${20}"
+  # After the ")" that closes comm, field 3 is the first word; starttime is field 22 => index 19.
+  # An explicit IFS and `read -a` keep the split independent of the caller's IFS, of globbing and
+  # of the caller's positional parameters (the old `set -- $rest` touched all three).
+  IFS=' ' read -r -a fields <<<"$rest"
+  printf '%s' "${fields[19]:-}"
 }
 
 # Prints "<repo> pid=<pid> since=<time>" and returns 0 when the owner file names a live holder;
 # prints "stale" and returns 1 otherwise.
 _odl_describe_owner() {
   local file="$ODROID_DEPLOY_LOCK_FILE.owner" repo="" pid="" ticks="" started="" line key value live
-  [[ -r "$file" ]] || { printf 'unknown'; return 1; }
+  [[ -r "$file" ]] || {
+    printf 'unknown'
+    return 1
+  }
   while IFS= read -r line; do
-    key="${line%%=*}"; value="${line#*=}"
+    key="${line%%=*}"
+    value="${line#*=}"
     case "$key" in
       repo) repo="$value" ;; pid) pid="$value" ;; start_ticks) ticks="$value" ;; started) started="$value" ;;
     esac
   done <"$file"
-  [[ "$pid" =~ ^[0-9]+$ ]] || { printf 'unknown'; return 1; }
+  [[ "$pid" =~ ^[0-9]+$ ]] || {
+    printf 'unknown'
+    return 1
+  }
   live="$(_odl_start_ticks "$pid" 2>/dev/null || true)"
   if [[ -n "$live" && "$live" == "$ticks" ]]; then
     printf '%s pid=%s since=%s' "$repo" "$pid" "$started"
@@ -55,24 +66,35 @@ _odl_describe_owner() {
 
 odroid_deploy_lock_acquire() {
   local tag="${1:?repo tag required}" waited=0 slice="$ODROID_DEPLOY_LOCK_SLICE" who
-  local dir; dir="$(dirname "$ODROID_DEPLOY_LOCK_FILE")"
-  [[ -d "$dir" ]] || mkdir -p "$dir" || { echo "deploy-lock: cannot create $dir" >&2; return 1; }
+  local dir
+  dir="$(dirname "$ODROID_DEPLOY_LOCK_FILE")"
+  [[ -d "$dir" ]] || mkdir -p "$dir" || {
+    echo "deploy-lock: cannot create $dir" >&2
+    return 1
+  }
   # umask 0: the other repository's deploy user must be able to open (and the owner file to write) these
   # files whichever user created them first; the lock carries no secret.
-  ( umask 0; : >>"$ODROID_DEPLOY_LOCK_FILE"; : >>"$ODROID_DEPLOY_LOCK_FILE.owner" ) \
-    || { echo "deploy-lock: cannot create $ODROID_DEPLOY_LOCK_FILE" >&2; return 1; }
+  (
+    umask 0
+    : >>"$ODROID_DEPLOY_LOCK_FILE"
+    : >>"$ODROID_DEPLOY_LOCK_FILE.owner"
+  ) \
+    || {
+      echo "deploy-lock: cannot create $ODROID_DEPLOY_LOCK_FILE" >&2
+      return 1
+    }
   exec {ODROID_DEPLOY_LOCK_FD}<"$ODROID_DEPLOY_LOCK_FILE" || return 1
   while ! flock -w "$slice" "$ODROID_DEPLOY_LOCK_FD"; do
     waited=$((waited + slice))
     who="$(_odl_describe_owner)" || true
     echo "deploy-lock: $tag waiting for the host deploy lock, held by: $who (waited ${waited}s of ${ODROID_DEPLOY_LOCK_MAX_WAIT}s)" >&2
-    if (( waited >= ODROID_DEPLOY_LOCK_MAX_WAIT )); then
+    if ((waited >= ODROID_DEPLOY_LOCK_MAX_WAIT)); then
       echo "deploy-lock: gave up after ${waited}s; the other deploy is still running. Re-run this deploy when it ends." >&2
       exec {ODROID_DEPLOY_LOCK_FD}<&-
       return 75
     fi
   done
-  if (( waited > 0 )); then echo "deploy-lock: $tag acquired the host deploy lock after ${waited}s" >&2; fi
+  if ((waited > 0)); then echo "deploy-lock: $tag acquired the host deploy lock after ${waited}s" >&2; fi
   # Truncate and rewrite in place: the owner file sits in a sticky directory and may belong to the
   # other repository's user, so replacing it by rename would be refused.
   printf 'repo=%s\npid=%s\nstart_ticks=%s\nstarted=%s\n' \
