@@ -82,3 +82,5 @@ lint_checks:
     warn_above: 1200
     error_above: 2400
     exempt_extensions: [json]
+  ci:
+    rig_source: git+https://git.hyperide.ai/ultrabricks/rig-cli@a71eb0a52e206aa2ee6bf824acfb7b8285c50ac9

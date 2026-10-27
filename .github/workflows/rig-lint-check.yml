@@ -1,0 +1,42 @@
+# Managed by Rig. Class: generated. Source of truth: global Rig config (lint_checks) + rig.yaml.
+# Do not edit directly: `rig apply` reconciles the whole file (rig is installed from lint_checks.ci.rig_source).
+name: rig-lint-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-check:
+    name: lint-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned cccc v1.8.4 (digest-verified)
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "$tmp/cccc.tar.gz" https://github.com/moznion/cccc/releases/download/v1.8.4/cccc-v1.8.4-x86_64-unknown-linux-musl.tar.gz
+          echo "64b3084e05cf2f75d4af57268a2b898526c04be7bc31d0a36708081b13a64f97  $tmp/cccc.tar.gz" | sha256sum -c -
+          tar -xzf "$tmp/cccc.tar.gz" -C "$tmp" cccc
+          echo "e09bc0ec6e9b8e55a57188b0137fdb38a11bba3cc115be8f6ef28df7f4a1d578  $tmp/cccc" | sha256sum -c -
+          # the same lookup rig itself uses: ${XDG_DATA_HOME:-~/.local/share}/rig/cccc/v<version>/cccc
+          dest="${XDG_DATA_HOME:-$HOME/.local/share}/rig/cccc/v1.8.4"
+          mkdir -p "$dest"
+          install -m 0755 "$tmp/cccc" "$dest/cccc"
+      - name: Install rig from the pinned commit
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/rig-venv"
+          "$RUNNER_TEMP/rig-venv/bin/pip" install --quiet "git+https://git.hyperide.ai/ultrabricks/rig-cli@a71eb0a52e206aa2ee6bf824acfb7b8285c50ac9"
+          echo "$RUNNER_TEMP/rig-venv/bin" >> "$GITHUB_PATH"
+      - name: rig lint check
+        run: rig lint check --json
