@@ -25,11 +25,15 @@ ODROID_DEPLOY_LOCK_FD=""
 # Process start time in clock ticks since boot (field 22 of /proc/<pid>/stat); empty when gone.
 _odl_start_ticks() {
   local stat rest
+  local -a fields
   stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  # comm (field 2) may hold spaces and ")", so cut after the LAST ")" rather than splitting the line.
   rest="${stat##*) }"
-  # After the ")" that closes comm, field 3 is the first word; starttime is field 22 => 20th word.
-  set -- $rest
-  printf '%s' "${20}"
+  # After the ")" that closes comm, field 3 is the first word; starttime is field 22 => index 19.
+  # An explicit IFS and `read -a` keep the split independent of the caller's IFS, of globbing and
+  # of the caller's positional parameters (the old `set -- $rest` touched all three).
+  IFS=' ' read -r -a fields <<<"$rest"
+  printf '%s' "${fields[19]:-}"
 }
 
 # Prints "<repo> pid=<pid> since=<time>" and returns 0 when the owner file names a live holder;
