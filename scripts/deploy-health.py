@@ -39,13 +39,13 @@ import argparse
 import datetime
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from pathlib import Path
 
 sys.dont_write_bytecode = True
-import deploy_pm2  # noqa: E402  (a sibling file; must follow dont_write_bytecode)
+import deploy_pm2  # a sibling file; must follow dont_write_bytecode
 
 DEAD_STATUSES = ("errored", "stopped", "waiting restart")
 START_TOLERANCE_SECONDS = 2  # log timestamps have one-second resolution
@@ -169,9 +169,11 @@ def host_saturated(proc_dir, io_threshold, load_factor):
     """True while the host is I/O-bound or overloaded (what made HyperCalendarBot's release slow)."""
     try:
         for line in (Path(proc_dir) / "pressure/io").read_text().splitlines():
-            if line.startswith("some"):
-                if float(re.search(r"avg10=([0-9.]+)", line).group(1)) >= io_threshold:
-                    return True
+            if (
+                line.startswith("some")
+                and float(re.search(r"avg10=([0-9.]+)", line).group(1)) >= io_threshold
+            ):
+                return True
     except (OSError, AttributeError, ValueError):
         pass
     try:

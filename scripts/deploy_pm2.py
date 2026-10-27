@@ -47,6 +47,8 @@ def run(cmd, timeout=30):
             errors="replace",
             env=child_env(),
             stdin=subprocess.DEVNULL,
+            # A non-zero exit is data here (the caller reads the return code), not an exception.
+            check=False,
             # Explicit on purpose: a pm2 daemon started from here must not inherit the host deploy
             # lock's file descriptor (it would keep the lock after the deploy step ended).
             close_fds=True,

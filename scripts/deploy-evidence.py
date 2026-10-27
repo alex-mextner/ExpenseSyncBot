@@ -29,15 +29,16 @@ Assumptions:
 
 import argparse
 import datetime
+import functools
 import gzip
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 sys.dont_write_bytecode = True
-import deploy_pm2  # noqa: E402  (a sibling file; must follow dont_write_bytecode)
+import deploy_pm2  # a sibling file; must follow dont_write_bytecode
 
 TAIL_LINES = 400
 TAIL_MAX_BYTES = 256 * 1024
@@ -110,7 +111,7 @@ def best_effort(what, action):
     """Run one part of the bundle; a failure is reported and the other parts still get saved."""
     try:
         return action()
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - best effort: any failure is reported, never raised
         print(f"deploy-evidence: {what} not saved ({type(error).__name__})", file=sys.stderr)
         return None
 
@@ -252,9 +253,12 @@ def cmd_release_logs(args):
         for app, stream, path in log_sources(processes, args.app):
             if not os.path.isfile(path) or os.path.getsize(path) == 0:
                 continue
+            # Arguments are bound here, not read from the loop variables when the action runs (B023).
             copied = best_effort(
                 f"{app} {stream} log",
-                lambda: copy_tail_gz(path, directory / f"{app}.{stream}.log.gz", max_bytes),
+                functools.partial(
+                    copy_tail_gz, path, directory / f"{app}.{stream}.log.gz", max_bytes
+                ),
             )
             total += copied or 0
     print(f"RELEASE_LOGS dir={directory} bytes={total}")
@@ -343,7 +347,7 @@ def main(argv=None):
         parser.error("label/sha must be a short plain token")
     try:
         {"release-logs": cmd_release_logs, "failed": cmd_failed}[args.command](args)
-    except Exception as error:  # evidence is best effort and must never block a reload
+    except Exception as error:  # noqa: BLE001 - evidence is best effort and must never block a reload
         print(
             f"deploy-evidence: command {args.command} failed ({type(error).__name__})",
             file=sys.stderr,

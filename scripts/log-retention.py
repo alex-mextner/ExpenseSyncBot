@@ -519,7 +519,7 @@ def _compress_pass(root_real, entries, cfg, now, dry_run, compress, actions):
             continue
         try:
             _compress_one(root_real, info.path, compress)
-        except Exception as exc:  # the original is intact on any failure; report and carry on
+        except Exception as exc:  # noqa: BLE001 - the original is intact on any failure; report and carry on
             actions.append(Action("compress-failed", info.path, detail=type(exc).__name__))
         else:
             actions.append(Action("compressed", info.path))
@@ -740,7 +740,7 @@ def send_alert(report, cfg, env_file, state_file, now, sender=telegram_send):
             + [f"- {findings[k]}" for k in due]
         )
         sender(token, chat_id, text)
-    except Exception as exc:  # report the class only; messages from urllib can embed the URL
+    except Exception as exc:  # noqa: BLE001 - report the class only; messages from urllib can embed the URL
         result["failed"] = type(exc).__name__
         return result
     for kind in due:
