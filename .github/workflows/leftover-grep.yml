@@ -5,7 +5,8 @@
 # Scans only the lines the PR ADDS (vs the base) so it doesn't punish pre-existing debt.
 #
 # INSTALL: copy to .github/workflows/leftover-grep.yml AND keep the gate script at
-# ci/leftover-grep/leftover-grep.sh (vendor the ci/ dir, or copy + adjust the run: path).
+# ci/leftover-grep/leftover-grep.sh AND its sibling leftover_grep.py (the launcher execs it;
+# vendor the ci/ dir, or copy both files + adjust the run: path).
 #
 # KNOBS (env on the step): LEFTOVER_INCLUDE / LEFTOVER_EXCLUDE (which files), TICKET_REGEX
 # (what makes a TODO "tracked"), ALLOW_CONSOLE=1 (console.log -> warning not failure).
@@ -53,7 +54,6 @@ jobs:
       # is safe by construction, so it is suppressed greppably rather than left to block.
       - name: Fetch the PR head commit as DATA (not checked out / not executed)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
         run: |
@@ -66,7 +66,9 @@ jobs:
           # three-dot diff `base...HEAD` in leftover-grep.sh either errors (gate would no-op)
           # or diffs against an empty tree (false-positive flood). The base was checked out
           # with fetch-depth: 0 (full history); deepen the head fetch until a merge-base is
-          # reachable, then verify one exists — fail the gate if it doesn't.
+          # reachable, then verify one exists — fail the workflow if it doesn't. The script's
+          # two-dot fallback is for direct/local callers or older copied workflows, not this
+          # official full-fetch path.
           git fetch --no-tags origin "$HEAD_SHA"
           if ! git merge-base "origin/${BASE_REF}" "$HEAD_SHA" >/dev/null 2>&1; then
             # Rare: shallow base or unrelated histories. Deepen both sides, then re-check.
