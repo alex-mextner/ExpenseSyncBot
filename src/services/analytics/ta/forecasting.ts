@@ -136,12 +136,8 @@ export function quantileForecast(data: number[]): QuantileResult {
   };
 }
 
-/**
- * Croston's Method for intermittent demand (sporadic spending).
- * Separately forecasts: (1) amount of non-zero spending, (2) interval between non-zero periods.
- * Ideal for: car repairs, medical expenses — months of zero then a big expense.
- */
-export function croston(data: number[], alpha = 0.3): CrostonResult {
+/** Splits a series into its non-zero amounts and the gaps (in periods) that ended at each one. */
+function splitDemandEvents(data: number[]): { nonZero: number[]; intervals: number[] } {
   const nonZero: number[] = [];
   const intervals: number[] = [];
   let gap = 0;
@@ -154,6 +150,25 @@ export function croston(data: number[], alpha = 0.3): CrostonResult {
       gap = 0;
     }
   }
+  return { nonZero, intervals };
+}
+
+/** Simple exponential smoothing seeded with the first value; `fallback` replaces missing entries. */
+function smoothExponentially(values: number[], alpha: number, fallback: number): number {
+  let ema = values[0] ?? fallback;
+  for (let i = 1; i < values.length; i++) {
+    ema = alpha * (values[i] ?? fallback) + (1 - alpha) * ema;
+  }
+  return ema;
+}
+
+/**
+ * Croston's Method for intermittent demand (sporadic spending).
+ * Separately forecasts: (1) amount of non-zero spending, (2) interval between non-zero periods.
+ * Ideal for: car repairs, medical expenses — months of zero then a big expense.
+ */
+export function croston(data: number[], alpha = 0.3): CrostonResult {
+  const { nonZero, intervals } = splitDemandEvents(data);
 
   if (nonZero.length === 0)
     return { forecast: 0, expectedAmount: 0, expectedInterval: data.length || 1 };
@@ -164,17 +179,8 @@ export function croston(data: number[], alpha = 0.3): CrostonResult {
       expectedInterval: data.length,
     };
 
-  // EMA of non-zero amounts
-  let amountEma = nonZero[0] ?? 0;
-  for (let i = 1; i < nonZero.length; i++) {
-    amountEma = alpha * (nonZero[i] ?? 0) + (1 - alpha) * amountEma;
-  }
-
-  // EMA of intervals
-  let intervalEma = intervals[0] ?? 1;
-  for (let i = 1; i < intervals.length; i++) {
-    intervalEma = alpha * (intervals[i] ?? 1) + (1 - alpha) * intervalEma;
-  }
+  const amountEma = smoothExponentially(nonZero, alpha, 0);
+  const intervalEma = smoothExponentially(intervals, alpha, 1);
 
   // SBA (Syntetos-Boylan Approximation) bias correction
   // Classical Croston has positive bias; SBA removes it with factor (1 - α/2)

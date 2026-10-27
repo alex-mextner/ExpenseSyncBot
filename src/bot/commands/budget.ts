@@ -10,7 +10,10 @@ import {
 } from '../../config/constants';
 import { database } from '../../database';
 import { computeBudgetProgress } from '../../database/repositories/budget.repository';
+import type { Budget, Expense } from '../../database/types';
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
+import type { CategoryTaAnalysis } from '../../services/analytics/ta/analyzer';
+import type { TechnicalAnalysis } from '../../services/analytics/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
@@ -33,69 +36,73 @@ import { maybeSmartAdvice } from './ask';
 
 const logger = createLogger('budget');
 
+function parsePositiveAmount(numStr: string): number | null {
+  const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
+  if (Number.isNaN(amount) || amount <= 0) return null;
+  return amount;
+}
+
+type ParsedBudgetAmount = { amount: number; currency: CurrencyCode };
+
+function parseSymbolPrefixed(trimmed: string): ParsedBudgetAmount | null | undefined {
+  const match = trimmed.match(/^([$€£₽¥])\s*([\d\s,.]+)$/);
+  if (!match) return undefined;
+  const [, currencySymbol, numStr] = match;
+  if (!currencySymbol || !numStr) return null;
+
+  const normalized = normalizeCurrency(currencySymbol);
+  if (!normalized) return null;
+
+  const amount = parsePositiveAmount(numStr);
+  return amount === null ? null : { amount, currency: normalized };
+}
+
+function parseCurrencySuffixed(
+  trimmed: string,
+  defaultCurrency: CurrencyCode,
+): ParsedBudgetAmount | null | undefined {
+  const match = trimmed.match(/^([\d\s,.]+)\s*([$€£₽¥]|[a-zA-Zа-яА-Я]+)$/);
+  if (!match) return undefined;
+  const [, numStr, currencyStr] = match;
+  if (!numStr) return null;
+
+  const amount = parsePositiveAmount(numStr);
+  if (amount === null) return null;
+
+  const normalized = currencyStr ? normalizeCurrency(currencyStr) : null;
+  return { amount, currency: normalized ?? defaultCurrency };
+}
+
+function parseBareAmount(
+  trimmed: string,
+  defaultCurrency: CurrencyCode,
+): ParsedBudgetAmount | null | undefined {
+  const match = trimmed.match(/^([\d\s,.]+)$/);
+  if (!match) return undefined;
+  const [, numStr] = match;
+  if (!numStr) return null;
+
+  const amount = parsePositiveAmount(numStr);
+  return amount === null ? null : { amount, currency: defaultCurrency };
+}
+
 /**
  * Parse budget amount with optional currency
  * Supports: 500, 500$, $500, 500 EUR, 500 евро, etc.
+ *
+ * Each pattern parser returns undefined when its pattern does not match (try the
+ * next one), null when it matched but the value is invalid.
  */
 function parseBudgetAmount(
   amountStr: string,
   defaultCurrency: CurrencyCode,
-): { amount: number; currency: CurrencyCode } | null {
+): ParsedBudgetAmount | null {
   const trimmed = amountStr.trim();
-
-  // Pattern 1: Currency symbol before amount ($500, €100, ₽500)
-  const pattern1 = /^([$€£₽¥])\s*([\d\s,.]+)$/;
-  const match1 = trimmed.match(pattern1);
-
-  if (match1) {
-    const [, currencySymbol, numStr] = match1;
-    if (!currencySymbol || !numStr) return null;
-
-    const normalized = normalizeCurrency(currencySymbol);
-    if (!normalized) return null;
-
-    const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
-    if (Number.isNaN(amount) || amount <= 0) return null;
-
-    return { amount, currency: normalized };
-  }
-
-  // Pattern 2: Amount with currency after (500$, 500 EUR, 500 евро)
-  const pattern2 = /^([\d\s,.]+)\s*([$€£₽¥]|[a-zA-Zа-яА-Я]+)$/;
-  const match2 = trimmed.match(pattern2);
-
-  if (match2) {
-    const [, numStr, currencyStr] = match2;
-    if (!numStr) return null;
-
-    const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
-    if (Number.isNaN(amount) || amount <= 0) return null;
-
-    if (currencyStr) {
-      const normalized = normalizeCurrency(currencyStr);
-      if (normalized) {
-        return { amount, currency: normalized };
-      }
-    }
-
-    return { amount, currency: defaultCurrency };
-  }
-
-  // Pattern 3: Just amount (500)
-  const pattern3 = /^([\d\s,.]+)$/;
-  const match3 = trimmed.match(pattern3);
-
-  if (match3) {
-    const [, numStr] = match3;
-    if (!numStr) return null;
-
-    const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
-    if (Number.isNaN(amount) || amount <= 0) return null;
-
-    return { amount, currency: defaultCurrency };
-  }
-
-  return null;
+  const symbolPrefixed = parseSymbolPrefixed(trimmed);
+  if (symbolPrefixed !== undefined) return symbolPrefixed;
+  const currencySuffixed = parseCurrencySuffixed(trimmed, defaultCurrency);
+  if (currencySuffixed !== undefined) return currencySuffixed;
+  return parseBareAmount(trimmed, defaultCurrency) ?? null;
 }
 
 /**
@@ -178,30 +185,28 @@ export async function handleBudgetCommand(
   );
 }
 
-/**
- * Format budget progress text for a group (reusable by cron and /budget command)
- */
-export function formatBudgetProgressText(groupId: number): { text: string; hasBudgets: boolean } {
-  const now = new Date();
-  const currentMonth = format(now, 'yyyy-MM');
-  const currentMonthName = format(now, 'LLLL yyyy');
+type BudgetProgressRow = {
+  budget: Budget;
+  spent: number;
+  percentage: number;
+  is_exceeded: boolean;
+  is_warning: boolean;
+};
 
-  const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-  const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-  const expenses = database.expenses.findByDateRange(groupId, currentMonthStart, currentMonthEnd);
-
+function sumSpendingByCategory(expenses: Expense[]): Record<string, number> {
   const categorySpending: Record<string, number> = {};
   for (const expense of expenses) {
     categorySpending[expense.category] =
       (categorySpending[expense.category] || 0) + expense.eur_amount;
   }
+  return categorySpending;
+}
 
-  const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
-
-  if (budgets.length === 0) {
-    return { text: `Бюджет на ${currentMonthName}\n\nБюджеты не установлены.`, hasBudgets: false };
-  }
-
+/** Per-currency budget/spent totals, in order of first appearance of each currency. */
+function totalsByCurrency(
+  budgets: Budget[],
+  categorySpending: Record<string, number>,
+): Record<CurrencyCode, { totalBudget: number; totalSpent: number }> {
   const budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }> =
     {} as Record<CurrencyCode, { totalBudget: number; totalSpent: number }>;
 
@@ -215,16 +220,114 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
     budgetsByCurrency[currency].totalBudget += budget.limit_amount;
     budgetsByCurrency[currency].totalSpent += spentInCurrency;
   }
+  return budgetsByCurrency;
+}
 
-  let message = `Бюджет на ${currentMonthName}\n\n`;
-
+function renderCurrencyTotals(
+  budgetsByCurrency: Record<CurrencyCode, { totalBudget: number; totalSpent: number }>,
+): string {
+  let text = '';
   for (const [currency, { totalBudget, totalSpent }] of Object.entries(budgetsByCurrency)) {
     const percentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
-    message += `Всего (${currency}): ${formatAmount(totalSpent, currency as CurrencyCode)} / ${formatAmount(totalBudget, currency as CurrencyCode)} (${percentage}%)\n`;
+    text += `Всего (${currency}): ${formatAmount(totalSpent, currency as CurrencyCode)} / ${formatAmount(totalBudget, currency as CurrencyCode)} (${percentage}%)\n`;
   }
+  return text;
+}
+
+function budgetStatusMarker(row: BudgetProgressRow): string {
+  if (row.is_exceeded) return '(!)';
+  if (row.is_warning) return '(~)';
+  return '';
+}
+
+function renderBudgetRows(rows: BudgetProgressRow[]): string {
+  let text = '';
+  for (const row of rows) {
+    const { budget, spent, percentage } = row;
+    const emoji = getCategoryEmoji(budget.category);
+    text += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${budgetStatusMarker(row)}\n`;
+  }
+  return text;
+}
+
+function trendArrow(direction: string): string {
+  if (direction === 'rising') return '↑';
+  if (direction === 'falling') return '↓';
+  return '→';
+}
+
+/** Only categories approaching/exceeding budget, anomalous, or confidently rising are shown. */
+function isForecastNoteworthy(cat: CategoryTaAnalysis, forecastPct: number): boolean {
+  return (
+    forecastPct >= 80 ||
+    cat.anomaly.isAnomaly ||
+    (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6)
+  );
+}
+
+function buildForecastInsights(
+  analysis: TechnicalAnalysis,
+  budgetProgress: BudgetProgressRow[],
+): string[] {
+  const taInsights: string[] = [];
+  for (const cat of analysis.categories) {
+    const bp = budgetProgress.find((b) => b.budget.category === cat.category);
+    if (!bp) continue;
+
+    const forecast = Math.round(
+      convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency),
+    );
+    const forecastPct =
+      bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
+    if (!isForecastNoteworthy(cat, forecastPct)) continue;
+
+    let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency)} ${trendArrow(cat.trend.direction)}`;
+    if (cat.anomaly.isAnomaly) insight += ' ⚠️';
+    taInsights.push(insight);
+  }
+  return taInsights;
+}
+
+/**
+ * Cap at 10 lines so the full budget message stays under Telegram's 4096-char
+ * limit. N+2 rule for the "и ещё N" tail.
+ */
+function renderForecastSection(taInsights: string[]): string {
+  if (taInsights.length === 0) return '';
+  const MAX_TA_INSIGHTS = 10;
+  const hidden = taInsights.length - MAX_TA_INSIGHTS;
+  const visibleInsights = hidden >= 3 ? taInsights.slice(0, MAX_TA_INSIGHTS) : taInsights;
+  let text = `\nПрогноз на месяц:\n${visibleInsights.join('\n')}\n`;
+  if (hidden >= 3) {
+    text += `… и ещё ${hidden}\n`;
+  }
+  return text;
+}
+
+/**
+ * Format budget progress text for a group (reusable by cron and /budget command)
+ */
+export function formatBudgetProgressText(groupId: number): { text: string; hasBudgets: boolean } {
+  const now = new Date();
+  const currentMonth = format(now, 'yyyy-MM');
+  const currentMonthName = format(now, 'LLLL yyyy');
+
+  const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+  const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+  const expenses = database.expenses.findByDateRange(groupId, currentMonthStart, currentMonthEnd);
+  const categorySpending = sumSpendingByCategory(expenses);
+
+  const budgets = database.budgets.getAllBudgetsForMonth(groupId, currentMonth);
+
+  if (budgets.length === 0) {
+    return { text: `Бюджет на ${currentMonthName}\n\nБюджеты не установлены.`, hasBudgets: false };
+  }
+
+  let message = `Бюджет на ${currentMonthName}\n\n`;
+  message += renderCurrencyTotals(totalsByCurrency(budgets, categorySpending));
   message += '\n';
 
-  const budgetProgress = budgets.map((budget) => {
+  const budgetProgress: BudgetProgressRow[] = budgets.map((budget) => {
     const spentEur = categorySpending[budget.category] || 0;
     const spent = convertCurrency(spentEur, BASE_CURRENCY, budget.currency);
     const progress = computeBudgetProgress(budget, spent);
@@ -232,51 +335,14 @@ export function formatBudgetProgressText(groupId: number): { text: string; hasBu
   });
 
   budgetProgress.sort((a, b) => b.percentage - a.percentage);
+  message += renderBudgetRows(budgetProgress);
 
-  for (const { budget, spent, percentage, is_exceeded, is_warning } of budgetProgress) {
-    const emoji = getCategoryEmoji(budget.category);
-    const status = is_exceeded ? '(!)' : is_warning ? '(~)' : '';
-    message += `${emoji} ${budget.category}: ${formatAmount(spent, budget.currency)} / ${formatAmount(budget.limit_amount, budget.currency)} (${percentage}%) ${status}\n`;
-  }
-
-  // Add TA forecast insights for budgeted categories — cap at 10 lines so the
-  // full budget message stays under Telegram's 4096-char limit. N+2 rule for
-  // the "и ещё N" tail.
+  // TA forecast insights for budgeted categories
   const snapshot = spendingAnalytics.getFinancialSnapshot(groupId);
   if (snapshot.technicalAnalysis) {
-    const taInsights: string[] = [];
-    for (const cat of snapshot.technicalAnalysis.categories) {
-      const bp = budgetProgress.find((b) => b.budget.category === cat.category);
-      if (!bp) continue;
-
-      const forecast = Math.round(
-        convertCurrency(cat.forecasts.ensemble, BASE_CURRENCY, bp.budget.currency),
-      );
-      const trendLabel =
-        cat.trend.direction === 'rising' ? '↑' : cat.trend.direction === 'falling' ? '↓' : '→';
-      const forecastPct =
-        bp.budget.limit_amount > 0 ? Math.round((forecast / bp.budget.limit_amount) * 100) : 0;
-
-      // Only show insights for categories approaching or exceeding budget
-      if (
-        forecastPct >= 80 ||
-        cat.anomaly.isAnomaly ||
-        (cat.trend.direction === 'rising' && cat.trend.confidence >= 0.6)
-      ) {
-        let insight = `${getCategoryEmoji(cat.category)} ${cat.category}: прогноз ${formatAmount(forecast, bp.budget.currency)} ${trendLabel}`;
-        if (cat.anomaly.isAnomaly) insight += ' ⚠️';
-        taInsights.push(insight);
-      }
-    }
-    if (taInsights.length > 0) {
-      const MAX_TA_INSIGHTS = 10;
-      const hidden = taInsights.length - MAX_TA_INSIGHTS;
-      const visibleInsights = hidden >= 3 ? taInsights.slice(0, MAX_TA_INSIGHTS) : taInsights;
-      message += `\nПрогноз на месяц:\n${visibleInsights.join('\n')}\n`;
-      if (hidden >= 3) {
-        message += `… и ещё ${hidden}\n`;
-      }
-    }
+    message += renderForecastSection(
+      buildForecastInsights(snapshot.technicalAnalysis, budgetProgress),
+    );
   }
 
   return { text: truncateForTelegram(message.trim()), hasBudgets: true };

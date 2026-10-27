@@ -26,9 +26,7 @@ function makeKey(date: string, category: string, amount: number, currency: strin
   return `${date}|${category}|${amount}|${currency}`;
 }
 
-function sheetRowToKey(
-  row: SheetRow,
-): { key: string; amount: number; currency: CurrencyCode } | null {
+function sheetRowToKey(row: SheetRow): ParsedSheetRow | null {
   for (const [curr, amt] of Object.entries(row.amounts) as [string, number][]) {
     return {
       key: makeKey(row.date, row.category, amt, curr),
@@ -72,6 +70,219 @@ export interface SyncResult {
   createdCategories: string[];
   errors: MultiCurrencyRowError[];
   eurMismatches: EurMismatchWarning[];
+}
+
+interface ParsedSheetRow {
+  key: string;
+  amount: number;
+  currency: CurrencyCode;
+}
+
+interface UnmatchedSheetRow {
+  row: SheetRow;
+  parsed: ParsedSheetRow;
+}
+
+/** Shared state for applying one sync run's writes. */
+interface SyncRun {
+  groupId: number;
+  defaultUserId: number | undefined;
+  dbPool: Map<string, Expense[]>;
+  result: SyncResult;
+}
+
+/** Create categories referenced by the sheet that the group does not have yet. */
+function createMissingCategories(
+  groupId: number,
+  sheetExpenses: SheetRow[],
+  createdCategories: string[],
+): void {
+  for (const expense of sheetExpenses) {
+    if (expense.category && expense.category !== 'Без категории') {
+      if (!database.categories.exists(groupId, expense.category)) {
+        database.categories.create({ group_id: groupId, name: expense.category });
+        createdCategories.push(expense.category);
+      }
+    }
+  }
+}
+
+/** Multimap from DB: shortKey → [Expense]. */
+function buildDbPool(dbExpenses: Expense[]): Map<string, Expense[]> {
+  const dbPool = new Map<string, Expense[]>();
+  for (const e of dbExpenses) {
+    const key = dbExpenseToKey(e);
+    const arr = dbPool.get(key);
+    if (arr) {
+      arr.push(e);
+    } else {
+      dbPool.set(key, [e]);
+    }
+  }
+  return dbPool;
+}
+
+/** Pass 1: consume exact matches (key + comment + eurAmount) from the pool. */
+function matchExactRows(
+  sheetExpenses: SheetRow[],
+  dbPool: Map<string, Expense[]>,
+  result: SyncResult,
+): { unmatchedSheetRows: UnmatchedSheetRow[]; exactMatched: Set<number> } {
+  const exactMatched = new Set<number>(); // DB expense IDs that matched exactly
+  const unmatchedSheetRows: UnmatchedSheetRow[] = [];
+
+  for (const row of sheetExpenses) {
+    const parsed = sheetRowToKey(row);
+    if (!parsed) continue;
+
+    const candidates = dbPool.get(parsed.key);
+    if (!candidates || candidates.length === 0) {
+      unmatchedSheetRows.push({ row, parsed });
+      continue;
+    }
+
+    // Find exact match
+    const exactIdx = candidates.findIndex(
+      (e) => e.comment === row.comment && Math.abs(e.eur_amount - row.eurAmount) <= 0.01,
+    );
+
+    if (exactIdx !== -1) {
+      const matched = candidates.splice(exactIdx, 1)[0];
+      if (matched) exactMatched.add(matched.id);
+      result.unchanged++;
+    } else {
+      unmatchedSheetRows.push({ row, parsed });
+    }
+  }
+  return { unmatchedSheetRows, exactMatched };
+}
+
+/**
+ * Applies one sheet row's writes atomically. A row that violates a foreign key (e.g. its
+ * expense belongs to a user row that no longer exists) is skipped and logged, so one bad row
+ * cannot abort the sync of every other row; the rollback keeps the DB row it would replace.
+ */
+function writeRow(run: SyncRun, expense: SyncedExpense, write: () => void): boolean {
+  try {
+    database.transaction(write);
+    return true;
+  } catch (error) {
+    // SQLite's error for a write referencing a missing parent row (user, group, receipt).
+    if (!(error instanceof SQLiteError && error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY')) {
+      throw error;
+    }
+    logger.warn(
+      { err: error, groupId: run.groupId, expense },
+      '[SYNC] Sheet row skipped: foreign key violation (missing user or group)',
+    );
+    run.result.skipped.push(expense);
+    return false;
+  }
+}
+
+/** Partial match — replace the DB row with the sheet's version and record the update. */
+function applyPartialMatch(
+  run: SyncRun,
+  existing: Expense,
+  { row, parsed }: UnmatchedSheetRow,
+  expense: SyncedExpense,
+): void {
+  const changes: string[] = [];
+  if (Math.abs(existing.eur_amount - row.eurAmount) > 0.01) {
+    changes.push(`EUR: ${existing.eur_amount}→${row.eurAmount}`);
+  }
+  if (existing.comment !== row.comment) {
+    changes.push(`"${existing.comment || ''}"→"${row.comment || ''}"`);
+  }
+
+  const written = writeRow(run, expense, () => {
+    database.expenses.delete(existing.id);
+    database.expenses.create({
+      group_id: run.groupId,
+      user_id: existing.user_id,
+      date: row.date,
+      category: row.category,
+      comment: row.comment,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      eur_amount: row.eurAmount,
+    });
+  });
+  if (written) run.result.updated.push({ ...expense, field: changes.join(', ') });
+}
+
+/** No match at all — new expense owned by the group's default user. */
+function applyNewRow(
+  run: SyncRun,
+  { row, parsed }: UnmatchedSheetRow,
+  expense: SyncedExpense,
+): void {
+  const { defaultUserId } = run;
+  if (defaultUserId === undefined) {
+    logger.warn(
+      { groupId: run.groupId, expense },
+      '[SYNC] Sheet row skipped: the group has no user to own it',
+    );
+    run.result.skipped.push(expense);
+    return;
+  }
+  const written = writeRow(run, expense, () => {
+    database.expenses.create({
+      group_id: run.groupId,
+      user_id: defaultUserId,
+      date: row.date,
+      category: row.category,
+      comment: row.comment,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      eur_amount: row.eurAmount,
+    });
+  });
+  if (written) run.result.added.push(expense);
+}
+
+/** Pass 2: unmatched sheet rows — try partial match (update) or add. */
+function applyUnmatchedRows(run: SyncRun, unmatchedSheetRows: UnmatchedSheetRow[]): void {
+  for (const unmatched of unmatchedSheetRows) {
+    const { row, parsed } = unmatched;
+    const candidates = run.dbPool.get(parsed.key);
+    const expense: SyncedExpense = {
+      date: row.date,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      category: row.category,
+      comment: row.comment,
+    };
+
+    if (candidates && candidates.length > 0) {
+      const existing = candidates.shift();
+      if (!existing) continue;
+      applyPartialMatch(run, existing, unmatched, expense);
+    } else {
+      applyNewRow(run, unmatched, expense);
+    }
+  }
+}
+
+/** Pass 3: remaining unmatched DB expenses — deleted from sheet. */
+function deleteOrphanedExpenses(
+  dbPool: Map<string, Expense[]>,
+  exactMatched: Set<number>,
+  result: SyncResult,
+): void {
+  for (const candidates of dbPool.values()) {
+    for (const expense of candidates) {
+      if (exactMatched.has(expense.id)) continue;
+      database.expenses.delete(expense.id);
+      result.deleted.push({
+        date: expense.date,
+        amount: expense.amount,
+        currency: expense.currency,
+        category: expense.category,
+        comment: expense.comment,
+      });
+    }
+  }
 }
 
 /**
@@ -125,160 +336,13 @@ export async function syncExpenses(groupId: number): Promise<SyncResult> {
     eurMismatches,
   };
 
-  // Create missing categories
-  for (const expense of sheetExpenses) {
-    if (expense.category && expense.category !== 'Без категории') {
-      if (!database.categories.exists(groupId, expense.category)) {
-        database.categories.create({ group_id: groupId, name: expense.category });
-        result.createdCategories.push(expense.category);
-      }
-    }
-  }
+  createMissingCategories(groupId, sheetExpenses, result.createdCategories);
 
-  // Build multimap from DB: shortKey → [Expense]
-  const dbPool = new Map<string, Expense[]>();
-  for (const e of dbExpenses) {
-    const key = dbExpenseToKey(e);
-    const arr = dbPool.get(key);
-    if (arr) {
-      arr.push(e);
-    } else {
-      dbPool.set(key, [e]);
-    }
-  }
+  const dbPool = buildDbPool(dbExpenses);
+  const { unmatchedSheetRows, exactMatched } = matchExactRows(sheetExpenses, dbPool, result);
 
-  // Full-key set for exact match tracking
-  const exactMatched = new Set<number>(); // DB expense IDs that matched exactly
-
-  // Pass 1: exact matches (key + comment + eurAmount)
-  const unmatchedSheetRows: Array<{
-    row: SheetRow;
-    parsed: ReturnType<typeof sheetRowToKey> & {};
-  }> = [];
-
-  for (const row of sheetExpenses) {
-    const parsed = sheetRowToKey(row);
-    if (!parsed) continue;
-
-    const candidates = dbPool.get(parsed.key);
-    if (!candidates || candidates.length === 0) {
-      unmatchedSheetRows.push({ row, parsed });
-      continue;
-    }
-
-    // Find exact match
-    const exactIdx = candidates.findIndex(
-      (e) => e.comment === row.comment && Math.abs(e.eur_amount - row.eurAmount) <= 0.01,
-    );
-
-    if (exactIdx !== -1) {
-      const matched = candidates.splice(exactIdx, 1)[0];
-      if (matched) exactMatched.add(matched.id);
-      result.unchanged++;
-    } else {
-      unmatchedSheetRows.push({ row, parsed });
-    }
-  }
-
-  /**
-   * Applies one sheet row's writes atomically. A row that violates a foreign key (e.g. its
-   * expense belongs to a user row that no longer exists) is skipped and logged, so one bad row
-   * cannot abort the sync of every other row; the rollback keeps the DB row it would replace.
-   */
-  const writeRow = (expense: SyncedExpense, write: () => void): boolean => {
-    try {
-      database.transaction(write);
-      return true;
-    } catch (error) {
-      // SQLite's error for a write referencing a missing parent row (user, group, receipt).
-      if (!(error instanceof SQLiteError && error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY')) {
-        throw error;
-      }
-      logger.warn(
-        { err: error, groupId, expense },
-        '[SYNC] Sheet row skipped: foreign key violation (missing user or group)',
-      );
-      result.skipped.push(expense);
-      return false;
-    }
-  };
-
-  // Pass 2: unmatched sheet rows — try partial match (update) or add
-  for (const { row, parsed } of unmatchedSheetRows) {
-    const candidates = dbPool.get(parsed.key);
-    const expense: SyncedExpense = {
-      date: row.date,
-      amount: parsed.amount,
-      currency: parsed.currency,
-      category: row.category,
-      comment: row.comment,
-    };
-
-    if (candidates && candidates.length > 0) {
-      // Partial match — this is an update
-      const existing = candidates.shift();
-      if (!existing) continue;
-
-      const changes: string[] = [];
-      if (Math.abs(existing.eur_amount - row.eurAmount) > 0.01) {
-        changes.push(`EUR: ${existing.eur_amount}→${row.eurAmount}`);
-      }
-      if (existing.comment !== row.comment) {
-        changes.push(`"${existing.comment || ''}"→"${row.comment || ''}"`);
-      }
-
-      const written = writeRow(expense, () => {
-        database.expenses.delete(existing.id);
-        database.expenses.create({
-          group_id: groupId,
-          user_id: existing.user_id,
-          date: row.date,
-          category: row.category,
-          comment: row.comment,
-          amount: parsed.amount,
-          currency: parsed.currency,
-          eur_amount: row.eurAmount,
-        });
-      });
-      if (written) result.updated.push({ ...expense, field: changes.join(', ') });
-    } else if (defaultUserId === undefined) {
-      logger.warn(
-        { groupId, expense },
-        '[SYNC] Sheet row skipped: the group has no user to own it',
-      );
-      result.skipped.push(expense);
-    } else {
-      // No match at all — new expense
-      const written = writeRow(expense, () => {
-        database.expenses.create({
-          group_id: groupId,
-          user_id: defaultUserId,
-          date: row.date,
-          category: row.category,
-          comment: row.comment,
-          amount: parsed.amount,
-          currency: parsed.currency,
-          eur_amount: row.eurAmount,
-        });
-      });
-      if (written) result.added.push(expense);
-    }
-  }
-
-  // Pass 3: remaining unmatched DB expenses — deleted from sheet
-  for (const candidates of dbPool.values()) {
-    for (const expense of candidates) {
-      if (exactMatched.has(expense.id)) continue;
-      database.expenses.delete(expense.id);
-      result.deleted.push({
-        date: expense.date,
-        amount: expense.amount,
-        currency: expense.currency,
-        category: expense.category,
-        comment: expense.comment,
-      });
-    }
-  }
+  applyUnmatchedRows({ groupId, defaultUserId, dbPool, result }, unmatchedSheetRows);
+  deleteOrphanedExpenses(dbPool, exactMatched, result);
 
   logger.info(
     `[SYNC] Done: +${result.added.length} -${result.deleted.length} ~${result.updated.length} =${result.unchanged} skipped:${result.skipped.length}`,
@@ -295,31 +359,14 @@ function formatSyncResult(result: SyncResult): string {
   lines.push(`💾 Всего в БД: ${total}`);
   lines.push(`✓ Без изменений: ${result.unchanged}`);
 
-  if (result.added.length > 0) {
-    lines.push(`\n➕ Добавлено: ${result.added.length}`);
-    for (const e of result.added.slice(0, 10)) {
-      lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
-    }
-    if (result.added.length > 10) lines.push(`  ...и ещё ${result.added.length - 10}`);
-  }
-
-  if (result.deleted.length > 0) {
-    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
-    for (const e of result.deleted.slice(0, 10)) {
-      lines.push(`  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`);
-    }
-    if (result.deleted.length > 10) lines.push(`  ...и ещё ${result.deleted.length - 10}`);
-  }
-
-  if (result.updated.length > 0) {
-    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
-    for (const e of result.updated.slice(0, 10)) {
-      lines.push(
-        `  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)} (${e.field})`,
-      );
-    }
-    if (result.updated.length > 10) lines.push(`  ...и ещё ${result.updated.length - 10}`);
-  }
+  appendResultSection(lines, `➕ Добавлено`, result.added, fmtResultItem);
+  appendResultSection(lines, `🗑 Удалено`, result.deleted, fmtResultItem);
+  appendResultSection(
+    lines,
+    `✏️ Обновлено`,
+    result.updated,
+    (e) => `${fmtResultItem(e)} (${e.field})`,
+  );
 
   lines.push(...formatSkippedRows(result.skipped));
 
@@ -328,6 +375,23 @@ function formatSyncResult(result: SyncResult): string {
   }
 
   return lines.join('\n');
+}
+
+function fmtResultItem(e: SyncedExpense): string {
+  return `  ${fmtExpense(e.date, e.amount, e.currency, e.category, e.comment)}`;
+}
+
+/** Heading with count, first 10 items, and a "...и ещё N" tail; nothing when empty. */
+function appendResultSection<T>(
+  lines: string[],
+  heading: string,
+  items: T[],
+  fmt: (item: T) => string,
+): void {
+  if (items.length === 0) return;
+  lines.push(`\n${heading}: ${items.length}`);
+  for (const e of items.slice(0, 10)) lines.push(fmt(e));
+  if (items.length > 10) lines.push(`  ...и ещё ${items.length - 10}`);
 }
 
 /**
@@ -423,6 +487,35 @@ function formatSkippedRows(skipped: SyncedExpense[]): string[] {
   return lines;
 }
 
+interface SyncSection {
+  items: Array<SyncedExpense & { field?: string }>;
+  heading: string;
+  moreLabel: (n: number) => string;
+  suffix: string;
+  withField: boolean;
+}
+
+function renderSyncSection(
+  section: SyncSection,
+  cacheKey: string,
+  lines: string[],
+  buttons: Array<{ text: string; callback_data: string }>,
+): void {
+  const { items } = section;
+  if (items.length === 0) return;
+  lines.push(`\n${section.heading}: ${items.length}`);
+  for (const e of items.slice(0, SYNC_PAGE_SIZE)) {
+    const field = section.withField && e.field ? ` (${e.field})` : '';
+    lines.push(`  ${fmtSyncItem(e)}${field}`);
+  }
+  if (items.length > SYNC_PAGE_SIZE) {
+    buttons.push({
+      text: section.moreLabel(items.length - SYNC_PAGE_SIZE),
+      callback_data: `sync_more:${cacheKey}:${section.suffix}`,
+    });
+  }
+}
+
 function buildAutoSyncExpensesMessage(result: SyncResult, cacheKey: string): SyncNotifyMessage {
   const counts: string[] = [];
   if (result.added.length > 0) counts.push(`+${result.added.length}`);
@@ -432,44 +525,30 @@ function buildAutoSyncExpensesMessage(result: SyncResult, cacheKey: string): Syn
   const lines: string[] = [`🔄 Авто-синк расходов: ${counts.join(', ')}`];
   const buttons: Array<{ text: string; callback_data: string }> = [];
 
-  if (result.added.length > 0) {
-    lines.push(`\n➕ Добавлено: ${result.added.length}`);
-    for (const e of result.added.slice(0, SYNC_PAGE_SIZE)) {
-      lines.push(`  ${fmtSyncItem(e)}`);
-    }
-    if (result.added.length > SYNC_PAGE_SIZE) {
-      buttons.push({
-        text: `➕ ещё ${result.added.length - SYNC_PAGE_SIZE} добавлено`,
-        callback_data: `sync_more:${cacheKey}:a`,
-      });
-    }
-  }
-
-  if (result.deleted.length > 0) {
-    lines.push(`\n🗑 Удалено: ${result.deleted.length}`);
-    for (const e of result.deleted.slice(0, SYNC_PAGE_SIZE)) {
-      lines.push(`  ${fmtSyncItem(e)}`);
-    }
-    if (result.deleted.length > SYNC_PAGE_SIZE) {
-      buttons.push({
-        text: `🗑 ещё ${result.deleted.length - SYNC_PAGE_SIZE} удалено`,
-        callback_data: `sync_more:${cacheKey}:d`,
-      });
-    }
-  }
-
-  if (result.updated.length > 0) {
-    lines.push(`\n✏️ Обновлено: ${result.updated.length}`);
-    for (const e of result.updated.slice(0, SYNC_PAGE_SIZE)) {
-      lines.push(`  ${fmtSyncItem(e)}${e.field ? ` (${e.field})` : ''}`);
-    }
-    if (result.updated.length > SYNC_PAGE_SIZE) {
-      buttons.push({
-        text: `✏️ ещё ${result.updated.length - SYNC_PAGE_SIZE} обновлено`,
-        callback_data: `sync_more:${cacheKey}:u`,
-      });
-    }
-  }
+  const sections: SyncSection[] = [
+    {
+      items: result.added,
+      heading: '➕ Добавлено',
+      moreLabel: (n) => `➕ ещё ${n} добавлено`,
+      suffix: 'a',
+      withField: false,
+    },
+    {
+      items: result.deleted,
+      heading: '🗑 Удалено',
+      moreLabel: (n) => `🗑 ещё ${n} удалено`,
+      suffix: 'd',
+      withField: false,
+    },
+    {
+      items: result.updated,
+      heading: '✏️ Обновлено',
+      moreLabel: (n) => `✏️ ещё ${n} обновлено`,
+      suffix: 'u',
+      withField: true,
+    },
+  ];
+  for (const section of sections) renderSyncSection(section, cacheKey, lines, buttons);
 
   // Skipped rows alone never trigger a notice (ensureFreshExpenses): they recur on every sync.
   lines.push(...formatSkippedRows(result.skipped));

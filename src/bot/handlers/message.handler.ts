@@ -3,10 +3,14 @@ import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
 import { computeBudgetProgress } from '../../database/repositories/budget.repository';
-import type { Group, PhotoQueueItem, ReceiptItem } from '../../database/types';
+import type { Group, PhotoQueueItem, ReceiptItem, User } from '../../database/types';
 import { createInviteLink, sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
-import { parseExpenseMessage, validateParsedExpense } from '../../services/currency/parser';
+import {
+  type ParsedExpense,
+  parseExpenseMessage,
+  validateParsedExpense,
+} from '../../services/currency/parser';
 import { DevTaskState } from '../../services/dev-pipeline/types';
 import { extractURLsFromText, processPaymentLinks } from '../../services/receipt/link-analyzer';
 import type { ReceiptSummary } from '../../services/receipt/receipt-summarizer';
@@ -107,13 +111,77 @@ export async function sendPrivateChatRedirect(telegramId: number): Promise<void>
   }
 }
 
+/** Message in a configured group chat, resolved from the raw Telegram context */
+interface GroupMessage {
+  ctx: Ctx['Message'];
+  bot: BotInstance;
+  telegramId: number;
+  messageId: number;
+  text: string;
+  telegramGroupId: number;
+  groupTitle: string | undefined;
+  group: Group;
+}
+
+/** Group message with the sender resolved to a bot user */
+interface UserMessage extends GroupMessage {
+  user: User;
+}
+
 /**
- * Handle expense message
+ * One step of the message routing pipeline. Returns the handler result when the step
+ * consumed the message, or null to let the next step look at it.
  */
-export async function handleExpenseMessage(
+type MessageStage<M> = (msg: M) => Promise<boolean | null>;
+
+/** Run stages in order; the first non-null result wins */
+async function runStages<M>(stages: Array<MessageStage<M>>, msg: M): Promise<boolean | null> {
+  for (const stage of stages) {
+    const result = await stage(msg);
+    if (result !== null) return result;
+  }
+  return null;
+}
+
+/** Tracks each recognized expense for the numbered summary */
+interface ProcessedExpense {
+  amount: number;
+  currency: string;
+  category: string | null;
+  comment: string;
+  saved: boolean;
+  pendingExpenseId: number;
+  categoryExists: boolean;
+}
+
+/** Result of phase 1: pending expenses created for every line plus categories to confirm */
+interface PendingBatch {
+  processedExpenses: ProcessedExpense[];
+  newCategories: string[];
+}
+
+/** Group chat identity read from the Telegram context */
+interface GroupChat {
+  telegramGroupId: number;
+  title: string | undefined;
+}
+
+function readGroupChat(ctx: Ctx['Message']): GroupChat | null {
+  const chat = ctx.chat;
+  if (chat?.type === 'group' || chat?.type === 'supergroup') {
+    return { telegramGroupId: chat.id, title: chat.title };
+  }
+  return null;
+}
+
+/**
+ * Validate the raw message, redirect private chats and look up the group.
+ * Returns the resolved message, or the handler result when nothing more should happen.
+ */
+async function resolveGroupMessage(
   ctx: Ctx['Message'],
   bot: BotInstance,
-): Promise<boolean> {
+): Promise<GroupMessage | boolean> {
   const telegramId = ctx.from.id;
   const messageId = ctx.id;
   const text = ctx.text;
@@ -127,16 +195,15 @@ export async function handleExpenseMessage(
   }
 
   // Check if message is from group/supergroup
-  const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+  const chat = readGroupChat(ctx);
 
-  if (!isGroup) {
+  if (!chat) {
     logger.info(`[MSG] Message from private chat (user ${telegramId})`);
     await sendPrivateChatRedirect(telegramId);
     return true;
   }
 
-  const telegramGroupId = ctx.chat.id;
-  const groupTitle = ctx.chat.title;
+  const { telegramGroupId, title: groupTitle } = chat;
 
   logger.info(`[MSG] Message from group "${groupTitle}" (${telegramGroupId})`);
 
@@ -150,137 +217,202 @@ export async function handleExpenseMessage(
     return true;
   }
 
-  // Custom currency input during onboarding — must be checked before setup completion
-  if (text && !text.startsWith('/')) {
-    const { isAwaitingCustomCurrency, handleCustomCurrencyInput } = await import(
-      '../commands/connect'
-    );
-    if (isAwaitingCustomCurrency(telegramGroupId)) {
-      return await handleCustomCurrencyInput(ctx, telegramGroupId);
-    }
+  return { ctx, bot, telegramId, messageId, text, telegramGroupId, groupTitle, group };
+}
+
+/** Custom currency input during onboarding — must be checked before setup completion */
+async function consumeCustomCurrencyInput(msg: GroupMessage): Promise<boolean | null> {
+  if (msg.text.startsWith('/')) return null;
+  const { isAwaitingCustomCurrency, handleCustomCurrencyInput } = await import(
+    '../commands/connect'
+  );
+  if (isAwaitingCustomCurrency(msg.telegramGroupId)) {
+    return await handleCustomCurrencyInput(msg.ctx, msg.telegramGroupId);
   }
+  return null;
+}
 
-  // Bank setup wizard — consume credential input before other checks
-  if (text && !text.startsWith('/')) {
-    const { handleWizardInput } = await import('../commands/bank');
-    const handled = await handleWizardInput(ctx, group.id, text, bot);
-    if (handled) return true;
-  }
+/** Bank setup wizard — consume credential input before other checks */
+async function consumeBankWizardInput(msg: GroupMessage): Promise<boolean | null> {
+  if (msg.text.startsWith('/')) return null;
+  const { handleWizardInput } = await import('../commands/bank');
+  const handled = await handleWizardInput(msg.ctx, msg.group.id, msg.text, msg.bot);
+  return handled ? true : null;
+}
 
-  // Check if group has completed setup
-  if (!database.groups.hasCompletedSetup(telegramGroupId)) {
-    logger.info(`[MSG] Ignoring: group ${telegramGroupId} setup not completed`);
-    await sendMessage('Завершите настройку группы: /connect');
-    return true;
-  }
+/** Ignore everything until the group has completed /connect setup */
+async function requireCompletedSetup(msg: GroupMessage): Promise<boolean | null> {
+  if (database.groups.hasCompletedSetup(msg.telegramGroupId)) return null;
+  logger.info(`[MSG] Ignoring: group ${msg.telegramGroupId} setup not completed`);
+  await sendMessage('Завершите настройку группы: /connect');
+  return true;
+}
 
-  // Bank OTP — must be checked before topic restriction: the user may reply from any topic
-  // (the OTP prompt could land in a different thread than active_topic_id).
-  if (text && !text.startsWith('/')) {
-    const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
-    if (resolveOtpForGroup(telegramGroupId, text)) return true;
-  }
+/**
+ * Bank OTP — must be checked before topic restriction: the user may reply from any topic
+ * (the OTP prompt could land in a different thread than active_topic_id).
+ */
+async function consumeBankOtp(msg: GroupMessage): Promise<boolean | null> {
+  if (msg.text.startsWith('/')) return null;
+  const { resolveOtpForGroup } = await import('../../services/bank/otp-manager');
+  return resolveOtpForGroup(msg.telegramGroupId, msg.text) ? true : null;
+}
 
-  // Check topic restriction
-  const messageThreadId = ctx.update?.message?.message_thread_id;
-  if (group.active_topic_id && messageThreadId !== group.active_topic_id) {
-    logger.info(
-      `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${group.active_topic_id}`,
-    );
-    return true;
-  }
+/** Ignore messages outside the topic the bot listens to */
+async function enforceActiveTopic(msg: GroupMessage): Promise<boolean | null> {
+  const messageThreadId = msg.ctx.update?.message?.message_thread_id;
+  if (!msg.group.active_topic_id || messageThreadId === msg.group.active_topic_id) return null;
+  logger.info(
+    `[MSG] Ignoring: message from topic ${messageThreadId || 'general'}, bot listens to topic ${msg.group.active_topic_id}`,
+  );
+  return true;
+}
 
-  logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
+/** Steps that decide whether a group message is for the bot at all (before any user lookup) */
+const GROUP_GATE_STAGES: Array<MessageStage<GroupMessage>> = [
+  consumeCustomCurrencyInput,
+  consumeBankWizardInput,
+  requireCompletedSetup,
+  consumeBankOtp,
+  enforceActiveTopic,
+];
 
-  // Get or create user
-  let user = database.users.findByTelegramId(telegramId);
+/** Find the sender's user row, creating it or moving it to this group as needed */
+function findOrCreateUser(telegramId: number, group: Group): User | null {
+  const user = database.users.findByTelegramId(telegramId);
 
   if (!user) {
     logger.info(`[MSG] Creating new user ${telegramId} in group ${group.id}`);
-    user = database.users.create({
+    return database.users.create({
       telegram_id: telegramId,
       group_id: group.id,
     });
-  } else if (user.group_id !== group.id) {
-    // Update user's group_id if changed
-    logger.info(`[MSG] Updating user ${telegramId} group_id: ${user.group_id} → ${group.id}`);
-    database.users.update(telegramId, { group_id: group.id });
-    user = database.users.findByTelegramId(telegramId);
-    if (!user) return true;
   }
 
-  // Track group title and user membership for private chat redirect buttons
+  if (user.group_id === group.id) return user;
+
+  // Update user's group_id if changed
+  logger.info(`[MSG] Updating user ${telegramId} group_id: ${user.group_id} → ${group.id}`);
+  database.users.update(telegramId, { group_id: group.id });
+  return database.users.findByTelegramId(telegramId);
+}
+
+/** Track group title and user membership for private chat redirect buttons */
+function trackGroupAndMember(msg: GroupMessage): void {
+  const { telegramGroupId, groupTitle, group, telegramId } = msg;
   if (groupTitle && groupTitle !== group.title) {
     database.groups.update(telegramGroupId, { title: groupTitle });
   }
   trackMembership(telegramId, group.id);
+}
 
-  // Check if we're waiting for design edit or code edit input
-  const pendingTaskId = consumePendingDesignEdit(telegramGroupId);
-  if (pendingTaskId !== null) {
-    const pl = getPipelineInstance();
-    if (pl) {
-      try {
-        const pendingTask = database.devTasks.findById(pendingTaskId);
-        const isCodeEdit =
-          pendingTask?.state === DevTaskState.AWAITING_REVIEW ||
-          pendingTask?.state === DevTaskState.AWAITING_MERGE;
+/** Run a pending dev-pipeline design/code edit with the user's text */
+async function applyPendingDevEdit(taskId: number, text: string): Promise<void> {
+  const pipeline = getPipelineInstance();
+  if (!pipeline) return;
+  try {
+    const pendingTask = database.devTasks.findById(taskId);
+    const isCodeEdit =
+      pendingTask?.state === DevTaskState.AWAITING_REVIEW ||
+      pendingTask?.state === DevTaskState.AWAITING_MERGE;
 
-        if (isCodeEdit) {
-          await pl.editPR(pendingTaskId, text);
-        } else {
-          await pl.editDesign(pendingTaskId, text);
-        }
-      } catch (error) {
-        await sendMessage(getErrorMessage(error));
-      }
+    if (isCodeEdit) {
+      await pipeline.editPR(taskId, text);
+    } else {
+      await pipeline.editDesign(taskId, text);
     }
-    return true;
+  } catch (error) {
+    await sendMessage(getErrorMessage(error));
   }
+}
 
-  // Check if we're waiting for feedback text input
-  const feedbackPromptId = consumePendingFeedback(telegramGroupId, telegramId);
-  if (feedbackPromptId !== null) {
-    await submitFeedback(ctx, group, text, { promptMessageId: feedbackPromptId, bot });
-    return true;
-  }
+/** Waiting for design edit or code edit input */
+async function consumeDevEditInput(msg: UserMessage): Promise<boolean | null> {
+  const pendingTaskId = consumePendingDesignEdit(msg.telegramGroupId);
+  if (pendingTaskId === null) return null;
+  await applyPendingDevEdit(pendingTaskId, msg.text);
+  return true;
+}
 
-  // Check if we're waiting for bulk correction text input
-  const waitingBulkCorrection = database.photoQueue.findWaitingForBulkCorrection(group.id);
-  if (waitingBulkCorrection) {
-    await handleBulkCorrectionInput(text, waitingBulkCorrection, group);
-    return true;
-  }
+/** Waiting for feedback text input */
+async function consumeFeedbackInput(msg: UserMessage): Promise<boolean | null> {
+  const feedbackPromptId = consumePendingFeedback(msg.telegramGroupId, msg.telegramId);
+  if (feedbackPromptId === null) return null;
+  await submitFeedback(msg.ctx, msg.group, msg.text, {
+    promptMessageId: feedbackPromptId,
+    bot: msg.bot,
+  });
+  return true;
+}
 
-  // Check if we're waiting for category text input from user
-  const waitingItem = database.receiptItems.findWaitingForCategoryInput(group.id);
-  if (waitingItem) {
-    await handleCategoryTextInput(ctx, text, waitingItem, group.id);
-    return true;
-  }
+/** Waiting for bulk correction text input */
+async function consumeBulkCorrectionStage(msg: UserMessage): Promise<boolean | null> {
+  const waitingBulkCorrection = database.photoQueue.findWaitingForBulkCorrection(msg.group.id);
+  if (!waitingBulkCorrection) return null;
+  await handleBulkCorrectionInput(msg.text, waitingBulkCorrection, msg.group);
+  return true;
+}
 
-  // Bank transaction edit flow — route replies to pending edit transactions
-  const replyToMessageId = ctx.update?.message?.reply_to_message?.message_id;
-  if (replyToMessageId && text) {
-    const { handleBankEditReply } = await import('../commands/bank');
-    const handled = await handleBankEditReply(ctx, telegramGroupId, text, replyToMessageId);
-    if (handled) return true;
-  }
+/** Waiting for category text input from user */
+async function consumeCategoryInputStage(msg: UserMessage): Promise<boolean | null> {
+  const waitingItem = database.receiptItems.findWaitingForCategoryInput(msg.group.id);
+  if (!waitingItem) return null;
+  await handleCategoryTextInput(msg.ctx, msg.text, waitingItem, msg.group.id);
+  return true;
+}
 
-  // Check for URLs in message
-  const urls = extractURLsFromText(text);
-  if (urls.length > 0) {
-    const hasPayment = await processPaymentLinks(
-      bot,
-      telegramGroupId,
-      messageId,
-      urls,
-      group,
-      user,
-    );
-    if (hasPayment) return true;
-  }
+/** Bank transaction edit flow — route replies to pending edit transactions */
+async function consumeBankEditReply(msg: UserMessage): Promise<boolean | null> {
+  const replyToMessageId = msg.ctx.update?.message?.reply_to_message?.message_id;
+  if (!replyToMessageId) return null;
+  const { handleBankEditReply } = await import('../commands/bank');
+  const handled = await handleBankEditReply(
+    msg.ctx,
+    msg.telegramGroupId,
+    msg.text,
+    replyToMessageId,
+  );
+  return handled ? true : null;
+}
 
+/** Messages containing payment links go to the receipt link analyzer */
+async function consumePaymentLinks(msg: UserMessage): Promise<boolean | null> {
+  const urls = extractURLsFromText(msg.text);
+  if (urls.length === 0) return null;
+  const hasPayment = await processPaymentLinks(
+    msg.bot,
+    msg.telegramGroupId,
+    msg.messageId,
+    urls,
+    msg.group,
+    msg.user,
+  );
+  return hasPayment ? true : null;
+}
+
+/** Inputs the bot may be waiting for from this user, in priority order */
+const AWAITED_INPUT_STAGES: Array<MessageStage<UserMessage>> = [
+  consumeDevEditInput,
+  consumeFeedbackInput,
+  consumeBulkCorrectionStage,
+  consumeCategoryInputStage,
+  consumeBankEditReply,
+  consumePaymentLinks,
+];
+
+/**
+ * Parse every non-empty line of the message as an expense.
+ *
+ * Direct expense entry is intentionally strict and atomic: EVERY non-empty
+ * line must match the expense-entry grammar. If even one line is prose
+ * (for example a budget-planning instruction followed by amount/category
+ * lines), do not persist the parseable tail. Route the whole message to AI.
+ * Returns null in that case.
+ */
+function parseStrictLines(
+  text: string,
+  defaultCurrency: CurrencyCode,
+): { lines: string[]; parsedLines: Array<ParsedExpense | null> } | null {
   // Split message by lines and process each line
   const lines = text
     .split('\n')
@@ -289,154 +421,208 @@ export async function handleExpenseMessage(
 
   logger.info(`[MSG] Processing ${lines.length} line(s)`);
 
-  // Direct expense entry is intentionally strict and atomic: EVERY non-empty
-  // line must match the expense-entry grammar. If even one line is prose
-  // (for example a budget-planning instruction followed by amount/category
-  // lines), do not persist the parseable tail. Route the whole message to AI.
-  const parsedLines = lines.map((line) => parseExpenseMessage(line, group.default_currency));
+  const parsedLines = lines.map((line) => parseExpenseMessage(line, defaultCurrency));
   if (parsedLines.length === 0 || parsedLines.some((parsed) => !validateParsedExpense(parsed))) {
     logger.info('[MSG] Mixed/non-canonical message — routing the whole message to AI');
-    return false;
+    return null;
   }
+  return { lines, parsedLines };
+}
 
+/** Exact category match first, then fuzzy; a fuzzy hit rewrites parsed.category */
+async function resolveLineCategory(
+  parsed: ParsedExpense,
+  groupId: number,
+  categoryNames: string[],
+  lineNumber: number,
+): Promise<boolean> {
+  if (!parsed.category) return false;
+  if (database.categories.exists(groupId, parsed.category)) return true;
+
+  const fuzzyMatch = await findBestCategoryMatchAsync(parsed.category, categoryNames);
+  if (!fuzzyMatch) return false;
+
+  logger.info(`[MSG] Line ${lineNumber}: fuzzy matched "${parsed.category}" → "${fuzzyMatch}"`);
+  parsed.category = fuzzyMatch;
+  return true;
+}
+
+/** Phase 1 for one line: resolve its category and create the pending expense */
+async function createPendingExpenseForLine(
+  msg: UserMessage,
+  parsed: ParsedExpense,
+  categoryNames: string[],
+  lineNumber: number,
+): Promise<ProcessedExpense> {
+  logger.info(
+    {
+      data: {
+        amount: parsed.amount,
+        currency: parsed.currency,
+        category: parsed.category,
+        comment: parsed.comment,
+      },
+    },
+    `[MSG] Line ${lineNumber} parsed`,
+  );
+
+  const categoryExists = await resolveLineCategory(parsed, msg.group.id, categoryNames, lineNumber);
+
+  logger.info(`[MSG] Line ${lineNumber}: category "${parsed.category}" exists: ${categoryExists}`);
+
+  const pendingExpense = database.pendingExpenses.create({
+    user_id: msg.user.id,
+    message_id: msg.messageId,
+    parsed_amount: parsed.amount,
+    parsed_currency: parsed.currency,
+    detected_category: parsed.category,
+    comment: parsed.comment,
+    status: categoryExists || !parsed.category ? 'confirmed' : 'pending_category',
+  });
+
+  logger.info(`[MSG] Line ${lineNumber}: created pending expense ${pendingExpense.id}`);
+
+  return {
+    amount: parsed.amount,
+    currency: parsed.currency,
+    category: parsed.category,
+    comment: parsed.comment,
+    saved: false,
+    pendingExpenseId: pendingExpense.id,
+    categoryExists: categoryExists || !parsed.category,
+  };
+}
+
+/** Phase 1: parse all lines and create pending expenses (no network) */
+async function createPendingExpenses(
+  msg: UserMessage,
+  lines: string[],
+  parsedLines: Array<ParsedExpense | null>,
+): Promise<PendingBatch | null> {
   const newCategories: string[] = [];
-  const categoryNames = database.categories.getCategoryNames(group.id);
-
-  /** Tracks each recognized expense for the numbered summary */
-  interface ProcessedExpense {
-    amount: number;
-    currency: string;
-    category: string | null;
-    comment: string;
-    saved: boolean;
-    pendingExpenseId: number;
-    categoryExists: boolean;
-  }
+  const categoryNames = database.categories.getCategoryNames(msg.group.id);
   const processedExpenses: ProcessedExpense[] = [];
-
-  // ── Phase 1: parse all lines and create pending expenses (no network) ──
 
   for (const [index, line] of lines.entries()) {
     logger.info(`[MSG] Processing line ${index + 1}/${lines.length}: "${line}"`);
 
     const parsed = parsedLines[index];
     if (!parsed) {
-      // Indexed-access guard; all-lines validation above makes this unreachable.
-      return false;
+      // Indexed-access guard; all-lines validation makes this unreachable.
+      return null;
     }
 
-    logger.info(
-      {
-        data: {
-          amount: parsed.amount,
-          currency: parsed.currency,
-          category: parsed.category,
-          comment: parsed.comment,
-        },
-      },
-      `[MSG] Line ${index + 1} parsed`,
-    );
+    const processed = await createPendingExpenseForLine(msg, parsed, categoryNames, index + 1);
+    processedExpenses.push(processed);
 
-    // Check if category exists: exact match first, then fuzzy
-    let categoryExists = parsed.category
-      ? database.categories.exists(group.id, parsed.category)
-      : false;
-
-    if (!categoryExists && parsed.category) {
-      const fuzzyMatch = await findBestCategoryMatchAsync(parsed.category, categoryNames);
-      if (fuzzyMatch) {
-        logger.info(
-          `[MSG] Line ${index + 1}: fuzzy matched "${parsed.category}" → "${fuzzyMatch}"`,
-        );
-        parsed.category = fuzzyMatch;
-        categoryExists = true;
-      }
+    if (
+      !processed.categoryExists &&
+      processed.category &&
+      !newCategories.includes(processed.category)
+    ) {
+      newCategories.push(processed.category);
     }
-
-    logger.info(`[MSG] Line ${index + 1}: category "${parsed.category}" exists: ${categoryExists}`);
-
-    const pendingExpense = database.pendingExpenses.create({
-      user_id: user.id,
-      message_id: messageId,
-      parsed_amount: parsed.amount,
-      parsed_currency: parsed.currency,
-      detected_category: parsed.category,
-      comment: parsed.comment,
-      status: categoryExists || !parsed.category ? 'confirmed' : 'pending_category',
-    });
-
-    logger.info(`[MSG] Line ${index + 1}: created pending expense ${pendingExpense.id}`);
-
-    if (!categoryExists && parsed.category && !newCategories.includes(parsed.category)) {
-      newCategories.push(parsed.category);
-    }
-
-    processedExpenses.push({
-      amount: parsed.amount,
-      currency: parsed.currency,
-      category: parsed.category,
-      comment: parsed.comment,
-      saved: false,
-      pendingExpenseId: pendingExpense.id,
-      categoryExists: categoryExists || !parsed.category,
-    });
   }
 
-  // ── Phase 2: set 👀 reaction immediately (fire-and-forget, no await) ──
+  return { processedExpenses, newCategories };
+}
+
+/** Phase 2: set 👀 reaction immediately (fire-and-forget, no await) */
+function reactReceived(msg: GroupMessage): void {
+  msg.bot.api
+    .setMessageReaction({
+      chat_id: msg.telegramGroupId,
+      message_id: msg.messageId,
+      reaction: [{ type: 'emoji', emoji: '👀' }],
+    })
+    .catch((error) => {
+      logger.error({ err: error }, '[MSG] Failed to set 👀 reaction');
+    });
+}
+
+/**
+ * Phase 3: save confirmed expenses atomically (all sheets → one DB transaction).
+ * Returns the batch error (pending expenses are deleted then), or null on success.
+ */
+async function saveConfirmedBatch(
+  msg: UserMessage,
+  processedExpenses: ProcessedExpense[],
+  confirmedIds: number[],
+): Promise<unknown> {
+  if (confirmedIds.length === 0) return null;
+
+  try {
+    await saveExpenseBatch(msg.user.id, msg.group.id, confirmedIds);
+    for (const exp of processedExpenses) {
+      if (exp.categoryExists) exp.saved = true;
+    }
+    return null;
+  } catch (error) {
+    logger.error({ err: error }, '[MSG] Batch save failed — no expenses committed');
+    for (const id of confirmedIds) {
+      database.pendingExpenses.delete(id);
+    }
+    return error;
+  }
+}
+
+/** Phase 4: replace 👀 with the final reaction (digit count, or 👎 after a batch error) */
+async function setFinalReaction(
+  msg: GroupMessage,
+  batchError: unknown,
+  expenseCount: number,
+): Promise<void> {
+  try {
+    if (!batchError) {
+      await setExpenseReaction(msg.bot, msg.telegramGroupId, msg.messageId, expenseCount);
+    } else {
+      await msg.bot.api.setMessageReaction({
+        chat_id: msg.telegramGroupId,
+        message_id: msg.messageId,
+        reaction: [{ type: 'emoji', emoji: '👎' }],
+      });
+    }
+  } catch (error) {
+    logger.error({ err: error }, '[MSG] Failed to set final reaction');
+  }
+}
+
+/** Numbered summary of every recognized expense; unsaved ones are flagged ❓ */
+function renderExpenseSummary(processedExpenses: ProcessedExpense[]): string {
+  return processedExpenses
+    .map((exp, i) => {
+      const num = digitEmoji(i + 1);
+      const amount = formatAmount(exp.amount, exp.currency);
+      const cat = escapeHtml(exp.category ?? '');
+      const comment = exp.comment ? ` — ${escapeHtml(exp.comment)}` : '';
+      const status = exp.saved ? '' : ' ❓';
+      return `${num} ${amount} ${cat}${comment}${status}`;
+    })
+    .join('\n');
+}
+
+/** Create, save and report every expense line of a validated message */
+async function recordExpenses(
+  msg: UserMessage,
+  lines: string[],
+  parsedLines: Array<ParsedExpense | null>,
+): Promise<boolean> {
+  const batch = await createPendingExpenses(msg, lines, parsedLines);
+  if (!batch) return false;
+  const { processedExpenses, newCategories } = batch;
 
   const hasProcessedExpenses =
     processedExpenses.some((e) => e.categoryExists) || newCategories.length > 0;
 
-  if (hasProcessedExpenses) {
-    bot.api
-      .setMessageReaction({
-        chat_id: telegramGroupId,
-        message_id: messageId,
-        reaction: [{ type: 'emoji', emoji: '👀' }],
-      })
-      .catch((error) => {
-        logger.error({ err: error }, '[MSG] Failed to set 👀 reaction');
-      });
-  }
-
-  // ── Phase 3: save confirmed expenses atomically (all sheets → one DB transaction) ──
+  if (hasProcessedExpenses) reactReceived(msg);
 
   const confirmedIds = processedExpenses
     .filter((e) => e.categoryExists)
     .map((e) => e.pendingExpenseId);
-  let batchError: unknown = null;
+  const batchError = await saveConfirmedBatch(msg, processedExpenses, confirmedIds);
 
   if (confirmedIds.length > 0) {
-    try {
-      await saveExpenseBatch(user.id, group.id, confirmedIds);
-      for (const exp of processedExpenses) {
-        if (exp.categoryExists) exp.saved = true;
-      }
-    } catch (error) {
-      logger.error({ err: error }, '[MSG] Batch save failed — no expenses committed');
-      for (const id of confirmedIds) {
-        database.pendingExpenses.delete(id);
-      }
-      batchError = error;
-    }
-  }
-
-  // ── Phase 4: replace 👀 with final reaction ──
-
-  if (confirmedIds.length > 0) {
-    try {
-      if (!batchError) {
-        await setExpenseReaction(bot, telegramGroupId, messageId, processedExpenses.length);
-      } else {
-        await bot.api.setMessageReaction({
-          chat_id: telegramGroupId,
-          message_id: messageId,
-          reaction: [{ type: 'emoji', emoji: '👎' }],
-        });
-      }
-    } catch (error) {
-      logger.error({ err: error }, '[MSG] Failed to set final reaction');
-    }
+    await setFinalReaction(msg, batchError, processedExpenses.length);
   }
 
   if (batchError) {
@@ -445,15 +631,7 @@ export async function handleExpenseMessage(
 
   // Send numbered summary when multiple expenses recognized
   if (processedExpenses.length > 1) {
-    const summaryLines = processedExpenses.map((exp, i) => {
-      const num = digitEmoji(i + 1);
-      const amount = formatAmount(exp.amount, exp.currency);
-      const cat = escapeHtml(exp.category ?? '');
-      const comment = exp.comment ? ` — ${escapeHtml(exp.comment)}` : '';
-      const status = exp.saved ? '' : ' ❓';
-      return `${num} ${amount} ${cat}${comment}${status}`;
-    });
-    await sendMessage(summaryLines.join('\n'));
+    await sendMessage(renderExpenseSummary(processedExpenses));
   }
 
   // If there are new categories, show exactly one active wizard step. The callback
@@ -462,17 +640,161 @@ export async function handleExpenseMessage(
     logger.info(
       `[MSG] Starting sequential confirmation for ${newCategories.length} new categories`,
     );
-    await showNextPendingCategoryStep(user.id, messageId);
+    await showNextPendingCategoryStep(msg.user.id, msg.messageId);
     return true;
   }
 
   logger.info(`[MSG] ✅ Processed ${confirmedIds.length}/${lines.length} expenses successfully`);
 
   if (hasProcessedExpenses) {
-    await maybeSmartAdvice(group.id);
+    await maybeSmartAdvice(msg.group.id);
   }
 
   return hasProcessedExpenses;
+}
+
+/**
+ * Handle expense message
+ */
+export async function handleExpenseMessage(
+  ctx: Ctx['Message'],
+  bot: BotInstance,
+): Promise<boolean> {
+  const groupMessage = await resolveGroupMessage(ctx, bot);
+  if (typeof groupMessage === 'boolean') return groupMessage;
+
+  const gated = await runStages(GROUP_GATE_STAGES, groupMessage);
+  if (gated !== null) return gated;
+
+  const { group, telegramId } = groupMessage;
+  logger.info(`[MSG] Group ${group.id} found, default currency: ${group.default_currency}`);
+
+  const user = findOrCreateUser(telegramId, group);
+  if (!user) return true;
+
+  trackGroupAndMember(groupMessage);
+
+  const userMessage: UserMessage = { ...groupMessage, user };
+  const awaited = await runStages(AWAITED_INPUT_STAGES, userMessage);
+  if (awaited !== null) return awaited;
+
+  const strict = parseStrictLines(userMessage.text, group.default_currency);
+  if (!strict) return false;
+
+  return await recordExpenses(userMessage, strict.lines, strict.parsedLines);
+}
+
+/** Save the receipt's expenses for the Telegram sender, when both user and group exist */
+async function saveReceiptExpensesForSender(
+  telegramId: number,
+  groupId: number,
+  photoQueueId: number,
+): Promise<void> {
+  const user = database.users.findByTelegramId(telegramId);
+  if (!user) return;
+  const group = database.groups.findById(groupId);
+  if (!group) return;
+  await saveReceiptExpenses(photoQueueId, groupId, user.id);
+}
+
+/** After an item was confirmed: save everything when all items are done, else ask about the next */
+async function continueReceiptConfirmation(
+  telegramId: number,
+  groupId: number,
+  photoQueueId: number,
+): Promise<void> {
+  const allItems = database.receiptItems.findByPhotoQueueId(photoQueueId);
+  const allConfirmed = allItems.every((i) => i.status === 'confirmed');
+
+  if (allConfirmed) {
+    await saveReceiptExpensesForSender(telegramId, groupId, photoQueueId);
+  } else {
+    // Show next pending item
+    const { showNextItemForConfirmation } = await import('../../services/receipt/photo-processor');
+    await showNextItemForConfirmation(groupId, photoQueueId);
+  }
+}
+
+/** The typed category exactly matches an existing one — use it automatically */
+async function useExactCategory(
+  ctx: Ctx['Message'],
+  waitingItem: ReceiptItem,
+  groupId: number,
+  category: string,
+): Promise<void> {
+  logger.info(`[CATEGORY_INPUT] Exact match found: "${category}", using automatically`);
+
+  // Update item with found category
+  database.receiptItems.update(waitingItem.id, {
+    status: 'confirmed',
+    confirmed_category: category,
+    waiting_for_category_input: 0,
+  });
+
+  await sendMessage(`✅ Используется категория: <b>${category}</b>`);
+
+  await continueReceiptConfirmation(ctx.from.id, groupId, waitingItem.photo_queue_id);
+}
+
+/** Found a similar but not identical category — let the user pick */
+async function offerSimilarCategory(
+  waitingItem: ReceiptItem,
+  similarCategory: string,
+  typedCategory: string,
+): Promise<void> {
+  logger.info(`[CATEGORY_INPUT] Found similar category: "${similarCategory}"`);
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        {
+          text: `✅ Использовать "${similarCategory}"`,
+          callback_data: `use_found_category:${waitingItem.id}:${similarCategory}`,
+        },
+      ],
+      [
+        {
+          text: `❌ Создать новую "${typedCategory}"`,
+          callback_data: `create_new_category:${waitingItem.id}:${typedCategory}`,
+        },
+      ],
+    ],
+  };
+
+  await sendMessage(`Найдена похожая категория: <b>${similarCategory}</b>\n\nВыберите действие:`, {
+    reply_markup: keyboard,
+  });
+}
+
+/** No similar category exists — create the typed one and use it */
+async function createCategoryFromInput(
+  ctx: Ctx['Message'],
+  waitingItem: ReceiptItem,
+  groupId: number,
+  category: string,
+): Promise<void> {
+  // No match found - create new category directly
+  logger.info(`[CATEGORY_INPUT] No similar category found, creating new: "${category}"`);
+
+  // Reset waiting flag
+  database.receiptItems.update(waitingItem.id, {
+    status: 'confirmed',
+    confirmed_category: category,
+    waiting_for_category_input: 0,
+  });
+
+  // Create category if doesn't exist
+  if (!database.categories.exists(groupId, category)) {
+    database.categories.create({
+      group_id: groupId,
+      name: category,
+    });
+  }
+
+  await sendMessage(`✅ Создана новая категория: <b>${category}</b>`);
+
+  // Categories are collected dynamically in showNextItemForConfirmation
+  await continueReceiptConfirmation(ctx.from.id, groupId, waitingItem.photo_queue_id);
 }
 
 /**
@@ -502,112 +824,18 @@ async function handleCategoryTextInput(
   // Try to find best match
   const bestMatch = await findBestCategoryMatchAsync(normalizedCategory, categoryNames);
 
-  if (bestMatch) {
-    // Check if exact match - use it automatically
-    if (bestMatch.toLowerCase() === normalizedCategory.toLowerCase()) {
-      logger.info(`[CATEGORY_INPUT] Exact match found: "${bestMatch}", using automatically`);
-
-      // Update item with found category
-      database.receiptItems.update(waitingItem.id, {
-        status: 'confirmed',
-        confirmed_category: bestMatch,
-        waiting_for_category_input: 0,
-      });
-
-      await sendMessage(`✅ Используется категория: <b>${bestMatch}</b>`);
-
-      // Check if all items are confirmed
-      const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
-      const allConfirmed = allItems.every((i) => i.status === 'confirmed');
-
-      if (allConfirmed) {
-        // Save all items
-
-        const user = database.users.findByTelegramId(ctx.from.id);
-        if (user) {
-          const group = database.groups.findById(groupId);
-          if (group) {
-            await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id);
-          }
-        }
-      } else {
-        // Show next pending item
-        const { showNextItemForConfirmation } = await import(
-          '../../services/receipt/photo-processor'
-        );
-        await showNextItemForConfirmation(groupId, waitingItem.photo_queue_id);
-      }
-
-      return;
-    }
-
-    // Found similar but not exact match - ask user to confirm
-    logger.info(`[CATEGORY_INPUT] Found similar category: "${bestMatch}"`);
-
-    const keyboard = {
-      inline_keyboard: [
-        [
-          {
-            text: `✅ Использовать "${bestMatch}"`,
-            callback_data: `use_found_category:${waitingItem.id}:${bestMatch}`,
-          },
-        ],
-        [
-          {
-            text: `❌ Создать новую "${normalizedCategory}"`,
-            callback_data: `create_new_category:${waitingItem.id}:${normalizedCategory}`,
-          },
-        ],
-      ],
-    };
-
-    await sendMessage(`Найдена похожая категория: <b>${bestMatch}</b>\n\nВыберите действие:`, {
-      reply_markup: keyboard,
-    });
-  } else {
-    // No match found - create new category directly
-    logger.info(
-      `[CATEGORY_INPUT] No similar category found, creating new: "${normalizedCategory}"`,
-    );
-
-    // Reset waiting flag
-    database.receiptItems.update(waitingItem.id, {
-      status: 'confirmed',
-      confirmed_category: normalizedCategory,
-      waiting_for_category_input: 0,
-    });
-
-    // Create category if doesn't exist
-    if (!database.categories.exists(groupId, normalizedCategory)) {
-      database.categories.create({
-        group_id: groupId,
-        name: normalizedCategory,
-      });
-    }
-
-    await sendMessage(`✅ Создана новая категория: <b>${normalizedCategory}</b>`);
-
-    // Check if all items are confirmed (categories will be collected dynamically in showNextItemForConfirmation)
-    const allItems = database.receiptItems.findByPhotoQueueId(waitingItem.photo_queue_id);
-    const allConfirmed = allItems.every((i) => i.status === 'confirmed');
-
-    if (allConfirmed) {
-      // Save all items
-      const user = database.users.findByTelegramId(ctx.from.id);
-      if (user) {
-        const group = database.groups.findById(groupId);
-        if (group) {
-          await saveReceiptExpenses(waitingItem.photo_queue_id, groupId, user.id);
-        }
-      }
-    } else {
-      // Show next pending item
-      const { showNextItemForConfirmation } = await import(
-        '../../services/receipt/photo-processor'
-      );
-      await showNextItemForConfirmation(groupId, waitingItem.photo_queue_id);
-    }
+  if (!bestMatch) {
+    await createCategoryFromInput(ctx, waitingItem, groupId, normalizedCategory);
+    return;
   }
+
+  // Check if exact match - use it automatically
+  if (bestMatch.toLowerCase() === normalizedCategory.toLowerCase()) {
+    await useExactCategory(ctx, waitingItem, groupId, bestMatch);
+    return;
+  }
+
+  await offerSimilarCategory(waitingItem, bestMatch, normalizedCategory);
 }
 
 /**

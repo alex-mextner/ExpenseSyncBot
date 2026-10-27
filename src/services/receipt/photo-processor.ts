@@ -4,6 +4,7 @@ import { createReceiptSummaryKeyboard } from '../../bot/keyboards';
 import { BASE_CURRENCY, type CurrencyCode } from '../../config/constants';
 import { env } from '../../config/env';
 import { database } from '../../database';
+import type { PhotoQueueItem } from '../../database/types';
 import { escapeHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import { sendMessage, withChatContext } from '../bank/telegram-sender';
@@ -94,6 +95,258 @@ export function saveExtractedItems(
   logger.info(`[PHOTO_PROCESSOR] Saved ${items.length} items for queue #${photoQueueId}`);
 }
 
+// Escapes keep these exact code points (the shrug deliberately has no variation selector).
+const PROCESSING_REACTION = '\u{1F440}'; // 👀
+const SHRUG_REACTION = '\u{1F937}\u200D\u2642'; // 🤷‍♂
+
+/**
+ * React to the queued photo's message with an emoji; failures are logged, never thrown.
+ * The group is looked up fresh each time so the caller always reacts in the current group row.
+ */
+async function setQueueMessageReaction(
+  bot: Bot,
+  queueItem: PhotoQueueItem,
+  emoji: typeof PROCESSING_REACTION | typeof SHRUG_REACTION,
+  successLog: string,
+): Promise<void> {
+  const group = database.groups.findById(queueItem.group_id);
+  if (!group) return;
+
+  try {
+    await bot.api.setMessageReaction({
+      chat_id: group.telegram_group_id,
+      message_id: queueItem.message_id,
+      reaction: [{ type: 'emoji', emoji }],
+    });
+    logger.info(successLog);
+  } catch (error) {
+    logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to set reaction');
+  }
+}
+
+/**
+ * Save compressed receipt image to data/receipts/ for storage and dedup.
+ * Returns the saved path, or null if saving failed (processing continues without an image).
+ */
+async function saveReceiptImage(photoBuffer: Buffer, queueItemId: number): Promise<string | null> {
+  try {
+    const sharp = (await import('sharp')).default;
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+
+    const compressedBuffer = await sharp(photoBuffer)
+      .resize(800, undefined, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+    const receiptsDir = path.join(process.cwd(), 'data', 'receipts');
+    await fs.mkdir(receiptsDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `receipt-${queueItemId}-${timestamp}.jpg`;
+    const filepath = path.join(receiptsDir, filename);
+
+    await fs.writeFile(filepath, compressedBuffer);
+    logger.info(`[PHOTO_PROCESSOR] Receipt image saved: ${filepath}`);
+    return filepath;
+  } catch (saveError) {
+    logger.error({ err: saveError }, '[PHOTO_PROCESSOR] Failed to save receipt image');
+    return null;
+  }
+}
+
+/**
+ * No QR code in the photo: fall back to OCR.
+ * When OCR fails too, the item is marked done with a 🤷 reaction and null is returned.
+ */
+async function readReceiptTextByOcr(
+  bot: Bot,
+  queueItem: PhotoQueueItem,
+  queueItemId: number,
+  photoBuffer: Buffer,
+): Promise<string | null> {
+  logger.info(`[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}, trying OCR fallback`);
+
+  try {
+    const receiptData = await extractTextFromImageBuffer(photoBuffer);
+    logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
+    return receiptData;
+  } catch (ocrError) {
+    logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
+
+    // Both QR and OCR failed - mark as done and set reaction
+    database.photoQueue.update(queueItemId, { status: 'done' });
+    await setQueueMessageReaction(
+      bot,
+      queueItem,
+      SHRUG_REACTION,
+      `[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`,
+    );
+    return null;
+  }
+}
+
+/**
+ * QR code found: fetch the receipt from its URL, falling back to OCR when the fetch fails.
+ * When both fail, the item is marked as error, the user is notified and null is returned.
+ */
+async function readReceiptTextFromQR(
+  qrData: string,
+  queueItem: PhotoQueueItem,
+  queueItemId: number,
+  photoBuffer: Buffer,
+): Promise<string | null> {
+  logger.info(`[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`);
+
+  // Fetch receipt data from QR
+  try {
+    return await fetchReceiptData(qrData);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error(
+      { err: error },
+      '[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback',
+    );
+
+    // Try OCR as fallback when QR fetch fails
+    try {
+      const receiptData = await extractTextFromImageBuffer(photoBuffer);
+      logger.info(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
+      return receiptData;
+    } catch (ocrError) {
+      // Both QR fetch and OCR failed
+      logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
+
+      database.photoQueue.update(queueItemId, {
+        status: 'error',
+        error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
+      });
+
+      // Notify user
+      await notifyUser(
+        queueItem.group_id,
+        `❌ Не удалось загрузить чек: ${errorMessage}`,
+        queueItem.message_thread_id,
+      );
+      return null;
+    }
+  }
+}
+
+/**
+ * Parse receipt with a live-updating status message so the user sees progress
+ * during the 30-60s parse. The status writer streams the model's raw JSON output
+ * into a single Telegram message via edit-in-place (throttled to ~1 per 1.5s).
+ * On success → message is deleted, confirmation card takes its place.
+ * On failure → message is finalized with the error text.
+ * Returns null when processing must stop (group missing, or parse failed and was recorded).
+ */
+async function parseReceiptWithStatus(
+  queueItem: PhotoQueueItem,
+  queueItemId: number,
+  receiptData: string,
+): Promise<AIExtractionResult | null> {
+  // Get existing categories and recent examples for the group
+  const categories = database.categories.findByGroupId(queueItem.group_id);
+  const categoryNames = categories.map((c) => c.name);
+  const categoryExamples = database.expenses.getRecentExamplesByCategory(queueItem.group_id);
+
+  const groupForStatus = database.groups.findById(queueItem.group_id);
+  if (!groupForStatus) {
+    logger.error({ groupId: queueItem.group_id }, '[PHOTO_PROCESSOR] Group not found');
+    return null;
+  }
+  const statusThreadId = queueItem.message_thread_id ?? null;
+
+  const statusWriter = await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
+    Promise.resolve(new StatusWriter({ header: '🤖 AI читает чек...' })),
+  );
+
+  try {
+    const parsed = await parseReceipt(
+      receiptData,
+      categoryNames,
+      categoryExamples,
+      // Progress callback — feed raw text deltas from the model into the status message
+      (delta) => statusWriter.append(delta),
+    );
+
+    // Delete the status message — the confirmation card will be sent next as the real result
+    await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
+      statusWriter.close(),
+    );
+
+    const extractionResult: AIExtractionResult = { items: parsed.items };
+    if (parsed.currency) {
+      extractionResult.currency = parsed.currency;
+    }
+    if (parsed.date) {
+      extractionResult.date = parsed.date;
+    }
+    logger.info(
+      `[PHOTO_PROCESSOR] Parsed ${parsed.items.length} items, sum=${parsed.computedSum}, claimedTotal=${parsed.claimedTotal ?? 'n/a'}, verified=${parsed.sumVerified}, calc_rounds=${parsed.calculateSumRounds} via ${parsed.providerUsed}`,
+    );
+    if (!parsed.sumVerified && parsed.items.length > 0 && parsed.claimedTotal !== undefined) {
+      logger.warn(
+        `[PHOTO_PROCESSOR] Sum check failed: computed=${parsed.computedSum} vs claimed=${parsed.claimedTotal} — user review advised`,
+      );
+    }
+    return extractionResult;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to parse receipt');
+
+    // Finalize the status message with the error text instead of sending a separate
+    // one — keeps the chat clean
+    await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
+      statusWriter.finalize(`❌ AI не распознал чек: ${errorMessage}`),
+    );
+
+    database.photoQueue.update(queueItemId, {
+      status: 'error',
+      error_message: `❌ AI не распознал чек: ${errorMessage}`,
+    });
+    return null;
+  }
+}
+
+/**
+ * Persist extracted items and the receipt record, then show confirmation options.
+ * The currency falls back to the group default when the AI did not detect one.
+ */
+async function saveReceiptAndConfirm(
+  queueItem: PhotoQueueItem,
+  queueItemId: number,
+  extractionResult: AIExtractionResult,
+  savedReceiptPath: string | null,
+): Promise<void> {
+  // Get group default currency if AI didn't detect it
+  const group = database.groups.findById(queueItem.group_id);
+  const currency = extractionResult.currency || group?.default_currency || BASE_CURRENCY;
+
+  // Save receipt items to database
+  saveExtractedItems(queueItemId, extractionResult.items, currency);
+
+  // Create receipt record regardless of whether the image was saved to disk —
+  // the record is needed for bank transaction dedup matching.
+  const totalAmount = extractionResult.items.reduce((sum, item) => sum + item.total, 0);
+  const currentDate = extractionResult.date || new Date().toISOString().split('T')[0] || '';
+  database.receipts.create({
+    group_id: queueItem.group_id,
+    photo_queue_id: queueItemId,
+    image_path: savedReceiptPath,
+    total_amount: totalAmount,
+    currency,
+    date: currentDate,
+  });
+  logger.info(
+    `[PHOTO_PROCESSOR] Receipt record created: ${totalAmount} ${currency} for queue #${queueItemId}`,
+  );
+
+  // Show confirmation options (summary for >5 items, item-by-item otherwise)
+  await showReceiptConfirmationOptions(queueItem.group_id, queueItemId);
+}
+
 /**
  * Process a single photo queue item
  */
@@ -109,194 +362,30 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
   // Update status to processing
   database.photoQueue.update(queueItemId, { status: 'processing' });
 
-  // Get telegram group ID and set 👀 reaction to indicate processing started
-  const group = database.groups.findById(queueItem.group_id);
-  if (group) {
-    try {
-      await bot.api.setMessageReaction({
-        chat_id: group.telegram_group_id,
-        message_id: queueItem.message_id,
-        reaction: [{ type: 'emoji', emoji: '👀' }],
-      });
-      logger.info(`[PHOTO_PROCESSOR] Set 👀 reaction for message - processing started`);
-    } catch (error) {
-      logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to set reaction');
-    }
-  }
+  // Set 👀 reaction to indicate processing started
+  await setQueueMessageReaction(
+    bot,
+    queueItem,
+    PROCESSING_REACTION,
+    `[PHOTO_PROCESSOR] Set 👀 reaction for message - processing started`,
+  );
 
   try {
     // Download photo from Telegram
     const photoBuffer = await downloadPhoto(bot, queueItem.file_id);
 
-    // Save compressed receipt image to data/receipts/ for storage and dedup
-    let savedReceiptPath: string | null = null;
-    try {
-      const sharp = (await import('sharp')).default;
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
-      const compressedBuffer = await sharp(photoBuffer)
-        .resize(800, undefined, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-
-      const receiptsDir = path.join(process.cwd(), 'data', 'receipts');
-      await fs.mkdir(receiptsDir, { recursive: true });
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `receipt-${queueItemId}-${timestamp}.jpg`;
-      const filepath = path.join(receiptsDir, filename);
-
-      await fs.writeFile(filepath, compressedBuffer);
-      savedReceiptPath = filepath;
-      logger.info(`[PHOTO_PROCESSOR] Receipt image saved: ${filepath}`);
-    } catch (saveError) {
-      logger.error({ err: saveError }, '[PHOTO_PROCESSOR] Failed to save receipt image');
-    }
+    const savedReceiptPath = await saveReceiptImage(photoBuffer, queueItemId);
 
     // Scan QR code
     const qrData = await scanQRFromImage(photoBuffer);
 
-    let receiptData: string;
+    const receiptData = qrData
+      ? await readReceiptTextFromQR(qrData, queueItem, queueItemId, photoBuffer)
+      : await readReceiptTextByOcr(bot, queueItem, queueItemId, photoBuffer);
+    if (receiptData === null) return;
 
-    if (!qrData) {
-      // No QR code found - try OCR fallback
-      logger.info(
-        `[PHOTO_PROCESSOR] No QR code found in photo #${queueItemId}, trying OCR fallback`,
-      );
-
-      try {
-        receiptData = await extractTextFromImageBuffer(photoBuffer);
-        logger.info(`[PHOTO_PROCESSOR] OCR successful, extracted ${receiptData.length} chars`);
-      } catch (ocrError) {
-        logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
-
-        // Both QR and OCR failed - mark as done and set reaction
-        database.photoQueue.update(queueItemId, { status: 'done' });
-
-        // Get telegram group ID and set reaction
-        const group = database.groups.findById(queueItem.group_id);
-        if (group) {
-          try {
-            await bot.api.setMessageReaction({
-              chat_id: group.telegram_group_id,
-              message_id: queueItem.message_id,
-              reaction: [{ type: 'emoji', emoji: '🤷‍♂' }],
-            });
-            logger.info(`[PHOTO_PROCESSOR] Set 🤷‍♂️ reaction - both QR and OCR failed`);
-          } catch (error) {
-            logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to set reaction');
-          }
-        }
-
-        return;
-      }
-    } else {
-      logger.info(`[PHOTO_PROCESSOR] QR code found: ${qrData.substring(0, 100)}...`);
-
-      // Fetch receipt data from QR
-      try {
-        receiptData = await fetchReceiptData(qrData);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        logger.error(
-          { err: error },
-          '[PHOTO_PROCESSOR] Failed to fetch receipt data from QR, trying OCR fallback',
-        );
-
-        // Try OCR as fallback when QR fetch fails
-        try {
-          receiptData = await extractTextFromImageBuffer(photoBuffer);
-          logger.info(`[PHOTO_PROCESSOR] OCR fallback successful after QR fetch failed`);
-        } catch (ocrError) {
-          // Both QR fetch and OCR failed
-          logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
-
-          database.photoQueue.update(queueItemId, {
-            status: 'error',
-            error_message: `❌ Не удалось загрузить чек: ${errorMessage}`,
-          });
-
-          // Notify user
-          await notifyUser(
-            queueItem.group_id,
-            `❌ Не удалось загрузить чек: ${errorMessage}`,
-            queueItem.message_thread_id,
-          );
-          return;
-        }
-      }
-    }
-
-    // Get existing categories and recent examples for the group
-    const categories = database.categories.findByGroupId(queueItem.group_id);
-    const categoryNames = categories.map((c) => c.name);
-    const categoryExamples = database.expenses.getRecentExamplesByCategory(queueItem.group_id);
-
-    // Parse receipt with a live-updating status message so the user sees progress
-    // during the 30-60s parse. The status writer streams the model's raw JSON output
-    // into a single Telegram message via edit-in-place (throttled to ~1 per 1.5s).
-    // On success → message is deleted, confirmation card takes its place.
-    // On failure → message is finalized with the error text.
-    let extractionResult: AIExtractionResult;
-    const groupForStatus = database.groups.findById(queueItem.group_id);
-    if (!groupForStatus) {
-      logger.error({ groupId: queueItem.group_id }, '[PHOTO_PROCESSOR] Group not found');
-      return;
-    }
-    const statusThreadId = queueItem.message_thread_id ?? null;
-
-    const statusWriter = await withChatContext(
-      groupForStatus.telegram_group_id,
-      statusThreadId,
-      () => Promise.resolve(new StatusWriter({ header: '🤖 AI читает чек...' })),
-    );
-
-    try {
-      const parsed = await parseReceipt(
-        receiptData,
-        categoryNames,
-        categoryExamples,
-        // Progress callback — feed raw text deltas from the model into the status message
-        (delta) => statusWriter.append(delta),
-      );
-
-      // Delete the status message — the confirmation card will be sent next as the real result
-      await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
-        statusWriter.close(),
-      );
-
-      extractionResult = { items: parsed.items };
-      if (parsed.currency) {
-        extractionResult.currency = parsed.currency;
-      }
-      if (parsed.date) {
-        extractionResult.date = parsed.date;
-      }
-      logger.info(
-        `[PHOTO_PROCESSOR] Parsed ${parsed.items.length} items, sum=${parsed.computedSum}, claimedTotal=${parsed.claimedTotal ?? 'n/a'}, verified=${parsed.sumVerified}, calc_rounds=${parsed.calculateSumRounds} via ${parsed.providerUsed}`,
-      );
-      if (!parsed.sumVerified && parsed.items.length > 0 && parsed.claimedTotal !== undefined) {
-        logger.warn(
-          `[PHOTO_PROCESSOR] Sum check failed: computed=${parsed.computedSum} vs claimed=${parsed.claimedTotal} — user review advised`,
-        );
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      logger.error({ err: error }, '[PHOTO_PROCESSOR] Failed to parse receipt');
-
-      // Finalize the status message with the error text instead of sending a separate
-      // one — keeps the chat clean
-      await withChatContext(groupForStatus.telegram_group_id, statusThreadId, () =>
-        statusWriter.finalize(`❌ AI не распознал чек: ${errorMessage}`),
-      );
-
-      database.photoQueue.update(queueItemId, {
-        status: 'error',
-        error_message: `❌ AI не распознал чек: ${errorMessage}`,
-      });
-      return;
-    }
+    const extractionResult = await parseReceiptWithStatus(queueItem, queueItemId, receiptData);
+    if (!extractionResult) return;
 
     if (!extractionResult.items || extractionResult.items.length === 0) {
       database.photoQueue.update(queueItemId, {
@@ -313,31 +402,7 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       return;
     }
 
-    // Get group default currency if AI didn't detect it
-    const group = database.groups.findById(queueItem.group_id);
-    const currency = extractionResult.currency || group?.default_currency || BASE_CURRENCY;
-
-    // Save receipt items to database
-    saveExtractedItems(queueItemId, extractionResult.items, currency);
-
-    // Create receipt record regardless of whether the image was saved to disk —
-    // the record is needed for bank transaction dedup matching.
-    const totalAmount = extractionResult.items.reduce((sum, item) => sum + item.total, 0);
-    const currentDate = extractionResult.date || new Date().toISOString().split('T')[0] || '';
-    database.receipts.create({
-      group_id: queueItem.group_id,
-      photo_queue_id: queueItemId,
-      image_path: savedReceiptPath,
-      total_amount: totalAmount,
-      currency,
-      date: currentDate,
-    });
-    logger.info(
-      `[PHOTO_PROCESSOR] Receipt record created: ${totalAmount} ${currency} for queue #${queueItemId}`,
-    );
-
-    // Show confirmation options (summary for >5 items, item-by-item otherwise)
-    await showReceiptConfirmationOptions(queueItem.group_id, queueItemId);
+    await saveReceiptAndConfirm(queueItem, queueItemId, extractionResult, savedReceiptPath);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error({ err: errorMessage }, '[PHOTO_PROCESSOR] Unexpected error');

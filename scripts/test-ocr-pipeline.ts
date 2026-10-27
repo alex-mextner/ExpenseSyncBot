@@ -22,6 +22,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { extractTextFromImageBuffer } from '../src/services/receipt/ocr-extractor';
 import { parseReceipt } from '../src/services/receipt/receipt-parser';
+import { printLine } from './lib/print-line';
 
 // ── CLI parsing ─────────────────────────────────────────────────────────────
 
@@ -85,9 +86,9 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-console.log(`Testing ${files.length} image(s) from ${imagesDir}`);
-console.log(`Stage: ${stage}`);
-console.log();
+printLine(`Testing ${files.length} image(s) from ${imagesDir}`);
+printLine(`Stage: ${stage}`);
+printLine();
 
 // ── Pipeline ────────────────────────────────────────────────────────────────
 
@@ -183,57 +184,64 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.substring(0, n)}...` : s;
 }
 
-function printResult(r: PipelineResult) {
-  const statusIcon =
-    r.stageReached === 'error'
-      ? 'FAIL'
-      : r.itemsCount === 0
-        ? 'EMPTY'
-        : r.sumVerified
-          ? 'VERIFIED'
-          : 'UNVERIFIED';
+function statusLabel(r: PipelineResult): string {
+  if (r.stageReached === 'error') return 'FAIL';
+  if (r.itemsCount === 0) return 'EMPTY';
+  return r.sumVerified ? 'VERIFIED' : 'UNVERIFIED';
+}
 
-  console.log(`\n${'━'.repeat(80)}`);
-  console.log(`[${statusIcon}] ${r.file}  (${Math.round(r.bytes / 1024)}KB)`);
-  console.log('━'.repeat(80));
+function printOcrStage(r: PipelineResult & { ocrText: string }) {
+  const ocrMs = r.timing.ocrMs ?? 0;
+  printLine(`\n  STAGE 1 — OCR (${ocrMs}ms, ${r.ocrText.length} chars)`);
+  printLine('  ────────────────────────────────────────');
+  const lines = r.ocrText.split('\n').slice(0, 30);
+  for (const line of lines) {
+    printLine(`  │ ${truncate(line, 76)}`);
+  }
+  if (r.ocrText.split('\n').length > 30) {
+    printLine(`  │ ... (${r.ocrText.split('\n').length - 30} more lines)`);
+  }
+}
+
+function printItemsDetail(items: NonNullable<PipelineResult['items']>) {
+  printLine('    items detail:');
+  for (const it of items) {
+    printLine(`      - ${truncate(it.name_ru, 40).padEnd(40)}  ${String(it.quantity).padStart(4)} × ${String(it.price).padStart(8)} = ${String(it.total).padStart(8)}`,);
+  }
+}
+
+function printParseStage(r: PipelineResult) {
+  const parseMs = r.timing.parseMs ?? 0;
+  printLine(`\n  STAGE 2 — Parse + validate (${parseMs}ms, via ${r.providerUsed ?? '?'})`);
+  printLine('  ────────────────────────────────────────');
+  printLine(`    items:       ${r.itemsCount}`);
+  printLine(`    currency:    ${r.currency ?? '(none)'}`);
+  printLine(`    date:        ${r.date ?? '(not found)'}`);
+  printLine(`    computedSum: ${r.computedSum}`);
+  printLine(`    claimedTotal: ${r.claimedTotal ?? '(not found)'}`);
+  printLine(`    sumVerified: ${r.sumVerified ? 'YES' : 'NO'}`);
+
+  if (r.items && r.items.length > 0) {
+    printItemsDetail(r.items);
+  }
+}
+
+function printResult(r: PipelineResult) {
+  printLine(`\n${'━'.repeat(80)}`);
+  printLine(`[${statusLabel(r)}] ${r.file}  (${Math.round(r.bytes / 1024)}KB)`);
+  printLine('━'.repeat(80));
 
   if (r.ocrText) {
-    const ocrMs = r.timing.ocrMs ?? 0;
-    console.log(`\n  STAGE 1 — OCR (${ocrMs}ms, ${r.ocrText.length} chars)`);
-    console.log('  ────────────────────────────────────────');
-    const lines = r.ocrText.split('\n').slice(0, 30);
-    for (const line of lines) {
-      console.log(`  │ ${truncate(line, 76)}`);
-    }
-    if (r.ocrText.split('\n').length > 30) {
-      console.log(`  │ ... (${r.ocrText.split('\n').length - 30} more lines)`);
-    }
+    printOcrStage({ ...r, ocrText: r.ocrText });
   }
 
   if (r.stageReached === 'error' && r.error) {
-    console.log(`\n  ERROR: ${r.error}`);
+    printLine(`\n  ERROR: ${r.error}`);
     return;
   }
 
   if (r.itemsCount !== undefined) {
-    const parseMs = r.timing.parseMs ?? 0;
-    console.log(`\n  STAGE 2 — Parse + validate (${parseMs}ms, via ${r.providerUsed ?? '?'})`);
-    console.log('  ────────────────────────────────────────');
-    console.log(`    items:       ${r.itemsCount}`);
-    console.log(`    currency:    ${r.currency ?? '(none)'}`);
-    console.log(`    date:        ${r.date ?? '(not found)'}`);
-    console.log(`    computedSum: ${r.computedSum}`);
-    console.log(`    claimedTotal: ${r.claimedTotal ?? '(not found)'}`);
-    console.log(`    sumVerified: ${r.sumVerified ? 'YES' : 'NO'}`);
-
-    if (r.items && r.items.length > 0) {
-      console.log('    items detail:');
-      for (const it of r.items) {
-        console.log(
-          `      - ${truncate(it.name_ru, 40).padEnd(40)}  ${String(it.quantity).padStart(4)} × ${String(it.price).padStart(8)} = ${String(it.total).padStart(8)}`,
-        );
-      }
-    }
+    printParseStage(r);
   }
 }
 
@@ -243,7 +251,7 @@ const results: PipelineResult[] = [];
 
 for (const file of files) {
   const filepath = path.join(imagesDir, file);
-  console.log(`\n→ Processing ${file}...`);
+  printLine(`\n→ Processing ${file}...`);
   try {
     const result = await runPipeline(filepath);
     results.push(result);
@@ -262,9 +270,9 @@ for (const file of files) {
 
 // ── Summary ─────────────────────────────────────────────────────────────────
 
-console.log(`\n${'═'.repeat(80)}`);
-console.log('SUMMARY');
-console.log('═'.repeat(80));
+printLine(`\n${'═'.repeat(80)}`);
+printLine('SUMMARY');
+printLine('═'.repeat(80));
 
 const verified = results.filter((r) => r.sumVerified).length;
 const unverified = results.filter(
@@ -273,16 +281,17 @@ const unverified = results.filter(
 const empty = results.filter((r) => r.itemsCount === 0).length;
 const errored = results.filter((r) => r.stageReached === 'error').length;
 
-console.log(`Total:      ${results.length}`);
-console.log(`Verified:   ${verified}   (items extracted AND sum confirmed via tool)`);
-console.log(`Unverified: ${unverified}   (items extracted but sum check failed)`);
-console.log(`Empty:      ${empty}   (no items found in receipt text)`);
-console.log(`Errored:    ${errored}`);
+printLine(`Total:      ${results.length}`);
+printLine(`Verified:   ${verified}   (items extracted AND sum confirmed via tool)`);
+printLine(`Unverified: ${unverified}   (items extracted but sum check failed)`);
+printLine(`Empty:      ${empty}   (no items found in receipt text)`);
+printLine(`Errored:    ${errored}`);
 
 const totalOcrMs = results.reduce((a, r) => a + (r.timing.ocrMs ?? 0), 0);
 const totalParseMs = results.reduce((a, r) => a + (r.timing.parseMs ?? 0), 0);
-console.log(`\nAvg timings:`);
-console.log(`  OCR:    ${Math.round(totalOcrMs / results.length)}ms`);
-console.log(`  Parse:  ${Math.round(totalParseMs / results.length)}ms`);
-
-process.exit(errored > 0 ? 1 : 0);
+printLine(`\nAvg timings:`);
+printLine(`  OCR:    ${Math.round(totalOcrMs / results.length)}ms`);
+// Last write carries the exit callback: process.exit() drops writes still queued on a slow pipe.
+process.stdout.write(`  Parse:  ${Math.round(totalParseMs / results.length)}ms\n`, () =>
+  process.exit(errored > 0 ? 1 : 0),
+);

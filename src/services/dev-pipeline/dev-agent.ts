@@ -7,6 +7,7 @@ import { deleteFile, fileExists, listDirectory, readFile, searchCode, writeFile 
 import { commitChanges, managePackages, revertFileToMain } from './git-ops';
 
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
+type ToolCallRequest = NonNullable<StreamRoundResult['toolCalls']>[number];
 
 const logger = createLogger('dev-agent');
 
@@ -145,27 +146,7 @@ export class DevAgent {
         round++;
         logger.info(`[DEV-AGENT] Round ${round}/${MAX_ROUNDS}`);
 
-        let result: StreamRoundResult;
-        try {
-          result = await aiStreamRound({
-            messages,
-            maxTokens: 8192,
-            tools: DEV_TOOLS,
-            chain: 'smart',
-            purpose: 'dev_agent',
-            signal: controller.signal,
-          });
-        } catch (err: unknown) {
-          if ((err instanceof Error && err.name === 'AbortError') || controller.signal.aborted) {
-            if (this.aborted) {
-              throw new AgentAbortedError();
-            }
-            throw new Error(
-              `Agent timed out after ${AGENT_TIMEOUT_MS / 60000} minutes (completed ${round - 1} rounds)`,
-            );
-          }
-          throw err;
-        }
+        const result = await this.streamToolRound(messages, controller.signal, round);
 
         // Parse response
         const toolCalls = result.toolCalls ?? [];
@@ -181,58 +162,103 @@ export class DevAgent {
           break;
         }
 
-        // Build assistant message with tool calls for history
-        messages.push({
-          role: 'assistant',
-          content: result.text || null,
-          tool_calls: toolCalls.map((tc) => ({
-            id: tc.id,
-            type: 'function' as const,
-            function: { name: tc.name, arguments: tc.arguments },
-          })),
-        });
-
-        // Execute tools and add results
-        for (const call of toolCalls) {
-          let input: Record<string, unknown>;
-          try {
-            input = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
-          } catch {
-            logger.error(
-              `[DEV-AGENT] Malformed tool arguments for ${call.name}: ${call.arguments?.substring(0, 200)}`,
-            );
-            messages.push({
-              role: 'tool',
-              tool_call_id: call.id,
-              content: `Error: malformed arguments`,
-            });
-            continue;
-          }
-          logger.info(`[DEV-AGENT] Tool: ${call.name} ${JSON.stringify(input).slice(0, 200)}`);
-          const toolResult = await this.executeTool(call.name, input);
-          logger.info(`[DEV-AGENT] Result: ${toolResult.slice(0, 200)}`);
-          messages.push({ role: 'tool', tool_call_id: call.id, content: toolResult });
-        }
+        await this.recordToolRound(messages, result.text, toolCalls);
       }
 
       // Nudge for final answer if no text produced
       if (!finalText.trim() && round < MAX_ROUNDS) {
-        logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
-        messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
-        const nudge = await aiStreamRound({
-          messages,
-          maxTokens: 8192,
-          chain: 'smart',
-          purpose: 'dev_agent',
-        });
-        finalText += nudge.text;
-        logger.info(`[DEV-AGENT] Nudge result: textLen=${finalText.length}`);
+        finalText += await this.requestFinalAnswer(messages, finalText);
       }
 
       return finalText;
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  /**
+   * One streamed model round. Abort errors are translated: a user cancel becomes
+   * AgentAbortedError, a timeout becomes a descriptive Error.
+   */
+  private async streamToolRound(
+    messages: ChatMessage[],
+    signal: AbortSignal,
+    round: number,
+  ): Promise<StreamRoundResult> {
+    try {
+      return await aiStreamRound({
+        messages,
+        maxTokens: 8192,
+        tools: DEV_TOOLS,
+        chain: 'smart',
+        purpose: 'dev_agent',
+        signal,
+      });
+    } catch (err: unknown) {
+      if ((err instanceof Error && err.name === 'AbortError') || signal.aborted) {
+        if (this.aborted) {
+          throw new AgentAbortedError();
+        }
+        throw new Error(
+          `Agent timed out after ${AGENT_TIMEOUT_MS / 60000} minutes (completed ${round - 1} rounds)`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /** Append the assistant tool-call message, then execute every call and append its result. */
+  private async recordToolRound(
+    messages: ChatMessage[],
+    text: string | undefined,
+    toolCalls: ToolCallRequest[],
+  ): Promise<void> {
+    // Build assistant message with tool calls for history
+    messages.push({
+      role: 'assistant',
+      content: text || null,
+      tool_calls: toolCalls.map((tc) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.name, arguments: tc.arguments },
+      })),
+    });
+
+    // Execute tools and add results
+    for (const call of toolCalls) {
+      messages.push(await this.runToolCall(call));
+    }
+  }
+
+  /** Execute one tool call; malformed JSON arguments produce an error tool message. */
+  private async runToolCall(call: ToolCallRequest): Promise<ChatMessage> {
+    let input: Record<string, unknown>;
+    try {
+      input = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
+    } catch {
+      logger.error(
+        `[DEV-AGENT] Malformed tool arguments for ${call.name}: ${call.arguments?.substring(0, 200)}`,
+      );
+      return { role: 'tool', tool_call_id: call.id, content: `Error: malformed arguments` };
+    }
+    logger.info(`[DEV-AGENT] Tool: ${call.name} ${JSON.stringify(input).slice(0, 200)}`);
+    const toolResult = await this.executeTool(call.name, input);
+    logger.info(`[DEV-AGENT] Result: ${toolResult.slice(0, 200)}`);
+    return { role: 'tool', tool_call_id: call.id, content: toolResult };
+  }
+
+  /** Ask the model (no tools) for a final text answer after a run that produced none. */
+  private async requestFinalAnswer(messages: ChatMessage[], textSoFar: string): Promise<string> {
+    logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
+    messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
+    const nudge = await aiStreamRound({
+      messages,
+      maxTokens: 8192,
+      chain: 'smart',
+      purpose: 'dev_agent',
+    });
+    logger.info(`[DEV-AGENT] Nudge result: textLen=${(textSoFar + nudge.text).length}`);
+    return nudge.text;
   }
 
   private async executeTool(name: string, input: Record<string, unknown>): Promise<string> {

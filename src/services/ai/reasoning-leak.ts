@@ -36,11 +36,7 @@ const ASKS_FOR_ENGLISH =
  * agent's input, `"<user name>: <text>"`; only the text decides the language.
  */
 export function findReasoningLeak(answer: string, question: string): string | null {
-  const questionText = question.replace(/^[^:\n]{1,64}:\s*/, '');
-  // Russian = more Cyrillic than Latin letters: an English question may name a Russian category.
-  const cyrillicLetters = questionText.match(/[\u0400-\u04ff]/g)?.length ?? 0;
-  const latinLetters = questionText.match(/[A-Za-z]/g)?.length ?? 0;
-  if (cyrillicLetters <= latinLetters || ASKS_FOR_ENGLISH.test(questionText)) return null;
+  if (!isRussianQuestion(question)) return null;
   // Only visible prose counts: quoted material — <blockquote>/<code>/<pre> blocks and «…», "…",
   // “…” — is what the answer cites (a comment, a merchant), not the model talking about the task.
   // Every step is one linear pass: model output can be long and malformed.
@@ -50,33 +46,55 @@ export function findReasoningLeak(answer: string, question: string): string | nu
   const channel = unquoted.indexOf('<|channel|>');
   if (channel !== -1) return unquoted.slice(channel);
   const prose = withoutTags(unquoted).replace(/\s+/g, ' ');
+  return findMetaPassage(prose);
+}
 
-  // One linear pass over the words: a passage is the English text between runs of 3+ Russian
-  // words, so line breaks and a Russian category name inside reasoning do not split it.
+/**
+ * True when the question text is mostly Cyrillic and does not ask for English. The
+ * `"<user name>: <text>"` prefix is dropped first; only the text decides the language.
+ */
+function isRussianQuestion(question: string): boolean {
+  const questionText = question.replace(/^[^:\n]{1,64}:\s*/, '');
+  // Russian = more Cyrillic than Latin letters: an English question may name a Russian category.
+  const cyrillicLetters = questionText.match(/[\u0400-\u04ff]/g)?.length ?? 0;
+  const latinLetters = questionText.match(/[A-Za-z]/g)?.length ?? 0;
+  return cyrillicLetters > latinLetters && !ASKS_FOR_ENGLISH.test(questionText);
+}
+
+/** `passage` when it has enough distinct meta phrases to be leaked reasoning, else null. */
+function metaPassageOrNull(passage: string): string | null {
+  const phrases = new Set(passage.match(META_PHRASES)?.map((m) => m.toLowerCase())).size;
+  return phrases >= MIN_META_PHRASES ? passage.trim() : null;
+}
+
+/**
+ * One linear pass over the words of `prose`: a passage is the English text between runs of 3+
+ * Russian words, so line breaks and a Russian category name inside reasoning do not split it.
+ * Returns the first passage that is long enough and full of meta phrases, or null.
+ */
+function findMetaPassage(prose: string): string | null {
   let passageStart = -1;
   let englishWords = 0;
   let russianRun = 0;
   let lastEnglishEnd = 0;
   const check = (): string | null => {
     if (passageStart === -1 || englishWords < MIN_ENGLISH_PASSAGE_WORDS) return null;
-    const passage = prose.slice(passageStart, lastEnglishEnd);
-    const phrases = new Set(passage.match(META_PHRASES)?.map((m) => m.toLowerCase())).size;
-    return phrases >= MIN_META_PHRASES ? passage.trim() : null;
+    return metaPassageOrNull(prose.slice(passageStart, lastEnglishEnd));
   };
   for (const word of prose.matchAll(/[A-Za-z\u0400-\u04ff][A-Za-z\u0400-\u04ff'’-]*/g)) {
-    if (CYRILLIC.test(word[0])) {
-      russianRun++;
-      if (russianRun < RUSSIAN_RUN_WORDS) continue;
-      const found = check();
-      if (found) return found;
-      passageStart = -1;
-      englishWords = 0;
+    if (!CYRILLIC.test(word[0])) {
+      russianRun = 0;
+      if (passageStart === -1) passageStart = word.index;
+      englishWords++;
+      lastEnglishEnd = word.index + word[0].length;
       continue;
     }
-    russianRun = 0;
-    if (passageStart === -1) passageStart = word.index;
-    englishWords++;
-    lastEnglishEnd = word.index + word[0].length;
+    russianRun++;
+    if (russianRun < RUSSIAN_RUN_WORDS) continue;
+    const found = check();
+    if (found) return found;
+    passageStart = -1;
+    englishWords = 0;
   }
   return check();
 }

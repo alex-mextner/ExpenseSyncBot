@@ -105,55 +105,75 @@ function pluginDirToName(dir: string): string {
   return country ? `${name} (${country})` : name;
 }
 
-function parsePreferencesXml(xml: string): {
+interface ParsedPreferences {
   fields: CredentialField[];
   defaults: Record<string, string>;
-} {
-  const fields: CredentialField[] = [];
-  const defaults: Record<string, string> = {};
+}
 
+interface PreferenceAttrs {
+  key: string | undefined;
+  title: string | undefined;
+  inputType: string;
+  defaultValue: string | undefined;
+  obligatory: boolean;
+}
+
+function readPreferenceAttrs(attrs: string): PreferenceAttrs {
+  return {
+    key: /\bkey="([^"]+)"/.exec(attrs)?.[1],
+    title: /\btitle="([^"]+)"/.exec(attrs)?.[1],
+    inputType: /\binputType="([^"]+)"/.exec(attrs)?.[1] ?? 'text',
+    defaultValue: /\bdefaultValue="([^"]+)"/.exec(attrs)?.[1],
+    obligatory: /\bobligatory="true"/.test(attrs),
+  };
+}
+
+/** Returns the silent default for an EditTextPreference, or undefined when the user must be prompted. */
+function silentEditTextDefault(p: PreferenceAttrs): string | undefined {
+  // Auto-fill types — store as defaults, no user prompt.
+  if (p.inputType === 'date' || p.inputType === 'checkbox') {
+    return p.defaultValue ?? (p.inputType === 'date' ? '2020-01-01T00:00:00.000Z' : 'false');
+  }
+  // Non-obligatory fields that have a default value — auto-fill silently.
+  if (!p.obligatory && p.defaultValue !== undefined) return p.defaultValue;
+  return undefined;
+}
+
+function parseEditTextPreferences(xml: string, out: ParsedPreferences): void {
   // Match EditTextPreference opening tags (attributes may span multiple lines).
   // [^>]* matches any char except >, including newlines, so no `s` flag needed.
   const editTextRe = /<EditTextPreference([^>]*?)(?:\/>|>)/g;
 
   for (const m of xml.matchAll(editTextRe)) {
-    const attrs = m[1] ?? '';
-    const key = /\bkey="([^"]+)"/.exec(attrs)?.[1];
-    const title = /\btitle="([^"]+)"/.exec(attrs)?.[1];
-    const inputType = /\binputType="([^"]+)"/.exec(attrs)?.[1] ?? 'text';
-    const defaultValue = /\bdefaultValue="([^"]+)"/.exec(attrs)?.[1];
-    const obligatory = /\bobligatory="true"/.test(attrs);
+    const p = readPreferenceAttrs(m[1] ?? '');
+    if (!p.key) continue;
 
-    if (!key) continue;
-
-    // Auto-fill types — store as defaults, no user prompt.
-    if (inputType === 'date' || inputType === 'checkbox') {
-      defaults[key] = defaultValue ?? (inputType === 'date' ? '2020-01-01T00:00:00.000Z' : 'false');
-      continue;
-    }
-
-    // Non-obligatory fields that have a default value — auto-fill silently.
-    if (!obligatory && defaultValue !== undefined) {
-      defaults[key] = defaultValue;
+    const silentDefault = silentEditTextDefault(p);
+    if (silentDefault !== undefined) {
+      out.defaults[p.key] = silentDefault;
       continue;
     }
 
     const type: 'text' | 'password' =
-      inputType === 'textPassword' || inputType === 'numberPassword' ? 'password' : 'text';
-
-    fields.push({ name: key, type, prompt: title ?? key });
+      p.inputType === 'textPassword' || p.inputType === 'numberPassword' ? 'password' : 'text';
+    out.fields.push({ name: p.key, type, prompt: p.title ?? p.key });
   }
+}
 
+function parseListPreferences(xml: string, out: ParsedPreferences): void {
   // ListPreference — always auto-fill with defaultValue.
   const listRe = /<ListPreference([^>]*?)(?:\/>|>)/g;
   for (const m of xml.matchAll(listRe)) {
-    const attrs = m[1] ?? '';
-    const key = /\bkey="([^"]+)"/.exec(attrs)?.[1];
-    const defaultValue = /\bdefaultValue="([^"]+)"/.exec(attrs)?.[1];
-    if (key) defaults[key] = defaultValue ?? 'true';
+    const { key, defaultValue } = readPreferenceAttrs(m[1] ?? '');
+    if (key) out.defaults[key] = defaultValue ?? 'true';
   }
+}
 
-  return { fields, defaults };
+function parsePreferencesXml(xml: string): ParsedPreferences {
+  const parsed: ParsedPreferences = { fields: [], defaults: {} };
+  parseEditTextPreferences(xml, parsed);
+  parseListPreferences(xml, parsed);
+  return parsed;
 }
 
 function buildRegistry(): Record<string, BankPlugin> {

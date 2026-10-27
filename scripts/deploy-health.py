@@ -96,9 +96,8 @@ def line_time(line):
     return stamp.timestamp()
 
 
-def fresh_levels(path, since):
-    """(lines at level >= 50, lines at level >= 60) among those written at or after `since`."""
-    errors = fatal = 0
+def read_log_window(path, since):
+    """Lines of the file's tail, widened (doubling) until it reaches back before `since`; None if unreadable."""
     window = LOG_READ_BYTES
     try:
         with open(path, "rb") as handle:
@@ -112,10 +111,18 @@ def fresh_levels(path, since):
                 first = next((t for t in map(line_time, lines) if t is not None), None)
                 # Done when the window starts at the file's start, or already reaches back before the release.
                 if start == 0 or window >= LOG_READ_MAX_BYTES or (first is not None and first < since - START_TOLERANCE_SECONDS):
-                    break
+                    return lines
                 window *= 2
     except OSError:
+        return None
+
+
+def fresh_levels(path, since):
+    """(lines at level >= 50, lines at level >= 60) among those written at or after `since`."""
+    lines = read_log_window(path, since)
+    if lines is None:
         return 0, 0
+    errors = fatal = 0
     fresh = False
     for line in lines:
         stamp = line_time(line)
@@ -205,94 +212,136 @@ def parse_baseline(pairs):
     return baseline
 
 
+class WaitState:
+    """What one `wait` run remembers between polls."""
+
+    def __init__(self, args):
+        self.started = time.monotonic()
+        self.wall_start = time.time()
+        self.baseline = parse_baseline(args.baseline)
+        self.seen = {}
+        self.health = ""
+        self.apps = []
+        self.wanted = []
+        self.ok_since = None
+        self.last_marker = self.last_shape = None
+        self.last_progress = self.started
+        self.last_report = 0.0
+        self.unreachable = 0
+
+    def verdict(self, code, name, reason):
+        return result(code, name, self.health, self.apps, reason, self.started)
+
+
+def scan_apps(args, state, processes):
+    """Record every app's status/restarts; a dead app or a crash loop is a verdict, else None."""
+    state.wanted = []
+    state.apps = []
+    for name in args.app:
+        process = deploy_pm2.find(processes, name)
+        if process is None:
+            return state.verdict(3, "dead", f"{sanitize(name)} is not in the pm2 list")
+        env = deploy_pm2.pm2_env(process)
+        status = env.get("status") or "unknown"
+        restarts = env.get("restart_time") if isinstance(env.get("restart_time"), int) else 0
+        state.baseline.setdefault(name, restarts)
+        state.seen.setdefault(name, restarts)
+        state.apps.append((name, status, restarts))
+        state.wanted.append(process)
+        if status in DEAD_STATUSES:
+            return state.verdict(3, "dead", f"{sanitize(name)} is {sanitize(status)}")
+        if restarts - state.baseline[name] >= 2:
+            return state.verdict(3, "dead", f"crash loop: {sanitize(name)} restart count {state.baseline[name]}->{restarts}")
+        if restarts != state.seen[name]:
+            state.ok_since = None  # one restart is not yet a loop, but it restarts the stability window
+            state.seen[name] = restarts
+    return None
+
+
+def stable_verdict(args, state):
+    """The verdict once health has stayed ok for --stable seconds: judged by the fresh log lines."""
+    errors = fatal = 0
+    for process in state.wanted:
+        started_ms = deploy_pm2.pm2_env(process).get("pm_uptime")
+        since = started_ms / 1000 if isinstance(started_ms, (int, float)) else state.wall_start - 5
+        for path in log_paths(process):
+            found, fatals = fresh_levels(path, since)
+            errors, fatal = errors + found, fatal + fatals
+    if fatal:
+        return state.verdict(3, "dead", f"{fatal} fatal (level>=60) log lines since start")
+    if errors > args.max_error_logs:
+        return state.verdict(4, "unhealthy", f"{errors} level>=50 log lines since start (limit {args.max_error_logs})")
+    note = f"{errors} level>=50 log lines since start" if errors else "no level>=50 log lines"
+    return state.verdict(0, "ok", f"stable for {args.stable:g}s, {note}")
+
+
+def budget_verdict(args, state, now, elapsed):
+    """Past the base budget: a verdict unless the host is saturated and the apps still progress."""
+    if elapsed < args.base_budget:
+        return None
+    saturated = host_saturated(args.proc_dir, args.io_psi_threshold, args.load_factor)
+    progressing = (now - state.last_progress) <= args.stall
+    if elapsed >= args.hard_cap:
+        return state.verdict(4, "unhealthy", f"hard cap {args.hard_cap:g}s reached")
+    if not (saturated and progressing):
+        why = "host not saturated" if not saturated else f"no progress for {int(now - state.last_progress)}s"
+        return state.verdict(4, "unhealthy", f"not healthy after {int(elapsed)}s of {args.base_budget:g}s budget ({why})")
+    if elapsed - state.last_report >= 20 or state.last_report == 0:
+        print(f"HEALTH extended past the {args.base_budget:g}s budget at {int(elapsed)}s: host saturated, apps alive and progressing")
+        state.last_report = elapsed
+    return None
+
+
+def track_progress(state, now, marker):
+    shape = (state.health, tuple(status for _, status, _ in state.apps))
+    if marker != state.last_marker or shape != state.last_shape:
+        state.last_progress = now
+    state.last_marker, state.last_shape = marker, shape
+
+
+def judge_poll(args, state, now, elapsed):
+    """Probe /health and decide after a poll where every app is present and not dead: verdict or None."""
+    state.health = health_status(probe(args.url, args.command_timeout))
+    track_progress(state, now, log_marker(state.wanted))
+
+    healthy = state.health == "ok" and all(status == "online" for _, status, _ in state.apps)
+    if healthy:
+        state.ok_since = state.ok_since if state.ok_since is not None else now
+        if now - state.ok_since >= args.stable:
+            return stable_verdict(args, state)
+        return None
+    state.ok_since = None
+    verdict = budget_verdict(args, state, now, elapsed)
+    if verdict is not None:
+        return verdict
+    if elapsed - state.last_report >= 20:
+        print(f"HEALTH t={int(elapsed)}s health={sanitize(state.health)} apps={describe(state.apps)}")
+        state.last_report = elapsed
+    return None
+
+
+def poll_once(args, state):
+    """One poll: a verdict (exit code), or None to keep waiting."""
+    now = time.monotonic()
+    processes = deploy_pm2.pm2_processes(args.pm2, args.command_timeout)
+    if processes is None:
+        state.unreachable += 1
+        if state.unreachable >= args.pm2_failures:
+            return state.verdict(3, "dead", f"pm2 did not answer {state.unreachable} polls in a row")
+        return None
+    state.unreachable = 0
+    verdict = scan_apps(args, state, processes)
+    if verdict is not None:
+        return verdict
+    return judge_poll(args, state, now, now - state.started)
+
+
 def wait(args):
-    started = time.monotonic()
-    wall_start = time.time()
-    baseline = parse_baseline(args.baseline)
-    seen = {}
-    health = ""
-    apps = []
-    ok_since = None
-    last_marker = last_shape = None
-    last_progress = started
-    last_report = 0.0
-    unreachable = 0
+    state = WaitState(args)
     while True:
-        now = time.monotonic()
-        elapsed = now - started
-        processes = deploy_pm2.pm2_processes(args.pm2, args.command_timeout)
-        if processes is None:
-            unreachable += 1
-            if unreachable >= args.pm2_failures:
-                return result(3, "dead", health, apps, f"pm2 did not answer {unreachable} polls in a row", started)
-            time.sleep(args.poll)
-            continue
-        unreachable = 0
-
-        wanted = []
-        apps = []
-        for name in args.app:
-            process = deploy_pm2.find(processes, name)
-            if process is None:
-                return result(3, "dead", health, apps, f"{sanitize(name)} is not in the pm2 list", started)
-            env = deploy_pm2.pm2_env(process)
-            status = env.get("status") or "unknown"
-            restarts = env.get("restart_time") if isinstance(env.get("restart_time"), int) else 0
-            baseline.setdefault(name, restarts)
-            seen.setdefault(name, restarts)
-            apps.append((name, status, restarts))
-            wanted.append(process)
-            if status in DEAD_STATUSES:
-                return result(3, "dead", health, apps, f"{sanitize(name)} is {sanitize(status)}", started)
-            if restarts - baseline[name] >= 2:
-                return result(3, "dead", health, apps,
-                              f"crash loop: {sanitize(name)} restart count {baseline[name]}->{restarts}", started)
-            if restarts != seen[name]:
-                ok_since = None  # one restart is not yet a loop, but it restarts the stability window
-                seen[name] = restarts
-
-        health = health_status(probe(args.url, args.command_timeout))
-        marker = log_marker(wanted)
-        shape = (health, tuple(status for _, status, _ in apps))
-        if marker != last_marker or shape != last_shape:
-            last_progress = now
-        last_marker, last_shape = marker, shape
-
-        healthy = health == "ok" and all(status == "online" for _, status, _ in apps)
-        if healthy:
-            ok_since = ok_since if ok_since is not None else now
-            if now - ok_since >= args.stable:
-                errors = fatal = 0
-                for process in wanted:
-                    started_ms = deploy_pm2.pm2_env(process).get("pm_uptime")
-                    since = started_ms / 1000 if isinstance(started_ms, (int, float)) else wall_start - 5
-                    for path in log_paths(process):
-                        found, fatals = fresh_levels(path, since)
-                        errors, fatal = errors + found, fatal + fatals
-                if fatal:
-                    return result(3, "dead", health, apps, f"{fatal} fatal (level>=60) log lines since start", started)
-                if errors > args.max_error_logs:
-                    return result(4, "unhealthy", health, apps,
-                                  f"{errors} level>=50 log lines since start (limit {args.max_error_logs})", started)
-                note = f"{errors} level>=50 log lines since start" if errors else "no level>=50 log lines"
-                return result(0, "ok", health, apps, f"stable for {args.stable:g}s, {note}", started)
-        else:
-            ok_since = None
-            if elapsed >= args.base_budget:
-                saturated = host_saturated(args.proc_dir, args.io_psi_threshold, args.load_factor)
-                progressing = (now - last_progress) <= args.stall
-                if elapsed >= args.hard_cap:
-                    return result(4, "unhealthy", health, apps, f"hard cap {args.hard_cap:g}s reached", started)
-                if not (saturated and progressing):
-                    why = "host not saturated" if not saturated else f"no progress for {int(now - last_progress)}s"
-                    return result(4, "unhealthy", health, apps,
-                                  f"not healthy after {int(elapsed)}s of {args.base_budget:g}s budget ({why})", started)
-                if elapsed - last_report >= 20 or last_report == 0:
-                    print(f"HEALTH extended past the {args.base_budget:g}s budget at {int(elapsed)}s: host saturated, apps alive and progressing")
-                    last_report = elapsed
-        if not healthy and elapsed - last_report >= 20:
-            print(f"HEALTH t={int(elapsed)}s health={sanitize(health)} apps={describe(apps)}")
-            last_report = elapsed
+        verdict = poll_once(args, state)
+        if verdict is not None:
+            return verdict
         time.sleep(args.poll)
 
 

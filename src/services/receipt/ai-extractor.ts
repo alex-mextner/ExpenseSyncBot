@@ -53,6 +53,53 @@ export interface CategoryExample {
   currency: string;
 }
 
+/** Index of the `}` closing the object that opens at objStart (depth counting), or -1 if cut off. */
+function findObjectEnd(jsonStr: string, objStart: number): number {
+  let depth = 0;
+  for (let j = objStart; j < jsonStr.length; j++) {
+    if (jsonStr[j] === '{') depth++;
+    if (jsonStr[j] === '}') depth--;
+    if (depth === 0) return j;
+  }
+  return -1;
+}
+
+/** Parse one item object; null if malformed or missing a name / numeric total. */
+function parseSalvagedItem(objStr: string): AIReceiptItem | null {
+  try {
+    // Fix decimal separator before parsing
+    const fixed = objStr.replace(/(\d),(\d)/g, '$1.$2');
+    const item = JSON.parse(fixed) as AIReceiptItem;
+    return item.name_ru && typeof item.total === 'number' ? item : null;
+  } catch {
+    // Malformed object, skip
+    return null;
+  }
+}
+
+/** Collect every complete item object found from `from` onwards, stopping at the truncation point. */
+function salvageCompleteItems(jsonStr: string, from: number): AIReceiptItem[] {
+  const items: AIReceiptItem[] = [];
+  let i = from;
+  while (i < jsonStr.length) {
+    // Find next object start
+    const objStart = jsonStr.indexOf('{', i);
+    if (objStart < 0) break;
+
+    const objEnd = findObjectEnd(jsonStr, objStart);
+    if (objEnd < 0) {
+      // Incomplete object — truncated here, stop
+      break;
+    }
+
+    const item = parseSalvagedItem(jsonStr.substring(objStart, objEnd + 1));
+    if (item) items.push(item);
+
+    i = objEnd + 1;
+  }
+  return items;
+}
+
 /**
  * Attempt to repair truncated JSON by extracting complete items from a cut-off response.
  * When AI output is truncated (finish_reason=length), the JSON ends mid-item.
@@ -82,44 +129,7 @@ export function repairTruncatedJson(
   }
 
   // Extract complete item objects using brace matching
-  const items: AIReceiptItem[] = [];
-  let i = bracketStart + 1;
-  while (i < jsonStr.length) {
-    // Find next object start
-    const objStart = jsonStr.indexOf('{', i);
-    if (objStart < 0) break;
-
-    // Find matching closing brace by counting depth
-    let depth = 0;
-    let objEnd = -1;
-    for (let j = objStart; j < jsonStr.length; j++) {
-      if (jsonStr[j] === '{') depth++;
-      if (jsonStr[j] === '}') depth--;
-      if (depth === 0) {
-        objEnd = j;
-        break;
-      }
-    }
-
-    if (objEnd < 0) {
-      // Incomplete object — truncated here, stop
-      break;
-    }
-
-    const objStr = jsonStr.substring(objStart, objEnd + 1);
-    try {
-      // Fix decimal separator before parsing
-      const fixed = objStr.replace(/(\d),(\d)/g, '$1.$2');
-      const item = JSON.parse(fixed) as AIReceiptItem;
-      if (item.name_ru && typeof item.total === 'number') {
-        items.push(item);
-      }
-    } catch {
-      // Malformed object, skip
-    }
-
-    i = objEnd + 1;
-  }
+  const items = salvageCompleteItems(jsonStr, bracketStart + 1);
 
   if (items.length === 0) {
     logger.error(

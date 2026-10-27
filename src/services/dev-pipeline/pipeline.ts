@@ -37,107 +37,26 @@ import {
   removeWorktree,
   worktreeExists,
 } from './git-ops';
+import {
+  type AgentPrompt,
+  buildFirstRunPrompt,
+  buildResumePrompt,
+  buildRetryPrompt,
+  buildReviewFixPrompt,
+  CLARIFYING_SYSTEM_PROMPT,
+  DESIGN_SYSTEM_PROMPT,
+} from './prompts';
 import { isResumableState, isTerminalState, validateTransition } from './state-machine';
+import {
+  buildFullOutput,
+  formatAllPassedMessage,
+  formatFailureReportLines,
+  parseTestCounts,
+  type TestingOutcome,
+} from './test-report';
 import { type DevTask, DevTaskState, MAX_RETRY_ATTEMPTS, type UpdateDevTaskData } from './types';
 
 const logger = createLogger('pipeline');
-
-/** Reorder test output: failures and errors first, then passing tests fill remaining space */
-function prioritizeFailures(raw: string, maxChars: number): string {
-  const lines = raw.split('\n');
-  const failLines: string[] = [];
-  const otherLines: string[] = [];
-
-  for (const line of lines) {
-    if (
-      line.includes('error:') ||
-      line.includes('Error:') ||
-      line.includes('✗') ||
-      line.includes('FAIL') ||
-      line.includes('# Unhandled')
-    ) {
-      failLines.push(line);
-    } else {
-      otherLines.push(line);
-    }
-  }
-
-  // Failures + context first
-  const result = [...failLines, ...otherLines].join('\n');
-  return result.slice(0, maxChars);
-}
-
-/** Parse bun test summary counts from output (bun 1.3+: "N pass", "N fail", "N error") */
-function parseTestCounts(output: string): { pass: number; fail: number; error: number } {
-  const passMatch = output.match(/(\d+)\s+pass(?!\w)/);
-  const failMatch = output.match(/(\d+)\s+fail(?!\w)/);
-  const errorMatch = output.match(/(\d+)\s+error/);
-  return {
-    pass: passMatch ? parseInt(passMatch[1] ?? '0', 10) : 0,
-    fail: failMatch ? parseInt(failMatch[1] ?? '0', 10) : 0,
-    error: errorMatch ? parseInt(errorMatch[1] ?? '0', 10) : 0,
-  };
-}
-
-/** Take the last N characters of a string (errors are usually at the end of output) */
-function tailSlice(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `…${text.slice(-maxChars)}`;
-}
-
-/** Extract tsc error lines (file:line:col + message) for concise display */
-function extractTscErrors(output: string): string {
-  const lines = output.split('\n');
-  const errors: string[] = [];
-  for (const line of lines) {
-    if (line.includes('error TS')) {
-      errors.push(line.trim());
-    }
-  }
-  return errors.join('\n') || output;
-}
-
-/**
- * Shared development rules injected into all DevAgent prompts.
- * Based on obra's development philosophy — keeps the AI focused.
- */
-const DEV_RULES = `
-DEVELOPMENT RULES (follow strictly):
-- Make the smallest reasonable change to get the job done. No extras.
-- Read existing code BEFORE writing. Understand the patterns, then follow them.
-- Simple code over clever code. Readable beats concise.
-- Match the surrounding code style exactly — formatting, naming, patterns.
-- Names describe PURPOSE, not implementation (getUserById, not fetchDataFromDB).
-- One change at a time. Never bundle unrelated fixes.
-- No speculative generality — don't add features "just in case".
-- No dead code, no commented-out code, no TODO placeholders.
-- When fixing bugs: find root cause FIRST. Read error messages carefully. Form a hypothesis, verify it, then fix.
-- After a fix, verify you haven't broken anything else.
-- Keep functions small and focused. If a function does two things, split it.
-- Don't refactor code you're not changing. Stay focused on the task.
-- Protected paths (NEVER modify): src/services/dev-pipeline/, src/database/schema.ts, .github/
-
-TDD (Test-Driven Development) — MANDATORY:
-- Write tests FIRST, before writing implementation code.
-- For each piece of new functionality: write a failing test → implement minimal code to pass → refactor.
-- Every new function, method, or behavior MUST have a corresponding test.
-- Run tests after writing them to confirm they fail (red), then implement, then confirm they pass (green).
-- Test files go next to the source file: foo.ts → foo.test.ts
-
-TESTING RULES (Bun test):
-- NEVER use mock.module() — it is broken in Bun: leaks between test files, cannot be restored with mock.restore(), does not work transitively.
-- To mock singleton methods (like database repositories): use spyOn(object, 'method'). spyOn works correctly and is restored by mock.restore().
-- For new code: prefer dependency injection — pass dependencies as parameters so tests can inject mocks directly without module mocking.
-- Use mock() to create standalone mock functions when needed.
-- Always clean up in afterEach: call mock.restore() to restore spyOn mocks, clear intervals/timeouts, close connections.
-- When creating fake objects (e.g. fake bot for testing): stub ALL methods that the constructor or tested code calls, not just the ones your test uses.
-- If a test file needs database: either use spyOn on the singleton, or create an in-memory SQLite database — do NOT mock the database module.
-- Do NOT modify or "fix" tests that are unrelated to your task. If pre-existing tests fail, report it but do not change them.
-
-TOPIC-AWARE MESSAGING:
-- When sending Telegram messages from command/callback handlers: do NOT pass message_thread_id — AsyncLocalStorage middleware (src/bot/topic-middleware.ts) handles it automatically.
-- When sending from background workers (photo-processor, broadcast, pipeline notifications): DO pass message_thread_id explicitly.
-`;
 
 /**
  * Notification callback type.
@@ -405,12 +324,7 @@ export class DevPipeline {
 
     const agent = new DevAgent(await getRepoRoot());
 
-    const systemPrompt = `You are a senior software architect reviewing a task description for a Telegram bot (TypeScript, Bun, GramIO, SQLite).
-
-Analyze the task and generate 2-5 clarifying questions to better understand what needs to be done.
-Focus on ambiguities, missing details, and potential edge cases.
-
-Output ONLY the questions, numbered 1-5. No preamble.`;
+    const systemPrompt = CLARIFYING_SYSTEM_PROMPT;
 
     const questions = await this.runAgent(task.id, agent, systemPrompt, task.description);
 
@@ -485,154 +399,142 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
       throw new Error(`Task #${taskId} is already ${task.state}, cannot continue`);
     }
 
-    if (task.state === DevTaskState.FAILED) {
-      const enrichedDescription =
-        message !== 'Продолжай'
-          ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
-          : task.description;
+    switch (task.state) {
+      case DevTaskState.FAILED:
+        return this.resumeFailedTask(task, message);
+      case DevTaskState.CLARIFYING:
+        return this.answerTask(taskId, message);
+      case DevTaskState.APPROVAL:
+        return this.approveTask(taskId);
+      case DevTaskState.AWAITING_REVIEW:
+        return this.acceptReview(taskId);
+      case DevTaskState.AWAITING_MERGE:
+        return this.mergeTask(taskId);
+      default:
+        // For any other active state — re-trigger processing
+        await this.notify(task.group_id, `▶️ Dev task #${task.id}: resuming from ${task.state}...`);
 
-      database.devTasks.update(taskId, { description: enrichedDescription });
+        this.processStateAsync(task);
+        return task;
+    }
+  }
 
-      // Smart resume: check what was already completed before the failure
-      const hasWorktree = task.worktree_path && worktreeExists(task.worktree_path);
+  /**
+   * Smart resume of a FAILED task: pick the furthest stage whose prerequisites
+   * (PR, review, design, worktree) survived the failure.
+   */
+  private async resumeFailedTask(task: DevTask, message: string): Promise<DevTask> {
+    const enrichedDescription =
+      message !== 'Продолжай'
+        ? `${task.description}\n\nADDITIONAL CONTEXT:\n${message}`
+        : task.description;
 
-      // PR created + review done → show review buttons immediately
-      if (task.pr_number && task.code_review && hasWorktree) {
-        const updated = transition(task, DevTaskState.AWAITING_REVIEW, {
-          retry_count: 0,
-          failed_at_state: null,
-        });
-        updated.description = enrichedDescription;
+    database.devTasks.update(task.id, { description: enrichedDescription });
 
-        await this.notify(
-          task.group_id,
-          `🔍 <b>Dev task #${task.id}:</b> resuming — review already done\n\n` +
-            `<blockquote expandable>${escapeHtml(task.code_review.slice(0, 1500))}</blockquote>\n\n` +
-            `PR: ${task.pr_url}`,
-          { reply_markup: createDevReviewKeyboard(task.id) },
-        );
+    // Smart resume: check what was already completed before the failure
+    const hasWorktree = !!task.worktree_path && worktreeExists(task.worktree_path);
 
-        return updated;
-      }
-
-      // PR created but no review → run review only
-      if (task.pr_number && hasWorktree) {
-        const updated = transition(task, DevTaskState.REVIEWING, {
-          retry_count: 0,
-          failed_at_state: null,
-        });
-        updated.description = enrichedDescription;
-
-        await this.notify(
-          task.group_id,
-          `▶️ Dev task #${task.id}: resuming — PR exists, running code review...`,
-        );
-
-        this.processStateAsync(updated);
-        return updated;
-      }
-
-      // Failed at PR/review stage (tests already passed) → create PR
-      const failedAt = task.failed_at_state as DevTaskState | null;
-      if (
-        failedAt &&
-        (failedAt === DevTaskState.PULL_REQUEST || failedAt === DevTaskState.REVIEWING) &&
-        hasWorktree
-      ) {
-        const updated = transition(task, DevTaskState.PULL_REQUEST, {
-          retry_count: 0,
-          failed_at_state: null,
-        });
-        updated.description = enrichedDescription;
-
-        await this.notify(
-          task.group_id,
-          `▶️ Dev task #${task.id}: resuming — tests passed, creating PR...`,
-        );
-
-        this.processStateAsync(updated);
-        return updated;
-      }
-
-      // Design + worktree exist → resume implementation
-      if (task.design && hasWorktree) {
-        // Keep error_log so the agent knows what went wrong last time
-        const updated = transition(task, DevTaskState.IMPLEMENTING, {
-          retry_count: 0,
-          failed_at_state: null,
-        });
-        updated.description = enrichedDescription;
-
-        await this.notify(
-          task.group_id,
-          `▶️ Dev task #${task.id}: resuming implementation (design and worktree preserved)...`,
-        );
-
-        this.processStateAsync(updated);
-        return updated;
-      }
-
-      if (task.design) {
-        // Design exists but no worktree — re-create worktree and implement
-        const branchName = task.branch_name || generateBranchName(task.id, task.description);
-        const worktreePath = await createWorktree(branchName);
-
-        const updated = transition(task, DevTaskState.IMPLEMENTING, {
-          error_log: null,
-          retry_count: 0,
-          branch_name: branchName,
-          worktree_path: worktreePath,
-          failed_at_state: null,
-        });
-        updated.description = enrichedDescription;
-
-        await this.notify(
-          task.group_id,
-          `▶️ Dev task #${task.id}: resuming implementation (recreated worktree, design preserved)...`,
-        );
-
-        this.processStateAsync(updated);
-        return updated;
-      }
-
-      // No design — restart from scratch
-      const updated = transition(task, DevTaskState.PENDING, {
-        error_log: null,
-        retry_count: 0,
-        failed_at_state: null,
-      });
-      updated.description = enrichedDescription;
-
+    // PR created + review done → show review buttons immediately
+    if (task.pr_number && task.code_review && hasWorktree) {
+      const updated = this.reopenAt(task, DevTaskState.AWAITING_REVIEW, enrichedDescription);
       await this.notify(
         task.group_id,
-        `🔄 Dev task #${task.id}: restarting from scratch (no design found)...`,
+        `🔍 <b>Dev task #${task.id}:</b> resuming — review already done\n\n` +
+          `<blockquote expandable>${escapeHtml(task.code_review.slice(0, 1500))}</blockquote>\n\n` +
+          `PR: ${task.pr_url}`,
+        { reply_markup: createDevReviewKeyboard(task.id) },
       );
-
-      this.processStateAsync(updated);
       return updated;
     }
 
-    if (task.state === DevTaskState.CLARIFYING) {
-      return this.answerTask(taskId, message);
+    // PR created but no review → run review only
+    if (task.pr_number && hasWorktree) {
+      return this.resumeAt(
+        task,
+        DevTaskState.REVIEWING,
+        enrichedDescription,
+        `▶️ Dev task #${task.id}: resuming — PR exists, running code review...`,
+      );
     }
 
-    if (task.state === DevTaskState.APPROVAL) {
-      return this.approveTask(taskId);
+    // Failed at PR/review stage (tests already passed) → create PR
+    const failedAt = task.failed_at_state as DevTaskState | null;
+    if (
+      failedAt &&
+      (failedAt === DevTaskState.PULL_REQUEST || failedAt === DevTaskState.REVIEWING) &&
+      hasWorktree
+    ) {
+      return this.resumeAt(
+        task,
+        DevTaskState.PULL_REQUEST,
+        enrichedDescription,
+        `▶️ Dev task #${task.id}: resuming — tests passed, creating PR...`,
+      );
     }
 
-    if (task.state === DevTaskState.AWAITING_REVIEW) {
-      return this.acceptReview(taskId);
+    // Design + worktree exist → resume implementation
+    if (task.design && hasWorktree) {
+      // Keep error_log so the agent knows what went wrong last time
+      return this.resumeAt(
+        task,
+        DevTaskState.IMPLEMENTING,
+        enrichedDescription,
+        `▶️ Dev task #${task.id}: resuming implementation (design and worktree preserved)...`,
+      );
     }
 
-    if (task.state === DevTaskState.AWAITING_MERGE) {
-      return this.mergeTask(taskId);
+    if (task.design) {
+      // Design exists but no worktree — re-create worktree and implement
+      const branchName = task.branch_name || generateBranchName(task.id, task.description);
+      const worktreePath = await createWorktree(branchName);
+
+      return this.resumeAt(
+        task,
+        DevTaskState.IMPLEMENTING,
+        enrichedDescription,
+        `▶️ Dev task #${task.id}: resuming implementation (recreated worktree, design preserved)...`,
+        { error_log: null, branch_name: branchName, worktree_path: worktreePath },
+      );
     }
 
-    // For any other active state — re-trigger processing
-    await this.notify(task.group_id, `▶️ Dev task #${task.id}: resuming from ${task.state}...`);
+    // No design — restart from scratch
+    return this.resumeAt(
+      task,
+      DevTaskState.PENDING,
+      enrichedDescription,
+      `🔄 Dev task #${task.id}: restarting from scratch (no design found)...`,
+      { error_log: null },
+    );
+  }
 
-    this.processStateAsync(task);
-    return task;
+  /** Transition a FAILED task to `state`, clearing retry bookkeeping, with the enriched description. */
+  private reopenAt(
+    task: DevTask,
+    state: DevTaskState,
+    description: string,
+    extra?: Partial<UpdateDevTaskData>,
+  ): DevTask {
+    const updated = transition(task, state, {
+      ...extra,
+      retry_count: 0,
+      failed_at_state: null,
+    });
+    updated.description = description;
+    return updated;
+  }
+
+  /** reopenAt + notify + kick off async processing. */
+  private async resumeAt(
+    task: DevTask,
+    state: DevTaskState,
+    description: string,
+    notice: string,
+    extra?: Partial<UpdateDevTaskData>,
+  ): Promise<DevTask> {
+    const updated = this.reopenAt(task, state, description, extra);
+    await this.notify(task.group_id, notice);
+    this.processStateAsync(updated);
+    return updated;
   }
 
   /**
@@ -643,34 +545,7 @@ Output ONLY the questions, numbered 1-5. No preamble.`;
 
     const agent = new DevAgent(await getRepoRoot());
 
-    const systemPrompt = `You are a senior software architect analyzing a Telegram bot codebase (TypeScript, Bun, GramIO, SQLite).
-
-Your task: create a concise implementation plan for the requested feature/change.
-${DEV_RULES}
-PROCESS:
-1. Use tools to explore relevant files and understand the current architecture
-2. Identify which files need to be created or modified
-3. Write a clear plan with specific file paths and changes
-
-OUTPUT FORMAT (plain text, not markdown):
-TITLE: <short title for the task>
-
-FILES TO MODIFY:
-- <path>: <what changes>
-
-FILES TO CREATE:
-- <path>: <purpose>
-
-IMPLEMENTATION STEPS:
-1. <step>
-2. <step>
-...
-
-RISKS/NOTES:
-- <any concerns>
-
-Be specific about file paths. Reference existing patterns in the codebase.
-Keep the plan concise — 20-40 lines max.`;
+    const systemPrompt = DESIGN_SYSTEM_PROMPT;
 
     const design = await this.runAgent(task.id, agent, systemPrompt, task.description);
 
@@ -831,107 +706,22 @@ Keep the plan concise — 20-40 lines max.`;
 
     const agent = new DevAgent(task.worktree_path);
 
-    const techNotes = `TECH NOTES:
-- Bun runtime, not Node.js
-- bun:sqlite for database
-- GramIO for Telegram bot
-- date-fns for dates
-- currency.js for money formatting
-- Bun auto-loads .env`;
-
-    let systemPrompt: string;
-    let userMessage: string;
-
     // Check if worktree already has commits (code was written in a previous run)
     const hasExistingWork = await this.worktreeHasCommits(task.worktree_path);
 
+    let prompt: AgentPrompt;
     if (isRetry && task.error_log) {
       // RETRY MODE: focused fix after test failure
-      const changedFiles = await getChangedFilesFromMain(task.worktree_path);
-      const changedFilesList =
-        changedFiles.length > 0 ? changedFiles.join('\n') : '(no files changed yet)';
-
-      systemPrompt = `You are a senior TypeScript developer FIXING test/type-check failures in a Telegram bot.
-
-CRITICAL RULES:
-1. You are NOT reimplementing from scratch. Code already exists in the worktree.
-2. First, READ the files that failed — understand what's already there.
-3. Make MINIMAL targeted fixes to pass the failing tests/type-checks.
-4. Do NOT rewrite files that aren't broken.
-5. Do NOT delete or recreate files that already exist unless they're fundamentally wrong.
-6. After fixing, use the commit tool.
-
-SCOPE AWARENESS:
-- Tests run on the ENTIRE project, not just your changes.
-- If a test fails in a file you did NOT modify, your changes probably broke it indirectly (e.g., changed imports, moved exports).
-- In that case, FIX YOUR CODE, don't fix the other test. Or use revert_file to undo your unnecessary changes.
-- Do NOT "fix" pre-existing code, refactor unrelated files, or extract utilities. Stay focused on your task.
-${DEV_RULES}
-${techNotes}`;
-
-      userMessage = `Tests/type-check FAILED. Fix the errors below.
-
-YOUR CHANGED FILES (your scope — these are the files you modified vs main):
-${changedFilesList}
-
-ERRORS:
-${task.error_log}
-
-Original task for context: ${task.description}
-
-IMPORTANT: If errors are in files NOT in your changed files list, your changes likely broke them indirectly. Revert unnecessary changes with revert_file rather than trying to fix unrelated tests.`;
+      prompt = buildRetryPrompt(task, await getChangedFilesFromMain(task.worktree_path));
     } else if (hasExistingWork) {
       // RESUME MODE: code already exists from a previous failed run
-      systemPrompt = `You are a senior TypeScript developer RESUMING work on a Telegram bot feature.
-
-CRITICAL CONTEXT: This task was attempted before and FAILED. Code already exists in the worktree from a previous run.
-
-CRITICAL RULES:
-1. First, explore the worktree to understand what's already been implemented.
-2. Do NOT rewrite existing code unless it's broken or wrong.
-3. Read the error log below to understand what went wrong last time.
-4. Fix the issues, complete any unfinished work, and make it pass tests.
-5. After fixing, use the commit tool.
-${DEV_RULES}
-${techNotes}`;
-
-      userMessage = `RESUME this task (code already exists in worktree from a previous attempt):
-
-${task.description}
-
-DESIGN PLAN:
-${task.design || 'No design provided.'}
-${task.error_log ? `\nPREVIOUS FAILURE:\n${task.error_log}` : ''}
-
-Start by listing files and reading what's already there. Then fix/complete the implementation.`;
+      prompt = buildResumePrompt(task);
     } else {
       // FIRST RUN: implement from design using TDD
-      systemPrompt = `You are a senior TypeScript developer implementing a feature in a Telegram bot.
-
-IMPORTANT RULES:
-1. Use tools to read existing code BEFORE writing. Understand patterns first.
-2. Follow TDD: write tests FIRST (*.test.ts next to source), confirm they fail, then implement.
-3. Write complete files — no partial snippets or TODOs.
-4. Follow existing code style and patterns in the project.
-5. After writing all files, use the commit tool to save your work.
-${DEV_RULES}
-${techNotes}`;
-
-      userMessage = `Implement this task using TDD:
-
-${task.description}
-
-DESIGN PLAN:
-${task.design || 'No design provided. Analyze the codebase and implement directly.'}
-
-WORKFLOW:
-1. Read existing code to understand patterns
-2. Write test file(s) for the new functionality FIRST
-3. Implement the code to make tests pass
-4. Commit everything`;
+      prompt = buildFirstRunPrompt(task);
     }
 
-    await this.runAgent(task.id, agent, systemPrompt, userMessage);
+    await this.runAgent(task.id, agent, prompt.systemPrompt, prompt.userMessage);
 
     const updated = transition(task, DevTaskState.TESTING);
     await this.processState(updated);
@@ -984,33 +774,12 @@ WORKFLOW:
 
     await this.notify(task.group_id, `🧪 Dev task #${task.id}: running tests...`);
 
-    let fullOutput = '';
-    let typeCheckOutput = '';
-    let testsOutput = '';
-
-    // Run type check — tsc writes errors to stdout
-    // NOTE: Bun Shell does not support 2>&1 — always read both streams
-    const typeCheckResult = await this.runShell(task.worktree_path, 'bun x tsc --noEmit');
-    const typeCheckExitCode = typeCheckResult.exitCode;
-    const tscOOM = typeCheckExitCode === 137;
-    const typeCheckPassed = typeCheckExitCode === 0 || tscOOM; // OOM is not a type error
-    typeCheckOutput = tscOOM
-      ? 'tsc killed by OOM (exit 137) — not enough server memory, skipped'
-      : [typeCheckResult.stdout, typeCheckResult.stderr].filter(Boolean).join('\n');
-
-    // Run tests — bun test writes header to stdout but results/errors to stderr
-    const testsResult = await this.runShell(task.worktree_path, 'bun test');
-    testsOutput = [testsResult.stdout, testsResult.stderr].filter(Boolean).join('\n');
-    const testExitCode = testsResult.exitCode;
-    const testsPassed = testExitCode === 0;
-
-    // Parse test counts from bun test summary (bun 1.3+: "N pass", "N fail", "N error")
-    const { pass: passCount, fail: failCount, error: errorCount } = parseTestCounts(testsOutput);
+    const outcome = await this.runChecks(task.worktree_path);
 
     // Build full output for error_log (raw, for the AI agent)
-    fullOutput = `TYPE CHECK ${typeCheckPassed ? 'PASSED' : 'FAILED'}:\n${typeCheckOutput}\n\nTESTS ${testsPassed ? 'PASSED' : 'FAILED'} (exit code ${testExitCode}):\n${testsOutput}`;
+    const fullOutput = buildFullOutput(outcome);
 
-    const allPassed = typeCheckPassed && testsPassed;
+    const allPassed = outcome.typeCheckPassed && outcome.testsPassed;
 
     // Detect retry loops: if error_log is identical to previous attempt, stop early
     if (!allPassed && task.error_log && task.error_log === fullOutput) {
@@ -1025,96 +794,99 @@ WORKFLOW:
       return;
     }
 
-    if (allPassed) {
-      if (task.pr_number) {
-        // PR already exists — we're in the fix cycle, push and show merge keyboard
-        if (!task.branch_name) throw new Error(`Task #${task.id} has pr_number but no branch_name`);
-        await commitChanges(task.worktree_path, `fix: address review feedback (task #${task.id})`);
-        await pushBranch(task.worktree_path, task.branch_name);
-
-        transition(task, DevTaskState.AWAITING_MERGE);
-
-        const testSummary = `${passCount} ✅`;
-        await this.notify(
-          task.group_id,
-          `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
-            `${tscOOM ? '⚠️' : '✅'} <b>Тайпчекер:</b> ${tscOOM ? 'OOM (skipped)' : 'OK'}\n` +
-            `✅ <b>Тесты:</b> ${testSummary}\n\n` +
-            `PR: ${task.pr_url}`,
-          { reply_markup: createDevMergeKeyboard(task.id) },
-        );
-      } else {
-        // First run — create PR (existing flow)
-        const updated = transition(task, DevTaskState.PULL_REQUEST);
-
-        const testSummary = `${passCount} ✅`;
-        await this.notify(
-          task.group_id,
-          `✅ <b>Dev task #${task.id}:</b> all checks passed!\n\n` +
-            `${tscOOM ? '⚠️' : '✅'} <b>Тайпчекер:</b> ${tscOOM ? 'OOM (skipped)' : 'OK'}\n` +
-            `✅ <b>Тесты:</b> ${testSummary}`,
-        );
-        await this.processState(updated);
-      }
+    if (!allPassed) {
+      await this.handleChecksFailed(task, outcome, fullOutput);
+    } else if (task.pr_number) {
+      await this.handleFixCyclePassed(task, task.worktree_path, outcome);
     } else {
-      const retryCount = (task.retry_count || 0) + 1;
+      await this.handleFirstRunPassed(task, outcome);
+    }
+  }
 
-      // Build pretty notification
-      const lines: string[] = [];
-      lines.push(
-        `🧪 <b>Dev task #${task.id}</b> — результаты (попытка ${retryCount}/${MAX_RETRY_ATTEMPTS})\n`,
-      );
+  /**
+   * Run the type check and the test suite in the worktree.
+   * Both always run (tests even when tsc fails) so the agent sees every error at once.
+   */
+  private async runChecks(worktreePath: string): Promise<TestingOutcome> {
+    // Run type check — tsc writes errors to stdout
+    // NOTE: Bun Shell does not support 2>&1 — always read both streams
+    const typeCheckResult = await this.runShell(worktreePath, 'bun x tsc --noEmit');
+    const typeCheckExitCode = typeCheckResult.exitCode;
+    const tscOOM = typeCheckExitCode === 137;
+    const typeCheckPassed = typeCheckExitCode === 0 || tscOOM; // OOM is not a type error
+    const typeCheckOutput = tscOOM
+      ? 'tsc killed by OOM (exit 137) — not enough server memory, skipped'
+      : [typeCheckResult.stdout, typeCheckResult.stderr].filter(Boolean).join('\n');
 
-      if (typeCheckPassed) {
-        lines.push(`✅ <b>Тайпчекер:</b> OK`);
-      } else {
-        const tscErrors = extractTscErrors(typeCheckOutput);
-        const tscErrorCount = (typeCheckOutput.match(/error TS\d+/g) || []).length;
-        if (tscErrorCount > 0) {
-          lines.push(
-            `❌ <b>Тайпчекер:</b> ${tscErrorCount} ${tscErrorCount === 1 ? 'ошибка' : 'ошибок'}`,
-          );
-        } else {
-          lines.push(`⚠️ <b>Тайпчекер:</b> failed (exit code ${typeCheckResult.exitCode})`);
-        }
-        const tscDisplay = tscErrors.trim() || typeCheckOutput.trim() || '(no output)';
-        lines.push(
-          `<blockquote expandable>${escapeHtml(tailSlice(tscDisplay, 3000))}</blockquote>`,
-        );
-      }
+    // Run tests — bun test writes header to stdout but results/errors to stderr
+    const testsResult = await this.runShell(worktreePath, 'bun test');
+    const testsOutput = [testsResult.stdout, testsResult.stderr].filter(Boolean).join('\n');
 
-      if (testsPassed) {
-        lines.push(`✅ <b>Тесты:</b> ${passCount} ✅`);
-      } else {
-        const parts: string[] = [];
-        if (passCount > 0) parts.push(`${passCount} ✅`);
-        if (failCount > 0) parts.push(`${failCount} ❌`);
-        if (errorCount > 0) parts.push(`${errorCount} 💥`);
-        if (failCount === 0 && errorCount === 0) parts.push(`exit code ${testExitCode}`);
-        lines.push(
-          `${failCount > 0 || errorCount > 0 ? '❌' : '⚠️'} <b>Тесты:</b> ${parts.join(' / ')}`,
-        );
-        lines.push(
-          `<blockquote expandable>${escapeHtml(prioritizeFailures(testsOutput, 3000))}</blockquote>`,
-        );
-      }
+    // Parse test counts from bun test summary (bun 1.3+: "N pass", "N fail", "N error")
+    const { pass, fail, error } = parseTestCounts(testsOutput);
 
-      if (retryCount >= MAX_RETRY_ATTEMPTS) {
-        transition(task, DevTaskState.FAILED, {
-          error_log: fullOutput,
-          retry_count: retryCount,
-        });
-        lines.push(`\n💥 Задача провалена после ${retryCount} попыток.`);
-        await this.notify(task.group_id, lines.join('\n'));
-      } else {
-        const updated = transition(task, DevTaskState.IMPLEMENTING, {
-          error_log: fullOutput,
-          retry_count: retryCount,
-        });
-        lines.push(`\n🔄 Отправлено на исправление...`);
-        await this.notify(task.group_id, lines.join('\n'));
-        await this.processState(updated);
-      }
+    return {
+      typeCheckPassed,
+      tscOOM,
+      typeCheckExitCode,
+      typeCheckOutput,
+      testsPassed: testsResult.exitCode === 0,
+      testExitCode: testsResult.exitCode,
+      testsOutput,
+      passCount: pass,
+      failCount: fail,
+      errorCount: error,
+    };
+  }
+
+  /** Checks passed while a PR already exists: push the fix and show the merge keyboard. */
+  private async handleFixCyclePassed(
+    task: DevTask,
+    worktreePath: string,
+    outcome: TestingOutcome,
+  ): Promise<void> {
+    if (!task.branch_name) throw new Error(`Task #${task.id} has pr_number but no branch_name`);
+    await commitChanges(worktreePath, `fix: address review feedback (task #${task.id})`);
+    await pushBranch(worktreePath, task.branch_name);
+
+    transition(task, DevTaskState.AWAITING_MERGE);
+
+    await this.notify(task.group_id, formatAllPassedMessage(task.id, outcome, task.pr_url), {
+      reply_markup: createDevMergeKeyboard(task.id),
+    });
+  }
+
+  /** Checks passed on the first run: create the PR (existing flow). */
+  private async handleFirstRunPassed(task: DevTask, outcome: TestingOutcome): Promise<void> {
+    const updated = transition(task, DevTaskState.PULL_REQUEST);
+    await this.notify(task.group_id, formatAllPassedMessage(task.id, outcome));
+    await this.processState(updated);
+  }
+
+  /** Checks failed: report, then retry via IMPLEMENTING or fail after MAX_RETRY_ATTEMPTS. */
+  private async handleChecksFailed(
+    task: DevTask,
+    outcome: TestingOutcome,
+    fullOutput: string,
+  ): Promise<void> {
+    const retryCount = (task.retry_count || 0) + 1;
+    const lines = formatFailureReportLines(task.id, retryCount, outcome);
+
+    if (retryCount >= MAX_RETRY_ATTEMPTS) {
+      transition(task, DevTaskState.FAILED, {
+        error_log: fullOutput,
+        retry_count: retryCount,
+      });
+      lines.push(`\n💥 Задача провалена после ${retryCount} попыток.`);
+      await this.notify(task.group_id, lines.join('\n'));
+    } else {
+      const updated = transition(task, DevTaskState.IMPLEMENTING, {
+        error_log: fullOutput,
+        retry_count: retryCount,
+      });
+      lines.push(`\n🔄 Отправлено на исправление...`);
+      await this.notify(task.group_id, lines.join('\n'));
+      await this.processState(updated);
     }
   }
 
@@ -1261,21 +1033,8 @@ WORKFLOW:
 
     await this.notify(task.group_id, `🔄 Dev task #${task.id}: addressing review feedback...`);
 
+    const { systemPrompt, userMessage } = buildReviewFixPrompt(task);
     const agent = new DevAgent(task.worktree_path);
-
-    const systemPrompt = `You are a senior TypeScript developer fixing code review issues in a Telegram bot (Bun, GramIO, SQLite).
-
-RULES:
-1. Read the files mentioned in the review before making changes.
-2. Fix ONLY the issues mentioned — don't refactor unrelated code.
-3. After fixing, commit your changes.
-${DEV_RULES}`;
-
-    const userMessage = `Fix these code review issues:
-
-${task.code_review || 'No specific review comments.'}
-
-Original task: ${task.description}`;
 
     await this.runAgent(task.id, agent, systemPrompt, userMessage);
 

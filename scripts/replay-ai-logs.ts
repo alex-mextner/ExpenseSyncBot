@@ -26,6 +26,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type OpenAI from 'openai';
 import type { BankTransaction } from '../src/database/types';
+import type { StreamRoundResult } from '../src/services/ai/streaming';
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -158,11 +159,18 @@ globalThis.fetch = Object.assign(
   { preconnect: realFetch.preconnect },
 );
 
+interface ViaClaudeResult<T> {
+  value: T | null;
+  ok: boolean;
+  detail: string;
+  ms: number;
+}
+
 /** Run one step and report whether Anthropic answered it with the expected model. */
 async function viaClaude<T>(
   expectedModel: string,
   step: () => Promise<T>,
-): Promise<{ value: T | null; ok: boolean; detail: string; ms: number }> {
+): Promise<ViaClaudeResult<T>> {
   const from = fetchLog.length;
   const start = Date.now();
   let value: T | null = null;
@@ -224,92 +232,118 @@ function dedent(lines: string[]): string {
     .trim();
 }
 
+function isRunStart(lines: string[], idx: number): boolean {
+  return lines[idx] === SEPARATOR && /^\[\d{4}-\d{2}-\d{2}T/.test(lines[idx + 1] ?? '');
+}
+
+/** Collect lines from `start` until the next marker (or run start); returns [lines, nextIdx]. */
+function takeBlock(lines: string[], start: number): [string[], number] {
+  const out: string[] = [];
+  let j = start;
+  while (j < lines.length && !MARKER.test(lines[j] ?? '') && !isRunStart(lines, j)) {
+    out.push(lines[j] ?? '');
+    j++;
+  }
+  return [out, j];
+}
+
+/**
+ * Index of the `endMarker` line after `from`. A truncated log may lack the marker: consume the rest
+ * instead of rewinding to -1.
+ */
+function sectionEnd(lines: string[], from: number, endMarker: string): number {
+  const found = lines.indexOf(endMarker, from);
+  return found < 0 ? lines.length : found;
+}
+
+/** Split the lines of a HISTORY section into `[user]` / `[assistant]` turns. */
+function parseHistory(historyLines: string[]): LoggedRun['history'] {
+  const turns: { role: 'user' | 'assistant'; content: string[] }[] = [];
+  for (const h of historyLines) {
+    const role = h.match(/^\[(user|assistant)\]$/)?.[1];
+    if (role === 'user' || role === 'assistant') turns.push({ role, content: [] });
+    else turns.at(-1)?.content.push(h);
+  }
+  return turns.map((t) => ({ role: t.role, content: t.content.join('\n') }));
+}
+
+/**
+ * Read a run header starting at its separator: the timestamp and the MESSAGE (possibly multi-line).
+ * Returns the index just past the header's closing separator.
+ */
+function parseRunHeader(
+  lines: string[],
+  start: number,
+): { timestamp: string; message: string; next: number } {
+  const timestamp = (lines[start + 1] ?? '').slice(1, -1);
+  let i = start + 2; // separator, [timestamp]
+  // Header lines (CHAT: …) precede MESSAGE:, which may span several lines up to the separator.
+  while (i < lines.length && lines[i] !== SEPARATOR && !lines[i]?.startsWith('MESSAGE: ')) i++;
+  const messageLines: string[] = [];
+  while (i < lines.length && lines[i] !== SEPARATOR) messageLines.push(lines[i++] ?? '');
+  i++; // closing separator of the header
+  return { timestamp, message: messageLines.join('\n').replace(/^MESSAGE: /, ''), next: i };
+}
+
+/** Apply the body line at `i` to `run`; returns the index of the next line to examine. */
+function applyBodyLine(lines: string[], i: number, run: LoggedRun): number {
+  const line = lines[i] ?? '';
+  if (line === '## SYSTEM PROMPT') {
+    const end = sectionEnd(lines, i, '## END SYSTEM PROMPT');
+    run.systemPrompt = lines.slice(i + 1, end).join('\n');
+    return end + 1;
+  }
+  if (line.startsWith('## HISTORY')) {
+    const end = sectionEnd(lines, i, '## END HISTORY');
+    run.history.push(...parseHistory(lines.slice(i + 1, end)));
+    return end + 1;
+  }
+  if (line.startsWith('## ROUND ')) {
+    run.rounds.push({ toolCalls: [], toolResults: [] });
+    return i + 1;
+  }
+  if (line.startsWith('TOOL CALL: ')) {
+    const [block, next] = takeBlock(lines, i + 1);
+    run.rounds.at(-1)?.toolCalls.push({ name: line.slice(11), input: dedent(block) });
+    return next;
+  }
+  if (line.startsWith('TOOL RESULT: ')) {
+    const [, name = '', status = ''] = line.match(/^TOOL RESULT: (.+) → (OK|ERROR)$/) ?? [];
+    const [block, next] = takeBlock(lines, i + 1);
+    run.rounds.at(-1)?.toolResults.push({ name, ok: status === 'OK', body: dedent(block) });
+    return next;
+  }
+  if (line === '## FINAL') {
+    // "Tools called: n", "Response (n chars):", then the indented response.
+    const [block, next] = takeBlock(lines, i + 3);
+    run.finalResponse = dedent(block);
+    return next;
+  }
+  return i + 1;
+}
+
 function parseLogFile(file: string): LoggedRun[] {
   const lines = readFileSync(file, 'utf8').split('\n');
   const runs: LoggedRun[] = [];
   let i = 0;
 
-  const isRunStart = (idx: number) =>
-    lines[idx] === SEPARATOR && /^\[\d{4}-\d{2}-\d{2}T/.test(lines[idx + 1] ?? '');
-
-  /** Collect lines from `start` until the next marker (or run start); returns [lines, nextIdx]. */
-  const takeBlock = (start: number): [string[], number] => {
-    const out: string[] = [];
-    let j = start;
-    while (j < lines.length && !MARKER.test(lines[j] ?? '') && !isRunStart(j)) {
-      out.push(lines[j] ?? '');
-      j++;
-    }
-    return [out, j];
-  };
-
   while (i < lines.length) {
-    if (!isRunStart(i)) {
+    if (!isRunStart(lines, i)) {
       i++;
       continue;
     }
-    const timestamp = (lines[i + 1] ?? '').slice(1, -1);
-    i += 2; // separator, [timestamp]
-    // Header lines (CHAT: …) precede MESSAGE:, which may span several lines up to the separator.
-    while (i < lines.length && lines[i] !== SEPARATOR && !lines[i]?.startsWith('MESSAGE: ')) i++;
-    const messageLines: string[] = [];
-    while (i < lines.length && lines[i] !== SEPARATOR) messageLines.push(lines[i++] ?? '');
-    i++; // closing separator of the header
-
+    const header = parseRunHeader(lines, i);
+    i = header.next;
     const run: LoggedRun = {
       file,
-      timestamp,
-      message: messageLines.join('\n').replace(/^MESSAGE: /, ''),
+      timestamp: header.timestamp,
+      message: header.message,
       systemPrompt: '',
       history: [],
       rounds: [],
       finalResponse: null,
     };
-
-    while (i < lines.length && !isRunStart(i)) {
-      const line = lines[i] ?? '';
-      if (line === '## SYSTEM PROMPT') {
-        // A truncated log may lack the END marker: consume the rest instead of rewinding to -1.
-        const found = lines.indexOf('## END SYSTEM PROMPT', i);
-        const end = found < 0 ? lines.length : found;
-        run.systemPrompt = lines.slice(i + 1, end).join('\n');
-        i = end + 1;
-      } else if (line.startsWith('## HISTORY')) {
-        const found = lines.indexOf('## END HISTORY', i);
-        const end = found < 0 ? lines.length : found;
-        let current: { role: 'user' | 'assistant'; content: string[] } | null = null;
-        for (const h of lines.slice(i + 1, end)) {
-          const role = h.match(/^\[(user|assistant)\]$/)?.[1];
-          if (role === 'user' || role === 'assistant') {
-            if (current) run.history.push({ role: current.role, content: current.content.join('\n') });
-            current = { role, content: [] };
-          } else {
-            current?.content.push(h);
-          }
-        }
-        if (current) run.history.push({ role: current.role, content: current.content.join('\n') });
-        i = end + 1;
-      } else if (line.startsWith('## ROUND ')) {
-        run.rounds.push({ toolCalls: [], toolResults: [] });
-        i++;
-      } else if (line.startsWith('TOOL CALL: ')) {
-        const [block, next] = takeBlock(i + 1);
-        run.rounds.at(-1)?.toolCalls.push({ name: line.slice(11), input: dedent(block) });
-        i = next;
-      } else if (line.startsWith('TOOL RESULT: ')) {
-        const [, name = '', status = ''] = line.match(/^TOOL RESULT: (.+) → (OK|ERROR)$/) ?? [];
-        const [block, next] = takeBlock(i + 1);
-        run.rounds.at(-1)?.toolResults.push({ name, ok: status === 'OK', body: dedent(block) });
-        i = next;
-      } else if (line === '## FINAL') {
-        // "Tools called: n", "Response (n chars):", then the indented response.
-        const [block, next] = takeBlock(i + 3);
-        run.finalResponse = dedent(block);
-        i = next;
-      } else {
-        i++;
-      }
-    }
+    while (i < lines.length && !isRunStart(lines, i)) i = applyBodyLine(lines, i, run);
     runs.push(run);
   }
   return runs;
@@ -364,6 +398,163 @@ function toolCallProblems(toolCalls: { name: string; arguments: string }[]): str
   return problems;
 }
 
+type ClaudeRound = ViaClaudeResult<StreamRoundResult>;
+
+/** One agent-loop round on the smart chain — same parameters as ExpenseBotAgent.runAgentLoop. */
+function replayRound(messages: OpenAI.ChatCompletionMessageParam[]): Promise<ClaudeRound> {
+  return viaClaude(env.CLAUDE_MODEL, () =>
+    aiStreamRound({
+      messages,
+      tools: TOOL_DEFINITIONS,
+      maxTokens: 4096,
+      temperature: 0.3,
+      chain: 'smart',
+      purpose: 'replay',
+      signal: AbortSignal.timeout(90_000),
+    }),
+  );
+}
+
+/** Record a round as OK only when Claude answered it and every tool call it made is well-formed. */
+function recordRound(label: string, step: string, round: ClaudeRound): void {
+  const problems = round.value ? toolCallProblems(round.value.toolCalls) : [];
+  record(label, step, round.ok && problems.length === 0, [round.detail, ...problems].join(' | '));
+}
+
+function roundStatus(round: { ok: boolean; ms: number }): string {
+  return round.ok ? `ok ${(round.ms / 1000).toFixed(1)}s` : 'FAIL';
+}
+
+/** Agreement = same "no tools" decision or at least one shared tool. */
+function toolChoiceAgrees(histTools: string[], claudeTools: string[]): boolean {
+  if (histTools.length === 0) return claudeTools.length === 0;
+  return claudeTools.some((name) => histTools.includes(name));
+}
+
+function buildRunMessages(run: LoggedRun): OpenAI.ChatCompletionMessageParam[] {
+  return [
+    { role: 'system', content: run.systemPrompt },
+    ...run.history.map((h) => ({ role: h.role, content: h.content })),
+    { role: 'user', content: run.message },
+  ];
+}
+
+/** The conversation after the historical round 1: its tool calls plus their logged results. */
+function buildFollowUp(
+  messages: OpenAI.ChatCompletionMessageParam[],
+  histRound: LoggedRound,
+): OpenAI.ChatCompletionMessageParam[] {
+  return [
+    ...messages,
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: histRound.toolCalls.map((tc, i) => ({
+        id: `call_replay_${i}`,
+        type: 'function' as const,
+        function: { name: tc.name, arguments: tc.input || '{}' },
+      })),
+    },
+    ...histRound.toolCalls.map((_, i) => {
+      const result = histRound.toolResults[i];
+      return {
+        role: 'tool' as const,
+        tool_call_id: `call_replay_${i}`,
+        content: result ? (result.ok ? result.body : `Error: ${result.body}`) : 'Success',
+      };
+    }),
+  ];
+}
+
+/**
+ * Round 2 — feed the historical round-1 tool results back (bodies were clipped to 400 chars by
+ * the debug logger, so this checks request shape and continuation, not answer quality).
+ * `text` is Claude's answer when it finished without further tool calls.
+ */
+async function replayFollowUpRound(
+  label: string,
+  messages: OpenAI.ChatCompletionMessageParam[],
+  histRound: LoggedRound | undefined,
+): Promise<{ status: string; text: string | null }> {
+  if (!histRound || histRound.toolCalls.length === 0 || histRound.toolResults.length === 0) {
+    return { status: 'skip', text: null };
+  }
+  const r2 = await replayRound(buildFollowUp(messages, histRound));
+  recordRound(label, 'round2', r2);
+  const finished = r2.value !== null && r2.value.toolCalls.length === 0;
+  return { status: roundStatus(r2), text: finished ? (r2.value?.text ?? null) : null };
+}
+
+/** Validator (fast chain → Haiku) on Claude's final text, else on the historical final answer. */
+async function replayValidator(
+  label: string,
+  run: LoggedRun,
+  finalText: string,
+  toolNames: { claude: string[]; hist: string[] },
+): Promise<string> {
+  const validatorInput = finalText || run.finalResponse || '';
+  if (!validatorInput) return 'skip';
+  const v = await viaClaude(env.CLAUDE_FAST_MODEL, () =>
+    validateResponse({
+      userMessage: run.message,
+      toolCalls: finalText ? toolNames.claude.concat(toolNames.hist) : toolNames.hist,
+      response: validatorInput,
+    }),
+  );
+  record(label, 'validator', v.ok, v.detail);
+  if (!v.ok) return 'FAIL';
+  return v.value?.approved ? 'APPROVE' : 'REJECT';
+}
+
+interface AgentRunReport {
+  r1Status: string;
+  r2Status: string;
+  validStatus: string;
+  histTools: string[];
+  claudeTools: string[];
+}
+
+function reportAgentRun(idx: number, run: LoggedRun, report: AgentRunReport, finalText: string): void {
+  const { r1Status, r2Status, validStatus, histTools, claudeTools } = report;
+  say(`${String(idx + 1).padEnd(3)} ${r1Status.padEnd(9)} ${r2Status.padEnd(9)} ${validStatus.padEnd(9)} ` +
+    `[${histTools.join(',')}] → [${claudeTools.join(',')}] | ${run.message.replace(/\s+/g, ' ').slice(0, 70)}`);
+  if (finalText) say(`    claude: ${finalText.replace(/\s+/g, ' ').slice(0, 160)}`);
+}
+
+/** Replay one logged run (round 1, round 2, validator), print its report line, tally tool choice. */
+async function replayAgentRun(
+  idx: number,
+  run: LoggedRun,
+  agreement: { agreed: number; comparable: number },
+): Promise<void> {
+  const label = `${path.basename(path.dirname(run.file))}/${path.basename(run.file)}@${run.timestamp}`;
+  const messages = buildRunMessages(run);
+
+  const r1 = await replayRound(messages);
+  recordRound(label, 'round1', r1);
+
+  const histRound = run.rounds[0];
+  const histTools = histRound?.toolCalls.map((t) => t.name) ?? [];
+  const claudeTools = r1.value?.toolCalls.map((t) => t.name) ?? [];
+  if (r1.value) {
+    agreement.comparable++;
+    if (toolChoiceAgrees(histTools, claudeTools)) agreement.agreed++;
+  }
+
+  const r2 = await replayFollowUpRound(label, messages, histRound);
+  const finalText = r2.text ?? (r1.value && claudeTools.length === 0 ? r1.value.text : '');
+  const validStatus = await replayValidator(label, run, finalText, {
+    claude: claudeTools,
+    hist: histTools,
+  });
+  reportAgentRun(
+    idx,
+    run,
+    { r1Status: roundStatus(r1), r2Status: r2.status, validStatus, histTools, claudeTools },
+    finalText,
+  );
+}
+
 async function replayAgentRuns(dir: string): Promise<void> {
   const files = listLogFiles(dir);
   const parsed = files.flatMap(parseLogFile);
@@ -378,109 +569,11 @@ async function replayAgentRuns(dir: string): Promise<void> {
   say(`smart → ${env.CLAUDE_MODEL}, validator → ${env.CLAUDE_FAST_MODEL}`);
   say('#   R1        R2        VALID     hist-tools → claude-tools | message');
 
-  let toolAgreement = 0;
-  let toolComparable = 0;
+  const agreement = { agreed: 0, comparable: 0 };
+  for (const [idx, run] of runs.entries()) await replayAgentRun(idx, run, agreement);
 
-  for (const [idx, run] of runs.entries()) {
-    const label = `${path.basename(path.dirname(run.file))}/${path.basename(run.file)}@${run.timestamp}`;
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
-      { role: 'system', content: run.systemPrompt },
-      ...run.history.map((h) => ({ role: h.role, content: h.content })),
-      { role: 'user', content: run.message },
-    ];
-
-    // Round 1 — same parameters as ExpenseBotAgent.runAgentLoop.
-    const r1 = await viaClaude(env.CLAUDE_MODEL, () =>
-      aiStreamRound({
-        messages,
-        tools: TOOL_DEFINITIONS,
-        maxTokens: 4096,
-        temperature: 0.3,
-        chain: 'smart',
-        purpose: 'replay',
-        signal: AbortSignal.timeout(90_000),
-      }),
-    );
-    const r1Problems = r1.value ? toolCallProblems(r1.value.toolCalls) : [];
-    record(label, 'round1', r1.ok && r1Problems.length === 0, [r1.detail, ...r1Problems].join(' | '));
-
-    const histTools = run.rounds[0]?.toolCalls.map((t) => t.name) ?? [];
-    const claudeTools = r1.value?.toolCalls.map((t) => t.name) ?? [];
-    if (r1.value) {
-      toolComparable++;
-      const same =
-        histTools.length === 0
-          ? claudeTools.length === 0
-          : claudeTools.some((name) => histTools.includes(name));
-      if (same) toolAgreement++;
-    }
-
-    // Round 2 — feed the historical round-1 tool results back (bodies were clipped to 400 chars by
-    // the debug logger, so this checks request shape and continuation, not answer quality).
-    let r2Status = 'skip';
-    let finalText = r1.value && claudeTools.length === 0 ? r1.value.text : '';
-    const histRound = run.rounds[0];
-    if (histRound && histRound.toolCalls.length > 0 && histRound.toolResults.length > 0) {
-      const followUp: OpenAI.ChatCompletionMessageParam[] = [
-        ...messages,
-        {
-          role: 'assistant',
-          content: null,
-          tool_calls: histRound.toolCalls.map((tc, i) => ({
-            id: `call_replay_${i}`,
-            type: 'function' as const,
-            function: { name: tc.name, arguments: tc.input || '{}' },
-          })),
-        },
-        ...histRound.toolCalls.map((_, i) => {
-          const result = histRound.toolResults[i];
-          return {
-            role: 'tool' as const,
-            tool_call_id: `call_replay_${i}`,
-            content: result ? (result.ok ? result.body : `Error: ${result.body}`) : 'Success',
-          };
-        }),
-      ];
-      const r2 = await viaClaude(env.CLAUDE_MODEL, () =>
-        aiStreamRound({
-          messages: followUp,
-          tools: TOOL_DEFINITIONS,
-          maxTokens: 4096,
-          temperature: 0.3,
-          chain: 'smart',
-          purpose: 'replay',
-          signal: AbortSignal.timeout(90_000),
-        }),
-      );
-      const r2Problems = r2.value ? toolCallProblems(r2.value.toolCalls) : [];
-      record(label, 'round2', r2.ok && r2Problems.length === 0, [r2.detail, ...r2Problems].join(' | '));
-      r2Status = r2.ok ? `ok ${(r2.ms / 1000).toFixed(1)}s` : 'FAIL';
-      if (r2.value && r2.value.toolCalls.length === 0) finalText = r2.value.text;
-    }
-
-    // Validator (fast chain → Haiku) on Claude's final text, else on the historical final answer.
-    const validatorInput = finalText || run.finalResponse || '';
-    let validStatus = 'skip';
-    if (validatorInput) {
-      const v = await viaClaude(env.CLAUDE_FAST_MODEL, () =>
-        validateResponse({
-          userMessage: run.message,
-          toolCalls: finalText ? claudeTools.concat(histTools) : histTools,
-          response: validatorInput,
-        }),
-      );
-      record(label, 'validator', v.ok, v.detail);
-      validStatus = v.ok ? (v.value?.approved ? 'APPROVE' : 'REJECT') : 'FAIL';
-    }
-
-    const r1Status = r1.ok ? `ok ${(r1.ms / 1000).toFixed(1)}s` : 'FAIL';
-    say(`${String(idx + 1).padEnd(3)} ${r1Status.padEnd(9)} ${r2Status.padEnd(9)} ${validStatus.padEnd(9)} ` +
-      `[${histTools.join(',')}] → [${claudeTools.join(',')}] | ${run.message.replace(/\s+/g, ' ').slice(0, 70)}`);
-    if (finalText) say(`    claude: ${finalText.replace(/\s+/g, ' ').slice(0, 160)}`);
-  }
-
-  if (toolComparable > 0) {
-    say(`Round-1 tool choice agrees with history: ${toolAgreement}/${toolComparable} ` +
+  if (agreement.comparable > 0) {
+    say(`Round-1 tool choice agrees with history: ${agreement.agreed}/${agreement.comparable} ` +
       '(agreement = same "no tools" decision or at least one shared tool)');
   }
 }
@@ -493,13 +586,13 @@ interface HistoricalTx extends BankTransaction {
   confirmed_category: string | null;
 }
 
-async function replayPrefill(): Promise<void> {
-  const { database } = await import('../src/database');
-  const { preFillTransactions } = await import('../src/services/bank/prefill');
-
-  // Newest debit transactions; references: the user-confirmed category (when linked) and the
-  // prefill_category the production chain stored at the time ("прочее" is also its AI-failure default).
-  const rows = database.queryAll<HistoricalTx>(
+/** Newest debit transactions plus the two reference categories to score the suggestion against. */
+function loadHistoricalTx(database: {
+  queryAll<T>(sql: string, limit: number): T[];
+}): HistoricalTx[] {
+  // References: the user-confirmed category (when linked) and the prefill_category the production
+  // chain stored at the time ("прочее" is also its AI-failure default).
+  return database.queryAll<HistoricalTx>(
     `SELECT bt.*, bc.group_id AS group_id, e.category AS confirmed_category
      FROM bank_transactions bt
      JOIN bank_connections bc ON bc.id = bt.connection_id
@@ -509,25 +602,76 @@ async function replayPrefill(): Promise<void> {
      LIMIT ?`,
     LIMIT,
   );
+}
 
-  say(`\n=== Bank prefill: ${rows.length} debit transactions → ${env.CLAUDE_FAST_MODEL}`);
-  if (rows.length === 0) return;
-
+function groupTx(rows: HistoricalTx[]): Map<number, HistoricalTx[]> {
   const byGroup = new Map<number, HistoricalTx[]>();
   for (const row of rows) {
     const list = byGroup.get(row.group_id) ?? [];
     list.push(row);
     byGroup.set(row.group_id, list);
   }
+  return byGroup;
+}
 
-  const same = (a: string | null, b: string) => a !== null && a.toLowerCase() === b.toLowerCase();
-  let confirmedTotal = 0;
-  let confirmedHits = 0;
-  let prodTotal = 0;
-  let prodHits = 0;
-  let prodOther = 0;
-  let haikuOther = 0;
-  for (const [groupId, txs] of byGroup) {
+interface PrefillTally {
+  confirmedTotal: number;
+  confirmedHits: number;
+  prodTotal: number;
+  prodHits: number;
+  prodOther: number;
+  haikuOther: number;
+}
+
+function sameCategory(a: string | null, b: string): boolean {
+  return a !== null && a.toLowerCase() === b.toLowerCase();
+}
+
+/** Count one transaction's suggestion against its confirmed and stored production categories. */
+function tallyPrefill(tally: PrefillTally, tx: HistoricalTx, suggested: string): void {
+  if (suggested === 'прочее') tally.haikuOther++;
+  if (tx.confirmed_category !== null) {
+    tally.confirmedTotal++;
+    if (sameCategory(tx.confirmed_category, suggested)) tally.confirmedHits++;
+  }
+  if (tx.prefill_category !== null) {
+    tally.prodTotal++;
+    if (sameCategory(tx.prefill_category, suggested)) tally.prodHits++;
+    if (tx.prefill_category === 'прочее') tally.prodOther++;
+  }
+}
+
+function formatPrefillLine(tx: HistoricalTx, suggested: string): string {
+  return (
+    `${(tx.merchant_normalized ?? tx.merchant ?? '?').slice(0, 30).padEnd(30)} ` +
+    `MCC ${String(tx.mcc ?? '-').padEnd(5)} ${String(tx.amount).padStart(9)} ${tx.currency} ` +
+    `confirmed=${tx.confirmed_category ?? '—'} prod=${tx.prefill_category ?? '—'} haiku=${suggested}`
+  );
+}
+
+function reportPrefillTally(tally: PrefillTally, total: number): void {
+  say(`Haiku vs user-confirmed category: ${tally.confirmedHits}/${tally.confirmedTotal}; ` +
+    `vs stored production prefill: ${tally.prodHits}/${tally.prodTotal}; ` +
+    `"прочее": production ${tally.prodOther}/${tally.prodTotal}, Haiku ${tally.haikuOther}/${total}`);
+}
+
+async function replayPrefill(): Promise<void> {
+  const { database } = await import('../src/database');
+  const { preFillTransactions } = await import('../src/services/bank/prefill');
+
+  const rows = loadHistoricalTx(database);
+  say(`\n=== Bank prefill: ${rows.length} debit transactions → ${env.CLAUDE_FAST_MODEL}`);
+  if (rows.length === 0) return;
+
+  const tally: PrefillTally = {
+    confirmedTotal: 0,
+    confirmedHits: 0,
+    prodTotal: 0,
+    prodHits: 0,
+    prodOther: 0,
+    haikuOther: 0,
+  };
+  for (const [groupId, txs] of groupTx(rows)) {
     // One call per batch of 10 (PrefillResult batch size) so provenance maps to one request.
     for (let i = 0; i < txs.length; i += 10) {
       const batch = txs.slice(i, i + 10);
@@ -536,25 +680,12 @@ async function replayPrefill(): Promise<void> {
       record(`group ${groupId} batch ${i / 10 + 1}`, 'prefill', res.ok, res.detail);
       for (const [j, tx] of batch.entries()) {
         const suggested = res.value?.[j]?.category ?? '—';
-        if (suggested === 'прочее') haikuOther++;
-        if (tx.confirmed_category !== null) {
-          confirmedTotal++;
-          if (same(tx.confirmed_category, suggested)) confirmedHits++;
-        }
-        if (tx.prefill_category !== null) {
-          prodTotal++;
-          if (same(tx.prefill_category, suggested)) prodHits++;
-          if (tx.prefill_category === 'прочее') prodOther++;
-        }
-        say(`${(tx.merchant_normalized ?? tx.merchant ?? '?').slice(0, 30).padEnd(30)} ` +
-          `MCC ${String(tx.mcc ?? '-').padEnd(5)} ${String(tx.amount).padStart(9)} ${tx.currency} ` +
-          `confirmed=${tx.confirmed_category ?? '—'} prod=${tx.prefill_category ?? '—'} haiku=${suggested}`);
+        tallyPrefill(tally, tx, suggested);
+        say(formatPrefillLine(tx, suggested));
       }
     }
   }
-  say(`Haiku vs user-confirmed category: ${confirmedHits}/${confirmedTotal}; ` +
-    `vs stored production prefill: ${prodHits}/${prodTotal}; ` +
-    `"прочее": production ${prodOther}/${prodTotal}, Haiku ${haikuOther}/${rows.length}`);
+  reportPrefillTally(tally, rows.length);
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────

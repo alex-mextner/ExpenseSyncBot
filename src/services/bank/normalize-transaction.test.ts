@@ -144,6 +144,30 @@ describe('normalizePluginsTransaction', () => {
     expect(result2?.id).toBe(result?.id);
   });
 
+  test('only null/undefined movement.id gets a synthetic ID; empty string and 0 are kept', () => {
+    const withId = (id: unknown) =>
+      normalizePluginsTransaction(
+        makePluginsTx({
+          movements: [
+            {
+              id: id as string | null,
+              account: { id: 'acc-gel' },
+              sum: -50,
+              fee: 0,
+              invoice: null,
+            },
+          ],
+        }),
+        accountCurrencyMap,
+      );
+    const synthetic = Buffer.from(`synthetic:-50:${baseDate.getTime()}:acc-gel`).toString('base64');
+
+    expect(withId('')?.id).toBe('');
+    expect(withId(0)?.id).toBe(0 as unknown as string);
+    expect(withId(null)?.id).toBe(synthetic);
+    expect(withId(undefined)?.id).toBe(synthetic);
+  });
+
   test('date as Date object: converts to ISO string', () => {
     const result = normalizePluginsTransaction(makePluginsTx(), accountCurrencyMap);
     expect(result?.date).toBe('2026-03-05T20:00:00.000Z');

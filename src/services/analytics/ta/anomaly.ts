@@ -121,39 +121,64 @@ export function grubbsTest(data: number[]): GrubbsResult {
   return { outlier: outlierValue, statistic: G, isSignificant: G > critical };
 }
 
+/** t²(alpha/(2n), n-2) — approximate values for common sample sizes, ascending by n */
+const GRUBBS_T_SQUARED_TABLE: ReadonlyArray<readonly [number, number]> = [
+  [3, 12.706 ** 2],
+  [4, 6.97],
+  [5, 5.59],
+  [6, 4.77],
+  [7, 4.3],
+  [8, 3.93],
+  [9, 3.69],
+  [10, 3.5],
+  [12, 3.22],
+  [15, 2.97],
+  [20, 2.71],
+  [30, 2.46],
+];
+
 /** Approximate t² critical values for Grubbs test (alpha=0.05, two-sided) */
 function getCriticalTSquared(n: number): number {
-  // t²(alpha/(2n), n-2) — approximate values for common sample sizes
-  const table: Record<number, number> = {
-    3: 12.706 ** 2,
-    4: 6.97,
-    5: 5.59,
-    6: 4.77,
-    7: 4.3,
-    8: 3.93,
-    9: 3.69,
-    10: 3.5,
-    12: 3.22,
-    15: 2.97,
-    20: 2.71,
-    30: 2.46,
-  };
-  if (table[n] !== undefined) return table[n];
+  const exact = GRUBBS_T_SQUARED_TABLE.find(([size]) => size === n);
+  if (exact) return exact[1];
+
+  const first = GRUBBS_T_SQUARED_TABLE[0];
+  const last = GRUBBS_T_SQUARED_TABLE[GRUBBS_T_SQUARED_TABLE.length - 1];
+  if (n < (first?.[0] ?? 3)) return first?.[1] ?? 170;
+  if (n > (last?.[0] ?? 30)) return 2.3;
+
   // Interpolate for unlisted sizes
-  const keys = Object.keys(table)
-    .map(Number)
-    .sort((a, b) => a - b);
-  if (n < (keys[0] ?? 3)) return table[keys[0] ?? 3] ?? 170;
-  if (n > (keys[keys.length - 1] ?? 30)) return 2.3;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const lo = keys[i] ?? 3;
-    const hi = keys[i + 1] ?? 30;
-    if (n >= lo && n <= hi) {
-      const ratio = (n - lo) / (hi - lo);
-      return (table[lo] ?? 0) + ratio * ((table[hi] ?? 0) - (table[lo] ?? 0));
-    }
-  }
-  return 2.5;
+  const hiIndex = GRUBBS_T_SQUARED_TABLE.findIndex(([size]) => size >= n);
+  const lo = GRUBBS_T_SQUARED_TABLE[hiIndex - 1];
+  const hi = GRUBBS_T_SQUARED_TABLE[hiIndex];
+  if (!lo || !hi) return 2.5;
+  const ratio = (n - lo[0]) / (hi[0] - lo[0]);
+  return lo[1] + ratio * (hi[1] - lo[1]);
+}
+
+/** Dixon Q critical values at alpha = 0.05, ascending by n (use the first entry with n <= size) */
+const DIXON_CRITICAL_TABLE: ReadonlyArray<readonly [number, number]> = [
+  [3, 0.941],
+  [4, 0.765],
+  [5, 0.642],
+  [6, 0.56],
+  [7, 0.507],
+  [8, 0.468],
+  [9, 0.437],
+  [10, 0.412],
+  [12, 0.376],
+  [15, 0.338],
+  [20, 0.3],
+  [25, 0.277],
+  [30, 0.26],
+];
+
+/** Beyond the tabulated range the smallest (n = 30) critical value applies. */
+const DIXON_CRITICAL_FALLBACK = 0.26;
+
+function getDixonCritical(n: number): number {
+  const entry = DIXON_CRITICAL_TABLE.find(([size]) => n <= size);
+  return entry?.[1] ?? DIXON_CRITICAL_FALLBACK;
 }
 
 /**
@@ -179,35 +204,7 @@ export function dixonTest(data: number[]): DixonResult {
   const q = isHighOutlier ? qHigh : qLow;
   const outlier = isHighOutlier ? (sorted[n - 1] ?? 0) : (sorted[0] ?? 0);
 
-  // Critical values at alpha = 0.05
-  const criticals: Record<number, number> = {
-    3: 0.941,
-    4: 0.765,
-    5: 0.642,
-    6: 0.56,
-    7: 0.507,
-    8: 0.468,
-    9: 0.437,
-    10: 0.412,
-    12: 0.376,
-    15: 0.338,
-    20: 0.3,
-    25: 0.277,
-    30: 0.26,
-  };
-
-  let critical = 0.26;
-  const keys = Object.keys(criticals)
-    .map(Number)
-    .sort((a, b) => a - b);
-  for (const k of keys) {
-    if (n <= k) {
-      critical = criticals[k] ?? 0.26;
-      break;
-    }
-  }
-
-  return { outlier, qRatio: q, isSignificant: q > critical };
+  return { outlier, qRatio: q, isSignificant: q > getDixonCritical(n) };
 }
 
 /**

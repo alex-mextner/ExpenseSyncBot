@@ -25,28 +25,36 @@ interface FakeRepo {
 const store = new Map<number, DevTask>();
 let nextId = 1;
 
+const TASK_DEFAULTS: Omit<DevTask, 'id'> = {
+  group_id: 1000,
+  user_id: 1,
+  state: DevTaskState.PENDING,
+  title: null,
+  description: 'do the thing',
+  branch_name: null,
+  worktree_path: null,
+  pr_number: null,
+  pr_url: null,
+  design: null,
+  plan: null,
+  code_review: null,
+  error_log: null,
+  failed_at_state: null,
+  retry_count: 0,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+};
+
 function makeTask(partial: Partial<DevTask> = {}): DevTask {
   const id = partial.id ?? nextId++;
-  const task: DevTask = {
-    id,
-    group_id: partial.group_id ?? 1000,
-    user_id: partial.user_id ?? 1,
-    state: partial.state ?? DevTaskState.PENDING,
-    title: partial.title ?? null,
-    description: partial.description ?? 'do the thing',
-    branch_name: partial.branch_name ?? null,
-    worktree_path: partial.worktree_path ?? null,
-    pr_number: partial.pr_number ?? null,
-    pr_url: partial.pr_url ?? null,
-    design: partial.design ?? null,
-    plan: partial.plan ?? null,
-    code_review: partial.code_review ?? null,
-    error_log: partial.error_log ?? null,
-    failed_at_state: partial.failed_at_state ?? null,
-    retry_count: partial.retry_count ?? 0,
-    created_at: partial.created_at ?? '2026-01-01T00:00:00Z',
-    updated_at: partial.updated_at ?? '2026-01-01T00:00:00Z',
-  };
+  const task: DevTask = { ...TASK_DEFAULTS, id };
+  // `partial.x ?? default` semantics: undefined/null fall back to the default
+  for (const key of Object.keys(TASK_DEFAULTS) as (keyof typeof TASK_DEFAULTS)[]) {
+    const value = partial[key];
+    if (value !== undefined && value !== null) {
+      Object.assign(task, { [key]: value });
+    }
+  }
   store.set(task.id, task);
   return task;
 }

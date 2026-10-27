@@ -89,7 +89,16 @@ interface Scenario {
   alertEnv?: string;
 }
 
-function run(scenario: Scenario) {
+interface Sandbox {
+  dir: string;
+  bin: string;
+  fix: string;
+  byUuid: string;
+  alertEnv: string;
+}
+
+/** Lay out the fake bin dir (stub systemctl/sleep/curl), fixtures and by-uuid dir for a scenario. */
+function buildSandbox(scenario: Scenario): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), 'odroid-disk-recover-'));
   const bin = join(dir, 'bin');
   const fix = join(dir, 'fixtures');
@@ -108,29 +117,42 @@ function run(scenario: Scenario) {
   for (const unit of scenario.queued ?? []) writeFileSync(join(fix, 'jobs', unit), '');
   const alertEnv = join(dir, 'alert.env');
   writeFileSync(alertEnv, scenario.alertEnv ?? 'BOT_TOKEN="test-token"\r\nBOT_ADMIN_ID=42\r\n');
+  return { dir, bin, fix, byUuid, alertEnv };
+}
+
+/** Environment the script under test sees; every knob comes from the scenario. */
+function scenarioEnv(scenario: Scenario, sandbox: Sandbox): Record<string, string> {
+  return {
+    PATH: `${sandbox.bin}:${process.env['PATH']}`,
+    FIX: sandbox.fix,
+    BY_UUID_DIR: sandbox.byUuid,
+    WD500_UUID: WD500,
+    STORAGE_UUID: STORAGE,
+    WAIT_SEC: String(scenario.waitSec ?? 20),
+    POLL_SEC: String(scenario.pollSec ?? 5),
+    SETTLE_DELAY: scenario.settleDelay ? String(scenario.settleDelay) : '',
+    ALERT_ENV_FILE: sandbox.alertEnv,
+    TG_STATUS: scenario.telegramStatus ?? '200',
+    TG_BODY: scenario.telegramBody ?? '',
+    APPEAR_AFTER: scenario.late ? String(scenario.late.afterSleeps) : '',
+    APPEAR_UUID: scenario.late?.uuid ?? '',
+  };
+}
+
+function readLines(file: string): string[] {
+  return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+}
+
+function run(scenario: Scenario) {
+  const sandbox = buildSandbox(scenario);
+  const fix = sandbox.fix;
 
   const result = spawnSync('bash', [SCRIPT, ...(scenario.args ?? [])], {
-    env: {
-      PATH: `${bin}:${process.env['PATH']}`,
-      FIX: fix,
-      BY_UUID_DIR: byUuid,
-      WD500_UUID: WD500,
-      STORAGE_UUID: STORAGE,
-      WAIT_SEC: String(scenario.waitSec ?? 20),
-      POLL_SEC: String(scenario.pollSec ?? 5),
-      SETTLE_DELAY: scenario.settleDelay ? String(scenario.settleDelay) : '',
-      ALERT_ENV_FILE: alertEnv,
-      TG_STATUS: scenario.telegramStatus ?? '200',
-      TG_BODY: scenario.telegramBody ?? '',
-      APPEAR_AFTER: scenario.late ? String(scenario.late.afterSleeps) : '',
-      APPEAR_UUID: scenario.late?.uuid ?? '',
-    },
+    env: scenarioEnv(scenario, sandbox),
     encoding: 'utf8',
     timeout: 20_000,
   });
-  const lines = (file: string) =>
-    existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
-  const calls = lines(join(fix, 'systemctl.log'));
+  const calls = readLines(join(fix, 'systemctl.log'));
   const outcome = {
     status: result.status,
     stdout: result.stdout,
@@ -138,12 +160,12 @@ function run(scenario: Scenario) {
     calls,
     /** Every `systemctl start` attempted, including ones that failed. */
     startCalls: calls.filter((l) => l.startsWith('start ')).map((l) => l.slice('start '.length)),
-    telegram: lines(join(fix, 'telegram')).map((l): string => JSON.parse(l)),
-    curlArgv: lines(join(fix, 'curl-argv')),
-    curlConfig: lines(join(fix, 'curl-config')),
+    telegram: readLines(join(fix, 'telegram')).map((l): string => JSON.parse(l)),
+    curlArgv: readLines(join(fix, 'curl-argv')),
+    curlConfig: readLines(join(fix, 'curl-config')),
     sleeps: Number(existsSync(join(fix, 'sleeps')) ? readFileSync(join(fix, 'sleeps'), 'utf8') : 0),
   };
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(sandbox.dir, { recursive: true, force: true });
   return outcome;
 }
 

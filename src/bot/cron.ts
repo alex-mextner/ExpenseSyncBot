@@ -4,13 +4,15 @@ import cron from 'node-cron';
 import { env } from '../config/env';
 import { database } from '../database';
 import { AI_USAGE_RETENTION_DAYS } from '../database/repositories/ai-usage-events.repository';
+import type { Group } from '../database/types';
 import { sendDirect, sendMessage, withChatContext } from '../services/bank/telegram-sender';
 import { updateExchangeRates } from '../services/currency/converter';
-import { monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
+import { type MonthAbbr, monthAbbrFromDate, prevMonthAbbr } from '../services/google/month-abbr';
 import {
   cloneMonthTab,
   createEmptyMonthTab,
   createExpenseSpreadsheet,
+  type GoogleConn,
   getSpreadsheetUrl,
   googleConn,
   monthTabExists,
@@ -93,6 +95,102 @@ export function registerAiUsageRetentionCron(): void {
   logger.info('[CRON] AI usage retention cron registered (daily 03:30 UTC, prune on startup)');
 }
 
+const BUDGET_EDIT_HINT = '<code>/budget set Категория Сумма</code>\n' + '<code>/budget sync</code>';
+
+/** New-year spreadsheet (Expenses tab only) when the group has none for `year`; else the existing one. */
+async function ensureYearSpreadsheet(
+  group: Group,
+  conn: GoogleConn,
+  year: number,
+): Promise<{ spreadsheetId: string; newYearUrl: string | null }> {
+  const existingId = database.groupSpreadsheets.getByYear(group.id, year);
+  if (existingId) return { spreadsheetId: existingId, newYearUrl: null };
+
+  const { spreadsheetId: newId } = await createExpenseSpreadsheet(
+    conn,
+    group.default_currency,
+    group.enabled_currencies,
+  );
+  database.groupSpreadsheets.setYear(group.id, year, newId);
+  logger.info(`[CRON] Created new spreadsheet for group ${group.id}, year ${year}: ${newId}`);
+  return { spreadsheetId: newId, newYearUrl: `https://docs.google.com/spreadsheets/d/${newId}` };
+}
+
+/** Clone the previous month's tab when it exists, otherwise create an empty one. */
+async function createMonthTab(
+  group: Group,
+  conn: GoogleConn,
+  spreadsheetId: string,
+  year: number,
+  month: MonthAbbr,
+): Promise<void> {
+  const { year: prevYear, month: prevMonth } = prevMonthAbbr(year, month);
+  const prevSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, prevYear);
+
+  if (prevSpreadsheetId && (await monthTabExists(conn, prevSpreadsheetId, prevMonth))) {
+    await cloneMonthTab(conn, prevSpreadsheetId, prevMonth, spreadsheetId, month);
+    logger.info(`[CRON] Cloned ${prevMonth} → ${month} for group ${group.id}`);
+  } else {
+    await createEmptyMonthTab(conn, spreadsheetId, month);
+    logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
+  }
+}
+
+function buildMonthlyNotifyText(
+  sheetUrl: string,
+  newYearUrl: string | null,
+  year: number,
+  budget: { text: string; hasBudgets: boolean },
+): string {
+  const yearSuffix = newYearUrl ? ` (${year})` : '';
+  if (budget.hasBudgets) {
+    return (
+      `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>${yearSuffix}` +
+      `\n\n${budget.text}` +
+      `\n\nРедактировать бюджет можно через ИИ или командами:\n${BUDGET_EDIT_HINT}`
+    );
+  }
+  return (
+    `Пора сформировать бюджет\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>${yearSuffix}` +
+    `\n\nЗаполни вкладку в таблице или используй команды:\n${BUDGET_EDIT_HINT}`
+  );
+}
+
+/** Telegram message limit is 4096 chars — truncate at last newline boundary, close tags. */
+function truncateNotifyText(notifyText: string, sheetUrl: string): string {
+  if (notifyText.length <= 4000) return notifyText;
+  const cut = notifyText.lastIndexOf('\n', 3900);
+  const truncated = cut > 0 ? notifyText.slice(0, cut) : notifyText.slice(0, 3900);
+  return closeUnmatchedTags(`${truncated}\n...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`);
+}
+
+/** Create this month's tab for one group and notify it; skips when the tab already exists. */
+async function cloneMonthForGroup(group: Group, year: number, month: MonthAbbr): Promise<void> {
+  const conn = googleConn(group);
+  const { spreadsheetId, newYearUrl } = await ensureYearSpreadsheet(group, conn, year);
+
+  const tabAlreadyExists = await monthTabExists(conn, spreadsheetId, month);
+  if (tabAlreadyExists) {
+    logger.info(`[CRON] Tab ${month} already exists for group ${group.id}, skipping`);
+    return;
+  }
+
+  await createMonthTab(group, conn, spreadsheetId, year, month);
+
+  // Sync budgets from the newly created/cloned tab (silentSyncBudgets catches internally, never throws)
+  await silentSyncBudgets(conn, group.id);
+
+  const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
+  const notifyText = truncateNotifyText(
+    buildMonthlyNotifyText(sheetUrl, newYearUrl, year, formatBudgetProgressText(group.id)),
+    sheetUrl,
+  );
+
+  await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
+    sendMessage(notifyText),
+  ).catch((err: unknown) => logger.error({ err }, `[CRON] Failed to notify group ${group.id}`));
+}
+
 export function registerMonthlyCron(): void {
   cron.schedule('0 0 1 * *', async () => {
     logger.info('[CRON] Monthly tab auto-clone started');
@@ -111,86 +209,7 @@ export function registerMonthlyCron(): void {
       if (allSpreadsheets.length === 0) continue;
 
       try {
-        let spreadsheetId = database.groupSpreadsheets.getByYear(group.id, year);
-        let newYearUrl: string | null = null;
-
-        const conn = googleConn(group);
-
-        if (!spreadsheetId) {
-          // New year — create spreadsheet (Expenses tab only)
-          const { spreadsheetId: newId } = await createExpenseSpreadsheet(
-            conn,
-            group.default_currency,
-            group.enabled_currencies,
-          );
-          database.groupSpreadsheets.setYear(group.id, year, newId);
-          spreadsheetId = newId;
-          newYearUrl = `https://docs.google.com/spreadsheets/d/${newId}`;
-          logger.info(
-            `[CRON] Created new spreadsheet for group ${group.id}, year ${year}: ${newId}`,
-          );
-        }
-
-        const tabAlreadyExists = await monthTabExists(conn, spreadsheetId, month);
-        if (tabAlreadyExists) {
-          logger.info(`[CRON] Tab ${month} already exists for group ${group.id}, skipping`);
-          continue;
-        }
-
-        const { year: prevYear, month: prevMonth } = prevMonthAbbr(year, month);
-        const prevSpreadsheetId = database.groupSpreadsheets.getByYear(group.id, prevYear);
-
-        if (prevSpreadsheetId && (await monthTabExists(conn, prevSpreadsheetId, prevMonth))) {
-          await cloneMonthTab(conn, prevSpreadsheetId, prevMonth, spreadsheetId, month);
-          logger.info(`[CRON] Cloned ${prevMonth} → ${month} for group ${group.id}`);
-        } else {
-          await createEmptyMonthTab(conn, spreadsheetId, month);
-          logger.info(`[CRON] Created empty tab ${month} for group ${group.id}`);
-        }
-
-        // Sync budgets from the newly created/cloned tab (silentSyncBudgets catches internally, never throws)
-        await silentSyncBudgets(conn, group.id);
-
-        const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
-        const { text: budgetText, hasBudgets } = formatBudgetProgressText(group.id);
-
-        let notifyText: string;
-
-        if (hasBudgets) {
-          notifyText = `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
-          if (newYearUrl) {
-            notifyText += ` (${year})`;
-          }
-          notifyText += `\n\n${budgetText}`;
-          notifyText +=
-            '\n\nРедактировать бюджет можно через ИИ или командами:\n' +
-            '<code>/budget set Категория Сумма</code>\n' +
-            '<code>/budget sync</code>';
-        } else {
-          notifyText = `Пора сформировать бюджет\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`;
-          if (newYearUrl) {
-            notifyText += ` (${year})`;
-          }
-          notifyText +=
-            '\n\nЗаполни вкладку в таблице или используй команды:\n' +
-            '<code>/budget set Категория Сумма</code>\n' +
-            '<code>/budget sync</code>';
-        }
-
-        // Telegram message limit is 4096 chars — truncate at last newline boundary, close tags
-        if (notifyText.length > 4000) {
-          const cut = notifyText.lastIndexOf('\n', 3900);
-          const truncated = cut > 0 ? notifyText.slice(0, cut) : notifyText.slice(0, 3900);
-          notifyText = closeUnmatchedTags(
-            `${truncated}\n...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`,
-          );
-        }
-
-        await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
-          sendMessage(notifyText),
-        ).catch((err: unknown) =>
-          logger.error({ err }, `[CRON] Failed to notify group ${group.id}`),
-        );
+        await cloneMonthForGroup(group, year, month);
       } catch (err) {
         logger.error({ err }, `[CRON] Failed for group ${group.id}`);
       }

@@ -309,6 +309,126 @@ describe('formatStatsDiff', () => {
     const result = formatStatsDiff(a, b, '2026-01', '2026-02', 'RSD');
     expect(result).not.toContain('Biggest');
   });
+
+  describe('exact output and per-category extremes', () => {
+    const stats = (total: number, count: number): ExpenseStats => ({
+      count,
+      total,
+      avg: 0,
+      median: 0,
+      min: null,
+      max: null,
+    });
+    const exp = (category: string, eurAmount: number) => ({
+      amount: 0,
+      currency: 'RSD' as const,
+      eur_amount: eurAmount,
+      category,
+      comment: '',
+      date: '2026-01-01',
+    });
+
+    test('pins the full text with growth and drop lines', () => {
+      const result = formatStatsDiff(
+        stats(300000, 50),
+        stats(438000, 62),
+        'A',
+        'B',
+        'RSD',
+        [exp('Еда', 2000), exp('Жилье', 1000)],
+        [exp('Еда', 2450), exp('Жилье', 180)],
+      );
+      expect(result).toBe(
+        [
+          '=== Diff: A → B ===',
+          'total: +138000 RSD (+46.0%)',
+          'count: +12 (+24.0%)',
+          'median: 0',
+          'avg: 0',
+          'Biggest growth: Еда +45000 RSD',
+          'Biggest drop: Жилье \u221282000 RSD',
+        ].join('\n'),
+      );
+    });
+
+    test('a category present on one side only counts as growth or drop', () => {
+      const result = formatStatsDiff(
+        stats(10, 1),
+        stats(10, 1),
+        'A',
+        'B',
+        'RSD',
+        [exp('Old', 10)],
+        [exp('New', 20)],
+      );
+      expect(result).toContain('Biggest growth: New +2000 RSD');
+      expect(result).toContain('Biggest drop: Old \u22121000 RSD');
+    });
+
+    test('no drop line when every category grew, no growth line when every one dropped', () => {
+      const grew = formatStatsDiff(
+        stats(1, 1),
+        stats(2, 1),
+        'A',
+        'B',
+        'RSD',
+        [exp('X', 1)],
+        [exp('X', 2)],
+      );
+      expect(grew).toContain('Biggest growth: X +100 RSD');
+      expect(grew).not.toContain('Biggest drop');
+      const dropped = formatStatsDiff(
+        stats(2, 1),
+        stats(1, 1),
+        'A',
+        'B',
+        'RSD',
+        [exp('X', 2)],
+        [exp('X', 1)],
+      );
+      expect(dropped).toContain('Biggest drop: X \u2212100 RSD');
+      expect(dropped).not.toContain('Biggest growth');
+    });
+
+    test('equal deltas keep the first category seen (period A order, then period B)', () => {
+      const result = formatStatsDiff(
+        stats(1, 1),
+        stats(1, 1),
+        'A',
+        'B',
+        'RSD',
+        [exp('First', 1), exp('Second', 1)],
+        [exp('First', 2), exp('Second', 2)],
+      );
+      expect(result).toContain('Biggest growth: First +100 RSD');
+    });
+
+    test('unchanged categories produce neither line', () => {
+      const result = formatStatsDiff(
+        stats(1, 1),
+        stats(1, 1),
+        'A',
+        'B',
+        'RSD',
+        [exp('X', 1)],
+        [exp('X', 1)],
+      );
+      expect(result).not.toContain('Biggest');
+    });
+
+    test('per-category lines need raw expenses on both sides', () => {
+      const only = [exp('X', 1)];
+      expect(formatStatsDiff(stats(1, 1), stats(2, 1), 'A', 'B', 'RSD', only, [])).not.toContain(
+        'Biggest',
+      );
+      expect(formatStatsDiff(stats(1, 1), stats(2, 1), 'A', 'B', 'RSD', [], only)).not.toContain(
+        'Biggest',
+      );
+      expect(
+        formatStatsDiff(stats(1, 1), stats(2, 1), 'A', 'B', 'RSD', undefined, only),
+      ).not.toContain('Biggest');
+    });
+  });
 });
 
 describe('formatStatsTrend', () => {

@@ -49,6 +49,16 @@ export function emaArray(data: number[], period: number): number[] {
   return result;
 }
 
+/** Kaufman efficiency ratio at index `i`: net change over `period` / sum of absolute step changes. */
+function efficiencyRatioAt(data: number[], i: number, period: number): number {
+  const direction = Math.abs((data[i] ?? 0) - (data[i - period] ?? 0));
+  let volatility = 0;
+  for (let j = i - period + 1; j <= i; j++) {
+    volatility += Math.abs((data[j] ?? 0) - (data[j - 1] ?? 0));
+  }
+  return volatility > 0 ? direction / volatility : 0;
+}
+
 /**
  * Kaufman Adaptive Moving Average — adapts smoothing speed to market efficiency.
  * Fast period = 2, slow period = 30 (standard). Efficiency ratio determines blend.
@@ -66,12 +76,7 @@ export function kama(data: number[], period = 10): KamaResult {
 
   let lastER = 0;
   for (let i = period; i < data.length; i++) {
-    const direction = Math.abs((data[i] ?? 0) - (data[i - period] ?? 0));
-    let volatility = 0;
-    for (let j = i - period + 1; j <= i; j++) {
-      volatility += Math.abs((data[j] ?? 0) - (data[j - 1] ?? 0));
-    }
-    const er = volatility > 0 ? direction / volatility : 0;
+    const er = efficiencyRatioAt(data, i, period);
     lastER = er;
 
     const sc = (er * (fastSC - slowSC) + slowSC) ** 2;

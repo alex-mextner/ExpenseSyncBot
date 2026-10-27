@@ -40,6 +40,260 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 /** Number of historical months to look back for category profiles */
 const HISTORY_MONTHS = 6;
 
+/** Percent change from previous to current; a new (previously zero) spend counts as +100%. */
+function percentChange(current: number, previous: number): number {
+  if (previous > 0) return ((current - previous) / previous) * 100;
+  return current > 0 ? 100 : 0;
+}
+
+function trendDirection(changePercent: number): SpendingTrend['direction'] {
+  if (Math.abs(changePercent) <= 5) return 'stable';
+  return changePercent > 0 ? 'up' : 'down';
+}
+
+/** Sums per-category totals of the current and previous week; rows of other periods are ignored. */
+function splitWeekRows(rows: { period: string; category: string; total: number }[]): {
+  currentByCategory: Record<string, number>;
+  previousByCategory: Record<string, number>;
+  currentTotal: number;
+  previousTotal: number;
+} {
+  const currentByCategory: Record<string, number> = {};
+  const previousByCategory: Record<string, number> = {};
+  let currentTotal = 0;
+  let previousTotal = 0;
+
+  for (const row of rows) {
+    if (row.period === 'current_week') {
+      currentByCategory[row.category] = (currentByCategory[row.category] || 0) + row.total;
+      currentTotal += row.total;
+    } else if (row.period === 'previous_week') {
+      previousByCategory[row.category] = (previousByCategory[row.category] || 0) + row.total;
+      previousTotal += row.total;
+    }
+  }
+
+  return { currentByCategory, previousByCategory, currentTotal, previousTotal };
+}
+
+/** Total spend and number of months with data per category over the history window. */
+function sumHistoryByCategory(
+  historyRows: { category: string; monthly_total: number }[],
+): Record<string, { total: number; months: number }> {
+  const categoryHistory: Record<string, { total: number; months: number }> = {};
+  for (const row of historyRows) {
+    const entry = categoryHistory[row.category] ?? { total: 0, months: 0 };
+    entry.total += row.monthly_total;
+    entry.months += 1;
+    categoryHistory[row.category] = entry;
+  }
+  return categoryHistory;
+}
+
+function classifyAnomalySeverity(deviationRatio: number): CategoryAnomaly['severity'] {
+  if (deviationRatio >= 2.5) return 'extreme';
+  if (deviationRatio >= 1.5) return 'significant';
+  return 'mild';
+}
+
+/** Confidence in a projection grows with the number of elapsed days. */
+function projectionConfidence(daysElapsed: number): MonthlyProjection['confidence'] {
+  if (daysElapsed < 7) return 'low';
+  if (daysElapsed >= 20) return 'high';
+  return 'medium';
+}
+
+/**
+ * Aggregate profile across all categories for the overall projection:
+ * summed EMA / tx rate, EMA-weighted CV (real value instead of a hardcoded 0.5).
+ */
+function buildOverallProfile(
+  categoryProfiles: Map<string, CategoryProfile>,
+): CategoryProfile | null {
+  const profileValues = [...categoryProfiles.values()];
+  const aggregateEma = profileValues.reduce((s, p) => s + p.ema, 0);
+
+  const totalEma = aggregateEma || 1;
+  const weightedCv = profileValues.reduce((s, p) => s + p.cv * (p.ema / totalEma), 0);
+
+  if (categoryProfiles.size === 0) return null;
+  return {
+    ema: aggregateEma,
+    cv: Math.round(weightedCv * 1000) / 1000,
+    monthsOfData: Math.max(...profileValues.map((p) => p.monthsOfData)),
+    avgTxPerMonth: profileValues.reduce((s, p) => s + p.avgTxPerMonth, 0),
+    zeroMonthRatio: 0,
+  };
+}
+
+/** Projects one category's month-end total and compares it with its budget (converted to EUR). */
+function projectOneCategory(
+  cat: CategoryTotal,
+  budget: { limit: number; currency: string } | undefined,
+  daysElapsed: number,
+  daysInMonth: number,
+  history: {
+    profile: CategoryProfile | null;
+    lastTxDay: number | undefined;
+    intervalProfile: IntervalProfile | undefined;
+  },
+): CategoryProjection {
+  const daysSinceLastTx =
+    history.lastTxDay !== undefined ? daysElapsed - history.lastTxDay : undefined;
+  const projected = projectCategory(
+    cat.total,
+    daysElapsed,
+    daysInMonth,
+    history.profile,
+    daysSinceLastTx,
+    history.intervalProfile,
+  );
+
+  let budgetLimitEur: number | null = null;
+  let willExceed = false;
+  if (budget) {
+    budgetLimitEur = convertCurrency(budget.limit, budget.currency as CurrencyCode, BASE_CURRENCY);
+    willExceed = projected > budgetLimitEur;
+  }
+
+  return {
+    category: cat.category,
+    current: Math.round(cat.total * 100) / 100,
+    projected: Math.round(projected * 100) / 100,
+    budget_limit: budgetLimitEur !== null ? Math.round(budgetLimitEur * 100) / 100 : null,
+    will_exceed: willExceed,
+  };
+}
+
+/**
+ * Walks backwards from today while consecutive days stay on the same side of the
+ * overall daily average. A day without expenses breaks the streak.
+ */
+function measureCurrentStreak(
+  dailyMap: Record<string, number>,
+  today: string,
+  overallDailyAvg: number,
+): { streakDays: number; streakSum: number; streakType: SpendingStreak['streak_type'] } {
+  let streakDays = 0;
+  let streakSum = 0;
+  let streakType: SpendingStreak['streak_type'] = 'no_spending';
+  let currentDate = new Date(today);
+
+  for (let i = 0; i < 30; i++) {
+    const dayTotal = dailyMap[format(currentDate, 'yyyy-MM-dd')];
+    if (dayTotal === undefined) break;
+
+    const isAbove = dayTotal > overallDailyAvg;
+    if (streakDays === 0) {
+      // First day - determine streak type
+      streakType = isAbove ? 'above_average' : 'below_average';
+    } else if ((streakType === 'above_average') !== isAbove) {
+      break;
+    }
+
+    streakDays++;
+    streakSum += dayTotal;
+    currentDate = subDays(currentDate, 1);
+  }
+
+  return { streakDays, streakSum, streakType };
+}
+
+/** Calendar position of "today" within the month being analysed. */
+interface MonthProgress {
+  dayOfMonth: number;
+  daysInMonth: number;
+  daysElapsed: number;
+  daysRemaining: number;
+}
+
+/** Per-category inputs for one budget's burn-rate computation (amounts in EUR). */
+interface CategorySpendInputs {
+  spentEur: number;
+  txCount: number;
+  profileEur: CategoryProfile | null;
+  lastTxDay: number | undefined;
+  intervalProfile: IntervalProfile | undefined;
+}
+
+/**
+ * Status cascade, top-down: exceeded > critical > warning > on_track.
+ *
+ * Dynamic warning threshold: volatile categories need higher projection before warning
+ * CV=0 → 85%, CV=0.5 → 90%, CV≥1.0 → 95%
+ *
+ * If historical norm (EMA) exceeds budget, projection-based alerts are meaningless —
+ * the category chronically overspends, so every projection > budget is expected, not a signal.
+ * Only factual exceedance (spent >= budget) should trigger alerts in this case.
+ */
+function classifyBurnStatus(
+  spent: number,
+  limit: number,
+  projectedTotal: number,
+  profile: CategoryProfile | null,
+  cv: number,
+): BudgetBurnRate['status'] {
+  const warningThreshold = 0.85 + 0.1 * Math.min(1, cv);
+  const normExceedsBudget = profile && profile.ema > limit;
+
+  if (spent >= limit) return 'exceeded';
+  if (!normExceedsBudget && projectedTotal > limit) return 'critical';
+  if (!normExceedsBudget && projectedTotal > limit * warningThreshold) return 'warning';
+  return 'on_track';
+}
+
+function computeBudgetBurnRate(
+  budget: Budget,
+  month: MonthProgress,
+  inputs: CategorySpendInputs,
+): BudgetBurnRate {
+  const { dayOfMonth, daysInMonth, daysElapsed, daysRemaining } = month;
+  const { spentEur, txCount, profileEur, lastTxDay, intervalProfile } = inputs;
+  const currency = budget.currency as CurrencyCode;
+  // Convert EUR spent to budget currency for comparison
+  const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
+
+  const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
+
+  // Profile is in EUR — convert EMA to budget currency for projection
+  const profile: CategoryProfile | null = profileEur
+    ? {
+        ...profileEur,
+        ema: convertCurrency(profileEur.ema, BASE_CURRENCY, currency),
+      }
+    : null;
+
+  // Activity gate: skip projection if not enough transactions
+  const hasEnoughActivity = passesActivityGate(txCount, daysElapsed, daysInMonth, profile);
+  const daysSinceLastTx = lastTxDay !== undefined ? dayOfMonth - lastTxDay : undefined;
+  const projectedTotal = hasEnoughActivity
+    ? projectCategory(spent, daysElapsed, daysInMonth, profile, daysSinceLastTx, intervalProfile)
+    : spent;
+
+  const projectedOvershoot = projectedTotal - budget.limit_amount;
+  const runwayDays = dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
+
+  return {
+    category: budget.category,
+    budget_limit: budget.limit_amount,
+    spent,
+    currency,
+    days_elapsed: daysElapsed,
+    days_remaining: daysRemaining,
+    daily_burn_rate: Math.round(dailyBurnRate * 100) / 100,
+    projected_total: Math.round(projectedTotal * 100) / 100,
+    projected_overshoot: Math.round(projectedOvershoot * 100) / 100,
+    runway_days: runwayDays === Infinity ? 999 : Math.round(runwayDays * 10) / 10,
+    status: classifyBurnStatus(
+      spent,
+      budget.limit_amount,
+      projectedTotal,
+      profile,
+      profileEur?.cv ?? 0,
+    ),
+  };
+}
+
 /**
  * SpendingAnalytics - computes financial metrics from expense data
  * All methods are synchronous (bun:sqlite is synchronous)
@@ -149,85 +403,28 @@ export class SpendingAnalytics {
     const dayOfMonth = now.getDate();
     const daysInMonth = getDaysInMonth(now);
     const daysElapsed = dayOfMonth; // 1-indexed: day 1 = 1 day elapsed
-    const daysRemaining = daysInMonth - daysElapsed;
+    const month: MonthProgress = {
+      dayOfMonth,
+      daysInMonth,
+      daysElapsed,
+      daysRemaining: daysInMonth - daysElapsed,
+    };
 
     const results: BudgetBurnRate[] = [];
 
     for (const budget of budgets) {
       // Skip zero-budget categories — no meaningful projection possible
       if (budget.limit_amount <= 0) continue;
-      const currency = budget.currency as CurrencyCode;
-      const spentEur = categorySpentEur[budget.category] || 0;
-      const txCount = categoryTxCount[budget.category] || 0;
-      // Convert EUR spent to budget currency for comparison
-      const spent = convertCurrency(spentEur, BASE_CURRENCY, currency);
 
-      const dailyBurnRate = daysElapsed > 0 ? Math.round((spent / daysElapsed) * 100) / 100 : 0;
-
-      // Profile is in EUR — convert EMA to budget currency for projection
-      const profileEur = categoryProfiles.get(budget.category) ?? null;
-      const profile: CategoryProfile | null = profileEur
-        ? {
-            ...profileEur,
-            ema: convertCurrency(profileEur.ema, BASE_CURRENCY, currency),
-          }
-        : null;
-
-      // Activity gate: skip projection if not enough transactions
-      const hasEnoughActivity = passesActivityGate(txCount, daysElapsed, daysInMonth, profile);
-      const lastDay = lastTxByCategory[budget.category];
-      const daysSinceLastTx = lastDay !== undefined ? dayOfMonth - lastDay : undefined;
-      const intervalProfile = intervalProfiles.get(budget.category);
-      const projectedTotal = hasEnoughActivity
-        ? projectCategory(
-            spent,
-            daysElapsed,
-            daysInMonth,
-            profile,
-            daysSinceLastTx,
-            intervalProfile,
-          )
-        : spent;
-
-      const projectedOvershoot = projectedTotal - budget.limit_amount;
-      const runwayDays =
-        dailyBurnRate > 0 ? (budget.limit_amount - spent) / dailyBurnRate : Infinity;
-
-      // Dynamic warning threshold: volatile categories need higher projection before warning
-      // CV=0 → 85%, CV=0.5 → 90%, CV≥1.0 → 95%
-      const cv = profileEur?.cv ?? 0;
-      const warningThreshold = 0.85 + 0.1 * Math.min(1, cv);
-
-      // If historical norm (EMA) exceeds budget, projection-based alerts are meaningless —
-      // the category chronically overspends, so every projection > budget is expected, not a signal.
-      // Only factual exceedance (spent >= budget) should trigger alerts in this case.
-      const normExceedsBudget = profile && profile.ema > budget.limit_amount;
-
-      // Determine status: cascade top-down
-      let status: BudgetBurnRate['status'];
-      if (spent >= budget.limit_amount) {
-        status = 'exceeded';
-      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount) {
-        status = 'critical';
-      } else if (!normExceedsBudget && projectedTotal > budget.limit_amount * warningThreshold) {
-        status = 'warning';
-      } else {
-        status = 'on_track';
-      }
-
-      results.push({
-        category: budget.category,
-        budget_limit: budget.limit_amount,
-        spent,
-        currency,
-        days_elapsed: daysElapsed,
-        days_remaining: daysRemaining,
-        daily_burn_rate: Math.round(dailyBurnRate * 100) / 100,
-        projected_total: Math.round(projectedTotal * 100) / 100,
-        projected_overshoot: Math.round(projectedOvershoot * 100) / 100,
-        runway_days: runwayDays === Infinity ? 999 : Math.round(runwayDays * 10) / 10,
-        status,
-      });
+      results.push(
+        computeBudgetBurnRate(budget, month, {
+          spentEur: categorySpentEur[budget.category] || 0,
+          txCount: categoryTxCount[budget.category] || 0,
+          profileEur: categoryProfiles.get(budget.category) ?? null,
+          lastTxDay: lastTxByCategory[budget.category],
+          intervalProfile: intervalProfiles.get(budget.category),
+        }),
+      );
     }
 
     return results;
@@ -283,27 +480,10 @@ export class SpendingAnalytics {
   protected computeWeekOverWeek(groupId: number, today: string): SpendingTrend {
     const rows = database.expenses.getWeekOverWeekData(groupId, today);
 
-    const currentByCategory: Record<string, number> = {};
-    const previousByCategory: Record<string, number> = {};
-    let currentTotal = 0;
-    let previousTotal = 0;
+    const { currentByCategory, previousByCategory, currentTotal, previousTotal } =
+      splitWeekRows(rows);
 
-    for (const row of rows) {
-      if (row.period === 'current_week') {
-        currentByCategory[row.category] = (currentByCategory[row.category] || 0) + row.total;
-        currentTotal += row.total;
-      } else if (row.period === 'previous_week') {
-        previousByCategory[row.category] = (previousByCategory[row.category] || 0) + row.total;
-        previousTotal += row.total;
-      }
-    }
-
-    const changePercent =
-      previousTotal > 0
-        ? ((currentTotal - previousTotal) / previousTotal) * 100
-        : currentTotal > 0
-          ? 100
-          : 0;
+    const changePercent = percentChange(currentTotal, previousTotal);
 
     const allCategories = new Set([
       ...Object.keys(currentByCategory),
@@ -314,13 +494,11 @@ export class SpendingAnalytics {
     for (const category of allCategories) {
       const current = currentByCategory[category] || 0;
       const previous = previousByCategory[category] || 0;
-      const catChange =
-        previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : 0;
       categoryChanges.push({
         category,
         current: Math.round(current * 100) / 100,
         previous: Math.round(previous * 100) / 100,
-        change_percent: Math.round(catChange * 10) / 10,
+        change_percent: Math.round(percentChange(current, previous) * 10) / 10,
       });
     }
 
@@ -332,7 +510,7 @@ export class SpendingAnalytics {
       current_total: Math.round(currentTotal * 100) / 100,
       previous_total: Math.round(previousTotal * 100) / 100,
       change_percent: Math.round(changePercent * 10) / 10,
-      direction: Math.abs(changePercent) <= 5 ? 'stable' : changePercent > 0 ? 'up' : 'down',
+      direction: trendDirection(changePercent),
       category_changes: categoryChanges.slice(0, 10),
     };
   }
@@ -370,29 +548,18 @@ export class SpendingAnalytics {
       currentTotal += row.current_month;
       previousTotal += row.previous_month;
 
-      const catChange =
-        row.previous_month > 0
-          ? ((row.current_month - row.previous_month) / row.previous_month) * 100
-          : row.current_month > 0
-            ? 100
-            : 0;
-
       if (row.current_month > 0 || row.previous_month > 0) {
         categoryChanges.push({
           category: row.category,
           current: Math.round(row.current_month * 100) / 100,
           previous: Math.round(row.previous_month * 100) / 100,
-          change_percent: Math.round(catChange * 10) / 10,
+          change_percent:
+            Math.round(percentChange(row.current_month, row.previous_month) * 10) / 10,
         });
       }
     }
 
-    const changePercent =
-      previousTotal > 0
-        ? ((currentTotal - previousTotal) / previousTotal) * 100
-        : currentTotal > 0
-          ? 100
-          : 0;
+    const changePercent = percentChange(currentTotal, previousTotal);
 
     categoryChanges.sort((a, b) => Math.abs(b.change_percent) - Math.abs(a.change_percent));
 
@@ -401,7 +568,7 @@ export class SpendingAnalytics {
       current_total: Math.round(currentTotal * 100) / 100,
       previous_total: Math.round(previousTotal * 100) / 100,
       change_percent: Math.round(changePercent * 10) / 10,
-      direction: Math.abs(changePercent) <= 5 ? 'stable' : changePercent > 0 ? 'up' : 'down',
+      direction: trendDirection(changePercent),
       category_changes: categoryChanges.slice(0, 10),
     };
   }
@@ -436,18 +603,7 @@ export class SpendingAnalytics {
       currentMonthStart,
     );
 
-    // Compute average per category over the history months
-    const categoryHistory: Record<string, { total: number; months: number }> = {};
-    for (const row of historyRows) {
-      if (!categoryHistory[row.category]) {
-        categoryHistory[row.category] = { total: 0, months: 0 };
-      }
-      const entry = categoryHistory[row.category];
-      if (entry) {
-        entry.total += row.monthly_total;
-        entry.months += 1;
-      }
-    }
+    const categoryHistory = sumHistoryByCategory(historyRows);
 
     const anomalies: CategoryAnomaly[] = [];
 
@@ -461,21 +617,12 @@ export class SpendingAnalytics {
       const deviationRatio = currentTotal / avg3Month;
 
       if (deviationRatio >= 1.3) {
-        let severity: CategoryAnomaly['severity'];
-        if (deviationRatio >= 2.5) {
-          severity = 'extreme';
-        } else if (deviationRatio >= 1.5) {
-          severity = 'significant';
-        } else {
-          severity = 'mild';
-        }
-
         anomalies.push({
           category,
           current_month_total: Math.round(currentTotal * 100) / 100,
           avg_3_month: Math.round(avg3Month * 100) / 100,
           deviation_ratio: Math.round(deviationRatio * 100) / 100,
-          severity,
+          severity: classifyAnomalySeverity(deviationRatio),
         });
       }
     }
@@ -640,45 +787,11 @@ export class SpendingAnalytics {
       dailyMap[d.date] = d.total;
     }
 
-    // Walk backwards from today
-    let streakDays = 0;
-    let streakSum = 0;
-    let streakType: SpendingStreak['streak_type'] = 'no_spending';
-    let currentDate = new Date(today);
-
-    for (let i = 0; i < 30; i++) {
-      const dateStr = format(currentDate, 'yyyy-MM-dd');
-      const dayTotal = dailyMap[dateStr];
-
-      if (dayTotal === undefined) {
-        // No spending this day - breaks streak
-        if (streakDays === 0) {
-          streakType = 'no_spending';
-        }
-        break;
-      }
-
-      if (streakDays === 0) {
-        // First day - determine streak type
-        streakType = dayTotal > overallDailyAvg ? 'above_average' : 'below_average';
-        streakDays = 1;
-        streakSum = dayTotal;
-      } else {
-        // Check if continues same streak
-        const isAbove = dayTotal > overallDailyAvg;
-        if (
-          (streakType === 'above_average' && isAbove) ||
-          (streakType === 'below_average' && !isAbove)
-        ) {
-          streakDays++;
-          streakSum += dayTotal;
-        } else {
-          break;
-        }
-      }
-
-      currentDate = subDays(currentDate, 1);
-    }
+    const { streakDays, streakSum, streakType } = measureCurrentStreak(
+      dailyMap,
+      today,
+      overallDailyAvg,
+    );
 
     return {
       current_streak_days: streakDays,
@@ -715,25 +828,8 @@ export class SpendingAnalytics {
     const currentTotal = database.expenses.getTotalEurForRange(groupId, monthStart, today);
     if (currentTotal === 0 && daysElapsed < 3) return null;
 
-    // Build aggregate profile across all categories for overall projection
     const categoryProfiles = profiles ?? this.getCategoryProfiles(groupId, now);
-    const profileValues = [...categoryProfiles.values()];
-    const aggregateEma = profileValues.reduce((s, p) => s + p.ema, 0);
-
-    // Fix #2: compute real weighted CV from category profiles instead of hardcoded 0.5
-    const totalEma = aggregateEma || 1;
-    const weightedCv = profileValues.reduce((s, p) => s + p.cv * (p.ema / totalEma), 0);
-
-    const overallProfile: CategoryProfile | null =
-      categoryProfiles.size > 0
-        ? {
-            ema: aggregateEma,
-            cv: Math.round(weightedCv * 1000) / 1000,
-            monthsOfData: Math.max(...profileValues.map((p) => p.monthsOfData)),
-            avgTxPerMonth: profileValues.reduce((s, p) => s + p.avgTxPerMonth, 0),
-            zeroMonthRatio: 0,
-          }
-        : null;
+    const overallProfile = buildOverallProfile(categoryProfiles);
     const projectedTotal = projectCategory(currentTotal, daysElapsed, daysInMonth, overallProfile);
 
     // Get last month total for comparison
@@ -751,15 +847,7 @@ export class SpendingAnalytics {
 
     const projectedVsLastMonth = lastMonthTotal > 0 ? (projectedTotal / lastMonthTotal) * 100 : 0;
 
-    // Confidence
-    let confidence: MonthlyProjection['confidence'];
-    if (daysElapsed < 7) {
-      confidence = 'low';
-    } else if (daysElapsed >= 20) {
-      confidence = 'high';
-    } else {
-      confidence = 'medium';
-    }
+    const confidence = projectionConfidence(daysElapsed);
 
     // Category projections — with stall detection and interval-based projection
     const currentCatTotals =
@@ -774,41 +862,13 @@ export class SpendingAnalytics {
     const { lastTxByCategory, intervalProfiles } =
       projectionCtx ?? this.getProjectionContext(groupId, now, monthStart, today);
 
-    const categoryProjections: CategoryProjection[] = [];
-    for (const cat of currentCatTotals) {
-      const catProfile = categoryProfiles.get(cat.category) ?? null;
-      const catLastDay = lastTxByCategory[cat.category];
-      const catDaysSince = catLastDay !== undefined ? daysElapsed - catLastDay : undefined;
-      const catInterval = intervalProfiles.get(cat.category);
-      const catProjected = projectCategory(
-        cat.total,
-        daysElapsed,
-        daysInMonth,
-        catProfile,
-        catDaysSince,
-        catInterval,
-      );
-      const budget = budgetMap[cat.category];
-
-      let budgetLimitEur: number | null = null;
-      let willExceed = false;
-      if (budget) {
-        budgetLimitEur = convertCurrency(
-          budget.limit,
-          budget.currency as CurrencyCode,
-          BASE_CURRENCY,
-        );
-        willExceed = catProjected > budgetLimitEur;
-      }
-
-      categoryProjections.push({
-        category: cat.category,
-        current: Math.round(cat.total * 100) / 100,
-        projected: Math.round(catProjected * 100) / 100,
-        budget_limit: budgetLimitEur !== null ? Math.round(budgetLimitEur * 100) / 100 : null,
-        will_exceed: willExceed,
-      });
-    }
+    const categoryProjections: CategoryProjection[] = currentCatTotals.map((cat) =>
+      projectOneCategory(cat, budgetMap[cat.category], daysElapsed, daysInMonth, {
+        profile: categoryProfiles.get(cat.category) ?? null,
+        lastTxDay: lastTxByCategory[cat.category],
+        intervalProfile: intervalProfiles.get(cat.category),
+      }),
+    );
 
     // Sort by projected descending
     categoryProjections.sort((a, b) => b.projected - a.projected);

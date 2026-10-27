@@ -48,6 +48,16 @@ interface GaxiosLike {
   };
 }
 
+/** Numeric HTTP-ish code from the top-level code/status or the nested Google error body. */
+function sheetErrorCode(e: GaxiosLike): number {
+  return Number(e.code ?? e.status ?? e.response?.data?.error?.code ?? 0);
+}
+
+/** Most specific human-readable message the error carries (Google body, then error itself). */
+function sheetErrorMessage(e: GaxiosLike, err: unknown): string {
+  return e.response?.data?.error?.message ?? e.message ?? (err instanceof Error ? err.message : '');
+}
+
 /**
  * Map a sheets-API error to a SpreadsheetAccessStatus. Pure function — no I/O.
  */
@@ -61,10 +71,9 @@ export function classifySheetError(err: unknown): SpreadsheetAccessResult {
   }
 
   const e = err as GaxiosLike;
-  const code = Number(e.code ?? e.status ?? e.response?.data?.error?.code ?? 0);
+  const code = sheetErrorCode(e);
   const reason = e.response?.data?.error?.errors?.[0]?.reason;
-  const message =
-    e.response?.data?.error?.message ?? e.message ?? (err instanceof Error ? err.message : '');
+  const message = sheetErrorMessage(e, err);
 
   // Rate-limit detection comes BEFORE 403/404 because Google returns quota
   // errors sometimes as 403 (`userRateLimitExceeded`) — misclassifying that

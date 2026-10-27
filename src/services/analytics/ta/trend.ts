@@ -9,6 +9,7 @@ import type {
   MacdResult,
   RsiResult,
 } from './types';
+import { accumulateWeightedSums, solveWeightedLine } from './weighted-regression';
 
 /**
  * Linear Regression (OLS) on time series.
@@ -188,13 +189,23 @@ export function polynomialRegression(
 
   // Build Vandermonde matrix and solve via normal equations
   const maxDeg = Math.min(degree, 2); // Cap at quadratic
-  const cols = maxDeg + 1;
+  const { xtx, xty } = buildNormalEquations(data, maxDeg + 1);
 
-  // X^T X matrix
+  // Solve via Gaussian elimination
+  const coefficients = solveLinearSystem(xtx, xty);
+
+  const forecast = evaluatePolynomial(coefficients, n);
+  const r2 = polynomialR2(data, coefficients);
+
+  return { coefficients, forecast, r2 };
+}
+
+/** Normal equations XᵀX and Xᵀy for a Vandermonde design matrix with `cols` columns. */
+function buildNormalEquations(data: number[], cols: number): { xtx: number[][]; xty: number[] } {
   const xtx: number[][] = Array.from({ length: cols }, () => Array.from({ length: cols }, () => 0));
   const xty: number[] = Array.from({ length: cols }, () => 0);
 
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < data.length; i++) {
     const y = data[i] ?? 0;
     for (let j = 0; j < cols; j++) {
       xty[j] = (xty[j] ?? 0) + y * i ** j;
@@ -207,28 +218,56 @@ export function polynomialRegression(
     }
   }
 
-  // Solve via Gaussian elimination
-  const coefficients = solveLinearSystem(xtx, xty);
+  return { xtx, xty };
+}
 
-  // Forecast
-  let forecast = 0;
+/** Σ coefficients[j] · x^j accumulated in ascending power order. */
+function evaluatePolynomial(coefficients: number[], x: number): number {
+  let value = 0;
   for (let j = 0; j < coefficients.length; j++) {
-    forecast += (coefficients[j] ?? 0) * n ** j;
+    value += (coefficients[j] ?? 0) * x ** j;
   }
+  return value;
+}
 
-  // R²
+function polynomialR2(data: number[], coefficients: number[]): number {
+  const n = data.length;
   const meanY = data.reduce((s, v) => s + v, 0) / n;
   let ssRes = 0;
   let ssTot = 0;
   for (let i = 0; i < n; i++) {
-    let predicted = 0;
-    for (let j = 0; j < coefficients.length; j++) predicted += (coefficients[j] ?? 0) * i ** j;
+    const predicted = evaluatePolynomial(coefficients, i);
     ssRes += ((data[i] ?? 0) - predicted) ** 2;
     ssTot += ((data[i] ?? 0) - meanY) ** 2;
   }
-  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+  return ssTot > 0 ? 1 - ssRes / ssTot : 0;
+}
 
-  return { coefficients, forecast, r2 };
+/** Index of the row at/below `col` with the largest absolute value in column `col` (first wins ties). */
+function findPivotRow(aug: number[][], col: number): number {
+  const cell = (r: number) => Math.abs(aug[r]?.[col] ?? 0);
+  let maxRow = col;
+  for (let row = col + 1; row < aug.length; row++) {
+    if (cell(row) > cell(maxRow)) maxRow = row;
+  }
+  return maxRow;
+}
+
+/** Normalizes the pivot row and eliminates column `col` from every other row (in place). */
+function eliminateColumn(aug: number[][], col: number, pivot: number): void {
+  const n = aug.length;
+  const pivotRow = aug[col];
+  if (!pivotRow) return;
+
+  for (let j = col; j <= n; j++) pivotRow[j] = (pivotRow[j] ?? 0) / pivot;
+
+  for (let row = 0; row < n; row++) {
+    if (row === col) continue;
+    const target = aug[row];
+    if (!target) continue;
+    const factor = target[col] ?? 0;
+    for (let j = col; j <= n; j++) target[j] = (target[j] ?? 0) - factor * (pivotRow[j] ?? 0);
+  }
 }
 
 /** Gaussian elimination for small systems */
@@ -236,32 +275,17 @@ function solveLinearSystem(matrix: number[][], rhs: number[]): number[] {
   const n = rhs.length;
   const aug: number[][] = matrix.map((row, i) => [...row, rhs[i] ?? 0]);
 
-  const getCell = (r: number, c: number) => aug[r]?.[c] ?? 0;
-  const setCell = (r: number, c: number, v: number) => {
-    const row = aug[r];
-    if (row) row[c] = v;
-  };
-
   for (let col = 0; col < n; col++) {
     // Partial pivoting
-    let maxRow = col;
-    for (let row = col + 1; row < n; row++) {
-      if (Math.abs(getCell(row, col)) > Math.abs(getCell(maxRow, col))) maxRow = row;
-    }
+    const maxRow = findPivotRow(aug, col);
     const temp = aug[col];
     aug[col] = aug[maxRow] ?? [];
     aug[maxRow] = temp ?? [];
 
-    const pivot = getCell(col, col);
+    const pivot = aug[col]?.[col] ?? 0;
     if (Math.abs(pivot) < 1e-12) continue;
 
-    for (let j = col; j <= n; j++) setCell(col, j, getCell(col, j) / pivot);
-
-    for (let row = 0; row < n; row++) {
-      if (row === col) continue;
-      const factor = getCell(row, col);
-      for (let j = col; j <= n; j++) setCell(row, j, getCell(row, j) - factor * getCell(col, j));
-    }
+    eliminateColumn(aug, col, pivot);
   }
 
   return aug.map((row) => row[n] ?? 0);
@@ -302,44 +326,31 @@ export function robustRegression(
 
   // Start with OLS
   let { slope, intercept } = linearRegression(data);
-  const weights = Array.from({ length: n }, () => 1);
+  const xs = Array.from({ length: n }, (_, i) => i);
 
   for (let iter = 0; iter < iterations; iter++) {
-    // Compute residuals and weights (Huber weight function)
     const residuals = data.map((y, i) => (y ?? 0) - (intercept + slope * i));
-    const medResidual = sortedMedian(residuals.map(Math.abs));
-    const c = 1.345 * (medResidual || 1);
-
-    for (let i = 0; i < n; i++) {
-      const r = Math.abs(residuals[i] ?? 0);
-      weights[i] = r <= c ? 1 : c / r;
-    }
+    const weights = huberWeights(residuals);
 
     // Weighted least squares
-    let swx = 0;
-    let swy = 0;
-    let swx2 = 0;
-    let swxy = 0;
-    let sw = 0;
+    const fit = solveWeightedLine(accumulateWeightedSums(xs, data, weights));
+    if (!fit) break;
 
-    for (let i = 0; i < n; i++) {
-      const w = weights[i] ?? 1;
-      const y = data[i] ?? 0;
-      sw += w;
-      swx += w * i;
-      swy += w * y;
-      swx2 += w * i * i;
-      swxy += w * i * y;
-    }
-
-    const denom = sw * swx2 - swx * swx;
-    if (Math.abs(denom) < 1e-12) break;
-
-    slope = (sw * swxy - swx * swy) / denom;
-    intercept = (swy - slope * swx) / sw;
+    slope = fit.slope;
+    intercept = fit.intercept;
   }
 
   return { slope, intercept, forecast: intercept + slope * n };
+}
+
+/** Huber weights: 1 inside 1.345 × median |residual|, down-weighted proportionally outside. */
+function huberWeights(residuals: number[]): number[] {
+  const medResidual = sortedMedian(residuals.map(Math.abs));
+  const c = 1.345 * (medResidual || 1);
+  return Array.from({ length: residuals.length }, (_, i) => {
+    const r = Math.abs(residuals[i] ?? 0);
+    return r <= c ? 1 : c / r;
+  });
 }
 
 function sortedMedian(data: number[]): number {
