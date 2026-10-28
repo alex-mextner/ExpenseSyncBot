@@ -31,33 +31,33 @@ bun run format        # format with Biome
 node_modules/.bin/lefthook install --force
 ```
 
-### Heavy work runs on Runpod
+### Heavy work runs on the server
 
 This workstation is shared by many agent sessions, the review queue and the owner's own
 desktop; a full suite here starves all of them (it froze the machine twice on 2026-10-10).
-**Rule: locally, a single test file at most; the full suite and coverage go to a Runpod
-pod** via the shared `runpod-offload` skill (`skill://runpod-offload`; script
-`~/.agents/skills/runpod-offload/runpod-run`, on PATH as `runpod-run`).
+**Rule: locally, a single test file at most; the full suite, coverage, whole-repo typecheck and
+docker go to the owner's server** via the shared `server-offload` skill
+(script `~/.agents/skills/server-offload/server-run`, on PATH as `server-run`). Never the
+odroid for heavy work.
 
 Heavy here: `bun run test` (the isolated runner over every test file), `bun run
 test:coverage`.
 
 ```bash
-runpod-run -- bun run test                  # full suite on a 4-vCPU CPU pod ($0.16/h), pod deleted when done
-runpod-run --ttl 30 -- bun run test:coverage   # coverage, keeping the pod 30 idle minutes between runs
+server-run -- bun run test                  # full suite on the server
+server-run -- bun run test:coverage         # coverage
 bun test src/<area>/<one>.test.ts           # local: one file, that's the limit
 ```
 
-The pre-push hook (`lefthook.yml`) runs the same `runpod-run --ttl 30 -- bun run test`
-(`~/.agents/skills/runpod-offload/runpod-run` by absolute path, else `runpod-run` on PATH; machines
+The pre-push hook (`lefthook.yml`) runs the same `server-run -- bun run test`
+(`~/.agents/skills/server-offload/server-run` by absolute path, else `server-run` on PATH; machines
 with neither run it locally). The
-sync copies every tracked and untracked-but-not-ignored file in the checkout to the pod:
+sync copies every tracked and untracked-but-not-ignored file in the checkout to the server:
 keep secrets (only `.env`, `.env.development.local`, `.env.test.local` and `.env.production.local` are ignored; a stray `.env.staging.local`, `tokens.local`, downloaded credential, …) out of
 the checkout or git-ignored before offloading — tests need no credentials.
 
-`runpod-run --dry-run -- …` prints the plan and price. `runpod-run --status` lists every pod
-on the account; bare `runpod-run --stop` terminates only this repo's pods, `runpod-run --stop
-all` every pod created under this hostname — leave none behind.
+`server-run --status` lists the remote checkouts; run `server-run --clean` when you finish a task so
+stale checkouts do not pile up on the server.
 
 ### Deployment
 
@@ -577,7 +577,7 @@ ssh root@odroidn2 'su - www-data -c "pm2 list"'
 
 AI-статистика по провайдерам (read-only, дёшево): `ssh root@odroidn2 'su - www-data -c "cd /var/www/ExpenseSyncBot && bun scripts/report-ai-usage.ts --days 7"'` (`DATABASE_PATH` берётся из окружения, иначе `./data/expenses.db`; на проде БД лежит в `/var/www/ExpenseSyncBot/data/expenses.db`).
 
-**Никаких тяжёлых проверок на odroid.** У odroidn2 ~1 GB свободной RAM, а 2 GB swap уже заняты: 2026-10-12 агент запустил там бенчмарк ONNX-эмбеддингов (модель 118 MB) — нехватка памяти и перезагрузка сервера с прод-ботом. Не загружай модели, не гоняй бенчмарки и браузерные проверки на odroid — меряй на Runpod (`runpod-run`). Любая проверка на самом устройстве — только в окне, согласованном с владельцем.
+**Никаких тяжёлых проверок на odroid.** У odroidn2 ~1 GB свободной RAM, а 2 GB swap уже заняты: 2026-10-12 агент запустил там бенчмарк ONNX-эмбеддингов (модель 118 MB) — нехватка памяти и перезагрузка сервера с прод-ботом. Не загружай модели, не гоняй бенчмарки и браузерные проверки на odroid — тяжёлую работу гоняй на сервере владельца (`server-run`, § Heavy work runs on the server). Любая проверка на самом устройстве — только в окне, согласованном с владельцем.
 
 ### AI chat logs
 
@@ -671,11 +671,11 @@ AI-статистика по провайдерам (read-only, дёшево): `
 - **Changing tests to match code is a red flag**: always analyze WHY.
 - **Every commit must have tests**: no committing code without corresponding test coverage. Tests are NOT a "separate task" — they are part of the same unit of work as the code they cover. Never defer tests to a follow-up.
 - **Regression tests for every bugfix**: reproduce the exact bug scenario in a test BEFORE fixing.
-- **Maintain ~80% test coverage**: run `bun run test:coverage` regularly (on Runpod — § Heavy work runs on Runpod). New files must have corresponding test files.
+- **Maintain ~80% test coverage**: run `bun run test:coverage` regularly (on the server — § Heavy work runs on the server). New files must have corresponding test files.
 - **Commit atomically and often**: after each logical unit of work (feature, bugfix, refactor), commit immediately. Don't accumulate 30+ changed files.
 - **`mock.module()` is safe** — each test file runs in its own process via `scripts/test-runner.ts`. Use `mock.module()` freely for mocking dependencies. Use `spyOn` when you need to assert call counts or arguments on a real implementation.
 - **Database in tests uses `:memory:`** — `initDatabase()` detects `NODE_ENV=test` and uses in-memory SQLite instead of file-based `./data/expenses.db`. This prevents `SQLITE_BUSY_RECOVERY` errors when 14 parallel test processes compete for the same database file. Never change this to file-based in tests.
-- **Always run tests via `bun run test`** (isolated runner, on Runpod — § Heavy work runs on Runpod), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
+- **Always run tests via `bun run test`** (isolated runner, on the server — § Heavy work runs on the server), not `bun test` directly — the latter runs all files in one process and mock.module leaks between files. Use `bun test <file>` only for running a single file.
 - **Coverage**: run `bun run test:coverage` — uses single-process `bun test --coverage` (coverage requires single process). Isolated runner does not collect coverage.
 - **Test logging discipline**: every test that exercises code with logging MUST mock the logger:
   - Error-path tests: mock logger AND assert expected error/warn calls (`expect(logMock.error).toHaveBeenCalled()`)
@@ -752,8 +752,8 @@ const logger = createLogger('my-module');
 
 `lefthook.yml` configures pre-commit and pre-push hooks:
 - **pre-commit**: typecheck + biome lint on staged files
-- **pre-push**: full test suite — on a Runpod pod where `runpod-run` is installed (the shared
-  workstation; § Heavy work runs on Runpod), locally elsewhere
+- **pre-push**: full test suite — on the server where `server-run` is installed (the shared
+  workstation; § Heavy work runs on the server), locally elsewhere
 
 Install hooks after clone: `node_modules/.bin/lefthook install --force`
 
