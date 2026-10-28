@@ -16,7 +16,7 @@
 - `MAX_TOOL_ROUNDS = 40`, `RUN_DEADLINE_MS = 240_000`, `FINAL_ROUND_RESERVE_MS = 45_000`, `REPEATED_CALL_LIMIT = 3`, `CHEAP_TOOL_STREAK_LIMIT = 4`, `ERROR_STREAK_LIMIT = 3`, `ALTERNATION_ROUNDS = 4`, `STALE_ROUND_STREAK_LIMIT = 3`, `MAX_HANDOFFS = 2`, cheap tools = `calculate` only.
 - Work-log line exactly `🔄 Передаю задачу <provider>…` (provider = slot name, e.g. `z.ai (glm-5.1)`).
 - No message text, tool arguments or tool results in the DB — only tool names, per-run-seeded hashes, provider names, timings, decisions.
-- No `any`, no `Record<string, unknown>`; logger mocked and asserted in every test; one test file at a time locally, full suite only via `runpod-run --ttl 30 -- bun run test`.
+- No `any`, no `Record<string, unknown>`; logger mocked and asserted in every test; one test file at a time locally, full suite only via `server-run -- bun run test`.
 - New migration only (`052_create_agent_trajectories`); never edit earlier ones.
 - File header comment on every new file.
 
@@ -137,5 +137,5 @@
 
 - [ ] **Step 1:** Update the agent-loop bullet (40 rounds / 240 s, stall ladder, handoff line) and add `agent-trajectory.repository.ts` to the repository list.
 - [ ] **Step 2:** `bunx knip`, self-review, `codex exec review --uncommitted`.
-- [ ] **Step 3:** `runpod-run --ttl 30 -- bun run test` — all green.
+- [ ] **Step 3:** `server-run -- bun run test` — all green.
 - [ ] **Step 4:** Commit `docs: agent stall guard rules` (Refs HYP-1716), push the branch.

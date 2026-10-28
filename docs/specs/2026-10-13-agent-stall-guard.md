@@ -19,8 +19,8 @@ Healthy baseline: all 174 runs in the prod chat logs (2026-09…2026-10-12, hash
 ## 2. Plan of record (option C, by phases)
 
 - **Phase 0 (this spec, no ML):** a soft budget with safety caps, deterministic stall rules, nudge → handoff to the next provider → forced final round, and per-round trajectory logging as the dataset for phases 1–2.
-- **Phase 1 — data (Runpod, never odroid):** real threads from `agent_trajectories` + `logs/chats`; outcome labels from the run outcome and the follow-up gap; synthetic failures injected into healthy threads at a known step (repeat, A/B alternation, one-at-a-time `calculate`, dropped final answer); a sandbox agent (in-memory DB, fake sheet) run on generated questions through Groq 20b/120b, GLM, Claude, Qwen. Contested labels by an offline LLM annotator. Target 3–5k threads; the hold-out set is real threads only.
-- **Phase 2 — training:** classes `continue | nudge | handoff | finalize` (the same typed decision as phase 0). B: gradient boosting over the phase-0 features (in-process TS, <1 ms). A: LoRA Kev-0.8B or Laya-multilingual fine-tune on Runpod. Compared on the real failures, including the 2026-10-12 runs.
+- **Phase 1 — data (owner's server, never odroid):** real threads from `agent_trajectories` + `logs/chats`; outcome labels from the run outcome and the follow-up gap; synthetic failures injected into healthy threads at a known step (repeat, A/B alternation, one-at-a-time `calculate`, dropped final answer); a sandbox agent (in-memory DB, fake sheet) run on generated questions through Groq 20b/120b, GLM, Claude, Qwen. Contested labels by an offline LLM annotator. Target 3–5k threads; the hold-out set is real threads only.
+- **Phase 2 — training:** classes `continue | nudge | handoff | finalize` (the same typed decision as phase 0). B: gradient boosting over the phase-0 features (in-process TS, <1 ms). A: LoRA Kev-0.8B or Laya-multilingual fine-tune on the owner's server. Compared on the real failures, including the 2026-10-12 runs.
 - **Phase 3 — rollout:** shadow mode first (the classifier only logs its decision next to the rules' decision); switch on when hold-out accuracy ≥ 95 % and false alarms on healthy runs ≤ 2 %. A joins as a second tier only if it beats B on the cases B is unsure about.
 
 ## 3. Phase 0 behaviour
@@ -87,6 +87,6 @@ Replayed incidents: 11:53 nudge after round 5, handoffs after 6 and 10; 11:55 nu
 
 ## 4. Non-goals (phase 0)
 
-- No learned model, no Runpod calls in the loop, nothing heavier than hashing on odroid.
+- No learned model, no remote calls in the loop, nothing heavier than hashing on odroid.
 - No deterministic answer verifier (recompute totals from tool results) — candidate for phase 1 labels.
 - No retention job for the new tables (rows are ~100 bytes; revisit when phase 1 exports the data).
