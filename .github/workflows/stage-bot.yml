@@ -72,6 +72,12 @@ jobs:
       pull-requests: write
 
     steps:
+      # codeql[actions/untrusted-checkout/medium]
+      # Justified: this step deploys the PR's own commit to the stage bot on the home server; that is
+      # the job's purpose. The trust boundary is the job-level `if:` above (same-repository PRs by
+      # non-bot authors only, pinned by src/tooling/stage-bot-guard.test.ts), and the step checks out
+      # exactly `github.event.pull_request.head.sha` through git in its script, not via an
+      # actions/checkout of a fork's ref. The `closed` event runs no PR code.
       - name: Deploy or stop stage bot
         id: deploy
         shell: bash {0}

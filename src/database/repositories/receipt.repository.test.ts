@@ -2,7 +2,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearTestDb, createTestDb } from '../../test-utils/db';
@@ -132,8 +132,7 @@ describe('ReceiptRepository', () => {
     });
 
     test('removes image file from disk', () => {
-      const dir = join(tmpdir(), `receipt-test-${Date.now()}`);
-      mkdirSync(dir, { recursive: true });
+      const dir = mkdtempSync(join(tmpdir(), 'receipt-test-'));
       const imagePath = join(dir, 'receipt.jpg');
       writeFileSync(imagePath, 'fake image bytes');
       expect(existsSync(imagePath)).toBe(true);
