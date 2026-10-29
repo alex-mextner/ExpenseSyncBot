@@ -1,0 +1,157 @@
+# Per-PR stage QA (DEPLOY.md "Stage QA"): after `Stage Bot` has deployed a pull request head to the shared
+# stage slot on the odroid, drive @ExpenseSyncStageBot with real Telegram messages through qa-cli and post
+# the required `stage-qa` commit status for that head.
+#
+# Trust boundary. A `workflow_run` workflow always runs the copy of this file on the default branch, so a
+# pull request cannot change what runs on the QA runner. This file never checks out code and never downloads
+# or uploads an artifact: the qa job passes the head SHA, and nothing else, to the root-installed driver
+# /usr/local/lib/esb-stage-qa/stage-qa-driver.py (installed by hand from a reviewed checkout of main). The
+# driver first opens the connection to the browser host (the server, over an ssh key limited to one forced
+# command) and waits until the browser half holds the shared browser lock; only then does it ask the read-only
+# report script on the odroid (sudo, one file) which commit the stage slot runs, wait until it is the head and
+# hand the report to the browser half, where qa-cli (Telegram Web in a headless Chromium) sends the messages
+# and reads the replies; it asks the odroid again afterwards: if the slot moved to another pull request in the
+# meantime the result is void and no status is posted.
+# The job runs on its own runner (label stage-qa, its own user and service) on the odroid, not on the runner
+# that deploys; no browser runs on the odroid.
+name: Stage QA
+
+on:
+  workflow_run:
+    workflows: [Stage Bot]
+    types: [completed]
+
+# A newer head of the same branch replaces an older run that is still queued or running.
+concurrency:
+  group: stage-qa-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  # Hosted. Only an OPEN same-repository pull request whose head is exactly this commit and that no
+  # GitHub App bot opened gets a QA run: Stage Bot deploys nothing for the others (forks, bots) and the
+  # `closed` event puts the slot back on main, so the driver would wait for a commit the slot never runs
+  # while holding the QA runner.
+  eligible:
+    name: Stage QA eligibility
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.path == '.github/workflows/stage-bot.yml' &&
+      github.event.workflow_run.actor.type != 'Bot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.pr.outputs.run }}
+    steps:
+      - name: Find the open pull request of this head
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "refusing: head SHA is not a full commit SHA" >&2; exit 1; }
+          pulls="$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls")"
+          run=false
+          if jq -e --arg sha "$HEAD_SHA" --arg repo "$REPO" \
+            'any(.[]; .state == "open" and .head.sha == $sha and .head.repo.full_name == $repo and .user.type != "Bot")' \
+            <<<"$pulls" >/dev/null; then
+            run=true
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  qa:
+    name: Stage QA run
+    needs: eligible
+    # Only after a successful Stage Bot run (its stage-bot job deployed the head).
+    if: >-
+      needs.eligible.outputs.run == 'true' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, stage-qa]
+    # The driver first waits for the browser host's lock (the other repository's stage run: up to 3000 s,
+    # `lock_timeout`), then for the stage slot (10 min), then runs the cases (up to 30 min, `browser_timeout`),
+    # plus two report calls (120 s each) around the slot wait and after the cases. timeout-minutes MUST stay
+    # above the sum of those defaults of scripts/stage-qa-driver.py (pinned in stage-qa-workflows.test.ts).
+    timeout-minutes: 120
+    # The job needs no token: the driver reads the slot through sudo and talks to the browser host over its
+    # own ssh key.
+    permissions: {}
+    outputs:
+      rc: ${{ steps.run.outputs.rc }}
+      cases: ${{ steps.run.outputs.cases }}
+    steps:
+      - name: Run the stage QA through qa-cli
+        id: run
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # GitHub runs `run:` scripts with -e; the driver's exit code is data here, not an abort.
+          set -uo pipefail
+          set +e
+          out="$RUNNER_TEMP/stage-qa.out"
+          python3 /usr/local/lib/esb-stage-qa/stage-qa-driver.py "$HEAD_SHA" 2>&1 | tee "$out"
+          rc="${PIPESTATUS[0]}"
+          # A driver that never printed its result line did not run (not installed, crashed at start): that
+          # is neither a pass nor a verdict on the pull request.
+          grep -q '^STAGE_QA_RESULT ' "$out" || rc=70
+          cases="$(sed -n 's/^STAGE_QA_RESULT .* cases=\([0-9][0-9]*\) .*$/\1/p' "$out" | tail -n 1)"
+          { echo "rc=$rc"; echo "cases=${cases:-0}"; } >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # Hosted: the only job allowed to write the status. Anything running on a self-hosted runner can read a
+  # job's token but cannot post the verdict.
+  report:
+    name: Post stage-qa
+    needs: [eligible, qa]
+    if: always() && needs.eligible.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Post the stage-qa status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BOT_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BOT_RUN_ID: ${{ github.event.workflow_run.id }}
+          BOT_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          QA_RESULT: ${{ needs.qa.result }}
+          QA_RC: ${{ needs.qa.outputs.rc }}
+          QA_CASES: ${{ needs.qa.outputs.cases }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "refusing: head SHA is not a full commit SHA" >&2; exit 1; }
+          post() {
+            gh api --method POST "repos/$REPO/statuses/$HEAD_SHA" \
+              -f state="$1" -f context=stage-qa -f description="$2" -f target_url="$3" --silent
+          }
+          case "$BOT_CONCLUSION" in
+            success) ;;
+            failure) post failure "stage bot workflow failed run=$BOT_RUN_ID" "$BOT_RUN_URL"; exit 0 ;;
+            # Cancelled (a newer push replaced this head) or skipped: a newer head carries the verdict.
+            *) echo "Stage Bot ended '$BOT_CONCLUSION'; nothing to report for $HEAD_SHA"; exit 0 ;;
+          esac
+          case "$QA_RESULT:$QA_RC" in
+            success:0)
+              if [[ "$QA_CASES" =~ ^[1-9][0-9]*$ ]]; then
+                post success "passed cases=$QA_CASES run=$RUN_ID" "$RUN_URL"
+              else
+                post error "could not run: no smoke case ran run=$RUN_ID" "$RUN_URL"
+              fi ;;
+            failure:1) post failure "failed run=$RUN_ID" "$RUN_URL" ;;
+            failure:2) post error "could not run: refused run=$RUN_ID" "$RUN_URL" ;;
+            failure:3) post error "could not run: not provisioned run=$RUN_ID" "$RUN_URL" ;;
+            failure:70) post error "could not run: no result from the driver run=$RUN_ID" "$RUN_URL" ;;
+            failure:75) post error "could not run: lock wait timed out run=$RUN_ID" "$RUN_URL" ;;
+            failure:77) post error "could not run: stage slot never ran this commit, re-run Stage Bot run=$RUN_ID" "$RUN_URL" ;;
+            # Superseded (76), cancelled by a newer run, or qa skipped: no verdict for this head.
+            *) echo "stage QA ended '$QA_RESULT' rc='$QA_RC'; nothing to report for $HEAD_SHA" ;;
+          esac

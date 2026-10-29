@@ -51,3 +51,6 @@ debug-images/
 .playwright-mcp
 .claude/worktrees/
 /*.ab
+
+# Python bytecode of the tooling scripts (scripts/*.py are imported by tests)
+__pycache__/

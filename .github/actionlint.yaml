@@ -1,5 +1,11 @@
-# actionlint config: custom labels of the self-hosted runner on the home server,
-# used by deploy.yml, stage-bot.yml and runner-watchdog.yml.
+# actionlint config: custom labels of this repository's self-hosted runners on the home server. Without them
+# actionlint rejects `runs-on: [self-hosted, <label>]` as an unknown label (it only knows GitHub-hosted ones).
+#
+# Add a label here only when a registered runner actually carries it
+# (`gh api repos/alex-mextner/ExpenseSyncBot/actions/runners`):
+#   odroid     the runner named `odroid` (Linux ARM64), the home ODROID-N2+ — deploy.yml, stage-bot.yml, runner-watchdog.yml
+#   stage-qa   the Stage QA runner `odroid-esb-qa` (Linux ARM64), registered by hand (DEPLOY.md "Stage QA") — stage-qa.yml only
 self-hosted-runner:
   labels:
     - odroid
+    - stage-qa
