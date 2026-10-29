@@ -15,6 +15,7 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -32,6 +33,12 @@ import {
 } from '../test-utils/stage-qa-fixtures';
 
 setDefaultTimeout(60_000);
+
+const REAL_GIT = (() => {
+  const path = Bun.which('git');
+  if (!path) throw new Error('git is not on PATH');
+  return path;
+})();
 
 const ODROID_INSTALLER = join(REPO, 'scripts/install-stage-qa.sh');
 const BROWSER_INSTALLER = join(REPO, 'scripts/install-stage-qa-browser.sh');
@@ -236,6 +243,7 @@ describe('install-stage-qa-browser.sh', () => {
     ] as const) {
       writeExecutable(join(bin, name), text);
     }
+    symlinkSync(REAL_GIT, join(bin, 'git'));
     const log = join(root, 'fake.log');
     const browser: Browser = {
       checkout: createCheckout(root),
@@ -545,6 +553,9 @@ describe('install-stage-qa.sh', () => {
   function createOdroid(): Odroid {
     temp = tempRoot('install-stage-qa-');
     const root = temp.dir;
+    const bin = join(root, 'trusted-bin');
+    mkdirSync(bin);
+    symlinkSync(REAL_GIT, join(bin, 'git'));
     const lib = join(root, 'usr/local/lib/esb-stage-qa');
     const config = join(root, 'etc/esb-stage-qa/driver.json');
     const { uid, gid, username } = userInfo();
@@ -558,6 +569,10 @@ describe('install-stage-qa.sh', () => {
         writeExecutable(
           script,
           rewrite(readFileSync(ODROID_INSTALLER, 'utf8'), [
+            [
+              'readonly SAFE_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n',
+              `readonly SAFE_PATH=${bin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n`,
+            ],
             ['readonly LIB_DIR=/usr/local/lib/esb-stage-qa\n', `readonly LIB_DIR=${lib}\n`],
             ['readonly REQUIRED_EUID=0\n', `readonly REQUIRED_EUID=${uid}\n`],
             ['readonly INSTALL_OWNER=root:root\n', `readonly INSTALL_OWNER=${uid}:${gid}\n`],

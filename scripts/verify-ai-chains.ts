@@ -38,7 +38,7 @@ const SLOTS: SlotSpec[] = [
     model: env.AI_MODEL,
     vision: false,
   },
-  ...(env.CLAUDE_API_TOKEN
+  ...(env.CLAUDE_API_TOKEN?.trim() || env.CLAUDE_API_TOKEN2?.trim()
     ? [
         {
           chain: 'smart' as const,
@@ -78,7 +78,7 @@ const SLOTS: SlotSpec[] = [
     model: env.AI_FAST_MODEL,
     vision: false,
   },
-  ...(env.CLAUDE_API_TOKEN
+  ...(env.CLAUDE_API_TOKEN?.trim() || env.CLAUDE_API_TOKEN2?.trim()
     ? [
         {
           chain: 'fast' as const,
@@ -111,7 +111,7 @@ const SLOTS: SlotSpec[] = [
       ]
     : []),
   // OCR
-  ...(env.CLAUDE_API_TOKEN
+  ...(env.CLAUDE_API_TOKEN?.trim() || env.CLAUDE_API_TOKEN2?.trim()
     ? [
         {
           chain: 'ocr' as const,

@@ -6,6 +6,7 @@
 
 import OpenAI from 'openai';
 import { env } from '../../config/env';
+import { createClaudeClient } from './claude-client-pool';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -36,11 +37,10 @@ export function zaiClient(): OpenAI {
 
 export function claudeClient(): OpenAI {
   if (!_claude) {
-    _claude = new OpenAI({
-      apiKey: env.CLAUDE_API_TOKEN,
+    _claude = createClaudeClient({
+      tokens: [env.CLAUDE_API_TOKEN, env.CLAUDE_API_TOKEN2],
       baseURL: env.CLAUDE_BASE_URL,
       timeout: DEFAULT_TIMEOUT_MS,
-      maxRetries: 0,
       fetch: makeFetchDelegate(),
     });
   }

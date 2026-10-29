@@ -5,6 +5,10 @@
  */
 
 import { createLogger } from '../../../utils/logger';
+import {
+  CredentialsCoolingDownError,
+  getClaudeCredentialAvailability,
+} from '../claude-credential-pool';
 import { estimatePromptSize } from '../prompt-size';
 import {
   recordProviderConnectionFailure,
@@ -78,7 +82,8 @@ function recordBreakerOutcome(
     // 402 = out of prepaid credits (HF router): back only after a manual top-up, so it
     // cools down far longer than a rate limit. It still sits at the back of the chain.
     const cooldownMs =
-      status === 402 ? CREDITS_EXHAUSTED_COOLDOWN_MS : getRateLimitCooldownMs(error, failedAt);
+      (slot.key === 'claude' ? getClaudeCredentialAvailability(error)?.retryAfterMs : undefined) ??
+      (status === 402 ? CREDITS_EXHAUSTED_COOLDOWN_MS : getRateLimitCooldownMs(error, failedAt));
     recordProviderResponded(slot.key, failedAt);
     recordProviderRateLimit(slot.key, failedAt, cooldownMs);
   } else if (isUnreachableFailure(error) && !providerResponded(thrown)) {
@@ -161,7 +166,30 @@ class RoundRun {
     try {
       logger.info(`[AI_STREAM] Trying ${this.chainName} → ${slot.name}`);
       const { result, usage, timing } = await slot.stream(
-        { ...this.options, signal: combinedSignal },
+        {
+          ...this.options,
+          signal: combinedSignal,
+          perProviderTimeoutMs: this.perProviderTimeoutMs,
+          onCredentialAttempt: () => {
+            clock.startedAt = Date.now();
+            clock.startedPerf = performance.now();
+          },
+          onCredentialRetry: ({ error: thrown, startedAt, durationMs }) => {
+            const error = thrown instanceof Error ? thrown : new Error('Claude credential failed');
+            recordAiUsage([
+              usageEvent(this.usageRound, slot, startedAt, {
+                outcome: 'error',
+                ...classifyAttemptFailure(error, {
+                  callerAborted: false,
+                  providerTimedOut: error.name === 'CredentialAttemptTimeoutError',
+                }),
+                durationMs: Math.round(durationMs),
+                ...UNKNOWN_TIMING,
+                ...attemptUsage(thrown),
+              }),
+            ]);
+          },
+        },
         this.callbacks,
       );
       recordProviderReachable(slot.key); // a clean round rehabilitates a previously-demoted slot
@@ -177,6 +205,13 @@ class RoundRun {
       ]);
       return result;
     } catch (error) {
+      if (error instanceof CredentialsCoolingDownError) {
+        // Local availability is not a new HTTP response: leave breaker state and error counts alone.
+        this.lastError = error;
+        this.providerErrors.push({ name: slot.name, error });
+        recordAiUsage([usageEvent(this.usageRound, slot, clock.startedAt, SKIPPED_ATTEMPT)]);
+        return null;
+      }
       this.handleFailure(slot, error, clock, perProviderController.signal.aborted);
       return null;
     } finally {

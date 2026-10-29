@@ -6,6 +6,8 @@
 
 import type OpenAI from 'openai';
 import { createLogger } from '../../../utils/logger';
+import { withClaudeCredentials } from '../claude-client-pool';
+import type { ClaudeCredentialRequestOptions } from '../claude-credential-pool';
 import { errorText, numericStatus } from './error-signals';
 
 const logger = createLogger('ai-streaming');
@@ -87,12 +89,27 @@ export async function openChatStream(
   signal: AbortSignal | undefined,
   providerKey: string,
   model: string,
+  credentialOptions: Omit<ClaudeCredentialRequestOptions, 'signal'> = { timeoutMs: 45_000 },
 ): Promise<AsyncIterable<OpenAI.ChatCompletionChunk>> {
-  const request = (withUsage: boolean) =>
-    client.chat.completions.create(
-      withUsage ? { ...params, stream_options: { include_usage: true } } : params,
-      signal ? { signal } : undefined,
-    );
+  const startedPerf = performance.now();
+  const request = (withUsage: boolean) => {
+    const requestParams = withUsage
+      ? { ...params, stream_options: { include_usage: true } }
+      : params;
+    const invoke = (attemptClient: OpenAI, attemptSignal: AbortSignal | undefined) =>
+      Promise.resolve(
+        attemptClient.chat.completions.create(
+          requestParams,
+          attemptSignal ? { signal: attemptSignal } : undefined,
+        ),
+      );
+    if (providerKey !== 'claude') return invoke(client, signal);
+    return withClaudeCredentials(client, invoke, {
+      ...credentialOptions,
+      timeoutMs: credentialOptions.timeoutMs - (performance.now() - startedPerf),
+      ...(signal ? { signal } : {}),
+    });
+  };
   const usageOptionKey = `${providerKey}:${model}`;
   if (providersWithoutStreamingUsage.has(usageOptionKey)) return request(false);
   try {

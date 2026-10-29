@@ -70,9 +70,16 @@ export function streamingSlot(
     ...(slotOptions.preset ? { presetId: slotOptions.preset.id } : {}),
     stream: async (opts, cbs) => {
       const params = buildStreamParams(model, opts, slotOptions);
-      const requestStartedPerf = performance.now();
+      let requestStartedPerf = performance.now();
       const client = getClient();
-      const stream = await openChatStream(client, params, opts.signal, key, model);
+      const stream = await openChatStream(client, params, opts.signal, key, model, {
+        timeoutMs: opts.perProviderTimeoutMs ?? 45_000,
+        ...(opts.onCredentialRetry ? { onRetry: opts.onCredentialRetry } : {}),
+        onHttpAttempt: () => {
+          requestStartedPerf = performance.now();
+          opts.onCredentialAttempt?.();
+        },
+      });
 
       const collector = new StreamCollector(cbs);
       try {
