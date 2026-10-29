@@ -6,12 +6,15 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -745,10 +748,16 @@ describe('read-only', () => {
         const path = join(current, entry.name);
         if (entry.isDirectory()) walk(path);
         else if (entry.isFile()) {
-          const stat = statSync(path);
-          lines.push(`${path} ${stat.size} ${stat.mtimeMs} ${readFileSync(path).toString('hex')}`);
+          // One descriptor for the size, the time and the bytes: no stat-then-read window on the path.
+          const fd = openSync(path, 'r');
+          try {
+            const stat = fstatSync(fd);
+            lines.push(`${path} ${stat.size} ${stat.mtimeMs} ${readFileSync(fd).toString('hex')}`);
+          } finally {
+            closeSync(fd);
+          }
         } else lines.push(`${path} ${entry.isSymbolicLink() ? 'link' : 'other'}`);
-        if (entry.isDirectory()) lines.push(`${path}/ ${statSync(path).mtimeMs}`);
+        if (entry.isDirectory()) lines.push(`${path}/ ${lstatSync(path).mtimeMs}`);
       }
     };
     walk(dir);
