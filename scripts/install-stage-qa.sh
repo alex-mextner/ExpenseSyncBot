@@ -70,7 +70,9 @@ done
 
 [[ -e "$SRC/.git" ]] || fail "$SRC is not a git checkout; install from a reviewed main checkout"
 # safe.directory on the command line only: root must be able to read a checkout owned by another user.
-git_in_src() { git -c safe.directory="$SRC" -C "$SRC" "$@"; }
+# GIT_OPTIONAL_LOCKS=0: this runs as root in a checkout owned by the deploy user, and a plain `git status` refreshes
+# and rewrites .git/index as root:root, which breaks the deploy user's next git job (#230). Read only.
+git_in_src() { GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$SRC" -C "$SRC" "$@"; }
 DIRTY="$(git_in_src status --porcelain -- "${LIB_SOURCES[@]}")" || fail 'git status failed in the checkout'
 [[ -z "$DIRTY" ]] || fail "uncommitted or untracked changes to installed files (install only reviewed, committed code):
 $DIRTY"

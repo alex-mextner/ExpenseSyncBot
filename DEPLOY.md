@@ -410,6 +410,7 @@ git -c safe.directory=/var/www/ExpenseSyncBot -C /var/www/ExpenseSyncBot log -1 
 cd /var/www/ExpenseSyncBot && scripts/install-stage-qa.sh
 ```
    It copies `odroid-stage-qa-report.py`, `stage-smoke.py`, `stage-qa-driver.py` and `stage_qa_common.py` into a fresh `/usr/local/lib/esb-stage-qa` (root:root 0755, swapped in with one rename), creates `/etc/esb-stage-qa/driver.json` (browser host `ultra@65.21.40.51`, the key `/var/lib/hcb-qa-runner/.ssh/esb-stage-browser_ed25519`, that user's `known_hosts`) only if absent and never overwrites it, keeps the previous lib as `/usr/local/lib/esb-stage-qa.bak-<UTC stamp>` (the backup) and prints the sudoers line, the check below and `rollback: …`, the one command that restores the previous lib (or, on a first install, removes the lib and the config it created); a failed install removes the config it just created. Copy the `rollback:` line somewhere before going on. It touches only its own lib and config: no pm2, no checkout, no env file, no sudoers file, no log. Re-run it after every change to the installed files (merging such a change does not update the odroid).
+   Root only READS the checkout here: `install-stage-qa.sh` runs its git commands with `GIT_OPTIONAL_LOCKS=0`, because a plain `git status` as root refreshes and rewrites `.git/index` as `root:root` and the next `www-data` job (stage bot, deploy) then fails on it (#230). Do the same for any git command you type as root in that checkout (`GIT_OPTIONAL_LOCKS=0 git -c safe.directory=/var/www/ExpenseSyncBot -C /var/www/ExpenseSyncBot status`), and run every command that writes (`fetch`, `pull`, `checkout`, `submodule update`) as `www-data`. After a root session, `find /var/www/ExpenseSyncBot/.git ! -user www-data` must print nothing; if it prints a path, `chown -R www-data:www-data /var/www/ExpenseSyncBot/.git`.
 2. *Sudoers (once).* Same pattern as `/etc/sudoers.d/hcb-qa` (`hcb-qa ALL=(root) NOPASSWD: /usr/local/sbin/hypercal-stage-qa`) in a file of its own, so neither repository's edit touches the other's: `visudo -f /etc/sudoers.d/esb-stage-qa` (creates it 0440), one line, the one the installer prints:
 ```
 hcb-qa ALL=(root) NOPASSWD: /usr/local/lib/esb-stage-qa/odroid-stage-qa-report.py ""
@@ -522,6 +523,7 @@ pm2 start expensesyncbot bank-sync
    `gh api repos/alex-mextner/ExpenseSyncBot/actions/runners` (needs admin rights) or `gh workflow run runner-watchdog.yml`
 2. On odroid: `systemctl status 'actions.runner.*'`, logs in `/var/www/actions-runner/_diag/`
 3. `www-data` must own `/var/www/ExpenseSyncBot` and be able to `git pull` (`/var/www/.ssh/id_ed25519`)
+4. Nothing in `/var/www/ExpenseSyncBot/.git` may be owned by root. Check `find /var/www/ExpenseSyncBot/.git ! -user www-data`; a root-owned `index` (or any other entry) makes the next `www-data` git job fail on the index lock. Repair as root: `chown -R www-data:www-data /var/www/ExpenseSyncBot/.git`.
 
 ### PM2 process not reloading
 

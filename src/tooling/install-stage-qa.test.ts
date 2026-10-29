@@ -15,6 +15,7 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { userInfo } from 'node:os';
@@ -596,6 +597,20 @@ describe('install-stage-qa.sh', () => {
     }
     expect(modeOf(odroid.lib)).toBe(0o755);
     expect(leftovers(join(odroid.lib, '..'))).toEqual([]);
+  });
+
+  // Run as root against /var/www/ExpenseSyncBot, a plain `git status` rewrote .git/index as root:root and the
+  // deploy user's next git job failed on it (#230). The checkout is only read; an index whose stat data is stale
+  // (a touched file) is what makes git want to refresh and rewrite it.
+  test('reads the checkout without rewriting .git/index, even when a listed file has a stale stat entry', () => {
+    const odroid = createOdroid();
+    const touched = join(odroid.checkout.src, ODROID_SOURCES[0] as string);
+    const stale = new Date('2001-01-01T00:00:00Z');
+    utimesSync(touched, stale, stale);
+    const indexPath = join(odroid.checkout.src, '.git/index');
+    const before = readFileSync(indexPath);
+    expect(odroid.install().status).toBe(0);
+    expect(readFileSync(indexPath).equals(before)).toBe(true);
   });
 
   test('creates the driver config once, with the browser host, the ESB key and known_hosts, and never overwrites it', () => {
