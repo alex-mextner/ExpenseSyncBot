@@ -17,6 +17,7 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, hfClient, openrouterClient, zaiClient } from '../src/services/ai/clients';
+import { withClaudeCredentials } from '../src/services/ai/claude-client-pool';
 import { chatRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
@@ -182,6 +183,17 @@ interface SlotResult {
 const TEXT_PROMPT =
   'Reply with a JSON object: {"status": "ok", "test": true}. Use exactly that format.';
 
+async function createCompletion(spec: SlotSpec, params: OpenAI.ChatCompletionCreateParamsNonStreaming) {
+  const client = spec.client();
+  if (!spec.anthropic) return client.chat.completions.create(params);
+  return withClaudeCredentials(
+    client,
+    (attemptClient, signal) => Promise.resolve(attemptClient.chat.completions.create(params, signal ? { signal } : undefined)),
+    // Non-streaming: the budget covers the whole completion, so each of the two keys gets the full SDK timeout.
+    { timeoutMs: client.timeout * 2 },
+  );
+}
+
 async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {
   const start = Date.now();
   // Reasoning models (Qwen3, DeepSeek-R1) can burn lots of tokens on internal thinking
@@ -189,7 +201,7 @@ async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {
   const isReasoning = /qwen3|deepseek-r1/i.test(spec.model);
   const maxTokens = isReasoning ? 2048 : 256;
   try {
-    const response = await spec.client().chat.completions.create({
+    const response = await createCompletion(spec, {
       model: spec.model,
       messages: [{ role: 'user', content: TEXT_PROMPT }],
       ...chatRequestParams(spec.model, maxTokens, 0.1, spec.anthropic ?? false),
@@ -227,7 +239,7 @@ async function testVisionSlot(spec: SlotSpec): Promise<SlotResult> {
     };
   }
   try {
-    const response = await spec.client().chat.completions.create({
+    const response = await createCompletion(spec, {
       model: spec.model,
       messages: [
         {

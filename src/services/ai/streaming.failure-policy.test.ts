@@ -46,6 +46,54 @@ describe('classifyAttemptFailure: shapes without an SDK error class', () => {
     ['402 with a plain message', withStatus(402, 'pay up'), 'quota', 402],
     ['429 whose message is a quota phrase in any case', withStatus(429, 'QUOTA'), 'quota', 429],
     ['400 that mentions "will reset"', withStatus(400, 'will reset'), 'quota', 400],
+    [
+      'the documented organization usage-limit 400',
+      withStatus(
+        400,
+        'You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.',
+      ),
+      'quota',
+      400,
+    ],
+    [
+      'the documented workspace usage-limit 400',
+      withStatus(
+        400,
+        'You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.',
+      ),
+      'quota',
+      400,
+    ],
+    [
+      'the documented spend-cap 429',
+      withStatus(
+        429,
+        "You have reached your API usage limits: your organization has crossed its monthly API usage threshold, set based on your organization's API tier. You will regain access on 2026-09-01 at 00:00 UTC.",
+      ),
+      'quota',
+      429,
+    ],
+    [
+      'the documented credit-balance 400',
+      withStatus(
+        400,
+        'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.',
+      ),
+      'quota',
+      400,
+    ],
+    [
+      'an invalid tool schema 400',
+      withStatus(400, 'tools.0.input_schema: JSON schema is invalid'),
+      'bad_request',
+      400,
+    ],
+    [
+      'a prompt-too-long 400',
+      withStatus(400, 'prompt is too long: 250000 tokens > 200000 maximum'),
+      'bad_request',
+      400,
+    ],
     ['a status wins over a timeout message', withStatus(500, 'request timed out'), 'server', 500],
   ] as const)('%s', (_label, error, errorClass, httpStatus) => {
     expect(classifyAttemptFailure(error, idle)).toEqual({ errorClass, httpStatus });

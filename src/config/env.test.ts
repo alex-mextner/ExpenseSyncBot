@@ -196,10 +196,11 @@ describe('env config loading', () => {
   it('starts with only the required variables set — no CLAUDE_* and no retired provider keys', () => {
     const { keys, claudeVisionModel } = loadedConfig(loadEnv(REQUIRED_ENV));
     // The full credential set: a provider dropped from the chains must not linger in the config.
-    expect(keys.filter((key) => /_(API_KEY|TOKEN)$/.test(key)).sort()).toEqual([
+    expect(keys.filter((key) => /_(API_KEY|TOKEN)\d*$/.test(key)).sort()).toEqual([
       'ANTHROPIC_API_KEY',
       'BOT_TOKEN',
       'CLAUDE_API_TOKEN',
+      'CLAUDE_API_TOKEN2',
       'GITHUB_TOKEN',
       'HF_TOKEN',
       'OPENROUTER_API_KEY',
