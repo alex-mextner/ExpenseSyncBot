@@ -103,8 +103,8 @@ const { aiStreamRound } = await import('../src/services/ai/streaming');
 const { TOOL_DEFINITIONS } = await import('../src/services/ai/tools');
 const { validateResponse } = await import('../src/services/ai/response-validator');
 
-if (!env.CLAUDE_API_TOKEN) {
-  fail('CLAUDE_API_TOKEN is not set — nothing to replay');
+if (!env.CLAUDE_API_TOKEN?.trim() && !env.CLAUDE_API_TOKEN2?.trim()) {
+  fail('CLAUDE_API_TOKEN and CLAUDE_API_TOKEN2 are not set — nothing to replay');
   process.exit(2);
 }
 

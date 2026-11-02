@@ -38,7 +38,7 @@ function loadEnv(vars: Record<string, string>): LoadResult {
   try {
     // The child reports the loaded config on stdout; the parent parses it.
     const script = `const { env } = await import(${JSON.stringify(ENV_MODULE)});
-process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], routing: { mode: env.AI_ROUTING, userIds: env.AI_ROUTING_USER_IDS ?? null, chains: Object.fromEntries(Object.entries(env.AI_ROLE_CHAINS).map(([role, entries]) => [role, entries.map((e) => e.provider + (e.preset ? ':' + e.preset.id : ''))])) }, toolSchema: { mode: env.AI_TOOL_SCHEMA_MODE, userIds: env.AI_TOOL_SCHEMA_USER_IDS ?? null }, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
+process.stdout.write('REPORT:' + JSON.stringify({ keys: Object.keys(env), claudeVisionModel: env.CLAUDE_VISION_MODEL, claudeSecondary: env.CLAUDE_API_TOKEN2 ?? null, openrouter: [env.OPENROUTER_BASE_URL, env.OPENROUTER_MODEL, env.OPENROUTER_FAST_MODEL], routing: { mode: env.AI_ROUTING, userIds: env.AI_ROUTING_USER_IDS ?? null, chains: Object.fromEntries(Object.entries(env.AI_ROLE_CHAINS).map(([role, entries]) => [role, entries.map((e) => e.provider + (e.preset ? ':' + e.preset.id : ''))])) }, toolSchema: { mode: env.AI_TOOL_SCHEMA_MODE, userIds: env.AI_TOOL_SCHEMA_USER_IDS ?? null }, smartChain: env.AI_SMART_CHAIN, fastChain: env.AI_FAST_CHAIN }) + '\\n');`;
     const child = spawnSync(process.execPath, ['-e', script], {
       cwd,
       env: { PATH: process.env['PATH'] ?? '', ...vars },
@@ -59,6 +59,7 @@ interface ChainOrderJson {
 function loadedConfig(result: LoadResult): {
   keys: string[];
   claudeVisionModel: string;
+  claudeSecondary: string | null;
   openrouter: string[];
   routing: { mode: string; userIds: number[] | null; chains: Record<string, string[]> };
   toolSchema: { mode: string; userIds: number[] | null };
@@ -195,10 +196,11 @@ describe('env config loading', () => {
   it('starts with only the required variables set — no CLAUDE_* and no retired provider keys', () => {
     const { keys, claudeVisionModel } = loadedConfig(loadEnv(REQUIRED_ENV));
     // The full credential set: a provider dropped from the chains must not linger in the config.
-    expect(keys.filter((key) => /_(API_KEY|TOKEN)$/.test(key)).sort()).toEqual([
+    expect(keys.filter((key) => /_(API_KEY|TOKEN)\d*$/.test(key)).sort()).toEqual([
       'ANTHROPIC_API_KEY',
       'BOT_TOKEN',
       'CLAUDE_API_TOKEN',
+      'CLAUDE_API_TOKEN2',
       'GITHUB_TOKEN',
       'HF_TOKEN',
       'OPENROUTER_API_KEY',
@@ -206,6 +208,14 @@ describe('env config loading', () => {
     // Claude stays optional: CLAUDE_API_TOKEN is exposed (empty) and its slots are skipped.
     // OCR defaults to Sonnet (measured: Haiku accepted a misread degraded receipt).
     expect(claudeVisionModel).toBe('claude-sonnet-5-5');
+  });
+
+  it('reads the optional second Claude credential independently of z.ai', () => {
+    expect(
+      loadedConfig(loadEnv({ ...REQUIRED_ENV, CLAUDE_API_TOKEN2: 'synthetic-secondary' }))
+        .claudeSecondary,
+    ).toBe('synthetic-secondary');
+    expect(loadedConfig(loadEnv(REQUIRED_ENV)).claudeSecondary).toBe('');
   });
 
   it('reads CLAUDE_VISION_MODEL from the environment when set', () => {

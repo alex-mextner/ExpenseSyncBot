@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, hfClient, zaiClient } from '../src/services/ai/clients';
+import { withClaudeCredentials } from '../src/services/ai/claude-client-pool';
 import { chatRequestParams } from '../src/services/ai/streaming';
 
 const PROVIDERS: Record<string, { client: () => OpenAI; model: string; anthropic: boolean }> = {
@@ -41,7 +42,8 @@ say('---');
 
 try {
   const t0 = Date.now();
-  const response = await provider.client().chat.completions.create({
+  const client = provider.client();
+  const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
     model: provider.model,
     messages: [
       {
@@ -56,7 +58,15 @@ try {
       },
     ],
     ...chatRequestParams(provider.model, 2000, 0.1, provider.anthropic),
-  });
+  };
+  const response = provider.anthropic
+    ? await withClaudeCredentials(
+        client,
+        (attemptClient, signal) => Promise.resolve(attemptClient.chat.completions.create(params, signal ? { signal } : undefined)),
+        // Non-streaming: the budget covers the whole completion, so each of the two keys gets the full SDK timeout.
+        { timeoutMs: client.timeout * 2 },
+      )
+    : await client.chat.completions.create(params);
 
   const elapsed = Date.now() - t0;
   const text = response.choices[0]?.message?.content?.trim();

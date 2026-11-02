@@ -85,6 +85,12 @@ export interface SlotOutput {
   timing: StreamTiming;
 }
 
+interface ProviderAttemptOptions extends StreamRoundOptions {
+  /** Internal telemetry for a failed credential before the same Claude model tries another key. */
+  onCredentialRetry?: (attempt: { error: unknown; startedAt: number; durationMs: number }) => void;
+  onCredentialAttempt?: () => void;
+}
+
 export interface ProviderSlot {
   /** Human-readable, per-model label for logs/errors, e.g. "z.ai (glm-5.3)". */
   name: string;
@@ -96,5 +102,5 @@ export interface ProviderSlot {
   presetId?: string;
   /** Role whose chain this slot belongs to; unset on legacy-chain slots. */
   role?: Role;
-  stream: (opts: StreamRoundOptions, cbs: StreamCallbacks) => Promise<SlotOutput>;
+  stream: (opts: ProviderAttemptOptions, cbs: StreamCallbacks) => Promise<SlotOutput>;
 }

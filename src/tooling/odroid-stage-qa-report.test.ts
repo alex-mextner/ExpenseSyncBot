@@ -36,6 +36,12 @@ import {
 
 setDefaultTimeout(60_000);
 
+const REAL_GIT = (() => {
+  const path = Bun.which('git');
+  if (!path) throw new Error('git is not on PATH');
+  return path;
+})();
+
 const SCRIPT = join(REPO, 'scripts/odroid-stage-qa-report.py');
 const STAGE_ID = '222222222';
 const PROD_ID = '111111111';
@@ -59,6 +65,8 @@ import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("odroid_report", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+# The trusted fixture bin contains the same real Git, even when the host installs it outside system PATH.
+module.PM2_PATH = os.path.dirname(sys.argv[sys.argv.index("--pm2") + 1]) + ":" + module.PM2_PATH
 calls = []
 def get_me(_):
     calls.append(1)
@@ -163,6 +171,7 @@ function createSlot(): Slot {
   mkdirSync(pm2Home);
   writeFileSync(join(pm2Home, 'rpc.sock'), '');
   mkdirSync(join(root, 'bin'));
+  symlinkSync(REAL_GIT, join(root, 'bin/git'));
   const pm2 = join(root, 'bin/pm2');
   writeExecutable(pm2, FAKE_PM2);
 

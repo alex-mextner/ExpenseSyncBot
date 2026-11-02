@@ -5,6 +5,10 @@
  */
 
 import { createLogger } from '../../../utils/logger';
+import {
+  CredentialsCoolingDownError,
+  getClaudeCredentialAvailability,
+} from '../claude-credential-pool';
 import { estimatePromptSize } from '../prompt-size';
 import {
   recordProviderConnectionFailure,
@@ -74,11 +78,17 @@ function recordBreakerOutcome(
 ): void {
   if (isAbortLike(error)) return;
   const status = numericStatus(error);
+  const availability = slot.key === 'claude' ? getClaudeCredentialAvailability(error) : undefined;
+  if (availability?.state === 'ready' || availability?.state === 'probing') {
+    if (status !== undefined) recordProviderResponded(slot.key, failedAt);
+    return;
+  }
   if (status === 429 || status === 402) {
     // 402 = out of prepaid credits (HF router): back only after a manual top-up, so it
     // cools down far longer than a rate limit. It still sits at the back of the chain.
     const cooldownMs =
-      status === 402 ? CREDITS_EXHAUSTED_COOLDOWN_MS : getRateLimitCooldownMs(error, failedAt);
+      availability?.retryAfterMs ??
+      (status === 402 ? CREDITS_EXHAUSTED_COOLDOWN_MS : getRateLimitCooldownMs(error, failedAt));
     recordProviderResponded(slot.key, failedAt);
     recordProviderRateLimit(slot.key, failedAt, cooldownMs);
   } else if (isUnreachableFailure(error) && !providerResponded(thrown)) {
@@ -101,6 +111,7 @@ class RoundRun {
   // provider was reachable before a failure is read separately, off the thrown error's tag.)
   private textEmitted = false;
   private readonly providerErrors: Array<{ name: string; error: Error }> = [];
+  private readonly earlierCredentialErrors: Array<{ name: string; error: Error }> = [];
   private readonly usageRound: UsageRound;
   private readonly callbacks: StreamCallbacks;
   private readonly perProviderTimeoutMs: number;
@@ -161,7 +172,31 @@ class RoundRun {
     try {
       logger.info(`[AI_STREAM] Trying ${this.chainName} → ${slot.name}`);
       const { result, usage, timing } = await slot.stream(
-        { ...this.options, signal: combinedSignal },
+        {
+          ...this.options,
+          signal: combinedSignal,
+          perProviderTimeoutMs: this.perProviderTimeoutMs,
+          onCredentialAttempt: () => {
+            clock.startedAt = Date.now();
+            clock.startedPerf = performance.now();
+          },
+          onCredentialRetry: ({ error: thrown, startedAt, durationMs }) => {
+            const error = thrown instanceof Error ? thrown : new Error('Claude credential failed');
+            this.earlierCredentialErrors.push({ name: slot.name, error });
+            recordAiUsage([
+              usageEvent(this.usageRound, slot, startedAt, {
+                outcome: 'error',
+                ...classifyAttemptFailure(error, {
+                  callerAborted: false,
+                  providerTimedOut: error.name === 'CredentialAttemptTimeoutError',
+                }),
+                durationMs: Math.round(durationMs),
+                ...UNKNOWN_TIMING,
+                ...attemptUsage(thrown),
+              }),
+            ]);
+          },
+        },
         this.callbacks,
       );
       recordProviderReachable(slot.key); // a clean round rehabilitates a previously-demoted slot
@@ -177,6 +212,14 @@ class RoundRun {
       ]);
       return result;
     } catch (error) {
+      if (error instanceof CredentialsCoolingDownError) {
+        if (this.options.signal?.aborted) throw makeAbortError('AI overall deadline exceeded');
+        // Local availability is not a new HTTP response: leave breaker state and error counts alone.
+        this.lastError = error;
+        this.providerErrors.push({ name: slot.name, error });
+        recordAiUsage([usageEvent(this.usageRound, slot, clock.startedAt, SKIPPED_ATTEMPT)]);
+        return null;
+      }
       this.handleFailure(slot, error, clock, perProviderController.signal.aborted);
       return null;
     } finally {
@@ -189,8 +232,14 @@ class RoundRun {
     // Aggregate all provider errors so the caller (and logs) see the full picture,
     // not just the last provider's error. The message lists each provider and its
     // failure reason — much more useful for debugging than "400 (no body)".
+    // A slot's earlier credential failures come right before its final error, so a status-less
+    // transient one (connection error, credential timeout) still shows up in the text signals.
     const summary = this.providerErrors
-      .map((e) => `${e.name}: ${e.error.message.slice(0, 120)}`)
+      .map((e) =>
+        [...this.earlierCredentialErrors.filter((earlier) => earlier.name === e.name), e]
+          .map((attempt) => `${e.name}: ${attempt.error.message.slice(0, 120)}`)
+          .join('; '),
+      )
       .join('; ');
     const aggregated = new Error(
       `All ${this.providerErrors.length} providers in ${this.chainName} chain failed: ${summary}`,
@@ -201,7 +250,7 @@ class RoundRun {
     // prefers a transient signal (429/529/5xx/connection → retryable provider_down) over a co-occurring
     // 4xx, so a chain where one provider 400s and the rest are down still reads as "try later".
     const representative = pickRepresentativeError(
-      this.providerErrors.map((e) => e.error),
+      [...this.earlierCredentialErrors, ...this.providerErrors].map((e) => e.error),
       this.lastError,
     );
     if (representative) {
@@ -246,14 +295,15 @@ class RoundRun {
     // Text already sent to user — can't splice another model's output. The provider proved it was
     // reachable (it streamed text), so reset its connection-failure cluster before bailing out.
     if (this.textEmitted) {
-      if (!isAbortLike(error)) recordProviderResponded(slot.key, failedAt);
+      if (!this.options.signal?.aborted && !isAbortLike(error))
+        recordProviderResponded(slot.key, failedAt);
       logger.error(
         `[AI_STREAM] ${slot.name} died mid-stream after text was emitted — cannot fallback`,
       );
       throw thrown;
     }
 
-    recordBreakerOutcome(slot, error, thrown, failedAt);
+    if (!this.options.signal?.aborted) recordBreakerOutcome(slot, error, thrown, failedAt);
 
     // Overall deadline fired (not just this provider's timeout) — stop the chain
     // and signal a timeout so the caller surfaces the "time exceeded" message.

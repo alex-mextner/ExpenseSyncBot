@@ -54,3 +54,6 @@ debug-images/
 
 # Python bytecode of the tooling scripts (scripts/*.py are imported by tests)
 __pycache__/
+
+# Temporary git-hook test sandboxes; interrupted runs must remain untracked.
+/.tmp-hooks-guard-*/

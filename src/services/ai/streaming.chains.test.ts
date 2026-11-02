@@ -38,6 +38,16 @@ describe('aiStreamRound fallback chain', () => {
     expect(await chainModels(chain)).toEqual(expected);
   });
 
+  it.each([
+    ['smart' as const, ['test-model', 'claude-smart', 'hf-test']],
+    ['fast' as const, ['test-fast', 'claude-fast', 'hf-fast']],
+    ['ocr' as const, ['claude-vision', 'hf-vision']],
+  ])('secondary alone keeps Claude available in the %s chain', async (chain, expected) => {
+    mockEnv.CLAUDE_API_TOKEN = '';
+    mockEnv.CLAUDE_API_TOKEN2 = 'secondary-only';
+    expect(await chainModels(chain)).toEqual(expected);
+  });
+
   it('AI_SMART_CHAIN / AI_FAST_CHAIN override the order; the other chain keeps its default', async () => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['hf', 'claude'], fromEnv: true };

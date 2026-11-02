@@ -93,8 +93,9 @@ interface EnvConfig {
   AI_FAST_CHAIN: ChainOrder;
 
   // Anthropic Claude (OpenAI-compat endpoint; optional key — second in smart/fast, OCR primary).
-  // Without the key every Claude slot is skipped and OCR runs on HF vision alone.
+  // Without either key every Claude slot is skipped and OCR runs on HF vision alone.
   CLAUDE_API_TOKEN: string;
+  CLAUDE_API_TOKEN2: string;
   CLAUDE_BASE_URL: string;
   CLAUDE_MODEL: string;
   CLAUDE_FAST_MODEL: string;
@@ -168,6 +169,7 @@ function validateEnv(): EnvConfig {
     AI_FAST_CHAIN: parseChain('AI_FAST_CHAIN', DEFAULT_FAST_CHAIN),
 
     CLAUDE_API_TOKEN: getEnvVariable('CLAUDE_API_TOKEN', false),
+    CLAUDE_API_TOKEN2: getEnvVariable('CLAUDE_API_TOKEN2', false),
     CLAUDE_BASE_URL: getEnvVariable('CLAUDE_BASE_URL', false) || 'https://api.anthropic.com/v1/',
     CLAUDE_MODEL: getEnvVariable('CLAUDE_MODEL', false) || 'claude-sonnet-5-5',
     CLAUDE_FAST_MODEL: getEnvVariable('CLAUDE_FAST_MODEL', false) || 'claude-haiku-5-5',

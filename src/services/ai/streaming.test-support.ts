@@ -35,6 +35,7 @@ export const mockEnv = {
   AI_SMART_CHAIN: { ...defaultOrder() },
   AI_FAST_CHAIN: { ...defaultOrder() },
   CLAUDE_API_TOKEN: '',
+  CLAUDE_API_TOKEN2: '',
   CLAUDE_BASE_URL: 'https://test.claude/v1/',
   CLAUDE_MODEL: 'claude-smart',
   CLAUDE_FAST_MODEL: 'claude-fast',
@@ -85,6 +86,7 @@ export function resetFallbackEnv(): void {
   mockEnv.AI_SMART_CHAIN = defaultOrder();
   mockEnv.AI_FAST_CHAIN = defaultOrder();
   mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+  mockEnv.CLAUDE_API_TOKEN2 = '';
   mockEnv.CLAUDE_MODEL = 'claude-smart';
   mockEnv.CLAUDE_FAST_MODEL = 'claude-fast';
   mockEnv.CLAUDE_VISION_MODEL = 'claude-vision';

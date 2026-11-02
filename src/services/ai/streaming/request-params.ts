@@ -6,6 +6,8 @@
 
 import type OpenAI from 'openai';
 import { createLogger } from '../../../utils/logger';
+import { withClaudeCredentials } from '../claude-client-pool';
+import type { ClaudeCredentialRequestOptions } from '../claude-credential-pool';
 import { errorText, numericStatus } from './error-signals';
 
 const logger = createLogger('ai-streaming');
@@ -80,6 +82,8 @@ function rejectsUsageStreamOption(error: unknown): boolean {
 /**
  * Opens the chat stream, asking for the final usage chunk. A provider that rejects the option is
  * remembered and retried at once without it (same attempt, one usage row — its tokens stay unknown).
+ * For Claude the retry stays inside the credential that rejected the option: restarting rotation
+ * would re-ask a credential that was already denied and split the budget again.
  */
 export async function openChatStream(
   client: OpenAI,
@@ -87,23 +91,45 @@ export async function openChatStream(
   signal: AbortSignal | undefined,
   providerKey: string,
   model: string,
+  credentialOptions: Omit<ClaudeCredentialRequestOptions, 'signal'> = { timeoutMs: 45_000 },
 ): Promise<AsyncIterable<OpenAI.ChatCompletionChunk>> {
-  const request = (withUsage: boolean) =>
-    client.chat.completions.create(
-      withUsage ? { ...params, stream_options: { include_usage: true } } : params,
-      signal ? { signal } : undefined,
-    );
   const usageOptionKey = `${providerKey}:${model}`;
-  if (providersWithoutStreamingUsage.has(usageOptionKey)) return request(false);
-  try {
-    return await request(true);
-  } catch (error) {
-    if (!rejectsUsageStreamOption(error)) throw error;
-    providersWithoutStreamingUsage.add(usageOptionKey);
-    logger.warn(
-      { provider: providerKey, model },
-      '[AI_STREAM] Provider rejected streaming usage — retrying without usage telemetry',
+  const create = (
+    attemptClient: OpenAI,
+    attemptSignal: AbortSignal | undefined,
+    withUsage: boolean,
+  ) =>
+    Promise.resolve(
+      attemptClient.chat.completions.create(
+        withUsage ? { ...params, stream_options: { include_usage: true } } : params,
+        attemptSignal ? { signal: attemptSignal } : undefined,
+      ),
     );
-    return request(false);
-  }
+  const createWithUsage = async (
+    attemptClient: OpenAI,
+    attemptSignal: AbortSignal | undefined,
+    onRetryHttp?: () => void,
+  ) => {
+    if (providersWithoutStreamingUsage.has(usageOptionKey))
+      return create(attemptClient, attemptSignal, false);
+    try {
+      return await create(attemptClient, attemptSignal, true);
+    } catch (error) {
+      if (!rejectsUsageStreamOption(error)) throw error;
+      providersWithoutStreamingUsage.add(usageOptionKey);
+      logger.warn(
+        { provider: providerKey, model },
+        '[AI_STREAM] Provider rejected streaming usage — retrying without usage telemetry',
+      );
+      onRetryHttp?.();
+      return create(attemptClient, attemptSignal, false);
+    }
+  };
+  if (providerKey !== 'claude') return createWithUsage(client, signal);
+  return withClaudeCredentials(
+    client,
+    (attemptClient, attemptSignal, countHttpRequest) =>
+      createWithUsage(attemptClient, attemptSignal, countHttpRequest),
+    { ...credentialOptions, ...(signal ? { signal } : {}) },
+  );
 }

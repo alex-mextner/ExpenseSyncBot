@@ -12,7 +12,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dir, '../..');
@@ -24,7 +23,8 @@ const USER_HOOK = '#!/bin/sh\n# the user-global hook dispatcher\n';
  * already holds a user hook. Nothing here can reach the real HOME or its global hooks.
  */
 function sandbox({ globalHooksPath }: { globalHooksPath: boolean }) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hooks-guard-')));
+  // Keep real-install fixtures on the cache filesystem so Bun can hardlink instead of filling tmpfs.
+  const dir = realpathSync(mkdtempSync(join(ROOT, '.tmp-hooks-guard-')));
   const home = join(dir, 'home');
   const globalHooks = join(home, '.config/git/hooks');
   mkdirSync(globalHooks, { recursive: true });
@@ -47,6 +47,7 @@ function sandbox({ globalHooksPath }: { globalHooksPath: boolean }) {
     XDG_CONFIG_HOME: join(home, '.config'),
     GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CEILING_DIRECTORIES: dir,
   };
   const git = (cwd: string, ...args: string[]) => {
     const result = spawnSync('git', args, { cwd, env, encoding: 'utf8' });
@@ -117,6 +118,25 @@ function realInstall(box: ReturnType<typeof sandbox>) {
 }
 
 describe('postinstall git hook guard', () => {
+  test('a ceiling excludes an ancestor checkout while a nested repository remains usable', () => {
+    const box = sandbox({ globalHooksPath: false });
+    try {
+      box.git(box.dir, 'init', '-q');
+      const plain = join(box.dir, 'plain');
+      mkdirSync(plain);
+      const outside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+        cwd: plain,
+        env: box.env,
+        encoding: 'utf8',
+      });
+      expect(outside.status).not.toBe(0);
+      expect(outside.stdout.trim()).toBe('');
+      expect(box.git(box.initRepo(), 'rev-parse', '--is-inside-work-tree')).toBe('true');
+    } finally {
+      rmSync(box.dir, { recursive: true, force: true });
+    }
+  });
+
   test('a global core.hooksPath outside the repository is left alone', () => {
     const box = sandbox({ globalHooksPath: true });
     try {

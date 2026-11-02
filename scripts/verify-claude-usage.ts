@@ -7,7 +7,7 @@
  * synthetic receipt image), then reads the ai_usage_events rows the bot's recorder wrote and checks
  * that each request left an `ok` row for provider `claude` with reported token counts.
  *
- * CLAUDE_API_TOKEN must be in the environment (never on the command line). The usage rows go to a
+ * CLAUDE_API_TOKEN or CLAUDE_API_TOKEN2 must be in the environment (never on the command line). The usage rows go to a
  * temp SQLite file (or --db PATH) — never to ./data/expenses.db — so this is safe next to a live bot.
  *
  * Usage: CLAUDE_API_TOKEN=… bun scripts/verify-claude-usage.ts [--db PATH]
@@ -35,8 +35,8 @@ function argValue(flag: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-if (!process.env['CLAUDE_API_TOKEN']) {
-  fail('CLAUDE_API_TOKEN is not set — nothing to verify');
+if (!process.env['CLAUDE_API_TOKEN']?.trim() && !process.env['CLAUDE_API_TOKEN2']?.trim()) {
+  fail('CLAUDE_API_TOKEN and CLAUDE_API_TOKEN2 are not set — nothing to verify');
   process.exit(2);
 }
 

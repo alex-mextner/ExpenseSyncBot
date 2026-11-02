@@ -130,7 +130,10 @@ function buildTextChain(
 function smartAvailability(): Record<ProviderId, ProviderAvailability> {
   return {
     zai: { model: env.AI_MODEL, apiKey: env.ANTHROPIC_API_KEY },
-    claude: { model: env.CLAUDE_MODEL, apiKey: env.CLAUDE_API_TOKEN },
+    claude: {
+      model: env.CLAUDE_MODEL,
+      apiKey: env.CLAUDE_API_TOKEN?.trim() || env.CLAUDE_API_TOKEN2?.trim() || '',
+    },
     hf: { model: env.HF_MODEL, apiKey: env.HF_TOKEN },
     openrouter: { model: env.OPENROUTER_MODEL, apiKey: env.OPENROUTER_API_KEY },
   };
@@ -139,7 +142,10 @@ function smartAvailability(): Record<ProviderId, ProviderAvailability> {
 function fastAvailability(): Record<ProviderId, ProviderAvailability> {
   return {
     zai: { model: env.AI_FAST_MODEL, apiKey: env.ANTHROPIC_API_KEY },
-    claude: { model: env.CLAUDE_FAST_MODEL, apiKey: env.CLAUDE_API_TOKEN },
+    claude: {
+      model: env.CLAUDE_FAST_MODEL,
+      apiKey: env.CLAUDE_API_TOKEN?.trim() || env.CLAUDE_API_TOKEN2?.trim() || '',
+    },
     hf: { model: env.HF_FAST_MODEL, apiKey: env.HF_TOKEN },
     openrouter: { model: env.OPENROUTER_FAST_MODEL, apiKey: env.OPENROUTER_API_KEY },
   };
@@ -207,7 +213,7 @@ function buildRoleChain(role: Role): ProviderSlot[] {
 
 function buildOcrChain(): ProviderSlot[] {
   const chain: ProviderSlot[] = [];
-  if (env.CLAUDE_API_TOKEN) {
+  if (env.CLAUDE_API_TOKEN?.trim() || env.CLAUDE_API_TOKEN2?.trim()) {
     chain.push(
       streamingSlot(
         `Claude (${env.CLAUDE_VISION_MODEL})`,
