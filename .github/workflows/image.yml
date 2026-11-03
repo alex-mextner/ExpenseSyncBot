@@ -1,0 +1,119 @@
+# Builds the bot as a linux/arm64 container image on GitHub's native ARM runner (the target is
+# the Raspberry Pi cluster) and publishes it to ghcr.io. Independent of deploy.yml, which keeps
+# deploying the pm2 checkout on the odroid: this workflow never touches a running bot.
+#
+#   pull_request            build + smoke test only, nothing is pushed
+#   push (any branch)       build + smoke test, then push :<full sha> (a push event on this
+#                           repository carries a write token; forks only ever get pull_request)
+#   push to main            additionally pushes :latest
+#   workflow_dispatch       same as push, for the branch it is run on
+name: Container image
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.ref }}
+  # Never cancel a main build midway: a newer push queues behind it instead.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/expensesyncbot
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # The bank plugins live in the ZenPlugins submodule; without it the image has no banks.
+          submodules: recursive
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker
+      - name: Decide whether this run publishes
+        id: publish
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: steps.publish.outputs.push == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Built into the local daemon first (load) so the smoke test runs on the exact bits that
+      # would be published; a broken image never reaches the registry.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          push: false
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Smoke test the image
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Every check must pass: sh -c with `set -e` stops at the first missing piece.
+          docker run --rm --entrypoint sh "$IMAGE" -ec '
+            command -v flock
+            bun --version
+            test "$(id -u)" = 10001
+            test -d /app/data && test -w /app/data
+            test -d /app/miniapp/dist && test -f /app/miniapp/dist/index.html
+            test -f /app/public/index.html
+            test -f /app/index.ts && test -f /app/bank-sync.ts
+            test -f /app/src/services/bank/ZenPlugins/package.json
+            test -d /app/src/services/bank/ZenPlugins/node_modules
+            test -d /app/src/services/bank/ZenPlugins/src/plugins
+            test -d /ms-playwright
+            if find /app -maxdepth 1 -name ".env*" | grep -q .; then echo "env file in image"; exit 1; fi
+            cd /app
+            # Native modules and the browser really load on this architecture.
+            bun -e "
+              (async () => {
+                const sharp = require(\"sharp\");
+                await sharp({ create: { width: 2, height: 2, channels: 3, background: \"#fff\" } }).png().toBuffer();
+                const { chromium } = require(\"playwright\");
+                const browser = await chromium.launch({ headless: true, args: [\"--no-sandbox\"] });
+                await browser.close();
+                console.log(\"sharp + chromium ok\");
+              })();
+            "
+          '
+      - name: Push image
+        if: steps.publish.outputs.push == 'true'
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SHA: ${{ github.sha }}
+          ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$SHA"
+          # A re-run keeps its original sha and ref: only the current tip of main may move :latest.
+          if [ "$ON_MAIN" = "true" ] && [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$SHA" ]; then
+            docker tag "$IMAGE:$SHA" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
+          docker image inspect "$IMAGE:$SHA" --format '{{index .RepoDigests 0}}' || true
+          echo "Pushed $IMAGE:$SHA" >> "$GITHUB_STEP_SUMMARY"
