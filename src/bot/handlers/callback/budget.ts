@@ -6,6 +6,7 @@ import type { Group } from '../../../database/types';
 import { getBudgetManager } from '../../../services/budget-manager';
 import { normalizeCurrency } from '../../commands/budget';
 import type { BotInstance } from '../../types';
+import { handleBudgetPromptCallback } from '../budget-callbacks';
 import { type CallbackCtx, deletePromptMessage, resolveUserGroup } from './shared';
 
 const DEFAULT_BUDGET_AMOUNT = 100;
@@ -115,10 +116,24 @@ export async function handleBudgetAction(
   telegramId: number,
   bot: BotInstance,
 ): Promise<void> {
-  const [subAction, category, ...rest] = params;
+  const [subAction, ...promptArgs] = params;
   const resolved = await resolveUserGroup(ctx, telegramId);
   if (!resolved) return;
 
+  // Smart budget-setup prompt buttons (budget:psuggest|pskip|view:…)
+  if (subAction === 'psuggest' || subAction === 'pskip' || subAction === 'view') {
+    await handleBudgetPromptCallback(
+      ctx,
+      bot,
+      subAction,
+      promptArgs,
+      resolved.group,
+      resolved.user,
+    );
+    return;
+  }
+
+  const [category, ...rest] = promptArgs;
   const handler = BUDGET_ACTIONS.get(subAction ?? '');
   if (!handler) {
     await ctx.answerCallbackQuery({ text: 'Unknown budget action' });

@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { getCurrencySymbol, MESSAGES } from '../../config/constants';
 import {
   answeredTexts,
-  budgetPromptKeyboardMock,
   categoriesListKeyboardMock,
   dispatch,
   fakeBot,
@@ -26,6 +25,7 @@ import {
   runCallback,
   saveExpenseBatchMock,
   saveReceiptExpensesMock,
+  sendBudgetPromptsMock,
   sendMessageMock,
   setBudgetMock,
   showNextItemMock,
@@ -192,13 +192,12 @@ describe('category:add', () => {
       takeQueuedCategoryBudgetPromptsMock.mockImplementation(() => ['Животные', 'Еда']);
       await dispatch('category:add:77');
       expect(takeQueuedCategoryBudgetPromptsMock).toHaveBeenCalledWith(10, 500);
-      expect(budgetPromptKeyboardMock).toHaveBeenCalledWith('Животные', 'EUR');
-      expect(budgetPromptKeyboardMock).toHaveBeenCalledWith('Еда', 'EUR');
-      expect(sendMessageMock).toHaveBeenCalledTimes(2);
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        '💰 Хочешь установить бюджет для категории "Животные"?',
-        { reply_markup: { inline_keyboard: [[{ text: 'Животные/EUR', callback_data: 'x' }]] } },
-      );
+      expect(sendBudgetPromptsMock).toHaveBeenCalledTimes(1);
+      expect(sendBudgetPromptsMock).toHaveBeenCalledWith({
+        group: expect.objectContaining({ id: 1, default_currency: 'EUR' }),
+        userId: 10,
+        categories: ['Животные', 'Еда'],
+      });
     });
 
     test('wizard still has steps → no budget prompts are taken', async () => {
@@ -330,10 +329,11 @@ describe('category:choose', () => {
       showNextPendingCategoryStepMock.mockImplementation(() => Promise.resolve(false));
       takeQueuedCategoryBudgetPromptsMock.mockImplementation(() => ['Еда']);
       await dispatch('category:choose:77:3');
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        '💰 Хочешь установить бюджет для категории "Еда"?',
-        { reply_markup: { inline_keyboard: [[{ text: 'Еда/EUR', callback_data: 'x' }]] } },
-      );
+      expect(sendBudgetPromptsMock).toHaveBeenCalledWith({
+        group: expect.objectContaining({ id: 1, default_currency: 'EUR' }),
+        userId: 10,
+        categories: ['Еда'],
+      });
     });
   });
 });

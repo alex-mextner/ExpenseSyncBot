@@ -4,6 +4,7 @@
 import { aiTrajectoryAndUsageMigrations } from './ai-trajectories-and-usage';
 import { analyticsAndDevTaskMigrations } from './analytics-and-dev-tasks';
 import { bankIntegrationMigrations } from './bank-integration';
+import { budgetPromptMigrations } from './budget-prompts';
 import { coreTableMigrations } from './core-tables';
 import { groupMemberAndReceiptMigrations } from './group-members-and-receipts';
 import { photoQueueAndReceiptItemMigrations } from './photo-queue-and-receipt-items';
@@ -18,4 +19,5 @@ export const migrations: Migration[] = [
   ...snapshotAndDataFixMigrations,
   ...groupMemberAndReceiptMigrations,
   ...aiTrajectoryAndUsageMigrations,
+  ...budgetPromptMigrations,
 ];

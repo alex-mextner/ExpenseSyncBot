@@ -196,6 +196,16 @@ export const mockChatMessages = {
   ),
 };
 
+export const mockBudgets = {
+  getAllBudgetsForMonth: mock(() => []),
+};
+export const mockBudgetPrompts = {
+  findActiveForUser: mock(() => null),
+  findByMessageId: mock(() => null),
+};
+mock.module('../services/budget-prompt', () => ({
+  handleBudgetPromptText: mock(() => Promise.resolve(false)),
+}));
 mock.module('../../database', () => ({
   database: {
     groups: mockGroups,
@@ -207,7 +217,10 @@ mock.module('../../database', () => ({
     groupMembers: mockGroupMembers,
     devTasks: mockDevTasks,
     chatMessages: mockChatMessages,
+    budgets: mockBudgets,
+    budgetPrompts: mockBudgetPrompts,
   },
+  _budgetWriter: () => mockBudgets,
 }));
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────

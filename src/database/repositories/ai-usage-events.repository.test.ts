@@ -91,7 +91,11 @@ describe('migration 053_create_ai_usage_events', () => {
     expect(at).toBeGreaterThanOrEqual(0);
     expect(names[at + 1]).toBe('054_add_role_preset_cost_to_ai_usage_events');
     expect(names[at + 2]).toBe('055_add_timing_and_prompt_size_to_ai_usage_events');
-    expect(names.at(-1)).toBe('055_add_timing_and_prompt_size_to_ai_usage_events');
+    // Later migrations are appended after 055 (budget prompts 056-057, …) — never reordered.
+    expect(names.at(-1)).not.toBe('055_add_timing_and_prompt_size_to_ai_usage_events');
+    expect(names.lastIndexOf('055_add_timing_and_prompt_size_to_ai_usage_events')).toBeGreaterThan(
+      at,
+    );
   });
 
   it('creates the table with exactly the usage columns and no user-identifying column', () => {

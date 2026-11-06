@@ -6,6 +6,7 @@ import {
   KEYBOARD_TEXTS,
   SUPPORTED_CURRENCIES,
 } from '../config/constants';
+import { formatAmount } from '../services/currency/converter';
 
 /**
  * Create currency set selection keyboard (Step 1)
@@ -178,25 +179,30 @@ export function createConfirmKeyboard(action: string): InlineKeyboard {
 }
 
 /**
- * Create budget setup prompt keyboard
+ * Create budget setup prompt keyboard: one button per suggested amount plus skip.
+ * Callbacks carry the numeric prompt id only, so a stale button can never touch another prompt.
  */
-export function createBudgetPromptKeyboard(
-  category: string,
-  defaultCurrency: string = BASE_CURRENCY,
+export function createBudgetSuggestionKeyboard(
+  promptId: number,
+  amounts: number[],
+  currency: string = BASE_CURRENCY,
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const currencySymbol = getCurrencySymbol(defaultCurrency);
-
-  keyboard
-    .text(
-      `💰 Установить бюджет ${currencySymbol}100`,
-      `budget:set:${category}:100:${defaultCurrency}`,
-    )
-    .row()
-    .text('⏭️ Пропустить', `budget:skip:${category}`);
+  if (amounts.length > 0) {
+    for (const amount of amounts) {
+      keyboard.text(formatAmount(amount, currency), `budget:psuggest:${promptId}:${amount}`);
+    }
+    keyboard.row();
+  }
+  keyboard.text('⏭️ Пропустить', `budget:pskip:${promptId}`);
 
   return keyboard;
+}
+
+/** "Show budget" action attached to every successful budget-set confirmation. */
+export function createBudgetViewKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text('📊 Показать бюджет', 'budget:view');
 }
 
 /**

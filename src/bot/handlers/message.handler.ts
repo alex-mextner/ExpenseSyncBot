@@ -22,6 +22,7 @@ import { createLogger } from '../../utils/logger.ts';
 import { handleAskQuestion, maybeSmartAdvice } from '../commands/ask';
 import { consumePendingDesignEdit, getPipelineInstance } from '../commands/dev';
 import { consumePendingFeedback, submitFeedback } from '../commands/feedback';
+import { handleBudgetPromptText } from '../services/budget-prompt';
 import { showNextPendingCategoryStep } from '../services/category-wizard';
 import { saveExpenseBatch, saveReceiptExpenses } from '../services/expense-saver';
 import { getSheetErrorMessage } from '../services/sheet-errors';
@@ -361,6 +362,23 @@ async function consumeCategoryInputStage(msg: UserMessage): Promise<boolean | nu
   return true;
 }
 
+/**
+ * Budget prompt answer — only a strict plain amount, or a reply to a prompt message
+ * (the deferred budget-setup prompts of #123).
+ */
+async function consumeBudgetPromptText(msg: UserMessage): Promise<boolean | null> {
+  if (!msg.text || msg.text.startsWith('/')) return null;
+  const replyToMessageId = msg.ctx.update?.message?.reply_to_message?.message_id;
+  const messageThreadId = msg.ctx.update?.message?.message_thread_id;
+  const consumed = await handleBudgetPromptText({
+    group: msg.group,
+    user: msg.user,
+    text: msg.text,
+    replyToMessageId: replyToMessageId ?? null,
+    messageThreadId: messageThreadId ?? null,
+  });
+  return consumed ? true : null;
+}
 /** Bank transaction edit flow — route replies to pending edit transactions */
 async function consumeBankEditReply(msg: UserMessage): Promise<boolean | null> {
   const replyToMessageId = msg.ctx.update?.message?.reply_to_message?.message_id;
@@ -396,6 +414,7 @@ const AWAITED_INPUT_STAGES: Array<MessageStage<UserMessage>> = [
   consumeFeedbackInput,
   consumeBulkCorrectionStage,
   consumeCategoryInputStage,
+  consumeBudgetPromptText,
   consumeBankEditReply,
   consumePaymentLinks,
 ];
