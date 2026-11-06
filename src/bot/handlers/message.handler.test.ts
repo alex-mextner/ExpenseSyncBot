@@ -115,8 +115,10 @@ mock.module('../services/expense-saver', () => ({
 
 // ── ask (maybeSmartAdvice is fire-and-forget advice hook) ──
 const maybeSmartAdviceMock = mock(() => Promise.resolve());
+const handleAskQuestionMock = mock(() => Promise.resolve());
 mock.module('../commands/ask', () => ({
   maybeSmartAdvice: maybeSmartAdviceMock,
+  handleAskQuestion: handleAskQuestionMock,
 }));
 
 // ── dev pipeline — never trigger in these tests ──
@@ -243,7 +245,9 @@ mock.module('../services/category-wizard', () => ({
 }));
 
 // Dynamic-import target — must come AFTER all mock.module calls.
-const { handleExpenseMessage, buildBudgetAlertStatus } = await import('./message.handler');
+const { handleExpenseMessage, buildBudgetAlertStatus, routeTextMessage } = await import(
+  './message.handler'
+);
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -336,6 +340,7 @@ function resetAllMocks(): void {
   saveExpenseBatchMock.mockReset().mockResolvedValue();
   saveReceiptExpensesMock.mockReset().mockResolvedValue();
   maybeSmartAdviceMock.mockReset().mockResolvedValue();
+  handleAskQuestionMock.mockReset().mockResolvedValue();
   isAwaitingCustomCurrencyMock.mockReset().mockReturnValue(false);
   handleCustomCurrencyInputMock.mockReset().mockResolvedValue(true);
   handleWizardInputMock.mockReset().mockResolvedValue(false);
@@ -789,5 +794,116 @@ describe('handleExpenseMessage — multi-line batch', () => {
     // Summary is sent because >1 expense recognized
     const summaryCall = sendMessageMock.mock.calls.find((c) => String(c[0]).includes('groceries'));
     expect(summaryCall).toBeDefined();
+  });
+});
+
+// Budget language is intent, even if every line otherwise matches expense syntax.
+describe('budget routing safety regression', () => {
+  beforeEach(() => {
+    resetAllMocks();
+    mockGroups.findByTelegramGroupId.mockReturnValue(makeGroup());
+    mockCategories.exists.mockReturnValue(true);
+  });
+
+  test.each([
+    'бюджет',
+    'БЮДЖЕТ',
+    'бюджета',
+    'бюджету',
+    'бюджетом',
+    'бюджете',
+    'бюджеты',
+    'бюджетов',
+    'бюджетами',
+    'бюджетный',
+    'budget',
+    'BuDgEt',
+    'BUDGETS',
+  ])('refuses all expense writes when %s appears in a parseable line', async (word) => {
+    const handled = await handleExpenseMessage(
+      fakeMessageCtx(`10 EUR еда\n20 EUR ${word}`),
+      fakeBot(),
+    );
+    expect(handled).toBe(false);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    'Составь план\n€450 — квартира',
+    '€450 — квартира\nУточни остаток',
+    '\n\n',
+    '10 EUR еда\nБЮДЖЕТ\n20 EUR дом',
+  ])('keeps the entire mixed message out of expense writes: %s', async (text) => {
+    expect(await handleExpenseMessage(fakeMessageCtx(text), fakeBot())).toBe(false);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+  });
+
+  test('euro prefix, em dash and blank lines remain valid for pure expenses', async () => {
+    expect(
+      await handleExpenseMessage(fakeMessageCtx('\n€450 — квартира\n\n€600 — еда\n'), fakeBot()),
+    ).toBe(true);
+    expect(mockPendingExpenses.create).toHaveBeenCalledTimes(2);
+    expect(saveExpenseBatchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('production text route forwards budget intent intact', () => {
+  beforeEach(() => {
+    resetAllMocks();
+    mockGroups.findByTelegramGroupId.mockReturnValue(makeGroup({ active_topic_id: 77 }));
+    mockCategories.exists.mockReturnValue(true);
+  });
+
+  test('exact October plan reaches AI once with original context and zero expense writes', async () => {
+    const text = `Сформируй бюджет на грядущий октябрь
+
+€450 — квартира
+€600 — еда
+€300 — коммуналка
+€200 — животные
+€200 — машина
+€700 — Лена
+€700 — Алекс
+€100 — развлечения
+€620 — подписки
+€100 — дом
+
+Другие категории убери (перечили), сумма должна быть 6000€`;
+    const ctx = fakeMessageCtx(text, { isForum: true, threadId: 77 });
+    const bot = fakeBot();
+    await routeTextMessage(ctx, bot, true);
+    expect(handleAskQuestionMock).toHaveBeenCalledTimes(1);
+    expect(handleAskQuestionMock).toHaveBeenCalledWith(ctx, text, bot);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+    expect(saveReceiptExpensesMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '100 EUR БЮДЖЕТА',
+    'Вводный текст\n€450 — квартира',
+    '€450 — квартира\nЗавершающий текст',
+  ])('declined fastpath calls AI rather than dropping input: %s', async (text) => {
+    const ctx = fakeMessageCtx(text, { threadId: 77 });
+    const bot = fakeBot();
+    await routeTextMessage(ctx, bot, true);
+    expect(handleAskQuestionMock).toHaveBeenCalledTimes(1);
+    expect(handleAskQuestionMock).toHaveBeenCalledWith(ctx, text, bot);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+  });
+
+  test('pure expenses are saved without invoking AI', async () => {
+    await routeTextMessage(
+      fakeMessageCtx('€450 — квартира\n\n€600 — еда', { threadId: 77 }),
+      fakeBot(),
+      true,
+    );
+    expect(mockPendingExpenses.create).toHaveBeenCalledTimes(2);
+    expect(saveExpenseBatchMock).toHaveBeenCalledTimes(1);
+    expect(handleAskQuestionMock).not.toHaveBeenCalled();
   });
 });

@@ -48,8 +48,10 @@ mock.module('../services/expense-saver', () => ({
 
 // ── ask ──
 export const maybeSmartAdviceMock = mock((_groupId: number) => Promise.resolve());
+export const handleAskQuestionMock = mock((_ctx: unknown, _text: string) => Promise.resolve());
 mock.module('../commands/ask', () => ({
   maybeSmartAdvice: maybeSmartAdviceMock,
+  handleAskQuestion: handleAskQuestionMock,
 }));
 
 // ── dev pipeline ──
@@ -312,6 +314,7 @@ export function resetAllMocks(): void {
   saveExpenseBatchMock.mockReset().mockResolvedValue();
   saveReceiptExpensesMock.mockReset().mockResolvedValue();
   maybeSmartAdviceMock.mockReset().mockResolvedValue();
+  handleAskQuestionMock.mockReset().mockResolvedValue();
   consumePendingDesignEditMock.mockReset().mockReturnValue(null);
   getPipelineInstanceMock.mockReset().mockReturnValue(null);
   consumePendingFeedbackMock.mockReset().mockReturnValue(null);
