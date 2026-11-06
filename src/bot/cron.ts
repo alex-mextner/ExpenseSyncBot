@@ -18,9 +18,9 @@ import {
   monthTabExists,
   sortExpensesTab,
 } from '../services/google/sheets';
-import { closeUnmatchedTags } from '../utils/html';
+import { packHtmlBlocks } from '../utils/html';
 import { createLogger } from '../utils/logger.ts';
-import { formatBudgetProgressText } from './commands/budget';
+import { formatBudgetProgress } from './commands/budget-view';
 import { importExpensesFromSheet } from './commands/sync';
 import { silentSyncBudgets } from './services/budget-sync';
 
@@ -136,34 +136,6 @@ async function createMonthTab(
   }
 }
 
-function buildMonthlyNotifyText(
-  sheetUrl: string,
-  newYearUrl: string | null,
-  year: number,
-  budget: { text: string; hasBudgets: boolean },
-): string {
-  const yearSuffix = newYearUrl ? ` (${year})` : '';
-  if (budget.hasBudgets) {
-    return (
-      `Новый бюджет сформирован\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>${yearSuffix}` +
-      `\n\n${budget.text}` +
-      `\n\nРедактировать бюджет можно через ИИ или командами:\n${BUDGET_EDIT_HINT}`
-    );
-  }
-  return (
-    `Пора сформировать бюджет\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>${yearSuffix}` +
-    `\n\nЗаполни вкладку в таблице или используй команды:\n${BUDGET_EDIT_HINT}`
-  );
-}
-
-/** Telegram message limit is 4096 chars — truncate at last newline boundary, close tags. */
-function truncateNotifyText(notifyText: string, sheetUrl: string): string {
-  if (notifyText.length <= 4000) return notifyText;
-  const cut = notifyText.lastIndexOf('\n', 3900);
-  const truncated = cut > 0 ? notifyText.slice(0, cut) : notifyText.slice(0, 3900);
-  return closeUnmatchedTags(`${truncated}\n...\n\n🔗 <a href="${sheetUrl}">Гугл таблица</a>`);
-}
-
 /** Create this month's tab for one group and notify it; skips when the tab already exists. */
 async function cloneMonthForGroup(group: Group, year: number, month: MonthAbbr): Promise<void> {
   const conn = googleConn(group);
@@ -181,14 +153,24 @@ async function cloneMonthForGroup(group: Group, year: number, month: MonthAbbr):
   await silentSyncBudgets(conn, group.id);
 
   const sheetUrl = newYearUrl ?? getSpreadsheetUrl(spreadsheetId);
-  const notifyText = truncateNotifyText(
-    buildMonthlyNotifyText(sheetUrl, newYearUrl, year, formatBudgetProgressText(group.id)),
-    sheetUrl,
-  );
+  const { messages: budgetMessages, hasBudgets } = formatBudgetProgress(group.id);
+  const yearSuffix = newYearUrl ? ` (${year})` : '';
+  const sheetLink = `🔗 <a href="${sheetUrl}">Гугл таблица</a>${yearSuffix}`;
 
-  await withChatContext(group.telegram_group_id, group.active_topic_id, () =>
-    sendMessage(notifyText),
-  ).catch((err: unknown) => logger.error({ err }, `[CRON] Failed to notify group ${group.id}`));
+  const blocks = hasBudgets
+    ? [
+        `Новый бюджет сформирован\n\n${sheetLink}`,
+        ...budgetMessages,
+        `Редактировать бюджет можно через ИИ или командами:\n${BUDGET_EDIT_HINT}`,
+      ]
+    : [
+        `Пора сформировать бюджет\n\n${sheetLink}\n\n` +
+          `Заполни вкладку в таблице или используй команды:\n${BUDGET_EDIT_HINT}`,
+      ];
+
+  await withChatContext(group.telegram_group_id, group.active_topic_id, async () => {
+    for (const message of packHtmlBlocks(blocks)) await sendMessage(message);
+  }).catch((err: unknown) => logger.error({ err }, `[CRON] Failed to notify group ${group.id}`));
 }
 
 export function registerMonthlyCron(): void {

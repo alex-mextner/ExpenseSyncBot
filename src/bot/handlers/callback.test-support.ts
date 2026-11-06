@@ -117,6 +117,7 @@ mock.module('../commands/connect', () => connectMocks);
 // '' for the sentinel 'bad' lets tests pin the `|| group.default_currency` fallback.
 mock.module('../commands/budget', () => ({
   normalizeCurrency: (s: string) => (s === 'bad' ? '' : s.toUpperCase()),
+  sendBudgetView: mock(() => Promise.resolve()),
 }));
 
 export const devMock = mock(() => Promise.resolve());
@@ -157,16 +158,23 @@ mock.module('../services/sheet-errors', () => ({
   getSheetErrorMessage: (_e: unknown) => 'sheet error',
 }));
 
-export const budgetPromptKeyboardMock = mock((category: string, currency: string) => ({
-  inline_keyboard: [[{ text: `${category}/${currency}`, callback_data: 'x' }]],
-}));
+export const sendBudgetPromptsMock = mock((_params: unknown) => Promise.resolve());
 export const categoriesListKeyboardMock = mock((_categories: unknown, pendingId: number) => ({
   inline_keyboard: [[{ text: `list/${pendingId}`, callback_data: 'x' }]],
 }));
 mock.module('../keyboards', () => ({
-  createBudgetPromptKeyboard: budgetPromptKeyboardMock,
   createCategoriesListKeyboard: categoriesListKeyboardMock,
   createCategoryConfirmKeyboard: mock(() => ({ inline_keyboard: [] })),
+  createBudgetSuggestionKeyboard: mock(() => ({ inline_keyboard: [] })),
+  createBudgetViewKeyboard: mock(() => ({ inline_keyboard: [] })),
+  createAddCategoryWithBudgetKeyboard: mock(() => ({ inline_keyboard: [] })),
+}));
+mock.module('../services/budget-prompt', () => ({
+  sendBudgetPrompts: sendBudgetPromptsMock,
+  handleBudgetPromptText: mock(() => Promise.resolve(false)),
+  applyBudgetPrompt: mock(() => Promise.resolve()),
+  lookupPromptForCallback: mock(() => null),
+  skipBudgetPrompt: mock(() => Promise.resolve()),
 }));
 
 export const getPendingCategoryExpenseMock = mock<
@@ -241,6 +249,7 @@ mock.module('../../services/receipt/receipt-summarizer', () => ({
 // Wrapping makes the normalization observable: tests assert the wrapped value is persisted.
 mock.module('../../utils/fuzzy-search', () => ({
   normalizeCategoryName: (s: string) => `N(${s})`,
+  findBestCategoryMatch: (_input: string, _categories: string[]): string | null => null,
 }));
 
 // ─── Domain fixtures ──────────────────────────────────────────────────────────
@@ -383,7 +392,7 @@ const resettable: Array<{ mockReset(): void }> = [
   queueCategoryBudgetPromptMock,
   showNextPendingCategoryStepMock,
   takeQueuedCategoryBudgetPromptsMock,
-  budgetPromptKeyboardMock,
+  sendBudgetPromptsMock,
   categoriesListKeyboardMock,
   trackMembershipMock,
   getSyncCachedResultMock,
@@ -445,9 +454,7 @@ export function resetCallbackMocks(): void {
   summaryToCategoryMapMock.mockImplementation(() => new Map<string, string>());
   getSyncCachedResultMock.mockImplementation(() => null);
   getBudgetSyncCachedResultMock.mockImplementation(() => null);
-  budgetPromptKeyboardMock.mockImplementation((category, currency) => ({
-    inline_keyboard: [[{ text: `${category}/${currency}`, callback_data: 'x' }]],
-  }));
+  sendBudgetPromptsMock.mockImplementation(() => Promise.resolve());
   categoriesListKeyboardMock.mockImplementation((_categories, pendingId) => ({
     inline_keyboard: [[{ text: `list/${pendingId}`, callback_data: 'x' }]],
   }));

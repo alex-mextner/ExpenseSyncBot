@@ -9,7 +9,8 @@ import { database } from '../../../database';
 import type { PendingExpense } from '../../../database/types';
 import { sendMessage } from '../../../services/bank/telegram-sender';
 import { createLogger } from '../../../utils/logger.ts';
-import { createBudgetPromptKeyboard, createCategoriesListKeyboard } from '../../keyboards';
+import { createCategoriesListKeyboard } from '../../keyboards';
+import { sendBudgetPrompts } from '../../services/budget-prompt';
 import {
   getPendingCategoryExpense,
   getPendingCategorySiblings,
@@ -58,12 +59,11 @@ async function advanceCategoryWizard(
 
   // Category confirmation is complete. Only now surface deferred budget actions,
   // so the user never has several different actionable wizard messages at once.
-  for (const category of takeQueuedCategoryBudgetPrompts(userId, sourceMessageId)) {
-    const keyboard = createBudgetPromptKeyboard(category, group.default_currency);
-    await sendMessage(`💰 Хочешь установить бюджет для категории "${category}"?`, {
-      reply_markup: keyboard,
-    });
-  }
+  await sendBudgetPrompts({
+    group,
+    userId,
+    categories: takeQueuedCategoryBudgetPrompts(userId, sourceMessageId),
+  });
 }
 
 /** Delete the wizard prompt; a failure is logged and never aborts the flow. */
