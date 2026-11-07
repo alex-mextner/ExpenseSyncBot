@@ -90,6 +90,24 @@ export async function editMessageText(
   }
 }
 
+/**
+ * Strip a message's inline keyboard, leaving its text as is. Reads chatId from context.
+ * A failure is logged, never thrown — dead buttons are cosmetic, the flow already succeeded.
+ */
+export async function removeInlineKeyboard(messageId: number): Promise<void> {
+  try {
+    const { chatId } = getContext();
+    await getBot().api.editMessageReplyMarkup({
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    });
+  } catch (error) {
+    // Includes a missing chat context: the whole call is best-effort, never thrown.
+    logger.warn({ err: error, messageId }, 'removeInlineKeyboard failed');
+  }
+}
+
 /** Delete a message. Reads chatId from context. */
 export async function deleteMessage(messageId: number): Promise<void> {
   const { chatId } = getContext();

@@ -8,8 +8,13 @@ export interface ParsedBudgetAmount {
   currency: CurrencyCode | null;
 }
 
-const MAX_AMOUNT = 1_000_000_000_000;
-const NUMBER = String.raw`(\d{1,3}(?:[  ]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)`;
+/** Upper bound for budget-prompt amounts, typed (parseBudgetInputAmount) and suggestion
+ * buttons alike — one constant so both paths reject at the same line (#244). */
+export const BUDGET_MAX_AMOUNT = 1_000_000_000_000;
+
+const MAX_AMOUNT = BUDGET_MAX_AMOUNT;
+// Space or NBSP separates thousands groups ("1 500", "1\u00A0500"); \d cannot stand in for it.
+const NUMBER = String.raw`(\d{1,3}(?:[ ${'\u00A0'}]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)`;
 const PREFIX_FORM = new RegExp(String.raw`^([$€£₽¥])\s*${NUMBER}$`);
 const SUFFIX_FORM = new RegExp(String.raw`^${NUMBER}\s*([$€£₽¥]|[\p{L}]+)?$`, 'u');
 

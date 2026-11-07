@@ -970,6 +970,33 @@ describe('production text route forwards budget intent intact', () => {
     expect(mockPendingExpenses.create).not.toHaveBeenCalled();
   });
 
+  // The exact 2026-11-06 12:22 UTC message from the issue-#123 follow-up: the AI answered
+  // «Вы не указали сами лимиты» because the @mention routing had truncated it to the first
+  // line. Without a mention the whole message must reach the AI verbatim — the history row
+  // it stores is what the follow-up turn («Как не указала, вот они») then reads.
+  test('exact November 2026 limit list reaches AI verbatim, including «Суммы в евро»', async () => {
+    const text = `Установи следующие лимиты по бюджету по категориям
+Суммы в евро
+Аренда 550
+Еда 900
+КУ 250
+Животные 200
+Машина 200
+Алекс 700
+Лена 700
+Прочее 200
+Подписки 450
+Накопления семья 700
+Путешествия 800`;
+    const ctx = fakeMessageCtx(text, { threadId: 77 });
+    const bot = fakeBot();
+    await routeTextMessage(ctx, bot, true);
+    expect(handleAskQuestionMock).toHaveBeenCalledTimes(1);
+    expect(handleAskQuestionMock).toHaveBeenCalledWith(ctx, text, bot);
+    expect(mockPendingExpenses.create).not.toHaveBeenCalled();
+    expect(saveExpenseBatchMock).not.toHaveBeenCalled();
+  });
+
   test('pure expenses are saved without invoking AI', async () => {
     await routeTextMessage(
       fakeMessageCtx('€450 — квартира\n\n€600 — еда', { threadId: 77 }),

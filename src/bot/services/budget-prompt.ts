@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import type { CurrencyCode } from '../../config/constants';
 import { database } from '../../database';
 import type { BudgetPrompt, Group, User } from '../../database/types';
-import { sendMessage } from '../../services/bank/telegram-sender';
+import { removeInlineKeyboard, sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
 import {
   type BudgetSuggestions,
@@ -233,8 +233,24 @@ export async function handleBudgetPromptText(input: PromptTextInput): Promise<bo
 
   const { prompt } = target;
   const result = await applyBudgetPrompt(prompt, parsed.amount, parsed.currency ?? prompt.currency);
+  if (result === 'already_handled') {
+    // The prompt was finished between the lookup and the apply (a racing button or reply).
+    // Nothing to do for the user, but leave a trace — the second reply silently doing
+    // nothing is otherwise undiagnosable from the logs (#244).
+    logger.debug(
+      { promptId: prompt.id, category: prompt.category },
+      '[BUDGET-PROMPT] already_handled race in the text flow',
+    );
+    return true;
+  }
   if (result === 'failed') {
     await sendMessage('Не удалось установить бюджет. Попробуй ещё раз или используй /budget set.');
+    return true;
+  }
+  // The budget is set through the text flow: retire the prompt's buttons so they cannot be
+  // pressed afterwards and answered «устарел» (#244).
+  if (prompt.telegram_message_id !== null) {
+    await removeInlineKeyboard(prompt.telegram_message_id);
   }
   return true;
 }

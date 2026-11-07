@@ -1,6 +1,7 @@
 // Callback handlers for the smart budget prompt buttons: suggested amount, skip, show budget
 
 import type { Group, User } from '../../database/types';
+import { BUDGET_MAX_AMOUNT } from '../../services/currency/budget-amount-parser';
 import { formatAmount } from '../../services/currency/converter';
 import { sendBudgetView } from '../commands/budget';
 import {
@@ -39,6 +40,14 @@ async function handleSuggestion(
   const amount = parsePositiveInt(args[1]);
   if (promptId === null || amount === null) {
     await ctx.answerCallbackQuery({ text: STALE_TEXT });
+    return;
+  }
+
+  // Same upper bound as typed amounts (parseBudgetInputAmount): both budget-prompt paths —
+  // typed replies and generated buttons — reject amounts at/above BUDGET_MAX_AMOUNT (#244).
+  // /budget set and the AI set_budget tool are separate paths with their own validation.
+  if (amount >= BUDGET_MAX_AMOUNT) {
+    await ctx.answerCallbackQuery({ text: '❌ Слишком большая сумма' });
     return;
   }
 

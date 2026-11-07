@@ -17,6 +17,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   withChatContext: mock(),
   initSender: mock(),
   editMessageText: mock(),
+  removeInlineKeyboard: mock(),
   deleteMessage: mock(),
   sendDirect: mock(),
   sendDocumentDirect: mock(),

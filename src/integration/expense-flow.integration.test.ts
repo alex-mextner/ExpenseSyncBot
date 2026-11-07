@@ -41,6 +41,7 @@ mock.module('../services/bank/telegram-sender', () => ({
   sendMessage: sendMessageMock,
   withChatContext: async <T>(_c: number, _t: number | null, fn: () => Promise<T>) => fn(),
   editMessageText: mock(() => Promise.resolve()),
+  removeInlineKeyboard: mock(() => Promise.resolve()),
   sendDirect: mock(() => Promise.resolve(null)),
   sendChatAction: mock(() => Promise.resolve()),
   deleteMessage: mock(() => Promise.resolve()),
