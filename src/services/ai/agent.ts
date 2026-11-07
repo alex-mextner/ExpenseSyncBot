@@ -60,6 +60,9 @@ import type { AgentContext, ToolCallResult, ToolResult } from './types';
 
 const logger = createLogger('agent');
 
+/** Failure text for a non-AI error mid-run; ask.ts shows the same one when it owns the reply. */
+export const UNCLASSIFIED_FAILURE_MESSAGE = '❌ Ошибка при обработке вопроса. Попробуй еще раз.';
+
 /** Singleton debug logger — writes full AI conversations to logs/chats/ when enabled */
 export const aiDebugLogger = new AiDebugLogger(env.AI_DEBUG_LOGS, 'logs');
 
@@ -360,9 +363,21 @@ export class ExpenseBotAgent {
     debugCtx?.flush();
     this.recordTrajectory('error', classification?.kind ?? 'unclassified');
     if (!classification) {
-      // Not a recognizable AI/network/timeout failure — propagate so the caller
-      // (and logs) see the real, unrelated error instead of a masked generic one.
+      // Not a recognizable AI/network/timeout failure — a bug or an unrelated error.
       // (No admin AI-failure report here: it isn't an AI failure.)
+      if (this.writeToolRan) {
+        // A write tool already changed data: the work log is the user's only record of
+        // what was done, so keep it and show the failure under it (issue #182). The
+        // AgentError tells the caller the message is already on screen — no duplicate.
+        logger.error(
+          { err: error },
+          '[AGENT] non-AI error after write tools — keeping the work log, failure under it',
+        );
+        await writer.fail(UNCLASSIFIED_FAILURE_MESSAGE);
+        throw new AgentError(UNCLASSIFIED_FAILURE_MESSAGE, error);
+      }
+      // Nothing user-visible was done — propagate so the caller (and logs) see the
+      // real, unrelated error instead of a masked generic one.
       await writer.deleteSentMessage();
       throw error;
     }

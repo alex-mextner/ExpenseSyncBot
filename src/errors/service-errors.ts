@@ -21,7 +21,11 @@ export class OAuthError extends AppError {}
 
 /** AI agent error — user-facing message already sent to Telegram, no further action needed */
 export class AgentError extends AppError {
-  constructor(public readonly userMessage: string) {
-    super(userMessage, 'AGENT_ERROR');
+  /** `cause` keeps the original error (e.g. an unclassified non-AI one) for the logs. */
+  constructor(
+    public readonly userMessage: string,
+    cause?: unknown,
+  ) {
+    super(userMessage, 'AGENT_ERROR', cause);
   }
 }

@@ -505,5 +505,28 @@ describe('ExpenseBotAgent', () => {
       expect(shown).toContain('Записываю расход: 5 EUR, Еда');
       expect(shown.endsWith('⏳ Слишком много запросов к AI. Подожди минуту.')).toBe(true);
     });
+
+    it('a write tool, then an unclassified non-AI error: the work log stays, failure under it', async () => {
+      mockIsRetryableError.mockReturnValue(false);
+      mockClassifyAiError.mockReturnValue(null);
+      const bug = new TypeError('bug after the write');
+      mockToolCallRound('add_expense', '{"amount":5,"currency":"EUR","category":"Еда"}');
+      mockAiStreamRound.mockRejectedValueOnce(bug);
+
+      const { AgentError } = await import('../../errors');
+      let thrown: unknown;
+      await agent.run('запиши 5 евро еда', [], mockBot as unknown as Bot).catch((e) => {
+        thrown = e;
+      });
+
+      // The caller must not send a second, duplicate failure message: the agent already
+      // rendered it under the preserved work log.
+      expect(thrown).toBeInstanceOf(AgentError);
+      expect(mockBot.api.deleteMessage).not.toHaveBeenCalled();
+      const edits = mockBot.api.editMessageText.mock.calls as unknown as Array<[{ text: string }]>;
+      const shown = edits.at(-1)?.[0].text ?? '';
+      expect(shown).toContain('Записываю расход: 5 EUR, Еда');
+      expect(shown).toContain('Ошибка при обработке вопроса');
+    });
   });
 });

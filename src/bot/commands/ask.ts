@@ -9,7 +9,7 @@ import { database } from '../../database';
 import type { Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
 import { validateAdvice } from '../../services/ai/advice-validator';
-import { ExpenseBotAgent } from '../../services/ai/agent';
+import { ExpenseBotAgent, UNCLASSIFIED_FAILURE_MESSAGE } from '../../services/ai/agent';
 import { aiStreamRound, stripThinkingTags } from '../../services/ai/streaming';
 import { NO_ANSWER_MESSAGE } from '../../services/ai/telegram-stream';
 import type { AgentContext } from '../../services/ai/types';
@@ -265,9 +265,8 @@ async function handleAskWithAnthropic(
       return false;
     }
     logger.error({ err: error }, '[ASK] Anthropic agent error');
-    const failureMessage = '❌ Ошибка при обработке вопроса. Попробуй еще раз.';
-    await sendMessage(failureMessage);
-    persistAssistantReply(failureMessage);
+    await sendMessage(UNCLASSIFIED_FAILURE_MESSAGE);
+    persistAssistantReply(UNCLASSIFIED_FAILURE_MESSAGE);
     return false;
   }
 }
