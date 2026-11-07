@@ -394,24 +394,40 @@ function appendResultSection<T>(
   if (items.length > 10) lines.push(`  ...и ещё ${items.length - 10}`);
 }
 
+export interface SheetImportResult {
+  /** Rows added to the DB. */
+  inserted: number;
+  /** Rows skipped because the group has no user to own them — never a global fallback id (#184). */
+  skippedNoOwner: number;
+}
+
 /**
  * One-directional import: read expenses from an arbitrary spreadsheet and add any
- * that are missing from the DB. Never deletes. Returns the number of inserted rows.
+ * that are missing from the DB. Never deletes. Rows are skipped (and counted) when
+ * the group has no user to own them, so callers can report it (#184).
  * Safe to call repeatedly — deduplicates by date|category|amount|currency key.
  */
 export async function importExpensesFromSheet(
   groupId: number,
   conn: GoogleConn,
   spreadsheetId: string,
-): Promise<number> {
+): Promise<SheetImportResult> {
   const { expenses: sheetExpenses } = await readExpensesFromSheet(conn, spreadsheetId);
-  if (sheetExpenses.length === 0) return 0;
+  if (sheetExpenses.length === 0) return { inserted: 0, skippedNoOwner: 0 };
 
   const dbExpenses = database.expenses.findByGroupId(groupId, 100000);
   const existingKeys = new Set(dbExpenses.map((e) => dbExpenseToKey(e)));
 
   const users = database.users.findByGroupId ? database.users.findByGroupId(groupId) : [];
-  const defaultUserId = users[0]?.id ?? 1;
+  // No fallback id: users.id is global, so any constant would hand rows to another group's user.
+  const defaultUserId = users[0]?.id;
+  if (defaultUserId === undefined) {
+    logger.warn(
+      { groupId, rows: sheetExpenses.length },
+      '[SYNC] Sheet import skipped: the group has no user to own the rows',
+    );
+    return { inserted: 0, skippedNoOwner: sheetExpenses.length };
+  }
 
   let inserted = 0;
   for (const row of sheetExpenses) {
@@ -432,7 +448,7 @@ export async function importExpensesFromSheet(
     existingKeys.add(parsed.key); // guard against within-loop duplicates
     inserted++;
   }
-  return inserted;
+  return { inserted, skippedNoOwner: 0 };
 }
 
 // ── Auto-sync with cooldown ──

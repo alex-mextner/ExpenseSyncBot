@@ -146,13 +146,17 @@ mock.module('../../services/currency/converter', () => ({
   formatAmount: (x: number, c: string) => `${x} ${c}`,
 }));
 
-const importExpensesFromSheetMock = mock(async (..._args: unknown[]): Promise<number> => 0);
-
+const importExpensesFromSheetMock = mock(
+  async (..._args: unknown[]): Promise<{ inserted: number; skippedNoOwner: number }> => ({
+    inserted: 0,
+    skippedNoOwner: 0,
+  }),
+);
 mock.module('./sync', () => ({
   importExpensesFromSheet: importExpensesFromSheetMock,
 }));
 
-const { handleReconnectCommand } = await import('./reconnect');
+const { handleReconnectCommand, formatFullSyncReport } = await import('./reconnect');
 
 let db: SqliteDb;
 let groups: GroupRepository;
@@ -575,5 +579,30 @@ describe('/reconnect budget import from sheet', () => {
     const existing = budgets.findByGroupCategoryMonth(group.id, 'Food', '2026-03');
     const hasChanged = !existing || existing.limit_amount !== 500 || existing.currency !== 'EUR';
     expect(hasChanged).toBe(false);
+  });
+});
+
+describe('/reconnect full sync report', () => {
+  // #184: sheet rows skipped for a userless group must be reported, not silently dropped.
+  test('skipped-no-owner rows are listed in the user-facing report', () => {
+    const report = formatFullSyncReport({
+      snapshotId: null,
+      snapshotExpenses: 0,
+      snapshotBudgets: 0,
+      sheetBackupUrl: null,
+      yearCreated: null,
+      sheetToDbExpenses: 0,
+      sheetRowsSkippedNoOwner: 3,
+      dbToSheetExpenses: 0,
+      sheetToBudgets: 0,
+      budgetTabsCreated: [],
+      budgetRowsWritten: 0,
+      audit: [],
+      recreated: [],
+    });
+    expect(report).toContain('пропущено 3 строки');
+    expect(report).toContain('в группе нет ни одного участника');
+    // The skip IS the outcome: the generic «синхронизированы» must not mask it (#184).
+    expect(report).not.toContain('расходы синхронизированы');
   });
 });
