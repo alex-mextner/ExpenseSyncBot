@@ -1,6 +1,6 @@
 // Tests for the persistent budget prompt service: sending, plain input, reply disambiguation, claiming
 
-import { mock } from 'bun:test';
+import { mock, spyOn } from 'bun:test';
 // ── Real in-memory persistence for prompts, stubs for everything else ──
 import { BudgetPromptRepository } from '../../database/repositories/budget-prompt.repository';
 import { GroupRepository } from '../../database/repositories/group.repository';
@@ -39,7 +39,11 @@ const sendMessageMock = mock(
   (_text: string, _options?: { reply_markup?: unknown }): Promise<{ message_id: number } | null> =>
     Promise.resolve({ message_id: nextMessageId++ }),
 );
-mock.module('../../services/bank/telegram-sender', () => ({ sendMessage: sendMessageMock }));
+const removeInlineKeyboardMock = mock((_messageId: number): Promise<void> => Promise.resolve());
+mock.module('../../services/bank/telegram-sender', () => ({
+  sendMessage: sendMessageMock,
+  removeInlineKeyboard: removeInlineKeyboardMock,
+}));
 
 const setBudgetMock = mock(
   (_params: {
@@ -106,6 +110,8 @@ beforeEach(() => {
   user = userRepo.create({ telegram_id: 1, group_id: group.id });
   otherUser = userRepo.create({ telegram_id: 2, group_id: group.id });
   nextMessageId = 1000;
+  removeInlineKeyboardMock.mockClear();
+  logMock.debug.mockClear();
   sendMessageMock.mockClear();
   setBudgetMock.mockClear();
   setBudgetMock.mockImplementation(() => Promise.resolve({ sheetsSynced: true }));
@@ -177,6 +183,36 @@ describe('handleBudgetPromptText', () => {
     const [text, options] = sendMessageMock.mock.calls[0] ?? [];
     expect(text).toContain('Бюджет установлен');
     expect(keyboardData(options)).toContain('budget:view');
+  });
+
+  test('a typed apply strips the prompt message buttons so they cannot be pressed later (#244)', async () => {
+    const id = await openPrompt('Food');
+    const boundMessageId = prompts.findById(id)?.telegram_message_id;
+    expect(boundMessageId).not.toBeNull();
+
+    expect(await handleBudgetPromptText(input('150'))).toBe(true);
+
+    expect(removeInlineKeyboardMock).toHaveBeenCalledTimes(1);
+    expect(removeInlineKeyboardMock).toHaveBeenCalledWith(boundMessageId);
+  });
+
+  test('the already_handled race consumes the reply, writes no budget and logs the prompt id (#244)', async () => {
+    const id = await openPrompt('Food');
+    // The prompt is active at lookup, but a racing button claims it before our apply:
+    // finish() reports another writer won.
+    sendMessageMock.mockClear();
+    const finishSpy = spyOn(prompts, 'finish').mockReturnValueOnce(false);
+
+    expect(await handleBudgetPromptText(input('150'))).toBe(true);
+
+    expect(setBudgetMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(removeInlineKeyboardMock).not.toHaveBeenCalled();
+    expect(logMock.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ promptId: id }),
+      expect.stringContaining('already_handled'),
+    );
+    finishSpy.mockRestore();
   });
 
   test('an explicit currency overrides the prompt currency', async () => {

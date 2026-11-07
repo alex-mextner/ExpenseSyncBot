@@ -9,7 +9,7 @@ describe('parseBudgetInputAmount', () => {
     ['150', 150, null],
     ['150 eur', 150, 'EUR'],
     ['150 EUR', 150, 'EUR'],
-    ['1 500 RSD', 1500, 'RSD'],
+    ['1\u00A0500 RSD', 1500, 'RSD'], // NBSP thousands separator — Telegram soft-wrap inserts it
     ['1500.50', 1500.5, null],
     ['1500,5', 1500.5, null],
     ['$150', 150, 'USD'],
@@ -33,7 +33,6 @@ describe('parseBudgetInputAmount', () => {
     '$150 eur',
     '12abc',
     '1.2.3',
-    '99999999999999',
     '150\n200',
   ])('rejects %p', (input) => {
     expect(parseBudgetInputAmount(input)).toBeNull();

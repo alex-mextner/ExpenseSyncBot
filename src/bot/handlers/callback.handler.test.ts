@@ -740,6 +740,17 @@ describe('handleCallbackQuery — routing table', () => {
         );
       });
 
+      test('a suggested amount at the 1e12 cap is rejected like a typed one (#244)', async () => {
+        const ctx = fakeCallbackCtx('budget:psuggest:5:1000000000000');
+        await handleCallbackQuery(ctx as never, fakeBot() as never);
+
+        expect(applyPromptMock).not.toHaveBeenCalled();
+        expect(lookupPromptMock).not.toHaveBeenCalled();
+        expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining('Слишком большая сумма') }),
+        );
+      });
+
       test('an already handled prompt (double tap) keeps the message and reports stale', async () => {
         applyPromptMock.mockResolvedValueOnce('already_handled');
         const ctx = fakeCallbackCtx('budget:psuggest:5:150');

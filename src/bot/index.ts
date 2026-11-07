@@ -40,6 +40,7 @@ import { requireAdmin, requireGoogle, requireGroup } from './guards';
 import { handleCallbackQuery } from './handlers/callback.handler';
 import { routeTextMessage } from './handlers/message.handler';
 import { handlePhotoMessage } from './handlers/photo.handler';
+import { extractMentionQuestion } from './mention-question';
 import { rateLimitOnResponseError, rateLimitPreRequest } from './rate-limit.hook';
 import { sanitizeOutgoingMessages } from './sanitize-outgoing.hook';
 import { registerTopicMiddleware } from './topic-middleware';
@@ -170,11 +171,11 @@ export function createBot(): Bot {
 
     // @mention is always the trigger for AI — works regardless of topics config
     if (botUsername) {
-      const mentionPattern = new RegExp(`@${botUsername}\\s+(.+)`, 'i');
-      const match = text.match(mentionPattern);
-
-      if (match?.[1]) {
-        await handleAskQuestion(ctx, match[1].trim(), bot, true);
+      // The question spans newlines: a mention followed by a multi-line budget list must
+      // reach the AI in full (2026-11-06 incident — the list was cut at the first line).
+      const question = extractMentionQuestion(text, botUsername);
+      if (question) {
+        await handleAskQuestion(ctx, question, bot, true);
         return;
       }
     }
