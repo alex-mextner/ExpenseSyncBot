@@ -74,7 +74,10 @@ class FakeAgent {
     return agentRunMock(question, history);
   }
 }
-mock.module('../../services/ai/agent', () => ({ ExpenseBotAgent: FakeAgent }));
+mock.module('../../services/ai/agent', () => ({
+  ExpenseBotAgent: FakeAgent,
+  UNCLASSIFIED_FAILURE_MESSAGE: '❌ Ошибка при обработке вопроса. Попробуй еще раз.',
+}));
 mock.module('../../services/analytics/spending-analytics', () => ({
   spendingAnalytics: { getFinancialSnapshot: mock(() => ({})) },
 }));
