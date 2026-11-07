@@ -241,10 +241,19 @@ export async function recoverPriorYearExpenses(): Promise<void> {
 
     for (const { year, spreadsheetId } of priorSheets) {
       try {
-        const inserted = await importExpensesFromSheet(group.id, googleConn(group), spreadsheetId);
+        const { inserted, skippedNoOwner } = await importExpensesFromSheet(
+          group.id,
+          googleConn(group),
+          spreadsheetId,
+        );
         if (inserted > 0) {
           logger.info(
             `[RECOVER] Restored ${inserted} expense(s) for group ${group.id}, year ${year}`,
+          );
+        } else if (skippedNoOwner > 0) {
+          // No user to report to and none to own the rows: the operator trace (#184).
+          logger.warn(
+            `[RECOVER] group ${group.id}, year ${year}: skipped ${skippedNoOwner} row(s) — no user in the group`,
           );
         } else {
           logger.info(`[RECOVER] group ${group.id}, year ${year}: nothing missing`);

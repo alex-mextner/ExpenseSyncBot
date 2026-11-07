@@ -102,6 +102,8 @@ interface FullSyncReport {
   sheetBackupUrl: string | null;
   yearCreated: number | null;
   sheetToDbExpenses: number;
+  /** Sheet rows skipped because the group had no user to own them (#184). */
+  sheetRowsSkippedNoOwner: number;
   dbToSheetExpenses: number;
   sheetToBudgets: number;
   budgetTabsCreated: string[];
@@ -205,6 +207,7 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
     sheetBackupUrl: null,
     yearCreated: null,
     sheetToDbExpenses: 0,
+    sheetRowsSkippedNoOwner: 0,
     dbToSheetExpenses: 0,
     sheetToBudgets: 0,
     budgetTabsCreated: [],
@@ -278,11 +281,13 @@ export async function fullSyncAfterReconnect(groupId: number): Promise<void> {
     report.yearCreated = await ensureCurrentYearSpreadsheet(freshGroup);
 
     // Step 3: Sheet → DB expenses (add-only, never deletes)
-    report.sheetToDbExpenses = await importExpensesFromSheet(
+    const importResult = await importExpensesFromSheet(
       freshGroup.id,
       conn,
       freshGroup.spreadsheet_id,
     );
+    report.sheetToDbExpenses = importResult.inserted;
+    report.sheetRowsSkippedNoOwner = importResult.skippedNoOwner;
 
     // Step 4: DB → Sheet expenses (push missing)
     report.dbToSheetExpenses = await pushMissingExpensesToSheet(freshGroup);
@@ -674,6 +679,12 @@ function formatExpenseSyncSection(report: FullSyncReport): string[] {
     lines.push(
       `\n📥 Таблица → БД: +${report.sheetToDbExpenses} ${pluralize(report.sheetToDbExpenses, 'расход добавлен', 'расхода добавлено', 'расходов добавлено')}`,
     );
+  } else if (report.sheetRowsSkippedNoOwner > 0) {
+    // The primary #184 case (0 imported, N skipped): the skip IS the outcome — saying
+    // «синхронизированы» would obscure that nothing was imported.
+    lines.push(
+      `⏭️ Таблица → БД: пропущено ${report.sheetRowsSkippedNoOwner} ${pluralize(report.sheetRowsSkippedNoOwner, 'строка', 'строки', 'строк')} — в группе нет ни одного участника; они добавятся после того, как кто-нибудь сделает /start`,
+    );
   } else {
     lines.push('\n📥 Таблица → БД: расходы синхронизированы');
   }
@@ -709,7 +720,7 @@ function formatBudgetSyncSection(report: FullSyncReport): string[] {
   return lines;
 }
 
-function formatFullSyncReport(report: FullSyncReport): string {
+export function formatFullSyncReport(report: FullSyncReport): string {
   const lines: string[] = ['✅ Синхронизация завершена!\n'];
   lines.push(...formatBackupSection(report));
   lines.push(...formatRecreatedSection(report));

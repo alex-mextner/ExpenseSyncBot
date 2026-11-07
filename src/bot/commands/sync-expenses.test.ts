@@ -37,7 +37,8 @@ const { DatabaseService } = await import('../../database/index');
 const service = new DatabaseService(db);
 mock.module('../../database', () => ({ database: service, _budgetWriter: () => service.budgets }));
 
-const { ensureFreshExpenses, handleSyncCommand, syncExpenses } = await import('./sync');
+const { ensureFreshExpenses, handleSyncCommand, importExpensesFromSheet, syncExpenses } =
+  await import('./sync');
 const { executeTool } = await import('../../services/ai/tool-executor');
 
 afterAll(() => db.close());
@@ -202,5 +203,31 @@ describe('sync reports name the skipped rows', () => {
 
     expect(result.output).toContain('Skipped: 1');
     expect(result.output?.length).toBeLessThan(500);
+  });
+});
+
+describe('importExpensesFromSheet ownership fallback', () => {
+  // users.id is global and the FK does not check group_id: a fallback to user 1 would hand the
+  // imported expense to another group's user whenever one exists (same hazard as /sync).
+  test("a userless group imports nothing, never rows owned by another group's user 1", async () => {
+    db.exec("DELETE FROM sqlite_sequence WHERE name = 'users'");
+    const otherGroupId = connectedGroup();
+    const otherUser = service.users.create({ telegram_id: Date.now(), group_id: otherGroupId });
+    expect(otherUser.id).toBe(1);
+    const groupId = connectedGroup();
+    sheetRows = [sheetRow('imported row')];
+
+    const result = await importExpensesFromSheet(
+      groupId,
+      { refreshToken: 'tok', oauthClient: 'current' } as never,
+      'SHEET',
+    );
+
+    expect(result.inserted).toBe(0);
+    // The caller (the /reconnect report) shows the skipped count to the user (#184).
+    expect(result.skippedNoOwner).toBe(1);
+    expect(service.expenses.findByGroupId(groupId, 100)).toEqual([]);
+    expect(logMock.warn).toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 });

@@ -123,7 +123,11 @@ mock.module('./services/budget-sync', () => ({
 }));
 
 const importExpensesFromSheetMock = mock(
-  async (_token: string, _groupId: number, _spreadsheetId: string): Promise<number> => 0,
+  async (
+    _token: string,
+    _groupId: number,
+    _spreadsheetId: string,
+  ): Promise<{ inserted: number; skippedNoOwner: number }> => ({ inserted: 0, skippedNoOwner: 0 }),
 );
 mock.module('./commands/sync', () => ({
   importExpensesFromSheet: importExpensesFromSheetMock,
@@ -686,7 +690,7 @@ describe('recoverPriorYearExpenses', () => {
   beforeEach(() => {
     mockGroupsRepo.findAll.mockReset().mockReturnValue([]);
     mockGroupSpreadsheets.listAll.mockReset().mockReturnValue([]);
-    importExpensesFromSheetMock.mockReset().mockResolvedValue(0);
+    importExpensesFromSheetMock.mockReset().mockResolvedValue({ inserted: 0, skippedNoOwner: 0 });
     logMock.error.mockReset();
     logMock.info.mockReset();
   });
@@ -728,12 +732,34 @@ describe('recoverPriorYearExpenses', () => {
     mockGroupSpreadsheets.listAll.mockReturnValue([
       { year: new Date().getFullYear() - 1, spreadsheetId: 'sid-prev' },
     ]);
-    importExpensesFromSheetMock.mockResolvedValue(7);
+    importExpensesFromSheetMock.mockResolvedValue({ inserted: 7, skippedNoOwner: 0 });
 
     await recoverPriorYearExpenses();
 
     const infoCalls = logMock.info.mock.calls.map((c) => JSON.stringify(c));
     expect(infoCalls.some((c) => c.includes('Restored 7'))).toBe(true);
+  });
+
+  it('warns when a userless group forced the import to skip rows (#184)', async () => {
+    mockGroupsRepo.findAll.mockReturnValue([
+      {
+        id: 1,
+        telegram_group_id: -100,
+        google_refresh_token: 'tok',
+        default_currency: 'EUR',
+        enabled_currencies: ['EUR'],
+        active_topic_id: null,
+      },
+    ]);
+    mockGroupSpreadsheets.listAll.mockReturnValue([
+      { year: new Date().getFullYear() - 1, spreadsheetId: 'sid-prev' },
+    ]);
+    importExpensesFromSheetMock.mockResolvedValue({ inserted: 0, skippedNoOwner: 4 });
+
+    await recoverPriorYearExpenses();
+
+    const warnCalls = logMock.warn.mock.calls.map((c) => JSON.stringify(c));
+    expect(warnCalls.some((c) => c.includes('skipped 4 row(s)'))).toBe(true);
   });
 
   it('logs and continues on per-sheet import failure', async () => {
@@ -753,7 +779,7 @@ describe('recoverPriorYearExpenses', () => {
     ]);
     importExpensesFromSheetMock
       .mockRejectedValueOnce(new Error('OAuth expired'))
-      .mockResolvedValueOnce(3);
+      .mockResolvedValueOnce({ inserted: 3, skippedNoOwner: 0 });
 
     await recoverPriorYearExpenses();
 
