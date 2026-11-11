@@ -20,11 +20,6 @@ const REQUIRED_ENV: Record<string, string> = {
   AI_BASE_URL: 'https://test.zai/v4',
   AI_MODEL: 'glm-test',
   AI_FAST_MODEL: 'glm-fast-test',
-  HF_TOKEN: 'test-hf-token',
-  HF_BASE_URL: 'https://test.hf/v1',
-  HF_MODEL: 'hf-test',
-  HF_FAST_MODEL: 'hf-fast-test',
-  HF_VISION_MODEL: 'hf-vision-test',
 };
 
 interface LoadResult {
@@ -74,12 +69,12 @@ function loadedConfig(result: LoadResult): {
 }
 
 describe('env config loading', () => {
-  it('defaults both text chains to z.ai → Claude → HF', () => {
+  it('defaults both text chains to z.ai → Claude', () => {
     const { smartChain, fastChain } = loadedConfig(loadEnv(REQUIRED_ENV));
     const expected = {
-      order: ['zai', 'claude', 'hf'],
+      order: ['zai', 'claude'],
       fromEnv: false,
-      fallback: ['zai', 'claude', 'hf'],
+      fallback: ['zai', 'claude'],
     };
     expect(smartChain).toEqual(expected);
     expect(fastChain).toEqual(expected);
@@ -187,9 +182,9 @@ describe('env config loading', () => {
       loadEnv({ ...REQUIRED_ENV, AI_SMART_CHAIN: 'groq,gemini' }),
     );
     expect(smartChain).toEqual({
-      order: ['zai', 'claude', 'hf'],
+      order: ['zai', 'claude'],
       fromEnv: false,
-      fallback: ['zai', 'claude', 'hf'],
+      fallback: ['zai', 'claude'],
     });
   });
 
@@ -225,12 +220,12 @@ describe('env config loading', () => {
     expect(claudeVisionModel).toBe('claude-vision-override');
   });
 
-  it('still fails fast when a required provider variable is missing', () => {
+  it('allows legacy HF variables to be omitted', () => {
     const withoutHfVision = Object.fromEntries(
       Object.entries(REQUIRED_ENV).filter(([name]) => name !== 'HF_VISION_MODEL'),
     );
     const result = loadEnv(withoutHfVision);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('Missing required environment variable: HF_VISION_MODEL');
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain('Missing required environment variable');
   });
 });

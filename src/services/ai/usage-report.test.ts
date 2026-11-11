@@ -137,7 +137,6 @@ describe('aggregateUsage', () => {
     expect(r.verdicts.map((v) => [v.provider, v.status])).toEqual([
       ['zai', 'healthy'],
       ['claude', 'no_traffic'],
-      ['hf', 'no_traffic'],
     ]);
   });
 
@@ -146,7 +145,6 @@ describe('aggregateUsage', () => {
     expect(r.verdicts.map((v) => [v.provider, v.status])).toEqual([
       ['zai', 'healthy'],
       ['claude', 'no_traffic'],
-      ['hf', 'no_traffic'],
       ['openrouter', 'healthy'],
     ]);
   });

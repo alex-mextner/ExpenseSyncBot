@@ -17,9 +17,9 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('env');
 
-/** Default order of the smart chain: z.ai → Claude → HF. Overridden by AI_SMART_CHAIN. */
+/** Default order of the smart chain: z.ai → Claude. Overridden by AI_SMART_CHAIN. */
 export const DEFAULT_SMART_CHAIN: ProviderId[] = [...DEFAULT_PROVIDER_IDS];
-/** Default order of the fast chain: z.ai → Claude → HF. Overridden by AI_FAST_CHAIN. */
+/** Default order of the fast chain: z.ai → Claude. Overridden by AI_FAST_CHAIN. */
 export const DEFAULT_FAST_CHAIN: ProviderId[] = [...DEFAULT_PROVIDER_IDS];
 
 /**
@@ -93,7 +93,7 @@ interface EnvConfig {
   AI_FAST_CHAIN: ChainOrder;
 
   // Anthropic Claude (OpenAI-compat endpoint; optional key — second in smart/fast, OCR primary).
-  // Without either key every Claude slot is skipped and OCR runs on HF vision alone.
+  // Without either key every Claude slot is skipped, including the OCR chain.
   CLAUDE_API_TOKEN: string;
   CLAUDE_API_TOKEN2: string;
   CLAUDE_BASE_URL: string;
@@ -101,7 +101,7 @@ interface EnvConfig {
   CLAUDE_FAST_MODEL: string;
   CLAUDE_VISION_MODEL: string;
 
-  // HuggingFace Router (fallback + vision)
+  // HuggingFace Router (legacy opt-in provider; no longer part of the default chains)
   HF_TOKEN: string;
   HF_BASE_URL: string;
   HF_MODEL: string;
@@ -176,11 +176,11 @@ function validateEnv(): EnvConfig {
     // Sonnet, not Haiku: on degraded receipt photos Haiku returned a wrong yet sum-verified receipt.
     CLAUDE_VISION_MODEL: getEnvVariable('CLAUDE_VISION_MODEL', false) || 'claude-sonnet-5-5',
 
-    HF_TOKEN: getEnvVariable('HF_TOKEN'),
-    HF_BASE_URL: getEnvVariable('HF_BASE_URL'),
-    HF_MODEL: getEnvVariable('HF_MODEL'),
-    HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL'),
-    HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL'),
+    HF_TOKEN: getEnvVariable('HF_TOKEN', false),
+    HF_BASE_URL: getEnvVariable('HF_BASE_URL', false),
+    HF_MODEL: getEnvVariable('HF_MODEL', false),
+    HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL', false),
+    HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL', false),
 
     AI_ROUTING: parseRoutingMode(process.env['AI_ROUTING']),
     AI_ROUTING_USER_IDS: parseRoutingUserIds(process.env['AI_ROUTING_USER_IDS']),

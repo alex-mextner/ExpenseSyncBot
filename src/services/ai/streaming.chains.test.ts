@@ -21,27 +21,27 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it.each([
-    ['smart' as const, ['test-model', 'claude-smart', 'hf-test']],
-    ['fast' as const, ['test-fast', 'claude-fast', 'hf-fast']],
-    ['ocr' as const, ['claude-vision', 'hf-vision']],
+    ['smart' as const, ['test-model', 'claude-smart']],
+    ['fast' as const, ['test-fast', 'claude-fast']],
+    ['ocr' as const, ['claude-vision']],
   ])('the %s chain with every key set is exactly %p', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     expect(await chainModels(chain)).toEqual(expected);
   });
 
   it.each([
-    ['smart' as const, ['test-model', 'hf-test']],
-    ['fast' as const, ['test-fast', 'hf-fast']],
-    ['ocr' as const, ['hf-vision']],
+    ['smart' as const, ['test-model']],
+    ['fast' as const, ['test-fast']],
+    ['ocr' as const, []],
   ])('without a Claude key the %s chain degrades to %p', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = '';
     expect(await chainModels(chain)).toEqual(expected);
   });
 
   it.each([
-    ['smart' as const, ['test-model', 'claude-smart', 'hf-test']],
-    ['fast' as const, ['test-fast', 'claude-fast', 'hf-fast']],
-    ['ocr' as const, ['claude-vision', 'hf-vision']],
+    ['smart' as const, ['test-model', 'claude-smart']],
+    ['fast' as const, ['test-fast', 'claude-fast']],
+    ['ocr' as const, ['claude-vision']],
   ])('secondary alone keeps Claude available in the %s chain', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = '';
     mockEnv.CLAUDE_API_TOKEN2 = 'secondary-only';
@@ -52,28 +52,26 @@ describe('aiStreamRound fallback chain', () => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['hf', 'claude'], fromEnv: true };
     expect(await chainModels('smart')).toEqual(['hf-test', 'claude-smart']);
-    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast', 'hf-fast']);
+    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast']);
   });
 
   it('a configured order naming nothing usable falls back to the default order', async () => {
     mockEnv.CLAUDE_API_TOKEN = '';
     mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['claude'], fromEnv: true };
-    expect(await chainModels('smart')).toEqual(['test-model', 'hf-test']);
+    expect(await chainModels('smart')).toEqual(['test-model']);
   });
 
   // A stalled model is handed off: the agent excludes it for the rest of the run (HYP-1716).
   it('skips the excluded providers and keeps the rest of the chain in order', async () => {
-    expect(await chainModels('smart', ['z.ai (test-model)'])).toEqual(['claude-smart', 'hf-test']);
-    expect(await chainModels('smart', ['z.ai (test-model)', 'Claude (claude-smart)'])).toEqual([
-      'hf-test',
-    ]);
+    expect(await chainModels('smart', ['z.ai (test-model)'])).toEqual(['claude-smart']);
+    expect(await chainModels('smart', ['z.ai (test-model)', 'Claude (claude-smart)'])).toEqual([]);
   });
 
   it('openrouter is part of a chain only when the operator names it and its key and model are set', async () => {
     mockEnv.OPENROUTER_API_KEY = 'or-key';
     // Not in the default order: a key alone changes nothing.
-    expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
-    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast', 'hf-fast']);
+    expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart']);
+    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast']);
     mockEnv.AI_SMART_CHAIN = {
       ...DEFAULT_ORDER,
       order: ['openrouter', 'claude', 'hf'],
@@ -82,7 +80,7 @@ describe('aiStreamRound fallback chain', () => {
     mockEnv.AI_FAST_CHAIN = { ...DEFAULT_ORDER, order: ['zai', 'openrouter'], fromEnv: true };
     expect(await chainModels('smart')).toEqual(['or-smart', 'claude-smart', 'hf-test']);
     expect(await chainModels('fast')).toEqual(['test-fast', 'or-fast']);
-    expect(await chainModels('ocr')).toEqual(['claude-vision', 'hf-vision']);
+    expect(await chainModels('ocr')).toEqual(['claude-vision']);
   });
 
   it('a named openrouter without key or model is skipped, the rest of the chain runs', async () => {
@@ -144,11 +142,7 @@ describe('aiStreamRound fallback chain', () => {
         ...mockEnv.AI_ROLE_CHAINS,
         executor: [entry('openrouter', flash)],
       };
-      expect(await chainModels('smart', undefined, 'executor')).toEqual([
-        'test-model',
-        'claude-smart',
-        'hf-test',
-      ]);
+      expect(await chainModels('smart', undefined, 'executor')).toEqual(['test-model', 'claude-smart']);
     });
 
     it('roles mode runs the role chain in its order: preset routes and bare providers', async () => {
@@ -162,7 +156,7 @@ describe('aiStreamRound fallback chain', () => {
         'claude-smart',
       ]);
       // A round without a role is still the legacy smart chain.
-      expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
+      expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart']);
     });
 
     it('sends the preset settings: reasoning_effort and temperature on OpenRouter, ceiling on max_tokens', async () => {
@@ -228,13 +222,11 @@ describe('aiStreamRound fallback chain', () => {
       expect(await chainModels('smart', undefined, 'executor')).toEqual([
         'test-model',
         'claude-smart',
-        'hf-test',
       ]);
       // An unset role chain behaves the same.
       expect(await chainModels('smart', undefined, 'repair')).toEqual([
         'test-model',
         'claude-smart',
-        'hf-test',
       ]);
     });
 
@@ -263,15 +255,8 @@ describe('aiStreamRound fallback chain', () => {
         'claude-fast',
         'test-fast',
       ]);
-      expect(await chainModels('fast', undefined, 'planner')).toEqual([
-        'test-fast',
-        'claude-fast',
-        'hf-fast',
-      ]);
-      expect(await chainModels('ocr', undefined, 'executor')).toEqual([
-        'claude-vision',
-        'hf-vision',
-      ]);
+      expect(await chainModels('fast', undefined, 'planner')).toEqual(['test-fast', 'claude-fast']);
+      expect(await chainModels('ocr', undefined, 'executor')).toEqual(['claude-vision']);
     });
 
     it('nextProvider and the excluded list follow the role chain', () => {

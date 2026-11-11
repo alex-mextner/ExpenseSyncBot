@@ -2,10 +2,10 @@
  * Unified AI streaming round with automatic provider fallback.
  *
  * Three chains, selected via options.chain:
- *   SMART: configured AI_SMART_CHAIN, default z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → HF ${HF_MODEL}
- *   FAST:  configured AI_FAST_CHAIN, default z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → HF ${HF_FAST_MODEL}
- *   OCR:   Claude ${CLAUDE_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
- * The Claude slot is skipped when its key is absent (OCR then runs HF-only); the OCR order is fixed.
+ *   SMART: configured AI_SMART_CHAIN, default z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL}
+ *   FAST:  configured AI_FAST_CHAIN, default z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL}
+ *   OCR:   Claude ${CLAUDE_VISION_MODEL}     (vision-only)
+ * The Claude slot is skipped when its key is absent; the OCR order is fixed.
  *
  * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
  * Callers that just want the final text (validator, prefill, merchant-agent) omit callbacks.

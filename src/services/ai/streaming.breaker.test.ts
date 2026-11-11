@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import OpenAI from 'openai';
 import {
   aiStreamRound,
+  mockEnv,
   isProviderDemoted,
   resetFallbackEnv,
   streamingModule,
@@ -136,6 +137,11 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it('a 402 from the HF fallback slot demotes HF for an hour', async () => {
+    mockEnv.AI_SMART_CHAIN = {
+      order: ['zai', 'claude', 'hf'],
+      fromEnv: true,
+      fallback: ['zai', 'claude', 'hf'],
+    };
     const clientsMod = await import('./clients');
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       if (params.model === 'hf-test') throw noCredits();
