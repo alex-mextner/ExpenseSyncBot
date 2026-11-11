@@ -60,13 +60,16 @@ describe('aiStreamRound fallback chain', () => {
   it.each([
     ['smart' as const, 'claude-sonnet-5-5', ['test-model', 'hf-test']],
     ['fast' as const, 'claude-haiku-5-5', ['test-fast', 'hf-fast']],
-    ['ocr' as const, 'claude-sonnet-5-5', ['hf-vision']],
-    ['ocr' as const, 'claude-haiku-5-5', ['hf-vision']],
   ])('Claude requests in the %s chain (%s) omit temperature and use the per-model thinking params; other providers are unchanged', async (chain, claudeModel, otherModels) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     if (chain === 'smart') mockEnv.CLAUDE_MODEL = claudeModel;
     else if (chain === 'fast') mockEnv.CLAUDE_FAST_MODEL = claudeModel;
     else mockEnv.CLAUDE_VISION_MODEL = claudeModel;
+    if (chain === 'smart') {
+      mockEnv.AI_SMART_CHAIN = { order: ['zai', 'claude', 'hf'], fromEnv: true, fallback: ['zai', 'claude', 'hf'] };
+    } else if (chain === 'fast') {
+      mockEnv.AI_FAST_CHAIN = { order: ['zai', 'claude', 'hf'], fromEnv: true, fallback: ['zai', 'claude', 'hf'] };
+    }
     const hfModel = otherModels[otherModels.length - 1];
     type SentParams = OpenAI.ChatCompletionCreateParamsStreaming & { thinking?: unknown };
     const sent = new Map<string, SentParams>();
@@ -143,7 +146,7 @@ describe('aiStreamRound fallback chain', () => {
         }),
       ).rejects.toThrow();
 
-      expect(sent.map((p) => p.model)).toEqual(['test-model', 'claude-smart', 'hf-test']);
+      expect(sent.map((p) => p.model)).toEqual(['test-model', 'claude-smart']);
       for (const params of sent) {
         expect(params.tools).toEqual(calculateTool);
         expect(params.tool_choice).toBe('none');

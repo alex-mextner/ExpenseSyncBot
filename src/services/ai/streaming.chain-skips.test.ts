@@ -16,9 +16,9 @@ mock.module('../../utils/logger', () => ({
 }));
 
 const defaultOrder = (): ChainOrder => ({
-  order: ['zai', 'claude', 'hf'],
+  order: ['zai', 'claude'],
   fromEnv: false,
-  fallback: ['zai', 'claude', 'hf'],
+  fallback: ['zai', 'claude'],
 });
 
 const mockEnv = {
@@ -96,7 +96,7 @@ describe('text chain provider skips', () => {
     mockEnv.CLAUDE_API_TOKEN = '';
 
     expect(nextProvider('smart', [])).toBe('z.ai (test-model)');
-    expect(nextProvider('smart', ['z.ai (test-model)'])).toBe('HF (hf-test)');
+    expect(nextProvider('smart', ['z.ai (test-model)'])).toBeNull();
     nextProvider('smart', []);
 
     expect(logged('debug', 'default chain order')).toEqual([
@@ -109,6 +109,8 @@ describe('text chain provider skips', () => {
   });
 
   it('skips a retired model with one warning, even when its key is missing too', () => {
+    mockEnv.AI_SMART_CHAIN = { ...defaultOrder(), order: ['hf', 'zai'], fromEnv: true };
+    mockEnv.AI_FAST_CHAIN = { ...defaultOrder(), order: ['hf', 'zai'], fromEnv: true };
     mockEnv.HF_MODEL = RETIRED_MODEL;
     mockEnv.HF_FAST_MODEL = RETIRED_FAST_MODEL;
     mockEnv.HF_TOKEN = '';

@@ -97,7 +97,7 @@ function logUnconfiguredProvider(detail: object, named: boolean): void {
 
 /**
  * Builds one text chain in the configured order (AI_SMART_CHAIN / AI_FAST_CHAIN, default
- * z.ai → Claude → HF), skipping — and logging once — any provider whose key or model is
+ * z.ai → Claude), skipping — and logging once — any provider whose key or model is
  * missing. A named-but-unconfigured provider warns; one only in the default order is debug.
  * When nothing in an operator-configured order is usable the default order is tried instead.
  */
@@ -224,7 +224,6 @@ function buildOcrChain(): ProviderSlot[] {
       ),
     );
   }
-  chain.push(streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL));
   return chain;
 }
 

@@ -107,7 +107,6 @@ describe('formatUsageText exact output', () => {
       'Verdicts',
       '  zai: failing — 0/1 ok (0%), last error server @ 2026-10-23T11:59Z',
       '  claude: no traffic in the last 7 days',
-      '  hf: no traffic in the last 7 days',
       '  openrouter: degraded — 1/2 ok (50%), last ok 2026-10-23T11:59Z, last error rate_limit @ 2026-10-23T11:59Z',
       '',
     ]);

@@ -4,7 +4,7 @@
 
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import OpenAI from 'openai';
-import { aiStreamRound, resetFallbackEnv } from './streaming.test-support';
+import { aiStreamRound, mockEnv, resetFallbackEnv } from './streaming.test-support';
 
 describe('aiStreamRound fallback chain', () => {
   beforeEach(() => {
@@ -12,6 +12,11 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it('falls back to next provider on 400 BadRequest', async () => {
+    mockEnv.AI_SMART_CHAIN = {
+      order: ['zai', 'claude', 'hf'],
+      fromEnv: true,
+      fallback: ['zai', 'claude', 'hf'],
+    };
     // Mock: first provider (z.ai) → 400, second (Claude) should be tried
     // We test this via the full aiStreamRound by mocking fetch
     const calls: string[] = [];
@@ -514,6 +519,11 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it('all providers fail: aggregated error mentions all provider names', async () => {
+    mockEnv.AI_SMART_CHAIN = {
+      order: ['zai', 'claude', 'hf'],
+      fromEnv: true,
+      fallback: ['zai', 'claude', 'hf'],
+    };
     const clientsMod = await import('./clients');
     const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       throw new Error(`boom ${params.model}`);
@@ -546,6 +556,11 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it('preserves last error status on aggregated error', async () => {
+    mockEnv.AI_SMART_CHAIN = {
+      order: ['zai', 'claude', 'hf'],
+      fromEnv: true,
+      fallback: ['zai', 'claude', 'hf'],
+    };
     const clientsMod = await import('./clients');
     const createMock = mock(async () => {
       throw Object.assign(new Error('last-fail'), { status: 503 });
@@ -572,14 +587,11 @@ describe('aiStreamRound fallback chain', () => {
     }
   });
 
-  it('uses OCR chain (Claude vision → HF, no z.ai)', async () => {
+  it('uses the OCR chain with Claude vision only', async () => {
     const clientsMod = await import('./clients');
     const calls: string[] = [];
     const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
-      if (params.model === 'claude-vision') {
-        throw new Error('claude-vision-fail');
-      }
       return {
         [Symbol.asyncIterator]: async function* () {
           yield { choices: [{ delta: { content: 'ocr-text' }, finish_reason: 'stop' }] };
@@ -603,13 +615,12 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     expect(result.text).toBe('ocr-text');
-    // OCR chain uses only vision models (claude-vision + hf-vision).
+    // OCR chain uses only the Claude vision model.
     // Previous tests in this describe block already spied on zaiClient, so
     // we can't rely on zaiSpy.mock.calls here — instead verify no non-vision
     // model name appears in the calls array.
-    expect(calls.every((m) => m === 'claude-vision' || m === 'hf-vision')).toBe(true);
+    expect(calls).toEqual(['claude-vision']);
     expect(calls).toContain('claude-vision');
-    expect(calls).toContain('hf-vision');
     void zaiSpy;
   });
 
