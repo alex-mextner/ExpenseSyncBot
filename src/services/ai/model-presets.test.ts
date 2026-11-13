@@ -50,8 +50,10 @@ describe('MODEL_PRESETS', () => {
     }
   });
 
-  it('carries the exact OpenRouter ids probed on 2026-10-23', () => {
-    expect(findPreset('deepseek41-flash')?.models.openrouter).toBe('deepseek/deepseek-v4.1-flash');
+  it('carries the exact OpenRouter ids from the dated model catalogs', () => {
+    expect(findPreset('deepseek41-flash')?.models.openrouter).toBe(
+      'deepseek/deepseek-v4.1-flash-1017',
+    );
     expect(findPreset('glm53-flash-low')?.models.openrouter).toBe('z-ai/glm-5.3-flash');
     expect(findPreset('glm53-low')?.models.openrouter).toBe('z-ai/glm-5.3');
     expect(findPreset('haiku')?.models.openrouter).toBe('anthropic/claude-haiku-5.5');
@@ -99,10 +101,10 @@ describe('isExcludedModel', () => {
 
   it.each([
     'glm-5.3-flash',
-    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-v4.1-flash-1017',
     'claude-sonnet-5-5',
-    'Qwen/Qwen3-235B-A22B',
-    'meta-llama/Llama-3.3-70B-Instruct',
+    'Qwen/Qwen3.8-2.4T-A95B:deepinfra',
+    'meta-llama/Llama-4-Scout-17B-16E-Instruct:deepinfra',
   ])('keeps %s', (model) => {
     expect(isExcludedModel(model)).toBe(false);
   });
@@ -175,7 +177,7 @@ describe('presetRequestParams', () => {
 
 describe('computeCostMicroUsd', () => {
   // deepseek41-flash on OpenRouter: $0.30 in / $1.20 out per million tokens = 0.30 / 1.20 µUSD per token.
-  const MODEL = 'deepseek/deepseek-v4.1-flash';
+  const MODEL = 'deepseek/deepseek-v4.1-flash-1017';
 
   it('prices tokens at the list rate of the route, in whole micro-USD', () => {
     expect(computeCostMicroUsd('openrouter', MODEL, 1_000_000, 1_000_000)).toBe(1_500_000);

@@ -21,8 +21,8 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it.each([
-    ['smart' as const, ['test-model', 'claude-smart', 'hf-test']],
-    ['fast' as const, ['test-fast', 'claude-fast', 'hf-fast']],
+    ['smart' as const, ['claude-smart', 'test-model', 'hf-test']],
+    ['fast' as const, ['claude-fast', 'test-fast', 'hf-fast']],
     ['ocr' as const, ['claude-vision', 'hf-vision']],
   ])('the %s chain with every key set is exactly %p', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
@@ -39,8 +39,8 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it.each([
-    ['smart' as const, ['test-model', 'claude-smart', 'hf-test']],
-    ['fast' as const, ['test-fast', 'claude-fast', 'hf-fast']],
+    ['smart' as const, ['claude-smart', 'test-model', 'hf-test']],
+    ['fast' as const, ['claude-fast', 'test-fast', 'hf-fast']],
     ['ocr' as const, ['claude-vision', 'hf-vision']],
   ])('secondary alone keeps Claude available in the %s chain', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = '';
@@ -48,11 +48,11 @@ describe('aiStreamRound fallback chain', () => {
     expect(await chainModels(chain)).toEqual(expected);
   });
 
-  it('AI_SMART_CHAIN / AI_FAST_CHAIN override the order; the other chain keeps its default', async () => {
+  it('configured chains choose providers while Claude stays first and HF stays last', async () => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     mockEnv.AI_SMART_CHAIN = { ...DEFAULT_ORDER, order: ['hf', 'claude'], fromEnv: true };
-    expect(await chainModels('smart')).toEqual(['hf-test', 'claude-smart']);
-    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast', 'hf-fast']);
+    expect(await chainModels('smart')).toEqual(['claude-smart', 'hf-test']);
+    expect(await chainModels('fast')).toEqual(['claude-fast', 'test-fast', 'hf-fast']);
   });
 
   it('a configured order naming nothing usable falls back to the default order', async () => {
@@ -72,15 +72,15 @@ describe('aiStreamRound fallback chain', () => {
   it('openrouter is part of a chain only when the operator names it and its key and model are set', async () => {
     mockEnv.OPENROUTER_API_KEY = 'or-key';
     // Not in the default order: a key alone changes nothing.
-    expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
-    expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast', 'hf-fast']);
+    expect(await chainModels('smart')).toEqual(['claude-smart', 'test-model', 'hf-test']);
+    expect(await chainModels('fast')).toEqual(['claude-fast', 'test-fast', 'hf-fast']);
     mockEnv.AI_SMART_CHAIN = {
       ...DEFAULT_ORDER,
       order: ['openrouter', 'claude', 'hf'],
       fromEnv: true,
     };
     mockEnv.AI_FAST_CHAIN = { ...DEFAULT_ORDER, order: ['zai', 'openrouter'], fromEnv: true };
-    expect(await chainModels('smart')).toEqual(['or-smart', 'claude-smart', 'hf-test']);
+    expect(await chainModels('smart')).toEqual(['claude-smart', 'or-smart', 'hf-test']);
     expect(await chainModels('fast')).toEqual(['test-fast', 'or-fast']);
     expect(await chainModels('ocr')).toEqual(['claude-vision', 'hf-vision']);
   });
@@ -103,8 +103,8 @@ describe('aiStreamRound fallback chain', () => {
     mockEnv.HF_MODEL = 'openai/gpt-oss-120b';
     mockEnv.HF_FAST_MODEL = 'qwen/qwen3.8-27b';
     try {
-      expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart']);
-      expect(await chainModels('fast')).toEqual(['test-fast', 'claude-fast']);
+      expect(await chainModels('smart')).toEqual(['claude-smart', 'test-model']);
+      expect(await chainModels('fast')).toEqual(['claude-fast', 'test-fast']);
     } finally {
       mockEnv.HF_MODEL = 'hf-test';
       mockEnv.HF_FAST_MODEL = 'hf-fast';
@@ -145,24 +145,24 @@ describe('aiStreamRound fallback chain', () => {
         executor: [entry('openrouter', flash)],
       };
       expect(await chainModels('smart', undefined, 'executor')).toEqual([
-        'test-model',
         'claude-smart',
+        'test-model',
         'hf-test',
       ]);
     });
 
-    it('roles mode runs the role chain in its order: preset routes and bare providers', async () => {
+    it('roles mode prioritizes Claude among selected preset routes and bare providers', async () => {
       mockEnv.AI_ROUTING = 'roles';
       mockEnv.AI_ROLE_CHAINS = {
         ...mockEnv.AI_ROLE_CHAINS,
         executor: [entry('openrouter', flash), entry('claude')],
       };
       expect(await chainModels('smart', undefined, 'executor')).toEqual([
-        'vendor/flash',
         'claude-smart',
+        'vendor/flash',
       ]);
       // A round without a role is still the legacy smart chain.
-      expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
+      expect(await chainModels('smart')).toEqual(['claude-smart', 'test-model', 'hf-test']);
     });
 
     it('sends the preset settings: reasoning_effort and temperature on OpenRouter, ceiling on max_tokens', async () => {
@@ -226,14 +226,14 @@ describe('aiStreamRound fallback chain', () => {
         executor: [entry('openrouter', { ...flash, qualification: null })],
       };
       expect(await chainModels('smart', undefined, 'executor')).toEqual([
-        'test-model',
         'claude-smart',
+        'test-model',
         'hf-test',
       ]);
       // An unset role chain behaves the same.
       expect(await chainModels('smart', undefined, 'repair')).toEqual([
-        'test-model',
         'claude-smart',
+        'test-model',
         'hf-test',
       ]);
     });
@@ -264,8 +264,8 @@ describe('aiStreamRound fallback chain', () => {
         'test-fast',
       ]);
       expect(await chainModels('fast', undefined, 'planner')).toEqual([
-        'test-fast',
         'claude-fast',
+        'test-fast',
         'hf-fast',
       ]);
       expect(await chainModels('ocr', undefined, 'executor')).toEqual([
@@ -284,12 +284,12 @@ describe('aiStreamRound fallback chain', () => {
       expect(streamingModule.nextProvider('smart', ['Claude (claude-smart)'], 'repair')).toBe(
         'HF (hf-test)',
       );
-      expect(streamingModule.nextProvider('smart', [])).toBe('z.ai (test-model)');
+      expect(streamingModule.nextProvider('smart', [])).toBe('Claude (claude-smart)');
     });
   });
 
   it('nextProvider names the slot the chain would try first without the excluded ones', () => {
-    expect(streamingModule.nextProvider('smart', [])).toBe('z.ai (test-model)');
+    expect(streamingModule.nextProvider('smart', [])).toBe('Claude (claude-smart)');
     expect(streamingModule.nextProvider('smart', ['z.ai (test-model)'])).toBe(
       'Claude (claude-smart)',
     );
@@ -302,8 +302,27 @@ describe('aiStreamRound fallback chain', () => {
     ).toBeNull();
   });
 
-  it('nextProvider follows the breaker order: a demoted z.ai is not next, Claude is', () => {
+  it('a demoted Claude yields to z.ai while HF stays after every priority provider', async () => {
+    recordProviderRateLimit('claude', Date.now(), 60_000);
+    expect(streamingModule.nextProvider('smart', [])).toBe('z.ai (test-model)');
+    expect(await chainModels('smart')).toEqual(['test-model', 'claude-smart', 'hf-test']);
     recordProviderRateLimit('zai', Date.now(), 60_000);
-    expect(streamingModule.nextProvider('smart', [])).toBe('Claude (claude-smart)');
+    expect(await chainModels('smart')).toEqual(['claude-smart', 'test-model', 'hf-test']);
+  });
+
+  it('keeps HF last in a configured role chain with OpenRouter and a demoted Claude', async () => {
+    mockEnv.AI_ROUTING = 'roles';
+    mockEnv.OPENROUTER_API_KEY = 'or-key';
+    mockEnv.AI_ROLE_CHAINS.executor = [
+      { provider: 'hf', preset: null },
+      { provider: 'openrouter', preset: null },
+      { provider: 'claude', preset: null },
+    ];
+    recordProviderRateLimit('claude', Date.now(), 60_000);
+    expect(await chainModels('smart', undefined, 'executor')).toEqual([
+      'or-smart',
+      'claude-smart',
+      'hf-test',
+    ]);
   });
 });

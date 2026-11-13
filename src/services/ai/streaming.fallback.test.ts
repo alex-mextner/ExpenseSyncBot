@@ -12,16 +12,16 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it('falls back to next provider on 400 BadRequest', async () => {
-    // Mock: first provider (z.ai) → 400, second (Claude) should be tried
+    // Mock: first provider (Claude) → 400, second (z.ai) should be tried
     // We test this via the full aiStreamRound by mocking fetch
     const calls: string[] = [];
 
     const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
-      if (params.model === 'test-model') {
+      if (params.model === 'claude-smart') {
         throw new OpenAI.APIError(400, { message: 'bad request' }, 'bad request', new Headers());
       }
-      if (params.model === 'claude-smart') {
+      if (params.model === 'test-model') {
         throw new OpenAI.APIError(
           400,
           { message: 'bad request too' },
@@ -44,10 +44,10 @@ describe('aiStreamRound fallback chain', () => {
 
     // Mock all three clients to use our createMock
     const clientsMod = await import('./clients');
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -63,7 +63,7 @@ describe('aiStreamRound fallback chain', () => {
     expect(result.text).toBe('hello from HF');
     expect(result.providerUsed).toContain('HF');
     // All three providers were tried
-    expect(calls).toEqual(['test-model', 'claude-smart', 'hf-test']);
+    expect(calls).toEqual(['claude-smart', 'test-model', 'hf-test']);
   });
 
   it('propagates error when text was already emitted', async () => {
@@ -75,7 +75,7 @@ describe('aiStreamRound fallback chain', () => {
       },
     }));
 
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -138,7 +138,7 @@ describe('aiStreamRound fallback chain', () => {
         yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -162,8 +162,8 @@ describe('aiStreamRound fallback chain', () => {
       arguments: '{"limit":5}',
     });
     expect(result.finishReason).toBe('tool_calls');
-    expect(result.providerUsed).toContain('z.ai');
-    // Claude/HF should NOT be tried
+    expect(result.providerUsed).toContain('Claude');
+    // z.ai/HF should NOT be tried
     expect(createMock).toHaveBeenCalledTimes(1);
   });
 
@@ -189,7 +189,7 @@ describe('aiStreamRound fallback chain', () => {
         };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -223,7 +223,7 @@ describe('aiStreamRound fallback chain', () => {
         yield { choices: [{ delta: { content: 'plain answer' }, finish_reason: 'stop' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -245,18 +245,18 @@ describe('aiStreamRound fallback chain', () => {
       [Symbol.asyncIterator]: async function* () {
         callNum++;
         if (callNum === 1) {
-          // z.ai: empty response (common z.ai quirk)
+          // Claude: empty response
           yield { choices: [{ delta: { content: '' }, finish_reason: 'stop' }] };
           return;
         }
-        // Claude: actual text
+        // z.ai: actual text
         yield { choices: [{ delta: { content: 'recovered' }, finish_reason: 'stop' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -267,7 +267,7 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     expect(result.text).toBe('recovered');
-    expect(result.providerUsed).toContain('Claude');
+    expect(result.providerUsed).toContain('z.ai');
   });
 
   it('stops the chain immediately when the overall signal is pre-aborted', async () => {
@@ -280,10 +280,10 @@ describe('aiStreamRound fallback chain', () => {
         yield { choices: [{ delta: { content: 'nope' }, finish_reason: 'stop' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -323,7 +323,7 @@ describe('aiStreamRound fallback chain', () => {
         opts?: { signal?: AbortSignal },
       ) => {
         calls.push(params.model);
-        if (params.model === 'test-model') {
+        if (params.model === 'claude-smart') {
           // Hang until our injected per-provider timeout aborts this provider's signal.
           await new Promise<void>((_resolve, reject) => {
             opts?.signal?.addEventListener('abort', () => {
@@ -343,10 +343,10 @@ describe('aiStreamRound fallback chain', () => {
         };
       },
     );
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -358,8 +358,8 @@ describe('aiStreamRound fallback chain', () => {
     });
 
     expect(result.text).toBe('fresh fallback');
-    expect(result.providerUsed).toContain('Claude');
-    expect(calls).toEqual(['test-model', 'claude-smart']);
+    expect(result.providerUsed).toContain('z.ai');
+    expect(calls).toEqual(['claude-smart', 'test-model']);
     // The second provider received a fresh, non-aborted signal.
     expect(secondSignalStates).toEqual([false]);
   });
@@ -379,10 +379,10 @@ describe('aiStreamRound fallback chain', () => {
       err.name = 'AbortError';
       throw err;
     });
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -398,7 +398,7 @@ describe('aiStreamRound fallback chain', () => {
       expect((err as Error).name).toBe('AbortError');
     }
     // Only the first provider was tried — overall deadline stops the chain.
-    expect(calls).toEqual(['test-model']);
+    expect(calls).toEqual(['claude-smart']);
   });
 
   it('tool-call resolution: handles missing tc.index (HF Router quirk)', async () => {
@@ -439,7 +439,7 @@ describe('aiStreamRound fallback chain', () => {
         yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -475,7 +475,7 @@ describe('aiStreamRound fallback chain', () => {
         yield { choices: [{ delta: { content: 'text anyway' }, finish_reason: 'stop' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -499,7 +499,7 @@ describe('aiStreamRound fallback chain', () => {
         yield { choices: [{ delta: { content: 'd' }, finish_reason: 'stop' }] };
       },
     }));
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -518,10 +518,10 @@ describe('aiStreamRound fallback chain', () => {
     const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       throw new Error(`boom ${params.model}`);
     });
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -538,8 +538,8 @@ describe('aiStreamRound fallback chain', () => {
     } catch (err) {
       const msg = (err as Error).message;
       expect(msg).toContain('All 3 providers');
-      expect(msg).toContain('z.ai');
       expect(msg).toContain('Claude');
+      expect(msg).toContain('z.ai');
       expect(msg).toContain('HF');
       expect(msg).toContain('smart');
     }
@@ -550,10 +550,10 @@ describe('aiStreamRound fallback chain', () => {
     const createMock = mock(async () => {
       throw Object.assign(new Error('last-fail'), { status: 503 });
     });
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
     spyOn(clientsMod, 'hfClient').mockReturnValue({
@@ -618,7 +618,7 @@ describe('aiStreamRound fallback chain', () => {
     const modelsCalled: string[] = [];
     const createMock = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       modelsCalled.push(params.model);
-      if (params.model === 'test-model') {
+      if (params.model === 'claude-smart') {
         throw new Error('first down');
       }
       return {
@@ -627,10 +627,10 @@ describe('aiStreamRound fallback chain', () => {
         },
       };
     });
-    spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
-    spyOn(clientsMod, 'claudeClient').mockReturnValue({
+    spyOn(clientsMod, 'zaiClient').mockReturnValue({
       chat: { completions: { create: createMock } },
     } as unknown as OpenAI);
 
@@ -640,9 +640,9 @@ describe('aiStreamRound fallback chain', () => {
       chain: 'smart',
     });
 
-    // First provider (test-model) was tried and failed, second (claude-smart) succeeded
-    expect(modelsCalled).toContain('test-model');
+    // First provider (claude-smart) was tried and failed, second (test-model) succeeded
     expect(modelsCalled).toContain('claude-smart');
+    expect(modelsCalled).toContain('test-model');
     expect(result.text).toBe('ok');
   });
 });

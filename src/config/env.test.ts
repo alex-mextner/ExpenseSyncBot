@@ -74,12 +74,12 @@ function loadedConfig(result: LoadResult): {
 }
 
 describe('env config loading', () => {
-  it('defaults both text chains to z.ai → Claude → HF', () => {
+  it('defaults both text chains to Claude → z.ai → HF', () => {
     const { smartChain, fastChain } = loadedConfig(loadEnv(REQUIRED_ENV));
     const expected = {
-      order: ['zai', 'claude', 'hf'],
+      order: ['claude', 'zai', 'hf'],
       fromEnv: false,
-      fallback: ['zai', 'claude', 'hf'],
+      fallback: ['claude', 'zai', 'hf'],
     };
     expect(smartChain).toEqual(expected);
     expect(fastChain).toEqual(expected);
@@ -184,12 +184,12 @@ describe('env config loading', () => {
 
   it('a chain order naming no known provider falls back to the default order', () => {
     const { smartChain } = loadedConfig(
-      loadEnv({ ...REQUIRED_ENV, AI_SMART_CHAIN: 'groq,gemini' }),
+      loadEnv({ ...REQUIRED_ENV, AI_SMART_CHAIN: 'unknown,unsupported' }),
     );
     expect(smartChain).toEqual({
-      order: ['zai', 'claude', 'hf'],
+      order: ['claude', 'zai', 'hf'],
       fromEnv: false,
-      fallback: ['zai', 'claude', 'hf'],
+      fallback: ['claude', 'zai', 'hf'],
     });
   });
 

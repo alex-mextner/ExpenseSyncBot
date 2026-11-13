@@ -14,4 +14,4 @@ export const PROVIDER_IDS = ['zai', 'claude', 'hf', 'openrouter'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /** The providers of the default chain orders; `openrouter` is optional and in none of them. */
-export const DEFAULT_PROVIDER_IDS: readonly ProviderId[] = ['zai', 'claude', 'hf'];
+export const DEFAULT_PROVIDER_IDS: readonly ProviderId[] = ['claude', 'zai', 'hf'];

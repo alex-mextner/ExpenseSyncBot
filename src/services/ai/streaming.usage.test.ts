@@ -16,15 +16,15 @@ mock.module('../../utils/logger', () => ({
 }));
 
 const defaultOrder = (): ChainOrder => ({
-  order: ['zai', 'claude', 'hf'],
+  order: ['claude', 'zai', 'hf'],
   fromEnv: false,
-  fallback: ['zai', 'claude', 'hf'],
+  fallback: ['claude', 'zai', 'hf'],
 });
-/** Puts HF at the head of both chains, to provoke a failing head provider (the order is an env setting). */
-const hfHead = (): ChainOrder => ({
-  order: ['hf', 'zai', 'claude'],
+/** Selects only HF when measuring the reserve provider in isolation. */
+const hfOnly = (): ChainOrder => ({
+  order: ['hf'],
   fromEnv: true,
-  fallback: ['zai', 'claude', 'hf'],
+  fallback: ['claude', 'zai', 'hf'],
 });
 
 const mockEnv = {
@@ -319,8 +319,8 @@ describe('classifyAttemptFailure', () => {
 
 describe('aiStreamRound usage events', () => {
   it('records an ok attempt with the tokens from the final usage chunk', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
+    mockEnv.AI_FAST_CHAIN = hfOnly();
     const restore = await useCreate(async () => streamOf(textChunks('hello', FULL_USAGE)));
     try {
       const result = await run();
@@ -363,8 +363,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('keeps tokens NULL when the provider reports no usage', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
+    mockEnv.AI_FAST_CHAIN = hfOnly();
     const restore = await useCreate(async () => streamOf(textChunks('hello')));
     try {
       await run();
@@ -383,8 +383,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('stores no prompt, completion or identifying data', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
+    mockEnv.AI_FAST_CHAIN = hfOnly();
     const restore = await useCreate(async () =>
       streamOf(textChunks('the model answer', FULL_USAGE)),
     );
@@ -422,11 +422,11 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('records one event per attempt and stops at the first success', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = defaultOrder();
+    mockEnv.AI_FAST_CHAIN = defaultOrder();
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const restore = await useCreate(async (params) => {
-      if (params.model === 'hf-test') throw apiError(429, 'Rate limit reached for model');
+      if (params.model === 'claude-smart') throw apiError(429, 'Rate limit reached for model');
       return streamOf(textChunks('from z.ai', FULL_USAGE));
     });
     try {
@@ -439,10 +439,10 @@ describe('aiStreamRound usage events', () => {
     expect(
       recorded.map((e) => [e.provider, e.model, e.outcome, e.errorClass, e.httpStatus]),
     ).toEqual([
-      ['hf', 'hf-test', 'error', 'rate_limit', 429],
+      ['claude', 'claude-smart', 'error', 'rate_limit', 429],
       ['zai', 'test-model', 'ok', null, null],
     ]);
-    // claude and hf were never reached: no row for them.
+    // HF was never reached: no row is recorded for it.
     expect(recorded[0]?.promptTokens).toBeNull();
     expect(recorded[0]?.requestId).toBe(recorded[1]?.requestId ?? 'missing');
     expect(recorded[0]?.requestId).toEqual(expect.any(String));
@@ -474,8 +474,8 @@ describe('aiStreamRound usage events', () => {
     }
 
     expect(recorded.map((e) => [e.provider, e.outcome, e.errorClass, e.httpStatus])).toEqual([
-      ['zai', 'error', 'server', 500],
       ['claude', 'error', 'bad_request', 400],
+      ['zai', 'error', 'server', 500],
       ['hf', 'error', 'quota', 402],
     ]);
   });
@@ -543,8 +543,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('records a caller deadline as aborted and stops the chain', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
+    mockEnv.AI_FAST_CHAIN = hfOnly();
     const controller = new AbortController();
     const restore = await useCreate((_params, opts) => {
       const hang = Promise.withResolvers<never>();
@@ -566,30 +566,30 @@ describe('aiStreamRound usage events', () => {
   });
 
   it('records a per-provider timeout as timeout and falls through to the next provider', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = defaultOrder();
+    mockEnv.AI_FAST_CHAIN = defaultOrder();
     const restore = await useCreate((params, opts) => {
-      if (params.model !== 'hf-test') return Promise.resolve(streamOf(textChunks('from z.ai')));
+      if (params.model !== 'test-model') return Promise.resolve(streamOf(textChunks('from HF')));
       const hang = Promise.withResolvers<never>();
       opts?.signal?.addEventListener('abort', () => hang.reject(new OpenAI.APIUserAbortError()));
       return hang.promise;
     });
     try {
       const result = await run({ perProviderTimeoutMs: 1 });
-      expect(result.providerUsed).toBe('z.ai (test-model)');
+      expect(result.providerUsed).toBe('HF (hf-test)');
     } finally {
       restore();
     }
 
     expect(recorded.map((e) => [e.provider, e.outcome, e.errorClass])).toEqual([
-      ['hf', 'error', 'timeout'],
-      ['zai', 'ok', null],
+      ['zai', 'error', 'timeout'],
+      ['hf', 'ok', null],
     ]);
   });
 
   it('records slots excluded by a handoff as skipped, without requesting them', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = defaultOrder();
+    mockEnv.AI_FAST_CHAIN = defaultOrder();
     const requested: string[] = [];
     const restore = await useCreate(async (params) => {
       requested.push(params.model);
@@ -619,8 +619,8 @@ describe('aiStreamRound usage events', () => {
   });
 
   it.each([
-    ['smart', 'agent', 'zai', 'test-model'],
-    ['fast', 'validator', 'zai', 'test-fast'],
+    ['smart', 'agent', 'claude', 'claude-smart'],
+    ['fast', 'validator', 'claude', 'claude-fast'],
     ['ocr', 'ocr', 'claude', 'claude-vision'],
   ] as const)('labels the %s chain event with its chain, purpose, provider and model', async (chain, purpose, provider, model) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
@@ -637,7 +637,7 @@ describe('aiStreamRound usage events', () => {
 });
 
 describe('aiStreamRound usage events: role, preset and cost (stage B4)', () => {
-  const DEEPSEEK = 'deepseek/deepseek-v4.1-flash';
+  const DEEPSEEK = 'deepseek/deepseek-v4.1-flash-1017';
   // 11 prompt + 5 completion tokens at $0.30 / $1.20 per million = 9.3 micro-USD → 9.
   const DEEPSEEK_COST = 9;
   const qualifiedPreset: ModelPreset = {
@@ -738,7 +738,7 @@ describe('aiStreamRound streaming usage request', () => {
       restore();
     }
 
-    expect(params.map((p) => p.model)).toEqual(['test-model', 'claude-smart', 'hf-test']);
+    expect(params.map((p) => p.model)).toEqual(['claude-smart', 'test-model', 'hf-test']);
     for (const p of params) expect(p.stream_options).toEqual({ include_usage: true });
   });
 
@@ -818,8 +818,8 @@ describe('aiStreamRound streaming usage request', () => {
   });
 
   it('remembers a provider that rejected stream_options and does not ask it again', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
-    mockEnv.AI_FAST_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
+    mockEnv.AI_FAST_CHAIN = hfOnly();
     const calls: CreateParams[] = [];
     const restore = await useCreate(async (p) => {
       calls.push(p);
@@ -897,7 +897,7 @@ describe('aiStreamRound prompt size estimate', () => {
   it('records the estimated request components on every attempt that sent a request, not on skipped ones', async () => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const restore = await useCreate(async (params) => {
-      if (params.model === 'test-model') throw apiError(500, 'down');
+      if (params.model === 'claude-smart') throw apiError(500, 'down');
       return streamOf(textChunks('ok'));
     });
     try {
@@ -925,13 +925,13 @@ describe('aiStreamRound prompt size estimate', () => {
     };
     expect(recorded.map((e) => [e.provider, e.outcome, e.promptSize])).toEqual([
       ['hf', 'skipped', null],
-      ['zai', 'error', size],
-      ['claude', 'ok', size],
+      ['claude', 'error', size],
+      ['zai', 'ok', size],
     ]);
   });
 
   it('stores only counts: no prompt text reaches the event', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
     const restore = await useCreate(async () => streamOf(textChunks('ok')));
     try {
       await run();
@@ -960,7 +960,7 @@ describe('aiStreamRound timing: first token and generation window', () => {
   const delta = (content: string) => ({ choices: [{ delta: { content }, finish_reason: null }] });
 
   it('measures the first content delta from the request start and the window to the last delta', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
     const restore = await useCreate(async () =>
       timedStream([
         { waitMs: 120, chunk: delta('he') },
@@ -987,7 +987,7 @@ describe('aiStreamRound timing: first token and generation window', () => {
   });
 
   it('counts a tool-call delta as the first token', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
     const toolDelta = {
       choices: [
         {
@@ -1016,7 +1016,7 @@ describe('aiStreamRound timing: first token and generation window', () => {
   });
 
   it('a one-chunk answer has a zero generation window, not an unknown one', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
     const restore = await useCreate(async () => streamOf(textChunks('hello', FULL_USAGE)));
     try {
       await run();
@@ -1049,7 +1049,7 @@ describe('aiStreamRound timing: first token and generation window', () => {
   });
 
   it('a mid-stream failure after text keeps both timings NULL', async () => {
-    mockEnv.AI_SMART_CHAIN = hfHead();
+    mockEnv.AI_SMART_CHAIN = hfOnly();
     const restore = await useCreate(async () => ({
       [Symbol.asyncIterator]: async function* () {
         yield delta('partial');
