@@ -21,9 +21,9 @@ mock.module('../../utils/logger', () => ({
   logger: logMock,
 }));
 export const defaultOrder = (): ChainOrder => ({
-  order: ['zai', 'claude', 'hf'],
+  order: ['claude', 'zai', 'hf'],
   fromEnv: false,
-  fallback: ['zai', 'claude', 'hf'],
+  fallback: ['claude', 'zai', 'hf'],
 });
 export const DEFAULT_ORDER = defaultOrder();
 

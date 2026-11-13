@@ -16,9 +16,9 @@ mock.module('../../utils/logger', () => ({
 }));
 
 const defaultOrder = (): ChainOrder => ({
-  order: ['zai', 'claude', 'hf'],
+  order: ['claude', 'zai', 'hf'],
   fromEnv: false,
-  fallback: ['zai', 'claude', 'hf'],
+  fallback: ['claude', 'zai', 'hf'],
 });
 
 const mockEnv = {
@@ -69,10 +69,14 @@ beforeEach(() => {
   mockEnv.AI_SMART_CHAIN = defaultOrder();
   mockEnv.AI_FAST_CHAIN = defaultOrder();
   mockEnv.CLAUDE_API_TOKEN = 'test-claude';
+  mockEnv.CLAUDE_VISION_MODEL = 'claude-vision';
   mockEnv.HF_TOKEN = 'test-hf';
   mockEnv.HF_MODEL = 'hf-test';
   mockEnv.HF_FAST_MODEL = 'hf-fast';
+  mockEnv.HF_VISION_MODEL = 'hf-vision';
   mockEnv.OPENROUTER_API_KEY = '';
+  mockEnv.OPENROUTER_MODEL = 'or-smart';
+  mockEnv.OPENROUTER_FAST_MODEL = 'or-fast';
   mockEnv.AI_ROUTING = 'legacy';
   mockEnv.AI_ROLE_CHAINS = { planner: [], executor: [], repair: [] };
 });
@@ -184,8 +188,8 @@ describe('role chain entry skips', () => {
       ],
     };
 
-    expect(nextProvider('smart', [], 'executor')).toBe('z.ai (test-model)');
-    expect(nextProvider('smart', [], 'executor')).toBe('z.ai (test-model)');
+    expect(nextProvider('smart', [], 'executor')).toBe('Claude (claude-smart)');
+    expect(nextProvider('smart', [], 'executor')).toBe('Claude (claude-smart)');
 
     expect(logged('error', 'Role chain')).toEqual([
       [

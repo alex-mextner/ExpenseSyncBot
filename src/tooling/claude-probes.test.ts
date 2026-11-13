@@ -16,6 +16,7 @@ function runProbe(
   script: string,
   vision = false,
   secondaryOnly = false,
+  options: { hfRoutes?: boolean; provider?: 'claude' | 'hf' } = {},
 ): { code: number; stdout: string; stderr: string; attempts: Attempt[] } {
   const dir = mkdtempSync(join(tmpdir(), 'esb-claude-probe-'));
   try {
@@ -40,21 +41,30 @@ const logger = { info() {}, warn() {}, error() {}, debug() {} };
 mock.module(${JSON.stringify(join(ROOT, 'src/utils/logger'))}, () => ({ createLogger: () => logger, logger }));
 const env = {
   ANTHROPIC_API_KEY: 'zai-key', AI_BASE_URL: 'https://zai.test/v1', AI_MODEL: 'zai-fixture', AI_FAST_MODEL: 'zai-fast-fixture',
-  HF_TOKEN: 'hf-key', HF_BASE_URL: 'https://hf.test/v1', HF_MODEL: 'hf-fixture', HF_FAST_MODEL: 'hf-fast-fixture', HF_VISION_MODEL: 'hf-vision-fixture',
+  HF_TOKEN: 'hf-key', HF_BASE_URL: 'https://hf.test/v1',
+  HF_MODEL: ${JSON.stringify(options.hfRoutes ? 'Qwen/Qwen3.8-2.4T-A95B:deepinfra' : 'hf-fixture')},
+  HF_FAST_MODEL: 'hf-fast-fixture',
+  HF_VISION_MODEL: ${JSON.stringify(options.hfRoutes ? 'Qwen/Qwen3.8-Flash-Next-FP8:nscale' : 'hf-vision-fixture')},
+  OPENROUTER_API_KEY: ${JSON.stringify(options.hfRoutes ? 'openrouter-key' : '')},
+  OPENROUTER_BASE_URL: 'https://openrouter.test/v1',
+  OPENROUTER_MODEL: 'Qwen/Qwen3.8-2.4T-A95B:deepinfra',
+  OPENROUTER_FAST_MODEL: 'Qwen/Qwen3.8-Flash-Next-FP8:nscale',
   CLAUDE_API_TOKEN: ${JSON.stringify(secondaryOnly ? '' : 'primary-key')}, CLAUDE_API_TOKEN2: 'secondary-key', CLAUDE_BASE_URL: 'https://claude.test/v1',
   CLAUDE_MODEL: 'claude-sonnet-fixture', CLAUDE_FAST_MODEL: 'claude-haiku-fixture', CLAUDE_VISION_MODEL: 'claude-sonnet-fixture',
-  AI_SMART_CHAIN: { order: ['zai', 'claude', 'hf'] }, AI_FAST_CHAIN: { order: ['zai', 'claude', 'hf'] },
+  AI_SMART_CHAIN: { order: ${JSON.stringify(options.hfRoutes ? ['zai', 'claude', 'openrouter', 'hf'] : ['zai', 'claude', 'hf'])} },
+  AI_FAST_CHAIN: { order: ${JSON.stringify(options.hfRoutes ? ['zai', 'claude', 'openrouter', 'hf'] : ['zai', 'claude', 'hf'])} },
 };
 mock.module(${JSON.stringify(join(ROOT, 'src/config/env'))}, () => ({ env }));
-const { chatRequestParams } = await import(${JSON.stringify(join(ROOT, 'src/services/ai/streaming/request-params.ts'))});
-mock.module(${JSON.stringify(join(ROOT, 'src/services/ai/streaming'))}, () => ({ chatRequestParams }));
+const { chatRequestParams, hfRequestParams } = await import(${JSON.stringify(join(ROOT, 'src/services/ai/streaming/request-params.ts'))});
+mock.module(${JSON.stringify(join(ROOT, 'src/services/ai/streaming'))}, () => ({ chatRequestParams, hfRequestParams }));
 const attempts = [];
 globalThis.fetch = async (url, init) => {
   const authorization = new Headers(init?.headers).get('authorization');
   const claude = new URL(String(url)).host === 'claude.test';
   attempts.push({ authorization, claude, body: init?.body });
   originalFs.writeFileSync(${JSON.stringify(attemptsPath)}, JSON.stringify(attempts));
-  if (!claude) return Response.json({ error: { message: 'synthetic unavailable credit' } }, { status: 402 });
+  const hf = new URL(String(url)).host === 'hf.test';
+  if (!claude && !(hf && ${JSON.stringify(options.hfRoutes ?? false)})) return Response.json({ error: { message: 'synthetic unavailable credit' } }, { status: 402 });
   if (authorization === 'Bearer primary-key') return Response.json({ error: { message: 'synthetic unauthorized' } }, { status: 401 });
   return Response.json({ id: 'synthetic', object: 'chat.completion', created: 0, model: JSON.parse(init.body).model,
     choices: [{ index: 0, message: { role: 'assistant', content: '{"status":"ok","test":true}' }, finish_reason: 'stop' }],
@@ -69,7 +79,7 @@ globalThis.fetch = async (url, init) => {
         '--preload',
         preload,
         join(ROOT, script),
-        ...(vision ? [image, 'claude'] : []),
+        ...(vision ? [image, options.provider ?? 'claude'] : []),
       ],
       cwd: ROOT,
       env: { PATH: process.env['PATH'] ?? '' },
@@ -129,4 +139,58 @@ test('a secondary-only vision probe works before rotation is needed', () => {
   const result = runProbe('scripts/test-vision.ts', true, true);
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   expect(result.attempts.map((attempt) => attempt.authorization)).toEqual(['Bearer secondary-key']);
+});
+
+interface ProbeRequest {
+  model: string;
+  max_tokens: number;
+  reasoning_effort?: string;
+  chat_template_kwargs?: { enable_thinking: boolean };
+}
+
+function bodiesFor(attempts: Attempt[], authorization: string): ProbeRequest[] {
+  return attempts
+    .filter((attempt) => attempt.authorization === authorization)
+    .map((attempt) => JSON.parse(attempt.body) as ProbeRequest);
+}
+
+test('the chain verification script uses HF thinking controls only for HF routes', () => {
+  const result = runProbe('scripts/verify-ai-chains.ts', false, false, { hfRoutes: true });
+  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
+  const hf = bodiesFor(result.attempts, 'Bearer hf-key');
+  expect(hf).toHaveLength(3);
+  expect(hf.find((body) => body.model === 'Qwen/Qwen3.8-2.4T-A95B:deepinfra')).toMatchObject({
+    max_tokens: 6144,
+    reasoning_effort: 'low',
+  });
+  expect(hf.find((body) => body.model === 'Qwen/Qwen3.8-Flash-Next-FP8:nscale')).toMatchObject({
+    max_tokens: 128,
+    chat_template_kwargs: { enable_thinking: false },
+  });
+  const fast = hf.find((body) => body.model === 'hf-fast-fixture');
+  expect(fast).toMatchObject({ max_tokens: 256 });
+  expect(fast?.reasoning_effort).toBeUndefined();
+  expect(fast?.chat_template_kwargs).toBeUndefined();
+  const openrouter = bodiesFor(result.attempts, 'Bearer openrouter-key');
+  expect(openrouter).toHaveLength(2);
+  for (const body of openrouter) {
+    expect(body.max_tokens).toBe(2048);
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.chat_template_kwargs).toBeUndefined();
+  }
+});
+
+test('the actual HF vision probe disables thinking for the Flash-Next route', () => {
+  const result = runProbe('scripts/test-vision.ts', true, false, {
+    hfRoutes: true,
+    provider: 'hf',
+  });
+  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
+  const hf = bodiesFor(result.attempts, 'Bearer hf-key');
+  expect(hf).toHaveLength(1);
+  expect(hf[0]).toMatchObject({
+    model: 'Qwen/Qwen3.8-Flash-Next-FP8:nscale',
+    max_tokens: 2000,
+    chat_template_kwargs: { enable_thinking: false },
+  });
 });

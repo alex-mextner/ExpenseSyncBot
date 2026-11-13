@@ -14,9 +14,9 @@ const log = createMockLogger();
 mock.module('../../utils/logger', () => ({ createLogger: () => log, logger: log }));
 
 const defaultOrder = () => ({
-  order: ['zai', 'claude', 'hf'],
+  order: ['claude', 'zai', 'hf'],
   fromEnv: false,
-  fallback: ['zai', 'claude', 'hf'],
+  fallback: ['claude', 'zai', 'hf'],
 });
 const env = {
   ANTHROPIC_API_KEY: 'zai-key',
@@ -133,15 +133,15 @@ const claudeThenHf = { order: ['claude', 'hf'], fromEnv: true, fallback: ['claud
 const bareClaude: RoleChainEntry[] = [{ provider: 'claude', preset: null }];
 
 describe('the secondary Claude credential alone', () => {
-  // z.ai answers 429 first wherever it is in the chain, so Claude is reached only through fallback.
+  // A working secondary Claude key serves the primary route without contacting another provider.
   test.each([
-    ['smart', 'smart' as const, undefined, 'claude-smart', 'zai-smart'],
-    ['fast', 'fast' as const, undefined, 'claude-fast', 'zai-fast'],
-    ['ocr', 'ocr' as const, undefined, 'claude-vision', undefined],
-    ['planner role', 'smart' as const, 'planner' as const, 'claude-fast', undefined],
-    ['executor role', 'smart' as const, 'executor' as const, 'claude-smart', undefined],
-    ['repair role', 'smart' as const, 'repair' as const, 'claude-smart', undefined],
-  ])('serves the %s chain and keeps the z.ai key out of Claude requests', async (_name, chain, role, claudeModel, zaiModel) => {
+    ['smart', 'smart' as const, undefined, 'claude-smart'],
+    ['fast', 'fast' as const, undefined, 'claude-fast'],
+    ['ocr', 'ocr' as const, undefined, 'claude-vision'],
+    ['planner role', 'smart' as const, 'planner' as const, 'claude-fast'],
+    ['executor role', 'smart' as const, 'executor' as const, 'claude-smart'],
+    ['repair role', 'smart' as const, 'repair' as const, 'claude-smart'],
+  ])('serves the %s chain and keeps the z.ai key out of Claude requests', async (_name, chain, role, claudeModel) => {
     if (role) {
       env.AI_ROUTING = 'roles';
       env.AI_ROLE_CHAINS = { planner: bareClaude, executor: bareClaude, repair: bareClaude };
@@ -154,9 +154,7 @@ describe('the secondary Claude credential alone', () => {
     expect(claudeCalls()).toEqual([
       { host: 'claude.test', authorization: 'Bearer secondary-key', model: claudeModel },
     ]);
-    expect(calls.filter((call) => call.host === 'zai.test')).toEqual(
-      zaiModel ? [{ host: 'zai.test', authorization: 'Bearer zai-key', model: zaiModel }] : [],
-    );
+    expect(calls.filter((call) => call.host === 'zai.test')).toEqual([]);
   });
 
   test('a rejected secondary is not retried and never replaced by the z.ai key', async () => {
@@ -188,6 +186,34 @@ describe('request-specific rejections', () => {
       'Bearer primary-key',
     ]);
     expect(rows.map((row) => row.outcome)).toEqual(['error', 'error']);
+  });
+});
+
+describe('retired Claude model failover', () => {
+  test('records HTTP 404, keeps the credential usable, and serves HF only after priority routes fail', async () => {
+    env.CLAUDE_API_TOKEN = 'primary-key';
+    env.AI_SMART_CHAIN = claudeThenHf;
+    fakeNetwork(async (call) =>
+      call.host === 'claude.test'
+        ? errorResponse(404, 'model: claude-smart not found')
+        : okResponse(),
+    );
+    expect((await aiStreamRound(request)).providerUsed).toBe('HF (hf-smart)');
+    expect(claudeCalls().map((call) => call.authorization)).toEqual(['Bearer primary-key']);
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        provider: 'claude',
+        outcome: 'error',
+        httpStatus: 404,
+      }),
+    );
+    expect(log.warn).toHaveBeenCalled();
+    fakeNetwork(async () => okResponse());
+    expect((await aiStreamRound(request)).providerUsed).toBe('Claude (claude-smart)');
+    expect(claudeCalls().map((call) => call.authorization)).toEqual([
+      'Bearer primary-key',
+      'Bearer primary-key',
+    ]);
   });
 });
 

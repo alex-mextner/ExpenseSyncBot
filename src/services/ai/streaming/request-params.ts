@@ -55,6 +55,31 @@ export function chatRequestParams(
   return anthropic ? claudeRequestParams(model, maxTokens) : { max_tokens: maxTokens, temperature };
 }
 
+/** HF Router fields forwarded as-is by the OpenAI SDK. */
+export interface HfParams {
+  max_tokens: number;
+  reasoning_effort?: 'low';
+  chat_template_kwargs?: { enable_thinking: false };
+}
+
+/**
+ * Exact Qwen 3.8 routes have different thinking contracts (official model cards, 2026-11-13).
+ * The 2.4T model cannot disable thinking: choose low effort and allow 4096 additional output
+ * tokens so a small caller budget is not also its whole reasoning budget. This allowance is an
+ * engineering choice, not a measured guarantee of answer completion. Flash-Next supports disabling
+ * thinking for bounded OCR output. Provider suffixes select a backend without changing the model.
+ */
+export function hfRequestParams(model: string, maxTokens: number): HfParams {
+  const modelId = model.split(':', 1)[0];
+  if (modelId === 'Qwen/Qwen3.8-2.4T-A95B') {
+    return { max_tokens: maxTokens + 4096, reasoning_effort: 'low' };
+  }
+  if (modelId === 'Qwen/Qwen3.8-Flash-Next-FP8') {
+    return { max_tokens: maxTokens, chat_template_kwargs: { enable_thinking: false } };
+  }
+  return { max_tokens: maxTokens };
+}
+
 /**
  * Endpoint+model pairs (`key:model`) that answered 400/422 to `stream_options`. They are asked
  * without it from then on; their usage rows carry NULL tokens. Per model, not per endpoint: HF

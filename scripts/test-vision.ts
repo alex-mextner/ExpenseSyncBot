@@ -1,7 +1,7 @@
 /**
  * Quick probe: send one receipt image to a single vision provider and print the raw answer.
- * Uses the bot's own clients, base URLs, models and request shape (chatRequestParams), so it
- * tests exactly what production sends. Override a model inline, e.g.
+ * Uses the bot's own clients, base URLs, models and request helpers (chatRequestParams
+ * and hfRequestParams), so it tests the production request shape. Override a model inline, e.g.
  *   CLAUDE_VISION_MODEL=claude-haiku-5-5 bun scripts/test-vision.ts receipt.jpg claude
  */
 import { readFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, hfClient, zaiClient } from '../src/services/ai/clients';
 import { withClaudeCredentials } from '../src/services/ai/claude-client-pool';
-import { chatRequestParams } from '../src/services/ai/streaming';
+import { chatRequestParams, hfRequestParams } from '../src/services/ai/streaming';
 
 const PROVIDERS: Record<string, { client: () => OpenAI; model: string; anthropic: boolean }> = {
   claude: { client: claudeClient, model: env.CLAUDE_VISION_MODEL, anthropic: true },
@@ -43,6 +43,7 @@ say('---');
 try {
   const t0 = Date.now();
   const client = provider.client();
+  const budget = chatRequestParams(provider.model, 2000, 0.1, provider.anthropic);
   const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
     model: provider.model,
     messages: [
@@ -57,7 +58,8 @@ try {
         ],
       },
     ],
-    ...chatRequestParams(provider.model, 2000, 0.1, provider.anthropic),
+    ...budget,
+    ...(providerName === 'hf' ? hfRequestParams(provider.model, budget.max_tokens) : {}),
   };
   const response = provider.anthropic
     ? await withClaudeCredentials(

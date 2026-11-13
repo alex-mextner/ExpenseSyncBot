@@ -1,5 +1,5 @@
-// Tests for the request each provider receives: Claude right after z.ai, the per-model Claude
-// thinking params, tool_choice, and a quota-exhausted z.ai being skipped on the next round.
+// Tests for Claude-first requests, model-specific thinking params, tool_choice, and failover
+// after a priority provider exhausts its quota.
 
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import OpenAI from 'openai';
@@ -18,9 +18,9 @@ describe('aiStreamRound fallback chain', () => {
   });
 
   it.each([
-    ['smart' as const, ['test-model', 'claude-smart']],
-    ['fast' as const, ['test-fast', 'claude-fast']],
-  ])('tries Claude right after z.ai in the %s chain', async (chain, expected) => {
+    ['smart' as const, ['claude-smart']],
+    ['fast' as const, ['claude-fast']],
+  ])('serves the %s chain through Claude without contacting fallbacks', async (chain, expected) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const calls: string[] = [];
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
@@ -143,7 +143,7 @@ describe('aiStreamRound fallback chain', () => {
         }),
       ).rejects.toThrow();
 
-      expect(sent.map((p) => p.model)).toEqual(['test-model', 'claude-smart', 'hf-test']);
+      expect(sent.map((p) => p.model)).toEqual(['claude-smart', 'test-model', 'hf-test']);
       for (const params of sent) {
         expect(params.tools).toEqual(calculateTool);
         expect(params.tool_choice).toBe('none');
@@ -164,7 +164,7 @@ describe('aiStreamRound fallback chain', () => {
       };
     });
     const clientsMod = await import('./clients');
-    const spy = spyOn(clientsMod, 'zaiClient').mockReturnValue({
+    const spy = spyOn(clientsMod, 'claudeClient').mockReturnValue({
       chat: { completions: { create } },
     } as unknown as OpenAI);
 
@@ -184,16 +184,16 @@ describe('aiStreamRound fallback chain', () => {
     }
   });
 
-  // Owner-ordered z.ai head: a depleted z.ai (429 quota) must cost one fast failure, not one per request.
+  // A depleted primary should fail once, then yield to the next priority provider.
   it.each([
     ['smart' as const, 'test-model', 'claude-smart'],
     ['fast' as const, 'test-fast', 'claude-fast'],
-  ])('a quota-exhausted z.ai (429) falls through to Claude and is skipped on the next %s round', async (chain, zaiModel, claudeModel) => {
+  ])('a quota-exhausted Claude (429) falls through to z.ai and is skipped on the next %s round', async (chain, zaiModel, claudeModel) => {
     mockEnv.CLAUDE_API_TOKEN = 'test-claude';
     const calls: string[] = [];
     const create = mock(async (params: OpenAI.ChatCompletionCreateParamsStreaming) => {
       calls.push(params.model);
-      if (params.model === zaiModel) {
+      if (params.model === claudeModel) {
         throw new OpenAI.APIError(
           429,
           { message: 'Insufficient balance or quota' },
@@ -203,7 +203,7 @@ describe('aiStreamRound fallback chain', () => {
       }
       return {
         [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: 'from Claude' }, finish_reason: 'stop' }] };
+          yield { choices: [{ delta: { content: 'from z.ai' }, finish_reason: 'stop' }] };
         },
       };
     });
@@ -219,11 +219,57 @@ describe('aiStreamRound fallback chain', () => {
         maxTokens: 100,
         chain,
       };
-      expect((await aiStreamRound(options)).text).toBe('from Claude');
-      expect((await aiStreamRound(options)).text).toBe('from Claude');
-      expect(calls).toEqual([zaiModel, claudeModel, claudeModel]);
+      expect((await aiStreamRound(options)).text).toBe('from z.ai');
+      expect((await aiStreamRound(options)).text).toBe('from z.ai');
+      expect(calls).toEqual([claudeModel, zaiModel, zaiModel]);
     } finally {
       for (const spy of spies) spy.mockRestore();
     }
+  });
+});
+
+describe('HF model request compatibility', () => {
+  it.each([
+    ['hf', 'Qwen/Qwen3.8-2.4T-A95B', 100, 4196, 'low', undefined],
+    ['hf', 'Qwen/Qwen3.8-2.4T-A95B:deepinfra', 100, 4196, 'low', undefined],
+    ['hf', 'Qwen/Qwen3.8-2.4T-A95B:deepinfra', 8192, 12288, 'low', undefined],
+    ['hf', 'Qwen/Qwen3.8-Flash-Next-FP8', 100, 100, undefined, false],
+    ['hf', 'Qwen/Qwen3.8-Flash-Next-FP8:nscale', 100, 100, undefined, false],
+    ['hf', 'vendor/unrelated-model:deepinfra', 100, 100, undefined, undefined],
+    ['hf', 'meta-llama/Llama-4-Scout-17B-16E-Instruct:deepinfra', 100, 100, undefined, undefined],
+    ['openrouter', 'Qwen/Qwen3.8-2.4T-A95B', 100, 100, undefined, undefined],
+    ['openrouter', 'Qwen/Qwen3.8-Flash-Next-FP8', 100, 100, undefined, undefined],
+  ] as const)('%s %s preserves the answer budget and sends only supported reasoning controls', async (provider, model, maxTokens, expectedMaxTokens, expectedEffort, expectedThinking) => {
+    type SentParams = OpenAI.ChatCompletionCreateParamsStreaming & {
+      chat_template_kwargs?: { enable_thinking: boolean };
+    };
+    const sent: SentParams[] = [];
+    const create = mock(async (params: SentParams) => {
+      sent.push(params);
+      return {
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'visible answer' }, finish_reason: 'stop' }] };
+        },
+      };
+    });
+    const client = { chat: { completions: { create } } } as unknown as OpenAI;
+    const { streamingSlot } = await import('./streaming/slot');
+    const slot = streamingSlot('request probe', provider, () => client, model);
+    const output = await slot.stream(
+      {
+        messages: [{ role: 'user', content: 'hi' }],
+        purpose: 'probe',
+        maxTokens,
+        temperature: 0.3,
+      },
+      {},
+    );
+    expect(output.result.text).toBe('visible answer');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.max_tokens).toBe(expectedMaxTokens);
+    expect(sent[0]?.reasoning_effort).toBe(expectedEffort);
+    expect(sent[0]?.chat_template_kwargs?.enable_thinking).toBe(expectedThinking);
+    expect(sent[0]).not.toHaveProperty('thinking');
+    expect(sent[0]?.temperature).toBe(0.3);
   });
 });

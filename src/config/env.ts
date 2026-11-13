@@ -17,9 +17,9 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('env');
 
-/** Default order of the smart chain: z.ai → Claude → HF. Overridden by AI_SMART_CHAIN. */
+/** Default order of the smart chain: Claude → z.ai → HF. Overridden by AI_SMART_CHAIN. */
 export const DEFAULT_SMART_CHAIN: ProviderId[] = [...DEFAULT_PROVIDER_IDS];
-/** Default order of the fast chain: z.ai → Claude → HF. Overridden by AI_FAST_CHAIN. */
+/** Default order of the fast chain: Claude → z.ai → HF. Overridden by AI_FAST_CHAIN. */
 export const DEFAULT_FAST_CHAIN: ProviderId[] = [...DEFAULT_PROVIDER_IDS];
 
 /**
@@ -82,7 +82,7 @@ interface EnvConfig {
   DATABASE_PATH: string;
   ENCRYPTION_KEY: string; // empty string when not set — encryption features deactivate gracefully
 
-  // z.ai provider (kept ANTHROPIC_API_KEY name — it's the z.ai key); head of the default chains
+  // z.ai provider (kept ANTHROPIC_API_KEY name — it's the z.ai key); fallback after Claude
   ANTHROPIC_API_KEY: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
@@ -92,7 +92,7 @@ interface EnvConfig {
   AI_SMART_CHAIN: ChainOrder;
   AI_FAST_CHAIN: ChainOrder;
 
-  // Anthropic Claude (OpenAI-compat endpoint; optional key — second in smart/fast, OCR primary).
+  // Anthropic Claude (OpenAI-compat endpoint; optional key — primary in smart/fast/OCR).
   // Without either key every Claude slot is skipped and OCR runs on HF vision alone.
   CLAUDE_API_TOKEN: string;
   CLAUDE_API_TOKEN2: string;
@@ -121,7 +121,7 @@ interface EnvConfig {
   AI_TOOL_SCHEMA_USER_IDS: number[] | undefined;
 
   // OpenRouter (optional; named in a chain order to be used, skipped without key and model).
-  // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash`.
+  // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash-1017`.
   OPENROUTER_API_KEY: string;
   OPENROUTER_BASE_URL: string;
   OPENROUTER_MODEL: string;

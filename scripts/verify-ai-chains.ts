@@ -18,7 +18,7 @@ import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, hfClient, openrouterClient, zaiClient } from '../src/services/ai/clients';
 import { withClaudeCredentials } from '../src/services/ai/claude-client-pool';
-import { chatRequestParams } from '../src/services/ai/streaming';
+import { chatRequestParams, hfRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
   chain: 'smart' | 'fast' | 'ocr';
@@ -28,6 +28,8 @@ interface SlotSpec {
   vision: boolean;
   /** Anthropic request shape, same as the Claude slots in streaming.ts: no `temperature` (400), per-model thinking. */
   anthropic?: boolean;
+  /** HF-only thinking controls, matching the runtime slots. */
+  hf?: boolean;
 }
 
 const SLOTS: SlotSpec[] = [
@@ -57,6 +59,7 @@ const SLOTS: SlotSpec[] = [
     client: hfClient,
     model: env.HF_MODEL,
     vision: false,
+    hf: true,
   },
   ...(env.OPENROUTER_API_KEY &&
   env.OPENROUTER_MODEL &&
@@ -97,6 +100,7 @@ const SLOTS: SlotSpec[] = [
     client: hfClient,
     model: env.HF_FAST_MODEL,
     vision: false,
+    hf: true,
   },
   ...(env.OPENROUTER_API_KEY &&
   env.OPENROUTER_FAST_MODEL &&
@@ -130,6 +134,7 @@ const SLOTS: SlotSpec[] = [
     client: hfClient,
     model: env.HF_VISION_MODEL,
     vision: true,
+    hf: true,
   },
 ];
 
@@ -200,11 +205,13 @@ async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {
   // before producing visible output. Give them headroom.
   const isReasoning = /qwen3|deepseek-r1/i.test(spec.model);
   const maxTokens = isReasoning ? 2048 : 256;
+  const budget = chatRequestParams(spec.model, maxTokens, 0.1, spec.anthropic ?? false);
   try {
     const response = await createCompletion(spec, {
       model: spec.model,
       messages: [{ role: 'user', content: TEXT_PROMPT }],
-      ...chatRequestParams(spec.model, maxTokens, 0.1, spec.anthropic ?? false),
+      ...budget,
+      ...(spec.hf ? hfRequestParams(spec.model, budget.max_tokens) : {}),
     });
     const text = response.choices[0]?.message?.content?.trim() ?? '';
     const ms = Date.now() - start;
@@ -238,6 +245,7 @@ async function testVisionSlot(spec: SlotSpec): Promise<SlotResult> {
       error: 'no test image available (place a .jpg/.png in debug-images/)',
     };
   }
+  const budget = chatRequestParams(spec.model, 128, 0.1, spec.anthropic ?? false);
   try {
     const response = await createCompletion(spec, {
       model: spec.model,
@@ -253,7 +261,8 @@ async function testVisionSlot(spec: SlotSpec): Promise<SlotResult> {
           ],
         },
       ],
-      ...chatRequestParams(spec.model, 128, 0.1, spec.anthropic ?? false),
+      ...budget,
+      ...(spec.hf ? hfRequestParams(spec.model, budget.max_tokens) : {}),
     });
     const text = response.choices[0]?.message?.content?.trim() ?? '';
     const ms = Date.now() - start;

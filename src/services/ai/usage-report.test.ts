@@ -299,7 +299,7 @@ describe('formatUsageTelegram', () => {
 });
 
 describe('cost and roles (stage B4)', () => {
-  const OR = { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' };
+  const OR = { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' };
 
   test('model cost sums the known rows and counts the unknown ones, like tokens', () => {
     const r = aggregateUsage(

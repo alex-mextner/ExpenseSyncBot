@@ -6,7 +6,13 @@
 import type OpenAI from 'openai';
 import { type ModelPreset, presetRequestParams } from '../model-presets';
 import type { ProviderId } from '../provider-ids';
-import { type ClaudeParams, chatRequestParams, openChatStream } from './request-params';
+import {
+  type ClaudeParams,
+  chatRequestParams,
+  type HfParams,
+  hfRequestParams,
+  openChatStream,
+} from './request-params';
 import { StreamCollector } from './stream-collector';
 import type { ProviderSlot, StreamRoundOptions } from './types';
 
@@ -28,22 +34,28 @@ export interface SlotOptions {
   provider?: ProviderId;
 }
 
-type StreamParams = OpenAI.ChatCompletionCreateParamsStreaming & Omit<ClaudeParams, 'max_tokens'>;
+type StreamParams = OpenAI.ChatCompletionCreateParamsStreaming &
+  Omit<ClaudeParams, 'max_tokens'> &
+  Pick<HfParams, 'chat_template_kwargs'>;
 
 /** The streaming chat request of one round: the slot's model, the caller's messages, tools and budget. */
 function buildStreamParams(
+  key: string,
   model: string,
   opts: StreamRoundOptions,
   slotOptions: SlotOptions,
 ): StreamParams {
   const temperature = opts.temperature ?? DEFAULT_TEMPERATURE;
+  const budget =
+    slotOptions.preset && slotOptions.provider && !slotOptions.anthropic
+      ? presetRequestParams(slotOptions.preset, slotOptions.provider, temperature, opts.maxTokens)
+      : chatRequestParams(model, opts.maxTokens, temperature, slotOptions.anthropic ?? false);
   const params: StreamParams = {
     model,
     messages: opts.messages,
     stream: true,
-    ...(slotOptions.preset && slotOptions.provider && !slotOptions.anthropic
-      ? presetRequestParams(slotOptions.preset, slotOptions.provider, temperature, opts.maxTokens)
-      : chatRequestParams(model, opts.maxTokens, temperature, slotOptions.anthropic ?? false)),
+    ...budget,
+    ...(key === 'hf' ? hfRequestParams(model, budget.max_tokens) : {}),
   };
   if (opts.tools && opts.tools.length > 0) {
     params.tools = opts.tools;
@@ -69,7 +81,7 @@ export function streamingSlot(
     model,
     ...(slotOptions.preset ? { presetId: slotOptions.preset.id } : {}),
     stream: async (opts, cbs) => {
-      const params = buildStreamParams(model, opts, slotOptions);
+      const params = buildStreamParams(key, model, opts, slotOptions);
       let requestStartedPerf = performance.now();
       const client = getClient();
       const stream = await openChatStream(client, params, opts.signal, key, model, {

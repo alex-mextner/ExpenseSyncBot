@@ -97,7 +97,7 @@ function logUnconfiguredProvider(detail: object, named: boolean): void {
 
 /**
  * Builds one text chain in the configured order (AI_SMART_CHAIN / AI_FAST_CHAIN, default
- * z.ai → Claude → HF), skipping — and logging once — any provider whose key or model is
+ * Claude → z.ai → HF), skipping — and logging once — any provider whose key or model is
  * missing. A named-but-unconfigured provider warns; one only in the default order is debug.
  * When nothing in an operator-configured order is usable the default order is tried instead.
  */
@@ -225,7 +225,16 @@ function buildOcrChain(): ProviderSlot[] {
     );
   }
   chain.push(streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL));
-  return chain;
+  return chain.filter((slot) => {
+    if (!isExcludedModel(slot.model)) return true;
+    logOnce(`ocr:${slot.key}:excluded:${slot.model}`, () =>
+      logger.warn(
+        { chain: 'ocr', provider: slot.key, model: slot.model },
+        '[AI_STREAM] Model is on the excluded list — skipping it',
+      ),
+    );
+    return false;
+  });
 }
 
 /** The smart chain: the role's own chain when one loads, else the legacy order. */
@@ -259,17 +268,22 @@ function buildChain(chain: ChainName, role?: Role): ProviderSlot[] {
   }
 }
 
-/** The chain's slots minus the excluded names, in breaker order (demoted slots last). */
+/**
+ * Claude leads the selected providers; health can demote it behind another priority provider.
+ * HF stays last even when a priority provider is demoted, so reserve credits are used last.
+ * Explicit chains still choose which providers participate and preserve the other providers' order.
+ */
 export function availableSlots(
   chain: ChainName,
   exclude: readonly string[],
   now: number,
   role?: Role,
 ): ProviderSlot[] {
-  return orderByHealth(
-    buildChain(chain, role).filter((slot) => !exclude.includes(slot.name)),
-    now,
-  );
+  const slots = buildChain(chain, role).filter((slot) => !exclude.includes(slot.name));
+  const primary = slots.filter((slot) => slot.key === 'claude');
+  const fallback = slots.filter((slot) => slot.key !== 'claude' && slot.key !== 'hf');
+  const reserve = slots.filter((slot) => slot.key === 'hf');
+  return [...orderByHealth([...primary, ...fallback], now), ...reserve];
 }
 
 /** The chain's slots named in `exclude` — a round skips them without requesting. */

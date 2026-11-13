@@ -50,8 +50,9 @@ export interface ModelPreset {
 }
 
 /**
- * Prices are OpenRouter's /models listing of 2026-10-23 (USD per token × 1e6). OpenRouter ids were
- * checked against the same listing. `claude-haiku-5-5` on the `claude` route has no price here: the
+ * Prices are OpenRouter's /models listing (USD per token × 1e6), dated per row. The default date
+ * is 2026-10-23; the DeepSeek 1017 route was refreshed on 2026-11-13. The direct `claude` route has
+ * no price here: the
  * direct Anthropic rate was not read, so its cost stays unknown.
  */
 const PRICE_AS_OF = '2026-10-23';
@@ -59,8 +60,8 @@ const PRICE_AS_OF = '2026-10-23';
 export const MODEL_PRESETS: readonly ModelPreset[] = [
   {
     id: 'deepseek41-flash',
-    models: { openrouter: 'deepseek/deepseek-v4.1-flash' },
-    priceUsdPerMTok: { in: 0.3, out: 1.2, asOf: PRICE_AS_OF, via: 'openrouter' },
+    models: { openrouter: 'deepseek/deepseek-v4.1-flash-1017' },
+    priceUsdPerMTok: { in: 0.3, out: 1.2, asOf: '2026-11-13', via: 'openrouter' },
     roles: ['executor'],
     qualification: null,
   },
