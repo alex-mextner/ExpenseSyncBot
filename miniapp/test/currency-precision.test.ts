@@ -5,6 +5,18 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StatCard } from '../src/widgets/StatCard';
 import { Ticker } from '../src/widgets/Ticker';
 
+function renderedText(markup: string): string {
+  let text = '';
+  new HTMLRewriter()
+    .onDocument({
+      text(chunk) {
+        text += chunk.text;
+      },
+    })
+    .transform(markup);
+  return text;
+}
+
 const widgets: Array<[string, ComponentType<{ value: number; currency?: string }>]> = [
   ['StatCard', StatCard],
   ['Ticker', Ticker],
@@ -17,7 +29,7 @@ for (const [name, Widget] of widgets) {
       { value: 1.234, text: '1,234 OMR' },
     ])('renders $value OMR without losing baisa', ({ value, text }) => {
       const markup = renderToStaticMarkup(createElement(Widget, { value, currency: 'OMR' }));
-      expect(markup.replace(/<[^>]*>/g, '')).toBe(text);
+      expect(renderedText(markup)).toBe(text);
     });
 
     test.each(
@@ -27,12 +39,12 @@ for (const [name, Widget] of widgets) {
       ]),
     )('renders $value $currency without rounding away hundredths', ({ currency, value, text }) => {
       const markup = renderToStaticMarkup(createElement(Widget, { value, currency }));
-      expect(markup.replace(/<[^>]*>/g, '')).toBe(text);
+      expect(renderedText(markup)).toBe(text);
     });
 
     test('retains the compact display for other currencies', () => {
       const markup = renderToStaticMarkup(createElement(Widget, { value: 1.234, currency: 'EUR' }));
-      expect(markup.replace(/<[^>]*>/g, '')).toBe('1 EUR');
+      expect(renderedText(markup)).toBe('1 EUR');
     });
   });
 }
@@ -42,5 +54,5 @@ test.each([
   { value: 1_200_000_000, text: '1.2 млрд OMR' },
 ])('StatCard retains large-value abbreviations for $value', ({ value, text }) => {
   const markup = renderToStaticMarkup(createElement(StatCard, { value, currency: 'OMR' }));
-  expect(markup.replace(/<[^>]*>/g, '')).toBe(text);
+  expect(renderedText(markup)).toBe(text);
 });
