@@ -9,13 +9,13 @@ interface Props {
 
 export function StatCard({ value, label, currency, comparison }: Props) {
   const delta = comparison != null ? value - comparison : null;
-  const pct = comparison && comparison !== 0 ? (delta! / Math.abs(comparison)) * 100 : null;
+  const pct = comparison && comparison !== 0 ? ((value - comparison) / Math.abs(comparison)) * 100 : null;
 
   return (
     <div style={{ padding: '12px 16px', minWidth: 120 }}>
       {label && <div style={{ fontSize: 11, opacity: 0.5, marginBottom: 4 }}>{label}</div>}
       <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: -1 }}>
-        {formatNum(value)}
+        {formatNum(value, currency)}
         {currency ? ` ${currency}` : ''}
       </div>
       {delta != null && (
@@ -28,8 +28,8 @@ export function StatCard({ value, label, currency, comparison }: Props) {
   );
 }
 
-function formatNum(n: number): string {
+function formatNum(n: number, currency?: string): string {
   if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + ' млрд';
   if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + ' млн';
-  return n.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+  return n.toLocaleString('ru-RU', { maximumFractionDigits: currency === 'OMR' ? 3 : ['GEL', 'THB', 'MYR', 'KHR', 'TRY'].includes(currency ?? '') ? 2 : 0 });
 }

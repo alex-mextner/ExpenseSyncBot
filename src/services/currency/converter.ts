@@ -3,6 +3,7 @@ import Big from 'big.js';
 import {
   BASE_CURRENCY,
   type CurrencyCode,
+  getCurrencyPrecision,
   getCurrencySymbol,
   SUPPORTED_CURRENCIES,
 } from '../../config/constants';
@@ -27,6 +28,13 @@ const FALLBACK_RATES_STR: Record<CurrencyCode, string> = {
   INR: '0.011', // 1 INR = 0.011 EUR (approx 90 INR = 1 EUR)
   LKR: '0.0028', // 1 LKR = 0.0028 EUR (approx 360 LKR = 1 EUR)
   AED: '0.25', // 1 AED = 0.25 EUR (approx 4 AED = 1 EUR)
+  // Offline fallback snapshot: open.er-api.com/v6/latest/EUR, 2026-11-10 00:02:31 UTC.
+  GEL: '0.34475340478462563', // 1 EUR = 2.900624 GEL
+  OMR: '2.3211011303762503', // 1 EUR = 0.43083 OMR
+  THB: '0.02667649713370375', // 1 EUR = 37.486181 THB
+  MYR: '0.21989200224201885', // 1 EUR = 4.547687 MYR
+  KHR: '0.000221004757402775', // 1 EUR = 4524.789474 KHR
+  TRY: '0.017772842456903522', // 1 EUR = 56.26562 TRY
   EGP: '0.018', // 1 EGP = 0.018 EUR (approx 55.5 EGP = 1 EUR)
 };
 
@@ -39,13 +47,11 @@ const FALLBACK_RATES: Record<CurrencyCode, number> = Object.fromEntries(
  * These are approximate values for when the API is unavailable.
  */
 const BANK_FALLBACK_RATES: Record<string, number> = {
-  GEL: 1 / 2.94, // Georgian Lari (~2.94 GEL = 1 EUR)
   KZT: 1 / 514, // Kazakh Tenge
   AMD: 1 / 408, // Armenian Dram
   UAH: 1 / 44, // Ukrainian Hryvnia
   UZS: 1 / 13500, // Uzbek Som
   AZN: 1 / 1.84, // Azerbaijani Manat
-  TRY: 1 / 35, // Turkish Lira
   ILS: 1 / 3.96, // Israeli Shekel
   PLN: 1 / 4.28, // Polish Zloty
   CZK: 1 / 25.2, // Czech Koruna
@@ -99,6 +105,12 @@ const LOGGED_RATE_DECIMALS: ReadonlyArray<[CurrencyCode, number]> = [
   ['LKR', 6],
   ['AED', 4],
   ['EGP', 6],
+  ['GEL', 4],
+  ['OMR', 4],
+  ['THB', 6],
+  ['MYR', 4],
+  ['KHR', 6],
+  ['TRY', 6],
 ];
 
 /** Supported currencies other than the base, in the order rate tables are built. */
@@ -106,11 +118,15 @@ const NON_BASE_CURRENCIES = SUPPORTED_CURRENCIES.filter(
   (currency): currency is Exclude<CurrencyCode, 'EUR'> => currency !== 'EUR',
 );
 
-/** API gives "1 EUR = X currency"; invert to "1 currency = 1/X EUR" (missing rate → 1). */
+/** Invert API quotes; missing or invalid individual quotes retain the offline rate. */
 function buildEurRates(apiRates: Record<string, number>): Record<CurrencyCode, number> {
   const rates = { EUR: 1.0 } as Record<CurrencyCode, number>;
   for (const currency of NON_BASE_CURRENCIES) {
-    rates[currency] = 1 / (apiRates[currency] || 1);
+    const quote = apiRates[currency];
+    rates[currency] =
+      typeof quote === 'number' && Number.isFinite(quote) && quote > 0
+        ? 1 / quote
+        : FALLBACK_RATES[currency];
   }
   return rates;
 }
@@ -122,7 +138,11 @@ function buildEurRates(apiRates: Record<string, number>): Record<CurrencyCode, n
 function buildRateStrings(apiRates: Record<string, number>): Record<CurrencyCode, string> {
   const rates = { EUR: '1' } as Record<CurrencyCode, string>;
   for (const currency of NON_BASE_CURRENCIES) {
-    rates[currency] = new Big(1).div(new Big(String(apiRates[currency] || 1))).toFixed(15);
+    const quote = apiRates[currency];
+    rates[currency] =
+      typeof quote === 'number' && Number.isFinite(quote) && quote > 0
+        ? new Big(1).div(String(quote)).toFixed(15)
+        : FALLBACK_RATES_STR[currency];
   }
   return rates;
 }
@@ -132,7 +152,7 @@ function buildKnownRates(apiRates: Record<string, number>): Record<string, numbe
   const allRates: Record<string, number> = { EUR: 1.0 };
   for (const currency of knownCurrencies) {
     const apiRate = apiRates[currency];
-    if (typeof apiRate === 'number' && apiRate > 0) {
+    if (typeof apiRate === 'number' && Number.isFinite(apiRate) && apiRate > 0) {
       allRates[currency] = 1 / apiRate;
     }
   }
@@ -254,7 +274,8 @@ export function convertCurrency(
   // rates[X] = "1 X = Y EUR"
   // from -> EUR -> to
   const eurAmount = amount * fromRate;
-  return Math.round((eurAmount / toRate) * 100) / 100;
+  const factor = 10 ** getCurrencyPrecision(toCurrency);
+  return Math.round((eurAmount / toRate) * factor) / factor;
 }
 
 /**
@@ -296,9 +317,10 @@ export function getExchangeRate(currency: CurrencyCode): number {
  */
 export function formatAmount(amount: number, currency: string, aiContext = false): string {
   const abs = Math.abs(amount);
+  const precision = getCurrencyPrecision(currency);
 
   if (aiContext) {
-    const exact = amount.toFixed(2);
+    const exact = amount.toFixed(precision);
     if (abs >= 1_000_000_000) {
       return `${exact} (${+(amount / 1_000_000_000).toFixed(2)} млрд) ${currency}`;
     }
@@ -315,7 +337,7 @@ export function formatAmount(amount: number, currency: string, aiContext = false
   } else if (abs >= 1_000_000) {
     num = `${+(amount / 1_000_000).toFixed(2)} млн`;
   } else {
-    num = amount.toFixed(2);
+    num = amount.toFixed(precision);
   }
   return `${num} ${symbol}`;
 }

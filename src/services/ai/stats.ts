@@ -1,8 +1,14 @@
 /** Pre-calculated statistics for expense data — avg, median, min, max, and trend/diff formatters */
+import Big from 'big.js';
 import type { CurrencyCode } from '../../config/constants';
 import { BASE_CURRENCY } from '../../config/constants';
 import type { Expense } from '../../database/types';
 import { convertCurrency, formatAmount } from '../currency/converter';
+import {
+  expenseAmountInCurrency,
+  sumExpensesInCurrency,
+  usesOriginalCurrencyAmounts,
+} from '../currency/totals';
 
 type ExpenseRecord = Pick<
   Expense,
@@ -18,6 +24,24 @@ export interface ExpenseStats {
   max: { amount: number; comment: string; category: string; date: string } | null;
 }
 
+function medianAmount(amounts: number[], displayCurrency: CurrencyCode): number {
+  const sorted = [...amounts].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  let median: number;
+  if (sorted.length % 2 === 0) {
+    median = usesOriginalCurrencyAmounts(displayCurrency)
+      ? new Big(sorted[mid - 1] ?? 0)
+          .plus(sorted[mid] ?? 0)
+          .div(2)
+          .toNumber()
+      : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+  } else {
+    median = sorted[mid] ?? 0;
+  }
+
+  return median;
+}
+
 export function computeExpenseStats(
   expenses: ExpenseRecord[],
   displayCurrency: CurrencyCode,
@@ -27,25 +51,20 @@ export function computeExpenseStats(
   }
 
   const converted = expenses.map((e) => ({
-    displayAmount: convertCurrency(e.eur_amount, BASE_CURRENCY, displayCurrency),
+    displayAmount: expenseAmountInCurrency(e, displayCurrency),
     comment: e.comment,
     category: e.category,
     date: e.date,
   }));
 
   const amounts = converted.map((e) => e.displayAmount);
-  const total = amounts.reduce((s, a) => s + a, 0);
+  const total = usesOriginalCurrencyAmounts(displayCurrency)
+    ? sumExpensesInCurrency(expenses, displayCurrency)
+    : amounts.reduce((s, a) => s + a, 0);
   const count = amounts.length;
   const avg = total / count;
 
-  const sorted = [...amounts].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  let median: number;
-  if (sorted.length % 2 === 0) {
-    median = ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
-  } else {
-    median = sorted[mid] ?? 0;
-  }
+  const median = medianAmount(amounts, displayCurrency);
 
   // Non-null assertion safe here: we checked expenses.length > 0 at the top
   // biome-ignore lint/style/noNonNullAssertion: guarded by early return on empty array
@@ -133,6 +152,20 @@ function aggregateByCategory(
   expenses: ExpenseRecord[],
   displayCurrency: CurrencyCode,
 ): Record<string, number> {
+  if (usesOriginalCurrencyAmounts(displayCurrency)) {
+    const grouped = new Map<string, ExpenseRecord[]>();
+    for (const expense of expenses) {
+      const items = grouped.get(expense.category) ?? [];
+      items.push(expense);
+      grouped.set(expense.category, items);
+    }
+    return Object.fromEntries(
+      [...grouped].map(([category, items]) => [
+        category,
+        sumExpensesInCurrency(items, displayCurrency),
+      ]),
+    );
+  }
   const result: Record<string, number> = {};
   for (const e of expenses) {
     const displayAmount = convertCurrency(e.eur_amount, BASE_CURRENCY, displayCurrency);

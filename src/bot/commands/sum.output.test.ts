@@ -124,6 +124,29 @@ describe('/sum message text', () => {
     snapshotMock.mockReset().mockReturnValue({ technicalAnalysis: null });
   });
 
+  test('OMR current-month total retains original baisa instead of rounded EUR cents', async () => {
+    mockExpensesRepo.findByGroupId.mockReturnValue([
+      { ...exp(MONTH_START, 'Food', 0), amount: 0.001, currency: 'OMR' },
+      { ...exp(MONTH_START, 'Food', 2.46), amount: 1.234, currency: 'OMR' },
+    ]);
+    await handleSumCommand(ctx, { ...group, default_currency: 'OMR' });
+    const message = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(message).toContain('💰 Всего: 1.235');
+    expect(logMock.error).not.toHaveBeenCalled();
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
+  test('KHR total retains original whole and fractional riels', async () => {
+    mockExpensesRepo.findByGroupId.mockReturnValue([
+      { ...exp(MONTH_START, 'Food', 0), amount: 1, currency: 'KHR' },
+      { ...exp(MONTH_START, 'Food', 0.22), amount: 1000.25, currency: 'KHR' },
+    ]);
+    await handleSumCommand(ctx, { ...group, default_currency: 'KHR' });
+    expect(sendMessageMock.mock.calls.at(-1)?.[0]).toContain('💰 Всего: 1001.25');
+    expect(logMock.error).not.toHaveBeenCalled();
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
   test('only current month: total line only, nothing else', async () => {
     mockExpensesRepo.findByGroupId.mockReturnValue([
       exp(MONTH_START, 'Food', 10),

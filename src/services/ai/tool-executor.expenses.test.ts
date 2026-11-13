@@ -665,3 +665,138 @@ describe('executeGetExpenses — batch periods and stats', () => {
     expect(result.output).toContain('=== Overall ===');
   });
 });
+
+describe('get_expenses preserves original OMR precision', () => {
+  beforeEach(() => {
+    resetAllMocks();
+    mockExpenses.findByDateRange.mockReturnValue([
+      makeExpense({
+        id: 1,
+        date: '2026-01-02',
+        amount: 0.001,
+        currency: 'OMR',
+        eur_amount: 0,
+        comment: 'one baisa',
+      }),
+      makeExpense({
+        id: 2,
+        date: '2026-01-01',
+        amount: 1.234,
+        currency: 'OMR',
+        eur_amount: 2.46,
+        comment: 'lunch',
+      }),
+    ]);
+  });
+
+  test('summary and category retain baisa instead of reconstructing rounded EUR', async () => {
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', summary_only: true, currency: 'OMR' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Total: 1.235 OMR');
+    expect(result.output).toContain('Food: 1.235 OMR (2 ops)');
+    expect(result.output).toContain('total: 1.235 OMR');
+    expect(result.output).toContain('min: 0.001 OMR');
+  });
+
+  test('detail pages carry the precise whole-set total and native page statistics', async () => {
+    const result = await executeTool(
+      'get_expenses',
+      { period: '2026-01', currency: 'OMR', page_size: 1 },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Total for all 2 expenses: 1.235 OMR (= 2.46 EUR)');
+    expect(result.output).toContain('total: 1.235 OMR');
+    expect(result.output).toContain('total: 0.001 OMR');
+  });
+
+  test('requested EUR keeps stored cents while the OMR group total remains exact', async () => {
+    const group = mockGroups.findById();
+    mockGroups.findById.mockReturnValue(group && { ...group, default_currency: 'OMR' });
+    const result = await executeTool('get_expenses', { period: '2026-01', currency: 'EUR' }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Total for all 2 expenses: 2.46 EUR (= 1.235 OMR)');
+    expect(result.output).toContain('total: 2.46 EUR');
+  });
+
+  test('batch overall totals preserve native precision across periods', async () => {
+    const tiny = makeExpense({ date: '2026-01-02', amount: 0.001, currency: 'OMR', eur_amount: 0 });
+    const lunch = makeExpense({
+      date: '2026-02-01',
+      amount: 1.234,
+      currency: 'OMR',
+      eur_amount: 2.46,
+    });
+    mockExpenses.findByDateRange.mockReturnValueOnce([tiny]).mockReturnValueOnce([lunch]);
+    const result = await executeTool(
+      'get_expenses',
+      { period: ['2026-01', '2026-02'], summary_only: true, currency: 'OMR' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('=== Overall ===\nTotal: 1.235 OMR');
+  });
+});
+
+describe('get_expenses native travel currency reports', () => {
+  beforeEach(resetAllMocks);
+
+  test.each([
+    'GEL',
+    'THB',
+    'MYR',
+    'KHR',
+    'TRY',
+  ] as const)('%s summaries and pagination use original totals', async (currency) => {
+    mockExpenses.findByDateRange.mockReturnValue([
+      makeExpense({
+        id: 1,
+        amount: 1.21,
+        currency,
+        eur_amount: 0,
+        comment: 'small',
+        date: '2026-04-01',
+      }),
+      makeExpense({
+        id: 2,
+        amount: 2.34,
+        currency,
+        eur_amount: 0.01,
+        comment: 'large',
+        date: '2026-04-02',
+      }),
+    ]);
+    const summary = await executeTool(
+      'get_expenses',
+      { period: '2026-04', summary_only: true, currency },
+      ctx,
+    );
+    expect(summary.success).toBe(true);
+    expect(summary.output).toContain(`Total: 3.55 ${currency}`);
+    expect(summary.output).toContain(`Food: 3.55 ${currency} (2 ops)`);
+    expect(summary.output).toContain(`min: 1.21 ${currency}`);
+    const detail = await executeTool(
+      'get_expenses',
+      { period: '2026-04', currency, page_size: 1 },
+      ctx,
+    );
+    expect(detail.success).toBe(true);
+    expect(detail.output).toContain(`Total for all 2 expenses: 3.55 ${currency} (= 0.01 EUR)`);
+    // Detail rows sort newest first, so page 1 contains the second dated expense.
+    expect(detail.output).toContain('[id:2]');
+    expect(detail.output).toContain(`total: 2.34 ${currency}`);
+    const group = mockGroups.findById();
+    mockGroups.findById.mockReturnValue(group && { ...group, default_currency: currency });
+    const normalized = await executeTool(
+      'get_expenses',
+      { period: '2026-04', currency: 'EUR' },
+      ctx,
+    );
+    expect(normalized.success).toBe(true);
+    expect(normalized.output).toContain(`Total for all 2 expenses: 0.01 EUR (= 3.55 ${currency})`);
+  });
+});

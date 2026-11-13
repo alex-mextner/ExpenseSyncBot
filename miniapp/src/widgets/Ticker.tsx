@@ -14,7 +14,7 @@ export function Ticker({ value, label, currency, series }: Props) {
       <div>
         {label && <div style={{ fontSize: 10, opacity: 0.5 }}>{label}</div>}
         <div style={{ fontSize: 18, fontWeight: 600 }}>
-          {value.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
+          {value.toLocaleString('ru-RU', { maximumFractionDigits: currency === 'OMR' ? 3 : ['GEL', 'THB', 'MYR', 'KHR', 'TRY'].includes(currency ?? '') ? 2 : 0 })}
           {currency ? ` ${currency}` : ''}
         </div>
       </div>

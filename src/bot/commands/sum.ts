@@ -11,6 +11,7 @@ import type { CategoryTaAnalysis } from '../../services/analytics/ta/analyzer';
 import type { TechnicalAnalysis } from '../../services/analytics/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { sumExpensesInCurrency } from '../../services/currency/totals';
 import { googleConn } from '../../services/google/sheets';
 import { truncateForTelegram } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
@@ -253,11 +254,7 @@ export async function handleSumCommand(ctx: Ctx['Command'], group: Group): Promi
 
   // Convert EUR totals to group's display currency for user output
   const displayCurrency = group.default_currency;
-  const currentMonthTotalDisplay = convertCurrency(
-    currentMonthTotal,
-    BASE_CURRENCY,
-    displayCurrency,
-  );
+  const currentMonthTotalDisplay = sumExpensesInCurrency(currentMonthExpenses, displayCurrency);
 
   let message = `📊 Расходы за ${format(now, 'LLLL yyyy')}\n\n`;
   message += `💰 Всего: ${formatAmount(currentMonthTotalDisplay, displayCurrency)}\n`;

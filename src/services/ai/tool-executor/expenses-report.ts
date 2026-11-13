@@ -14,7 +14,8 @@ import type { Expense } from '../../../database/types';
 import { createLogger } from '../../../utils/logger.ts';
 import { normalizeArrayParam, resolvePeriodDates } from '../../../utils/period';
 import { formatReceiptCommentForTelegram } from '../../../utils/receipt-display';
-import { convertCurrency, formatAmount } from '../../currency/converter';
+import { formatAmount } from '../../currency/converter';
+import { sumExpensesInCurrency, usesOriginalCurrencyAmounts } from '../../currency/totals';
 import {
   computeExpenseStats,
   type ExpenseStats,
@@ -36,6 +37,7 @@ interface PeriodData {
 }
 
 interface CategoryTotals {
+  expenses: Expense[];
   count: number;
   eur_total: number;
   amounts: Record<string, number>;
@@ -104,9 +106,10 @@ function aggregateByCategory(expenses: Expense[]): Record<string, CategoryTotals
   const totals: Record<string, CategoryTotals> = {};
   for (const e of expenses) {
     const existing = totals[e.category];
-    const cat = existing ?? { count: 0, eur_total: 0, amounts: {} };
+    const cat = existing ?? { expenses: [], count: 0, eur_total: 0, amounts: {} };
     totals[e.category] = cat;
     cat.count++;
+    cat.expenses.push(e);
     cat.eur_total += e.eur_amount;
     cat.amounts[e.currency] = (cat.amounts[e.currency] || 0) + e.amount;
   }
@@ -129,18 +132,26 @@ function renderPeriodSummary(
   }
 
   const totals = aggregateByCategory(pd.expenses);
-  const totalEur = Object.values(totals).reduce((s, c) => s + c.eur_total, 0);
-  const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+  const totalDisplay = sumExpensesInCurrency(pd.expenses, displayCurrency);
   lines.push(`Total: ${formatAmount(totalDisplay, displayCurrency, true)}`, '');
 
-  const sorted = Object.entries(totals).sort((a, b) => b[1].eur_total - a[1].eur_total);
-  for (const [cat, data] of sorted) {
+  const sorted = Object.entries(totals)
+    .map(([category, data]) => ({
+      category,
+      data,
+      displayTotal: sumExpensesInCurrency(data.expenses, displayCurrency),
+    }))
+    .sort((a, b) =>
+      usesOriginalCurrencyAmounts(displayCurrency)
+        ? b.displayTotal - a.displayTotal
+        : b.data.eur_total - a.data.eur_total,
+    );
+  for (const { category: cat, data, displayTotal } of sorted) {
     const amountParts = Object.entries(data.amounts)
       .map(([c, a]) => formatAmount(a, c as CurrencyCode, true))
       .join(', ');
-    const catDisplay = convertCurrency(data.eur_total, BASE_CURRENCY, displayCurrency);
     lines.push(
-      `${cat}: ${formatAmount(catDisplay, displayCurrency, true)} (${data.count} ops) [${amountParts}]`,
+      `${cat}: ${formatAmount(displayTotal, displayCurrency, true)} (${data.count} ops) [${amountParts}]`,
     );
   }
 
@@ -191,8 +202,7 @@ function renderBatchOverall(
   displayCurrency: CurrencyCode,
 ): string[] {
   const overallStats = computeExpenseStats(allExpenses, displayCurrency);
-  const overallEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
-  const overallDisplay = convertCurrency(overallEur, BASE_CURRENCY, displayCurrency);
+  const overallDisplay = sumExpensesInCurrency(allExpenses, displayCurrency);
   return [
     '=== Overall ===',
     `Total: ${formatAmount(overallDisplay, displayCurrency, true)}`,
@@ -244,14 +254,13 @@ function buildDetailOutput(
   const offset = (page - 1) * pageSize;
   const pageItems = allExpenses.slice(offset, offset + pageSize);
 
-  const totalEur = allExpenses.reduce((s, e) => s + e.eur_amount, 0);
-  const totalDisplay = convertCurrency(totalEur, BASE_CURRENCY, displayCurrency);
+  const totalDisplay = sumExpensesInCurrency(allExpenses, displayCurrency);
   // A requested currency other than the group's also gets the total in the group currency, so
   // the model never has to convert the authoritative total itself.
   const totalInDefault =
     displayCurrency === defaultCurrency
       ? ''
-      : ` (= ${formatAmount(convertCurrency(totalEur, BASE_CURRENCY, defaultCurrency), defaultCurrency, true)})`;
+      : ` (= ${formatAmount(sumExpensesInCurrency(allExpenses, defaultCurrency), defaultCurrency, true)})`;
 
   const firstPeriod = periodData[0];
   const lastPeriod = periodData[periodData.length - 1];

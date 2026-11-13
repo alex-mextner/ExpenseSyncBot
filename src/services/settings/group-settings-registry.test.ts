@@ -83,6 +83,24 @@ describe('registry enforcement', () => {
 describe('default_currency setting', () => {
   const def = GROUP_SETTINGS.default_currency;
 
+  test.each([
+    'GEL',
+    'OMR',
+    'THB',
+    'MYR',
+    'KHR',
+    'TRY',
+  ])('enables %s as the group default', async (code) => {
+    expect(def.parse(code.toLowerCase(), fakeGroup())).toEqual({ ok: true, value: code });
+    const result = await applyGroupSetting(def, fakeGroup(), code.toLowerCase());
+    expect(result.ok).toBe(true);
+    expect(updateMock).toHaveBeenCalledWith(-100, {
+      default_currency: code,
+      enabled_currencies: ['USD', 'EUR', code],
+    });
+    expect(def.aiValueHint).toContain(code);
+  });
+
   test('parse uppercases and accepts a supported code', () => {
     expect(def.parse('egp', fakeGroup())).toEqual({ ok: true, value: 'EGP' });
   });
@@ -146,10 +164,10 @@ describe('enabled_currencies setting', () => {
     if (!result.ok) expect(result.error).toContain('AB');
   });
 
-  test('parse accepts custom ISO codes for onboarding parity (e.g. GEL)', () => {
-    const result = def.parse('usd, gel', fakeGroup({ default_currency: 'USD' }));
-    // GEL is a valid ISO code but outside the built-in set — onboarding allows it, so does this.
-    expect(result).toEqual({ ok: true, value: ['USD', 'GEL'] as CurrencyCode[] });
+  test('parse accepts custom ISO codes for onboarding parity (e.g. KZT)', () => {
+    const result = def.parse('usd, kzt', fakeGroup({ default_currency: 'USD' }));
+    // KZT is a valid ISO code but outside the built-in set — onboarding allows it, so does this.
+    expect(result).toEqual({ ok: true, value: ['USD', 'KZT'] as CurrencyCode[] });
   });
 
   test('parse rejects an empty list', () => {

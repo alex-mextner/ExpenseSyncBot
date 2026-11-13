@@ -5,7 +5,12 @@
 import type Big from 'big.js';
 import { format } from 'date-fns';
 import { marked } from 'marked';
-import { BASE_CURRENCY, type CurrencyCode, SUPPORTED_CURRENCIES } from '../../config/constants';
+import {
+  BASE_CURRENCY,
+  type CurrencyCode,
+  getCurrencyPrecision,
+  SUPPORTED_CURRENCIES,
+} from '../../config/constants';
 import { database } from '../../database';
 import type { BankTransaction, BankTransactionFilters } from '../../database/types';
 import { getErrorMessage } from '../../utils/error';
@@ -584,7 +589,7 @@ function executeManageCategorySingle(action: string, name: string, ctx: AgentCon
  * Values >= 1,000,000 use scientific notation (e.g. 1.26e8).
  * Smaller values are rounded to 2 decimal places with trailing zeros stripped.
  */
-function formatCalculatorResult(n: Big): string {
+function formatCalculatorResult(n: Big, precision = 2): string {
   if (n.abs().gte(1_000_000)) {
     // 4 significant figures, strip trailing zeros and normalize exponent sign
     return n
@@ -592,7 +597,7 @@ function formatCalculatorResult(n: Big): string {
       .replace(/\.?0+(e)/, '$1')
       .replace('e+', 'e');
   }
-  return n.toFixed(2).replace(/\.?0+$/, '');
+  return n.toFixed(precision).replace(/\.?0+$/, '');
 }
 
 function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
@@ -607,10 +612,11 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
   }
   const rawCurrency =
     (input['target_currency'] as string | undefined) || group.default_currency || BASE_CURRENCY;
-  if (!SUPPORTED_CURRENCIES.includes(rawCurrency as CurrencyCode)) {
+  const currencyCode = rawCurrency.trim().toUpperCase();
+  if (!SUPPORTED_CURRENCIES.includes(currencyCode as CurrencyCode)) {
     return { success: false, error: `Unknown currency: "${rawCurrency}"` };
   }
-  const targetCurrency = rawCurrency as CurrencyCode;
+  const targetCurrency = currencyCode as CurrencyCode;
 
   const result = evaluateCurrencyExpression(expression, targetCurrency);
   if (result === null) {
@@ -624,7 +630,7 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
       // Single number with optional currency — might just need no operator
       hint =
         'single value with no operator; if this is a currency conversion (e.g. "90000 RSD"), it should work — check currency spelling';
-    } else if (/[^0-9+\-*/×÷.,% A-Za-zА-Яа-яёЁ$€£¥₽₸₴₼฿]/.test(expression)) {
+    } else if (/[^0-9+\-*/×÷.,% \p{L}\p{M}$€£¥₽₸₴₼฿₾\u20c4]/u.test(expression)) {
       hint = 'expression contains unsupported characters';
     } else {
       hint =
@@ -633,7 +639,10 @@ function executeCalculate(input: Record<string, unknown>, ctx: AgentContext): To
     return { success: false, error: `Cannot evaluate: "${expression}" — ${hint}` };
   }
 
-  const formatted = formatCalculatorResult(result.value);
+  const formatted = formatCalculatorResult(
+    result.value,
+    result.hasCurrency ? getCurrencyPrecision(targetCurrency) : 2,
+  );
   const output = result.hasCurrency ? `${formatted} ${targetCurrency}` : formatted;
   return { success: true, output };
 }

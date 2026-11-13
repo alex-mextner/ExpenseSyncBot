@@ -1,5 +1,6 @@
 /** Tests for computeExpenseStats, formatStats, formatStatsDiff, formatStatsTrend */
 import { describe, expect, mock, test } from 'bun:test';
+import type { CurrencyCode } from '../../config/constants';
 
 // Mock convertCurrency — use simple 1:100 EUR→RSD rate for predictable tests
 mock.module('../currency/converter', () => ({
@@ -15,6 +16,62 @@ import type { ExpenseStats } from './stats';
 import { computeExpenseStats, formatStats, formatStatsDiff, formatStatsTrend } from './stats';
 
 describe('computeExpenseStats', () => {
+  test('keeps native KHR in totals, average, median, minimum and maximum', () => {
+    const expenses = [
+      {
+        amount: 1,
+        currency: 'KHR' as const,
+        eur_amount: 0,
+        category: 'Food',
+        comment: 'fee',
+        date: '2026-04-01',
+      },
+      {
+        amount: 1000,
+        currency: 'KHR' as const,
+        eur_amount: 0.22,
+        category: 'Food',
+        comment: 'lunch',
+        date: '2026-04-02',
+      },
+    ];
+    const stats = computeExpenseStats(expenses, 'KHR');
+    expect(stats.total).toBe(1001);
+    expect(stats.avg).toBe(500.5);
+    expect(stats.median).toBe(500.5);
+    expect(stats.min?.amount).toBe(1);
+    expect(stats.max?.amount).toBe(1000);
+  });
+
+  test('keeps original OMR amounts when their stored EUR values lose a baisa', () => {
+    const expenses = [
+      {
+        amount: 0.001,
+        currency: 'OMR' as CurrencyCode,
+        eur_amount: 0,
+        category: 'Food',
+        comment: 'one baisa',
+        date: '2026-01-01',
+      },
+      {
+        amount: 1.234,
+        currency: 'OMR' as CurrencyCode,
+        eur_amount: 2.46,
+        category: 'Food',
+        comment: 'lunch',
+        date: '2026-01-02',
+      },
+    ];
+
+    const stats = computeExpenseStats(expenses, 'OMR' as CurrencyCode);
+    expect(stats.total).toBe(1.235);
+    expect(stats.avg).toBe(0.6175);
+    expect(stats.median).toBe(0.6175);
+    expect(stats.min?.amount).toBe(0.001);
+    expect(stats.min?.comment).toBe('one baisa');
+    expect(stats.max?.amount).toBe(1.234);
+  });
+
   test('returns zeroed stats for empty array', () => {
     const stats = computeExpenseStats([], 'RSD');
     expect(stats.count).toBe(0);

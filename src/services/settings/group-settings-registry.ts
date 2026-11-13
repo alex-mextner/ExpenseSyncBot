@@ -256,8 +256,7 @@ const defaultCurrencySetting: CurrencySettingDef = {
   kind: 'currency',
   emoji: '💱',
   labelRu: 'Валюта по умолчанию',
-  aiValueHint:
-    'one of the built-in supported ISO codes (USD, EUR, RUB, RSD, GBP, BYN, CHF, JPY, CNY, INR, LKR, AED, EGP), e.g. "EGP"',
+  aiValueHint: `one of the built-in supported ISO codes (${SUPPORTED_CURRENCIES.join(', ')}), e.g. "OMR"`,
   formatValue: (group) => group.default_currency,
   parse: (raw) => parseCurrency(raw),
   apply(group, value) {

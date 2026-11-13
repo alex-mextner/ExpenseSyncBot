@@ -70,7 +70,7 @@ export function formatSnapshotForPrompt(
   const bankAccounts = database.bankAccounts.findByGroupId(groupId);
   if (bankAccounts.length > 0) {
     const balanceLines = bankAccounts
-      .map((a) => `${a.title}: ${a.balance.toFixed(2)} ${a.currency}`)
+      .map((a) => `${a.title}: ${formatAmount(a.balance, a.currency, true)}`)
       .join('\n');
     result += `\n\n## Банковские балансы\n${balanceLines}`;
   }

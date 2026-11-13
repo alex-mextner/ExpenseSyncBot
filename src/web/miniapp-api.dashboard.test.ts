@@ -1,5 +1,7 @@
 // Tests for Mini App API: analytics, dashboard widgets and dashboard SSE events
 
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { handleMiniAppRequest } from './miniapp-api.ts';
 import {
@@ -43,14 +45,88 @@ describe('GET /api/analytics', () => {
     expect(res.status).toBe(401);
   });
 
+  test.each([
+    {
+      currency: 'OMR' as const,
+      original: 'OMR',
+      small: 0.001,
+      large: 1.234,
+      eur: 2.46,
+      total: 1.235,
+    },
+    {
+      currency: 'EUR' as const,
+      original: 'OMR',
+      small: 0.001,
+      large: 1.234,
+      eur: 2.46,
+      total: 2.46,
+    },
+    {
+      currency: 'KHR' as const,
+      original: 'KHR',
+      small: 1,
+      large: 1000.25,
+      eur: 0.22,
+      total: 1001.25,
+    },
+  ])('preserves $currency accounting in the real aggregation query', async ({
+    currency,
+    original,
+    small,
+    large,
+    eur,
+    total,
+  }) => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(
+        'CREATE TABLE expenses (group_id INTEGER, date TEXT, category TEXT, amount REAL, currency TEXT, eur_amount REAL)',
+      );
+      const insert = db.query('INSERT INTO expenses VALUES (?, ?, ?, ?, ?, ?)');
+      insert.run(7, '2025-03-01', 'Food', small, original, 0);
+      insert.run(7, '2025-03-02', 'Food', large, original, eur);
+      insert.run(8, '2025-03-01', 'Other group', 10, 'OMR', 20);
+      insert.run(7, '2025-02-01', 'Other month', 10, 'OMR', 20);
+      mockDbQueryAll.mockImplementation((sql, ...params) =>
+        db.query(sql).all(...(params as SQLQueryBindings[])),
+      );
+      mockFindByTelegramId.mockImplementation(() => MOCK_USER);
+      mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
+      mockGroupMembersIsMember.mockReturnValue(true);
+      mockGroupsFindById.mockImplementation(() =>
+        stubGroup({ id: 7, telegram_group_id: GROUP_ID, default_currency: currency }),
+      );
+
+      const req = makeRequest(
+        `/api/analytics?groupId=${GROUP_ID}&period=2025-03`,
+        'GET',
+        buildInitData(42),
+      );
+      const res = await handleMiniAppRequest(req, CORS_ORIGIN);
+      if (!res) throw new Error('expected Response, got null');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        expenses: number;
+        balance: number;
+        byCategory: Record<string, number>;
+      };
+      expect(body.expenses).toBe(total);
+      expect(body.balance).toBe(-total);
+      expect(body.byCategory).toEqual({ Food: total });
+    } finally {
+      db.close();
+    }
+  });
+
   test('success → 200 with correct shape', async () => {
     mockFindByTelegramId.mockImplementation(() => MOCK_USER);
     mockGroupsFindByTelegramGroupId.mockReturnValue(stubGroup({ id: 7 }));
     mockGroupMembersIsMember.mockReturnValue(true);
     mockGroupsFindById.mockImplementation(() => stubGroup({ telegram_group_id: GROUP_ID }));
     mockDbQueryAll.mockImplementation(() => [
-      { category: 'Food', total: 100 },
-      { category: 'Transport', total: 50 },
+      { category: 'Food', currency: 'EUR', amount: 100, eur_amount: 100 },
+      { category: 'Transport', currency: 'EUR', amount: 50, eur_amount: 50 },
     ]);
 
     const initData = buildInitData(42);

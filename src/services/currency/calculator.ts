@@ -2,29 +2,17 @@
  * Currency-aware expression evaluator — used by the AI calculate tool
  */
 import Big from 'big.js';
-import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import type { CurrencyCode } from '../../config/constants';
 import { convertCurrencyBig } from './converter';
 import { evaluateMathExpressionBig } from './parser';
+import { CURRENCY_TOKEN_PATTERN, normalizeCurrencyAlias, normalizeCurrencyText } from './tokens';
 
-// All currency aliases, sorted longest-first (prevents partial matches on shorter entries)
-const SORTED_ALIASES: Array<[string, CurrencyCode]> = (
-  Object.entries(CURRENCY_ALIASES) as Array<[string, string]>
-)
-  .filter(([alias]) => !/\s/.test(alias)) // skip multi-word aliases (e.g. "белорусский рубль")
-  .sort(([a], [b]) => b.length - a.length)
-  .map(([alias, code]) => [alias, code as CurrencyCode]);
-
-// Number pattern: digits with optional decimal (dot or comma)
+// A complete token must border a number/operator or whitespace, never part of another word.
 const NUM = '\\d+(?:[.,]\\d+)?';
-
-// Currency identifier pattern (longest aliases first, all special chars escaped)
-const CURR = SORTED_ALIASES.map(([alias]) => alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(
-  '|',
+const AMOUNT_RE = new RegExp(
+  `(?<![\\p{L}\\p{M}\\p{N}_])(?:(${CURRENCY_TOKEN_PATTERN})\\s*(${NUM})|(${NUM})\\s*(${CURRENCY_TOKEN_PATTERN}))(?![\\p{L}\\p{M}\\p{N}_])`,
+  'giu',
 );
-
-// Matches: (currency)(number)  e.g. $100, €50
-//      or: (number)(optional space)(currency)  e.g. 100$, 50 EUR, 100eur
-const AMOUNT_RE = new RegExp(`(${CURR})(${NUM})|(${NUM})\\s*(${CURR})`, 'gi');
 
 /**
  * Result of evaluating a currency-aware expression.
@@ -52,7 +40,7 @@ function convertAmountMatch(
   const currencyAlias = currBefore !== undefined ? currBefore : currAfter;
   const rawAmount = currBefore !== undefined ? numAfterCurr : numBeforeCurr;
 
-  const fromCurrency = CURRENCY_ALIASES[currencyAlias.toLowerCase()] as CurrencyCode | undefined;
+  const fromCurrency = normalizeCurrencyAlias(currencyAlias);
   if (!fromCurrency) return null;
 
   const amountStr = rawAmount.replace(',', '.');
@@ -108,7 +96,7 @@ export function evaluateCurrencyExpression(
   let anyCurrencyReplaced = false;
 
   // Replace each currency amount with its value in targetCurrency
-  const converted = expr.replace(
+  const converted = normalizeCurrencyText(expr).replace(
     AMOUNT_RE,
     (match, currBefore, numAfterCurr, numBeforeCurr, currAfter) => {
       const replacement = convertAmountMatch(
