@@ -313,8 +313,18 @@ Telegram Mini App for expense input with receipt scanning. Located in `miniapp/`
 
 1. Add aliases to `CURRENCY_ALIASES` in [src/config/constants.ts](src/config/constants.ts)
 2. Add code to `SUPPORTED_CURRENCIES` array
-3. Add symbol to `CURRENCY_SYMBOLS` map
-4. Add exchange rate in [src/services/currency/converter.ts](src/services/currency/converter.ts)
+3. Add names, symbol, shortcuts and non-default `decimalPlaces` to `CURRENCY_INFO`
+4. Add a dated offline exchange rate in [src/services/currency/converter.ts](src/services/currency/converter.ts)
+5. Currency tokens are shared in `src/services/currency/tokens.ts`; expense, budget and
+   calculator parsing must consume complete aliases, including multiword/native names.
+6. OMR has three decimal places. Use `getCurrencyPrecision`/`formatAmount` for original
+   amounts; keep receipt sums, original-currency reports and Sheets row matching precise.
+   A fixed half-cent match can delete an adjacent OMR row. Preserve the established
+   EUR normalization contract. Native GEL/OMR/THB/MYR/KHR/TRY reports use original
+   amounts plus converted foreign EUR subtotals, via `usesOriginalCurrencyAmounts`;
+   do not reconstruct these amounts from rounded EUR cents (even 1 KHR can become
+   zero EUR). Older currencies retain their existing reporting semantics. MYR, KHR
+   and TRY have two fractional digits; KHR cash habits must not erase fractions.
 
 ### Google Sheets Structure
 

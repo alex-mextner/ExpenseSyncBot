@@ -2,9 +2,10 @@
 import { InlineKeyboard } from 'gramio';
 import { BASE_CURRENCY, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
 import { database } from '../../database';
-import type { Group } from '../../database/types';
+import type { Expense, Group } from '../../database/types';
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { convertCurrency, formatAmount } from '../../services/currency/converter';
+import { sumExpensesInCurrency, usesOriginalCurrencyAmounts } from '../../services/currency/totals';
 import { createLogger } from '../../utils/logger.ts';
 import { buildMiniAppUrl } from '../../utils/miniapp-url';
 import { pluralize } from '../../utils/pluralize';
@@ -33,7 +34,16 @@ export async function handleStatsCommand(ctx: Ctx['Command'], group: Group): Pro
       message += `• ${formatAmount(total, currency as CurrencyCode)}\n`;
     }
 
-    const totalDisplay = convertCurrency(totalEUR, BASE_CURRENCY, group.default_currency);
+    // Aggregate all rows, not the recent-expense page: native amounts cannot be recovered from EUR cents.
+    const totalDisplay = usesOriginalCurrencyAmounts(group.default_currency)
+      ? sumExpensesInCurrency(
+          database.queryAll<Pick<Expense, 'currency' | 'amount' | 'eur_amount'>>(
+            'SELECT currency, SUM(amount) AS amount, SUM(eur_amount) AS eur_amount FROM expenses WHERE group_id = ? GROUP BY currency',
+            group.id,
+          ),
+          group.default_currency,
+        )
+      : convertCurrency(totalEUR, BASE_CURRENCY, group.default_currency);
     message += `\n<b>Всего:</b> ${formatAmount(totalDisplay, group.default_currency)}\n`;
 
     message += `\n<b>Последние ${recentExpenses.length} ${pluralize(recentExpenses.length, 'расход', 'расхода', 'расходов')}:</b>\n`;

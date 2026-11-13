@@ -1,6 +1,7 @@
 // Builds bank status panel text and keyboard — shared between bot commands and sync service.
 import { database } from '../../database';
 import type { BankConnection } from '../../database/types';
+import { formatAmount } from '../currency/converter';
 
 export interface PanelButton {
   text: string;
@@ -41,7 +42,7 @@ function renderBankSection(conn: BankConnection, cardsEnabled: boolean): string 
 
   const balanceLine =
     accounts.length > 0
-      ? accounts.map((a) => `${a.balance.toFixed(2)} ${a.currency}`).join(', ')
+      ? accounts.map((a) => formatAmount(a.balance, a.currency, true)).join(', ')
       : conn.last_sync_at
         ? 'балансы не найдены'
         : 'балансы загрузятся после первой синхронизации';
@@ -55,7 +56,7 @@ function renderBankSection(conn: BankConnection, cardsEnabled: boolean): string 
         pendingTxs
           .map(
             (tx) =>
-              `• ${tx.amount.toFixed(2)} ${tx.currency} — ${tx.merchant_normalized ?? tx.merchant ?? '—'} · ⏳ ожидает`,
+              `• ${formatAmount(tx.amount, tx.currency, true)} — ${tx.merchant_normalized ?? tx.merchant ?? '—'} · ⏳ ожидает`,
           )
           .join('\n')
       : '';

@@ -6,7 +6,7 @@ Telegram bot for tracking expenses and syncing them to Google Sheets.
 
 - 💰 Track expenses via Telegram messages
 - 📊 Automatic sync to Google Sheets
-- 💱 Multi-currency support (USD, EUR, RUB, RSD, GBP, CHF, JPY, CNY, INR)
+- 💱 Multi-currency support (USD, EUR, RUB, RSD, GBP, BYN, CHF, JPY, CNY, INR, LKR, AED, EGP, GEL, OMR, THB, MYR, KHR, TRY)
 - 🏷️ Automatic category detection with confirmation
 - 📈 Statistics and expense analysis
 - 🔐 Secure OAuth2 authentication with Google
@@ -34,6 +34,33 @@ $ 190 евро Alex hobby
 ```
 
 Format: `[amount] [currency?] [category] [comment]`
+
+### Georgian lari, Omani rial, and Thai baht
+
+GEL, OMR, THB, MYR, KHR, and TRY are available in the initial currency picker and group settings, for
+manual expenses, budgets, receipts, bank imports, Google Sheets, and the AI calculator.
+Codes are case-insensitive; symbols and complete names work before or after the amount,
+with or without a space.
+
+| Currency | Accepted examples | Expense example |
+| --- | --- | --- |
+| GEL — Georgian lari | `GEL`, `₾`, `лари`, `грузинских лари`, `lari`, `Georgian lari`, `ლარი`, `ქართული ლარი` | `₾12.34 food lunch` |
+| OMR — Omani rial | `OMR`, `RO`, `R.O.`, `оманский риал`, `оманских риалов`, `риала омана`, `Omani rial`, `rial omani`, `ر.ع.`, `ريال عماني` | `1,234 OMR food lunch` |
+| THB — Thai baht | `THB`, `฿`, `бат`, `бата`, `батов`, `тайских батов`, `baht`, `Thai baht`, `บาท`, `บาทไทย` | `100฿ food lunch` |
+| MYR — Malaysian ringgit | `MYR`, `RM`, `ринггит`, `рингит`, `малайзийских ринггитов`, `ringgit`, `Malaysian ringgit`, `Ringgit Malaysia` | `RM12.34 food lunch` |
+| KHR — Cambodian riel | `KHR`, `៛`, `риель`, `риэль`, `риелей`, `камбоджийских риелей`, `riel`, `Cambodian riel`, `រៀល` | `1 234,56៛ food lunch` |
+| TRY — Turkish lira | `TRY`, `TL`, `₺`, `лира`, `лир`, `турецких лир`, `Turkish lira`, `Türk lirası`, `TÜRK LİRASI` | `₺12.34 food lunch` |
+
+
+Russian case/count forms are accepted, including `таиландский` and `тайландский` baht
+spellings. OMR retains three fractional digits: `0.001 OMR` is one baisa; `1,234 OMR`
+means 1.234 OMR. GEL, THB, MYR, KHR, and TRY use two fractional digits, including KHR fractional amounts. Bare `rial`/`риал`/`ريال`
+are ambiguous and are not OMR or KHR aliases; subunit names do not stand for whole currency units. TRY uses `₺`, while `£` remains GBP; historical `TRL`/`YTL` codes are not treated as TRY. Native totals for the six currencies above sum original amounts directly and convert only foreign stored-EUR subtotals, so small KHR or OMR expenses are not lost to EUR-cent rounding. Older currencies retain their existing EUR-based reporting semantics.
+
+Original amounts remain numeric in SQLite and Sheets. Currency rates refresh through
+the existing daily API/cache flow; an unavailable or missing quote uses that currency's
+dated offline fallback. EUR remains the internal normalization currency.
+
 
 ## Setup
 
@@ -296,8 +323,11 @@ Edit [src/config/constants.ts](src/config/constants.ts):
 
 1. Add aliases to `CURRENCY_ALIASES`
 2. Add code to `SUPPORTED_CURRENCIES`
-3. Add symbol to `CURRENCY_SYMBOLS`
-4. Add exchange rate in [src/services/currency/converter.ts](src/services/currency/converter.ts)
+3. Add display names, symbol, shortcuts, and any non-default decimal precision to `CURRENCY_INFO`
+4. Add a dated offline exchange rate in [src/services/currency/converter.ts](src/services/currency/converter.ts)
+5. Exercise full/native names, attached symbols, boundaries, minor units, settings, recording,
+   receipts, summaries, and Sheets deletion; the shared token pattern and AI currency lists
+   derive from these constants.
 
 ### Adding New Bot Commands
 

@@ -1,7 +1,8 @@
 /** Expense message parser — extracts amount, currency, category, and comment from free-form text */
 import Big from 'big.js';
 import currency from 'currency.js';
-import { CURRENCY_ALIASES, type CurrencyCode } from '../../config/constants';
+import { type CurrencyCode, getCurrencyPrecision } from '../../config/constants';
+import { CURRENCY_TOKEN_PATTERN, normalizeCurrencyAlias, normalizeCurrencyText } from './tokens';
 
 export interface ParsedExpense {
   amount: number;
@@ -144,14 +145,6 @@ function evaluateMathExpression(expr: string): number | null {
 // ── End math expression evaluator ─────────────────────────────────────
 
 /**
- * Normalize currency code from alias
- */
-function normalizeCurrency(currencyStr: string): CurrencyCode | null {
-  const normalized = currencyStr.toLowerCase().trim();
-  return (CURRENCY_ALIASES[normalized] as CurrencyCode) || null;
-}
-
-/**
  * Parse expense message
  *
  * Supported formats:
@@ -172,7 +165,7 @@ export function parseExpenseMessage(
   text: string,
   defaultCurrency: CurrencyCode,
 ): ParsedExpense | null {
-  const trimmed = text.trim();
+  const trimmed = normalizeCurrencyText(text).trim();
 
   if (!trimmed) {
     return null;
@@ -181,8 +174,7 @@ export function parseExpenseMessage(
   return (
     parseSymbolBeforeAmount(trimmed) ??
     parseCurrencyAfterAmount(trimmed) ??
-    parseAmountOnly(trimmed, defaultCurrency) ??
-    parseCyrillicLetterCurrency(trimmed)
+    parseAmountOnly(trimmed, defaultCurrency)
   );
 }
 
@@ -194,31 +186,33 @@ function buildParsedExpense(
   rest: string,
 ): ParsedExpense | null {
   if (!currency) return null;
-  const amount = parseAmount(amountStr);
+  const amount = parseAmount(amountStr, currency);
   if (amount === null) return null;
 
   const { category, comment } = parseRest(rest);
   return { amount, currency, category, comment, raw };
 }
 
-// Pattern 1: Currency symbol before amount ($190, €100, ₽500, $10*3)
-function parseSymbolBeforeAmount(trimmed: string): ParsedExpense | null {
-  const match = trimmed.match(/^([$€£₽¥])\s*([\d\s,.+*×/]+)\s*(.+)?$/);
-  if (!match) return null;
+const PREFIX_AMOUNT = new RegExp(
+  `^(${CURRENCY_TOKEN_PATTERN})\\s*([\\d\\s,.+*×/]+)\\s*(.*)$`,
+  'iu',
+);
+const SUFFIX_AMOUNT = new RegExp(
+  `^([\\d\\s,.+*×/]+)\\s*(${CURRENCY_TOKEN_PATTERN})(?=\\s|$)\\s*(.*)$`,
+  'iu',
+);
 
-  const [, currencySymbol, amountStr, rest] = match;
-  if (!currencySymbol || !amountStr) return null;
-  return buildParsedExpense(trimmed, amountStr, normalizeCurrency(currencySymbol), rest || '');
+// Both symbols and complete currency names may precede or follow the amount.
+function parseSymbolBeforeAmount(trimmed: string): ParsedExpense | null {
+  const match = PREFIX_AMOUNT.exec(trimmed);
+  if (!match?.[1] || !match[2]) return null;
+  return buildParsedExpense(trimmed, match[2], normalizeCurrencyAlias(match[1]), match[3] ?? '');
 }
 
-// Pattern 2: Amount with currency symbol/code after (190€, 100$, 1900RSD, 190 евро, 10*3$)
 function parseCurrencyAfterAmount(trimmed: string): ParsedExpense | null {
-  const match = trimmed.match(/^([\d\s,.+*×/]+)\s*([а-яА-ЯёЁa-zA-Z$€£₽¥]+)\s+(.+)$/);
-  if (!match) return null;
-
-  const [, amountStr, currencyStr, rest] = match;
-  if (!amountStr || !currencyStr || !rest) return null;
-  return buildParsedExpense(trimmed, amountStr, normalizeCurrency(currencyStr), rest);
+  const match = SUFFIX_AMOUNT.exec(trimmed);
+  if (!match?.[1] || !match[2]) return null;
+  return buildParsedExpense(trimmed, match[1], normalizeCurrencyAlias(match[2]), match[3] ?? '');
 }
 
 // Pattern 3: Amount only (use default currency), must start with digit
@@ -231,22 +225,13 @@ function parseAmountOnly(trimmed: string, defaultCurrency: CurrencyCode): Parsed
   return buildParsedExpense(trimmed, amountStr, defaultCurrency, rest);
 }
 
-// Pattern 4: Currency symbol after, no space (190е, 100д, 10*3д)
-function parseCyrillicLetterCurrency(trimmed: string): ParsedExpense | null {
-  const match = trimmed.match(/^([\d\s,.+*×/]+)([а-яА-ЯёЁ])\s+(.+)$/);
-  if (!match) return null;
-
-  const [, amountStr, currencyLetter, rest] = match;
-  if (!amountStr || !currencyLetter || !rest) return null;
-  return buildParsedExpense(trimmed, amountStr, normalizeCurrency(currencyLetter), rest);
-}
-
 /**
  * Parse amount string to number
  * Handles: 190, 1900, 1 900, 1,900, 1.900, 1900.50
  * Also handles math expressions: 10*3, 100/4, 10+5, 10*3+5
  */
-function parseAmount(amountStr: string): number | null {
+function parseAmount(amountStr: string, code: CurrencyCode): number | null {
+  const precision = getCurrencyPrecision(code);
   try {
     // Remove spaces
     let cleaned = amountStr.replace(/\s+/g, '');
@@ -255,16 +240,18 @@ function parseAmount(amountStr: string): number | null {
     if (/[+\-*×/]/.test(cleaned)) {
       const result = evaluateMathExpression(cleaned);
       if (result === null || result <= 0) return null;
-      // Round to 2 decimal places (e.g. 100/3 = 33.333... → 33.33)
-      return Math.round(result * 100) / 100;
+      const rounded = new Big(result).round(precision).toNumber();
+      return rounded > 0 ? rounded : null;
     }
 
     // Handle European format (1.234,56 -> 1234.56)
-    if (cleaned.match(/\d+\.\d{3},\d{2}$/)) {
+    if (cleaned.match(/^\d{1,3}(?:\.\d{3})+,\d{1,3}$/)) {
       cleaned = cleaned.replace(/\./g, '').replace(',', '.');
     }
     // Handle US format with comma thousands separator (1,234.56)
-    else if (cleaned.match(/\d+,\d{3}(\.\d+)?$/)) {
+    else if (precision === 3 && /^\d+,\d{1,3}$/.test(cleaned)) {
+      cleaned = cleaned.replace(',', '.');
+    } else if (cleaned.match(/\d+,\d{3}(\.\d+)?$/)) {
       cleaned = cleaned.replace(/,/g, '');
     }
     // Handle just comma as decimal separator (1234,56 -> 1234.56)
@@ -272,7 +259,7 @@ function parseAmount(amountStr: string): number | null {
       cleaned = cleaned.replace(',', '.');
     }
 
-    const parsed = currency(cleaned, { separator: '', decimal: '.' });
+    const parsed = currency(cleaned, { separator: '', decimal: '.', precision });
 
     if (parsed.value <= 0) {
       return null;

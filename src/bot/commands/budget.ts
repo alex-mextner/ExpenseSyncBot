@@ -1,11 +1,13 @@
 /** /budget command handler — create, view, and edit spending budgets per category */
 import { format } from 'date-fns';
 import { InlineKeyboard } from 'gramio';
-import { CURRENCY_ALIASES, type CurrencyCode, getCurrencySymbol } from '../../config/constants';
+import { type CurrencyCode, getCurrencySymbol } from '../../config/constants';
 import { database } from '../../database';
 
 import { sendMessage } from '../../services/bank/telegram-sender';
 import { getBudgetManager } from '../../services/budget-manager';
+import { parseBudgetInputAmount } from '../../services/currency/budget-amount-parser';
+import { normalizeCurrencyAlias } from '../../services/currency/tokens';
 import { monthAbbrFromDate } from '../../services/google/month-abbr';
 import {
   createEmptyMonthTab,
@@ -28,81 +30,15 @@ const logger = createLogger('budget');
 const NO_BUDGET_HINT =
   'Используй:\n• /budget set &lt;Категория&gt; &lt;Сумма&gt;\n• /budget sync — синхронизировать с Google Sheets';
 
-function parsePositiveAmount(numStr: string): number | null {
-  const amount = parseFloat(numStr.replace(/[\s,]/g, ''));
-  if (Number.isNaN(amount) || amount <= 0) return null;
-  return amount;
+/** Parse the same strict amount syntax accepted by budget prompt replies. */
+function parseBudgetAmount(amountStr: string, defaultCurrency: CurrencyCode) {
+  const parsed = parseBudgetInputAmount(amountStr, defaultCurrency);
+  return parsed ? { amount: parsed.amount, currency: parsed.currency ?? defaultCurrency } : null;
 }
 
-type ParsedBudgetAmount = { amount: number; currency: CurrencyCode };
-
-function parseSymbolPrefixed(trimmed: string): ParsedBudgetAmount | null | undefined {
-  const match = trimmed.match(/^([$€£₽¥])\s*([\d\s,.]+)$/);
-  if (!match) return undefined;
-  const [, currencySymbol, numStr] = match;
-  if (!currencySymbol || !numStr) return null;
-
-  const normalized = normalizeCurrency(currencySymbol);
-  if (!normalized) return null;
-
-  const amount = parsePositiveAmount(numStr);
-  return amount === null ? null : { amount, currency: normalized };
-}
-
-function parseCurrencySuffixed(
-  trimmed: string,
-  defaultCurrency: CurrencyCode,
-): ParsedBudgetAmount | null | undefined {
-  const match = trimmed.match(/^([\d\s,.]+)\s*([$€£₽¥]|[a-zA-Zа-яА-Я]+)$/);
-  if (!match) return undefined;
-  const [, numStr, currencyStr] = match;
-  if (!numStr) return null;
-
-  const amount = parsePositiveAmount(numStr);
-  if (amount === null) return null;
-
-  const normalized = currencyStr ? normalizeCurrency(currencyStr) : null;
-  return { amount, currency: normalized ?? defaultCurrency };
-}
-
-function parseBareAmount(
-  trimmed: string,
-  defaultCurrency: CurrencyCode,
-): ParsedBudgetAmount | null | undefined {
-  const match = trimmed.match(/^([\d\s,.]+)$/);
-  if (!match) return undefined;
-  const [, numStr] = match;
-  if (!numStr) return null;
-
-  const amount = parsePositiveAmount(numStr);
-  return amount === null ? null : { amount, currency: defaultCurrency };
-}
-
-/**
- * Parse budget amount with optional currency
- * Supports: 500, 500$, $500, 500 EUR, 500 евро, etc.
- *
- * Each pattern parser returns undefined when its pattern does not match (try the
- * next one), null when it matched but the value is invalid.
- */
-function parseBudgetAmount(
-  amountStr: string,
-  defaultCurrency: CurrencyCode,
-): ParsedBudgetAmount | null {
-  const trimmed = amountStr.trim();
-  const symbolPrefixed = parseSymbolPrefixed(trimmed);
-  if (symbolPrefixed !== undefined) return symbolPrefixed;
-  const currencySuffixed = parseCurrencySuffixed(trimmed, defaultCurrency);
-  if (currencySuffixed !== undefined) return currencySuffixed;
-  return parseBareAmount(trimmed, defaultCurrency) ?? null;
-}
-
-/**
- * Normalize currency code from alias
- */
+/** Normalize currency spellings shared with expense and calculator input. */
 export function normalizeCurrency(currencyStr: string): CurrencyCode | null {
-  const normalized = currencyStr.toLowerCase().trim();
-  return (CURRENCY_ALIASES[normalized] as CurrencyCode) || null;
+  return normalizeCurrencyAlias(currencyStr);
 }
 
 /**

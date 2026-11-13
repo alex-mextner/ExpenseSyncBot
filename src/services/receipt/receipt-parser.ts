@@ -10,8 +10,13 @@
  * Runs on SMART_CHAIN because OCR correctness is critical — speed is not a concern.
  */
 
+import Big from 'big.js';
 import type OpenAI from 'openai';
-import type { CurrencyCode } from '../../config/constants';
+import {
+  type CurrencyCode,
+  getCurrencyPrecision,
+  SUPPORTED_CURRENCIES,
+} from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 import {
   aiStreamRound,
@@ -19,6 +24,7 @@ import {
   type StreamToolCall,
   stripThinkingTags,
 } from '../ai/streaming';
+import { normalizeCurrencyAlias } from '../currency/tokens';
 import {
   type AIExtractionResult,
   type AIReceiptItem,
@@ -126,7 +132,7 @@ const TOOLS: OpenAI.ChatCompletionTool[] = [
           },
           currency: {
             type: 'string',
-            description: 'Currency code detected on receipt (RSD, EUR, USD, etc.)',
+            description: `Currency code detected on receipt (${SUPPORTED_CURRENCIES.join(', ')}, etc.). Omani rial is OMR, Georgian lari is GEL, Thai baht is THB.`,
           },
           claimed_total: {
             type: 'number',
@@ -156,10 +162,10 @@ function executeCalculateSum(args: CalculateSumArgs): {
   count: number;
   label: string;
 } {
-  const nums = args.numbers.filter((n): n is number => typeof n === 'number' && !Number.isNaN(n));
-  const sum = nums.reduce((a, b) => a + b, 0);
+  const nums = args.numbers.filter((n): n is number => typeof n === 'number' && Number.isFinite(n));
+  const sum = nums.reduce((a, b) => a.plus(b), new Big(0));
   return {
-    sum: Math.round(sum * 100) / 100,
+    sum: sum.toNumber(),
     count: nums.length,
     label: args.label ?? 'sum',
   };
@@ -186,7 +192,8 @@ RULES:
 - NEVER call emit_items before calculate_sum. This is mandatory.
 - Translate item names to Russian (name_ru). Keep original in name_original.
 - Extract quantity, unit price (price), and line total (total) for each item.
-- Detect the currency (RSD, EUR, USD, RUB, BYN, etc.).
+- Detect the currency (${SUPPORTED_CURRENCIES.join(', ')}, etc.). Georgian lari (₾, ლარი) is GEL; Omani rial (RO, R.O., ر.ع., ريال عماني) is OMR; Thai baht (฿, บาท) is THB. Emit the uppercase ISO code.
+- Preserve all printed decimal digits: OMR has three fractional digits (1,000 baisa per rial). Never round OMR prices or totals to two digits. GEL and THB use two fractional digits.
 - Extract the PRINTED RECEIPT DATE (look for "ПФР време", "Datum", "Date", "время", or any printed date on the receipt). Convert it to YYYY-MM-DD format. Pass it as the "date" field in emit_items. This is the actual purchase date — critical for matching receipts with bank transactions. Omit the field only if no date is printed at all.
 - If the receipt has no line items (only fiscal header/footer, QR markers, no products) → emit an empty items array.
 ${
@@ -324,7 +331,7 @@ function recordEmittedItems(
 ): void {
   state.emitCalled = true;
   state.emittedItems = args.items ?? [];
-  state.emittedCurrency = args.currency;
+  state.emittedCurrency = normalizeCurrencyAlias(args.currency ?? '') ?? args.currency;
   state.claimedTotal = args.claimed_total;
   // Validate date format: strict YYYY-MM-DD, drop otherwise
   if (args.date && ISO_DATE_RE.test(args.date)) {
@@ -442,7 +449,10 @@ function isSumVerified(state: ParseState, actualSum: number): boolean {
 
 function buildParseResult(state: ParseState): ParseResult {
   const { emittedItems, emittedCurrency, emittedDate, claimedTotal, sumCallCount } = state;
-  const actualSum = Math.round(emittedItems.reduce((a, it) => a + (it.total ?? 0), 0) * 100) / 100;
+  const actualSum = emittedItems
+    .reduce((sum, item) => sum.plus(item.total ?? 0), new Big(0))
+    .round(getCurrencyPrecision(emittedCurrency ?? 'EUR'))
+    .toNumber();
   const sumVerified = isSumVerified(state, actualSum);
 
   if (sumCallCount === 0 && emittedItems.length > 0) {

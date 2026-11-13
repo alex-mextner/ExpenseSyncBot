@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "test": "bun test ./test",
+    "build": "bun run test && tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

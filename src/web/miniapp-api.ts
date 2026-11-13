@@ -5,7 +5,7 @@ import { type CurrencyCode, isValidCurrencyCode } from '../config/constants.ts';
 import { env } from '../config/env.ts';
 import { database } from '../database/index.ts';
 import { sendDocumentDirect } from '../services/bank/telegram-sender.ts';
-import { convertCurrency } from '../services/currency/converter.ts';
+import { sumExpensesInCurrency } from '../services/currency/totals.ts';
 import { getExpenseRecorder } from '../services/expense-recorder.ts';
 import { extractTextFromImageBuffer } from '../services/receipt/ocr-extractor.ts';
 import { fetchReceiptData } from '../services/receipt/receipt-fetcher.ts';
@@ -630,11 +630,9 @@ async function handleReceiptConfirm({ req, corsOrigin, corsHeaders }: RouteArgs)
 /** Row returned by the per-category aggregation query */
 interface CategoryRow {
   category: string;
-  total: number;
-}
-
-function roundCents(value: number): number {
-  return Math.round(value * 100) / 100;
+  currency: CurrencyCode;
+  amount: number;
+  eur_amount: number;
 }
 
 async function handleAnalytics({ req, url, corsOrigin, corsHeaders }: RouteArgs) {
@@ -656,25 +654,29 @@ async function handleAnalytics({ req, url, corsOrigin, corsHeaders }: RouteArgs)
   }
 
   const rows = database.queryAll<CategoryRow>(
-    `SELECT category, SUM(eur_amount) as total
+    `SELECT category, currency, SUM(amount) AS amount, SUM(eur_amount) AS eur_amount
        FROM expenses
        WHERE group_id = ? AND date LIKE ?
-       GROUP BY category`,
+       GROUP BY category, currency`,
     ctx.internalGroupId,
     `${period}-%`,
   );
 
   const defaultCurrency = group.default_currency as CurrencyCode;
 
-  let totalEur = 0;
-  const byCategory: Record<string, number> = {};
-
+  const grouped = new Map<string, CategoryRow[]>();
   for (const row of rows) {
-    totalEur += row.total;
-    byCategory[row.category] = roundCents(convertCurrency(row.total, 'EUR', defaultCurrency));
+    const items = grouped.get(row.category) ?? [];
+    items.push(row);
+    grouped.set(row.category, items);
   }
-
-  const totalInDefault = roundCents(convertCurrency(totalEur, 'EUR', defaultCurrency));
+  const byCategory = Object.fromEntries(
+    [...grouped].map(([category, items]) => [
+      category,
+      sumExpensesInCurrency(items, defaultCurrency),
+    ]),
+  );
+  const totalInDefault = sumExpensesInCurrency(rows, defaultCurrency);
 
   return jsonResponse(
     {

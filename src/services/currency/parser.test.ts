@@ -146,13 +146,12 @@ describe('parseExpenseMessage', () => {
       expect(result).toBeNull();
     });
 
-    test('should parse amount with currency as category (100 USD parsed as default currency + category USD)', () => {
+    test('keeps a lone known currency out of the category and requires a real category', () => {
       const result = parseExpenseMessage('100 USD', 'EUR');
-      expect(result).not.toBeNull();
-      expect(result?.amount).toBe(100);
-      expect(result?.currency).toBe('EUR'); // Uses default currency
-      expect(result?.category).toBe('Usd');
-      expect(result?.comment).toBe(''); // Single word = category only, no comment
+      expect(result).toMatchObject({ amount: 100, currency: 'USD', category: null, comment: '' });
+      // A known currency token is never a category in the default currency.
+      // The message handler rejects incomplete expense entries before any pending/DB write.
+      expect(validateParsedExpense(result)).toBe(false);
     });
 
     test('should return null for invalid amount', () => {

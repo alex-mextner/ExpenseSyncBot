@@ -22,8 +22,14 @@ const mockExpenses = {
   getTotalInEUR: mock((_groupId: number): number => 0),
 };
 
+const queryAllMock = mock(
+  (
+    _sql: string,
+    ..._params: unknown[]
+  ): Array<{ currency: string; amount: number; eur_amount: number }> => [],
+);
 mock.module('../../database', () => ({
-  database: { expenses: mockExpenses },
+  database: { expenses: mockExpenses, queryAll: queryAllMock },
 }));
 
 // ── Currency converter (identity-ish) ─────────────────────────────────────
@@ -116,6 +122,7 @@ beforeEach(() => {
   mockExpenses.findByGroupId.mockReset().mockReturnValue([]);
   mockExpenses.getTotalsByCurrency.mockReset().mockReturnValue({});
   mockExpenses.getTotalInEUR.mockReset().mockReturnValue(0);
+  queryAllMock.mockReset().mockReturnValue([]);
   buildMiniAppUrlMock.mockReset().mockReturnValue(null);
   maybeSmartAdviceMock.mockReset().mockResolvedValue(undefined);
   logMock.error.mockReset();
@@ -124,6 +131,40 @@ beforeEach(() => {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe('/stats', () => {
+  test('OMR grand total includes native baisa and foreign stored EUR beyond recent rows', async () => {
+    mockExpenses.findByGroupId.mockReturnValue([
+      makeExpense({ amount: 0.001, currency: 'OMR', eur_amount: 0 }),
+    ]);
+    mockExpenses.getTotalsByCurrency.mockReturnValue({ OMR: 1.235, USD: 999 });
+    mockExpenses.getTotalInEUR.mockReturnValue(4.46);
+    queryAllMock.mockReturnValue([
+      { currency: 'OMR', amount: 1.235, eur_amount: 2.46 },
+      { currency: 'USD', amount: 999, eur_amount: 2 },
+    ]);
+
+    await handleStatsCommand(fakeCtx(), fakeGroup({ default_currency: 'OMR' }));
+    const msg = sendMessageMock.mock.calls[0]?.[0];
+    expect(msg).toContain('<b>Всего:</b> 3.235 OMR');
+    expect(logMock.error).not.toHaveBeenCalled();
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
+  test('KHR grand total combines native riels and foreign stored EUR beyond recent rows', async () => {
+    mockExpenses.findByGroupId.mockReturnValue([
+      makeExpense({ amount: 1, currency: 'KHR', eur_amount: 0 }),
+    ]);
+    mockExpenses.getTotalsByCurrency.mockReturnValue({ KHR: 1001.25, USD: 999 });
+    mockExpenses.getTotalInEUR.mockReturnValue(2.22);
+    queryAllMock.mockReturnValue([
+      { currency: 'KHR', amount: 1001.25, eur_amount: 0.22 },
+      { currency: 'USD', amount: 999, eur_amount: 2 },
+    ]);
+    await handleStatsCommand(fakeCtx(), fakeGroup({ default_currency: 'KHR' }));
+    expect(sendMessageMock.mock.calls[0]?.[0]).toContain('<b>Всего:</b> 1003.25 KHR');
+    expect(logMock.error).not.toHaveBeenCalled();
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
   test('empty state — no expenses, no totals', async () => {
     mockExpenses.findByGroupId.mockReturnValue([]);
     mockExpenses.getTotalsByCurrency.mockReturnValue({});

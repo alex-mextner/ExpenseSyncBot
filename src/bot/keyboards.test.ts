@@ -66,6 +66,12 @@ describe('createCurrencyKeyboard', () => {
     expect(texts).toContain('EUR');
     expect(texts).toContain('USD');
     expect(texts).toContain('RSD');
+    expect(texts).toContain('GEL');
+    expect(texts).toContain('OMR');
+    expect(texts).toContain('THB');
+    expect(texts).toContain('MYR');
+    expect(texts).toContain('KHR');
+    expect(texts).toContain('TRY');
   });
 
   it('selected currencies get checkmark prefix', () => {

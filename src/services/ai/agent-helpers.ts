@@ -4,27 +4,30 @@
  */
 
 import type OpenAI from 'openai';
-import { CURRENCY_ALIASES, SUPPORTED_CURRENCIES } from '../../config/constants';
+import { isSupportedCurrency } from '../../config/constants';
+import {
+  CURRENCY_TOKEN_PATTERN,
+  normalizeCurrencyAlias,
+  normalizeCurrencyText,
+} from '../currency/tokens';
 import type { ToolResult } from './types';
 
+/** The amount side consumes one digit and bounded spacing, avoiding repeated long-number scans. */
+const amountCurrencyPattern = new RegExp(
+  String.raw`\d[\s\u00a0\u202f]{0,3}(${CURRENCY_TOKEN_PATTERN})(?![\p{L}\p{M}])|(?<![\p{L}\p{M}])(${CURRENCY_TOKEN_PATTERN})[\s\u00a0\u202f]{0,3}[-−+]?\d`,
+  'giu',
+);
+
 /**
- * Currencies of the amounts in `text`, once each: a supported code or a currency symbol right
- * before or after a digit ("700 USD", "USD 700", "$700", "700 €"). Used to spot a forced answer
- * that names a currency no tool result had — the invented amounts of #166. Every pattern is a
- * fixed-width match, so the scan stays linear on long digit runs.
+ * Currencies adjacent to amounts, once each, using the same aliases as expense input.
+ * Used to reject a forced answer that invents a currency absent from tool results (#166).
  */
 export function amountCurrencies(text: string): string[] {
   const codes = new Set<string>();
-  const add = (token: string | undefined) => {
-    const code = token && (CURRENCY_ALIASES[token] ?? token);
-    if (code && SUPPORTED_CURRENCIES.some((c) => c === code)) codes.add(code);
-  };
-  // Up to 3 spaces of any kind (non-breaking ones included) between amount and currency, and an
-  // optional sign before a prefixed amount ("USD -700", "USD −700").
-  for (const m of text.matchAll(
-    /\d[\s\u00a0\u202f]{0,3}([A-Z]{3}|[$€₽£])(?![A-Za-z])|(?<![A-Za-z])([A-Z]{3}|[$€₽£])[\s\u00a0\u202f]{0,3}[-−+]?\d/g,
-  )) {
-    add(m[1] ?? m[2]);
+  for (const match of normalizeCurrencyText(text).matchAll(amountCurrencyPattern)) {
+    const token = match[1] ?? match[2];
+    const code = token ? normalizeCurrencyAlias(token) : null;
+    if (code && isSupportedCurrency(code)) codes.add(code);
   }
   return [...codes];
 }

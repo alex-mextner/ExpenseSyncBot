@@ -1,6 +1,6 @@
 /** Raw Expenses-tab row access (migration helpers) and row deletion */
 import { google } from 'googleapis';
-import { SPREADSHEET_CONFIG } from '../../config/constants';
+import { getCurrencyPrecision, SPREADSHEET_CONFIG } from '../../config/constants';
 import { createLogger } from '../../utils/logger.ts';
 import {
   authClient,
@@ -266,7 +266,7 @@ function locateMatchColumns(headers: string[], currency: string): MatchColumns {
   };
 }
 
-/** True when a data row matches date, category, comment and amount (within half a cent). */
+/** True when a data row matches date, category, comment and amount (within half of that currency’s smallest unit). */
 function rowMatchesCriteria(
   row: unknown[],
   cols: MatchColumns,
@@ -279,13 +279,10 @@ function rowMatchesCriteria(
   const cellAmount = row[cols.currencyCol];
   const numAmount =
     typeof cellAmount === 'number' ? cellAmount : Number.parseFloat(String(cellAmount ?? ''));
-  // Epsilon 0.005 = half of the smallest unit for 2-decimal currencies
-  // (cents/копейки). Float round-trip through Sheets can drift by ~1e-14
-  // for fractional values like $12.34; strict equality here would miss
-  // those rows and leave them in the sheet, re-importable via /sync.
-  // The gap between any two realistic neighboring sums (12.34 vs 12.35)
-  // is 0.01 > 0.005, so false positives are impossible.
-  return Number.isFinite(numAmount) && Math.abs(numAmount - criteria.amount) <= 0.005;
+  // Permit binary-float drift without ever matching a neighboring minor unit:
+  // 0.005 for cents, 0.0005 for OMR baisa (1.234 and 1.235 are distinct rows).
+  const tolerance = 0.5 / 10 ** getCurrencyPrecision(criteria.currency);
+  return Number.isFinite(numAmount) && Math.abs(numAmount - criteria.amount) <= tolerance;
 }
 
 async function findAndDeleteExpenseRowImpl(

@@ -358,9 +358,9 @@ describe('formatAmount (aiContext=true)', () => {
 });
 
 describe('getAllExchangeRates', () => {
-  it('returns object with all 13 currencies', () => {
+  it('returns object with all 19 currencies', () => {
     const rates = getAllExchangeRates();
-    expect(Object.keys(rates)).toHaveLength(13);
+    expect(Object.keys(rates)).toHaveLength(19);
   });
 
   it('EUR rate is 1.0', () => {
@@ -400,6 +400,9 @@ describe('getAllExchangeRates', () => {
     expect(keys).toContain('LKR');
     expect(keys).toContain('AED');
     expect(keys).toContain('EGP');
+    expect(keys).toContain('GEL');
+    expect(keys).toContain('OMR');
+    expect(keys).toContain('THB');
   });
 });
 

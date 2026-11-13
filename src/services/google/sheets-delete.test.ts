@@ -353,3 +353,28 @@ describe('deleteExpenseRowsByIndex', () => {
     );
   });
 });
+
+describe('OMR row identity', () => {
+  test('keeps adjacent milli-rial rows distinct during deletion', async () => {
+    mockSpreadsheetsBatchUpdate.mockReset().mockResolvedValue({ data: {} });
+    mockValuesGet.mockResolvedValueOnce({
+      data: {
+        values: [
+          ['Дата', 'Категория', 'Комментарий', 'OMR (OMR)', 'EUR (calc)'],
+          ['2026-11-10', 'Food', 'Tea', 1.234, 2.86],
+          ['2026-11-10', 'Food', 'Tea', 1.235000000000001, 2.87],
+        ],
+      },
+    });
+    const result = await findAndDeleteExpenseRow(TEST_CONN, TEST_SPREADSHEET, {
+      date: '2026-11-10',
+      category: 'Food',
+      comment: 'Tea',
+      amount: 1.235,
+      currency: 'OMR',
+    });
+    expect(result.deletedRowIndex).toBe(3);
+    expect(logMock.warn).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+});

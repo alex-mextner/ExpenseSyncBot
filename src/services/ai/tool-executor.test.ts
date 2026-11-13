@@ -433,6 +433,15 @@ describe('calculate tool', () => {
     expect(result.output).toBe('33.33'); // pure math — no currency suffix
   });
 
+  test('currency arithmetic preserves OMR milli-rials and accepts lowercase target codes', async () => {
+    const result = await executeTool(
+      'calculate',
+      { expression: '1.234 OMR + 0.001 omani rial', target_currency: 'omr' },
+      ctx,
+    );
+    expect(result).toMatchObject({ success: true, output: '1.235 OMR' });
+  });
+
   test('pure math omits currency from output', async () => {
     const result = await executeTool('calculate', { expression: '50 + 50' }, ctx);
     expect(result.success).toBe(true);

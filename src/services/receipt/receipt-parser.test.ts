@@ -467,3 +467,70 @@ describe('parseReceipt — sum verification', () => {
     expect(result.calculateSumRounds).toBe(0);
   });
 });
+
+describe('parseReceipt — OMR minor units', () => {
+  beforeEach(() => {
+    resetMocks();
+    logMock.warn.mockClear();
+    logMock.error.mockClear();
+  });
+
+  it('preserves milli-rials through deterministic summation and emitted receipt totals', async () => {
+    mockRounds = [
+      buildMockResult([calcSumCall('calc-omr', [1.234, 0.001])]),
+      buildMockResult([
+        emitItemsCall(
+          'emit-omr',
+          [makeItem({ price: 1.234, total: 1.234 }), makeItem({ price: 0.001, total: 0.001 })],
+          { currency: 'OMR', claimed_total: 1.235 },
+        ),
+      ]),
+    ];
+    const result = await parseReceipt('Muscat receipt: R.O. 1.234 + R.O. 0.001. Total OMR 1.235', [
+      'Еда',
+    ]);
+    expect(result.currency).toBe('OMR');
+    expect(result.computedSum).toBe(1.235);
+    expect(result.claimedTotal).toBe(1.235);
+    expect(result.items.map((item) => item.total)).toEqual([1.234, 0.001]);
+    expect(result.sumVerified).toBe(true);
+    const options = mockAiStreamRound.mock.calls[1]?.[0] as {
+      messages: { role: string; tool_call_id?: string; content?: string | null }[];
+    };
+    const calculation = options.messages.find((message) => message.tool_call_id === 'calc-omr');
+    expect(JSON.parse(calculation?.content ?? '{}')).toMatchObject({ sum: 1.235, count: 2 });
+    expect(logMock.warn).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseReceipt — travel currencies', () => {
+  beforeEach(() => {
+    resetMocks();
+    logMock.warn.mockClear();
+    logMock.error.mockClear();
+  });
+
+  it.each(['MYR', 'KHR', 'TRY'])('keeps %s and two-decimal line items', async (currency) => {
+    mockRounds = [
+      buildMockResult([calcSumCall('calc-travel', [12.34, 0.01])]),
+      buildMockResult([
+        emitItemsCall(
+          'emit-travel',
+          [makeItem({ price: 12.34, total: 12.34 }), makeItem({ price: 0.01, total: 0.01 })],
+          { currency, claimed_total: 12.35 },
+        ),
+      ]),
+    ];
+    const result = await parseReceipt(`Synthetic receipt ${currency} 12.34 + 0.01 total 12.35`, [
+      'Еда',
+    ]);
+    expect(result.currency).toBe(currency);
+    expect(result.computedSum).toBe(12.35);
+    expect(result.claimedTotal).toBe(12.35);
+    expect(result.items.map((item) => item.total)).toEqual([12.34, 0.01]);
+    expect(result.sumVerified).toBe(true);
+    expect(logMock.warn).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+});

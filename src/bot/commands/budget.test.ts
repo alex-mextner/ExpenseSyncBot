@@ -436,3 +436,20 @@ describe('/budget invalid usage', () => {
     expect(msg).toContain('Неверный формат');
   });
 });
+
+describe('/budget set new currencies', () => {
+  test.each([
+    ['₾12.34', 12.34, 'GEL'],
+    ['RM12.34', 12.34, 'MYR'],
+    ['1\u00a0234,56 риелей', 1234.56, 'KHR'],
+    ['12.34 TÜRK LİRASI', 12.34, 'TRY'],
+    ['12.34 тайских батов', 12.34, 'THB'],
+    ['R.O.1.234', 1.234, 'OMR'],
+    ['1,234 оманских риалов', 1.234, 'OMR'],
+  ] as const)('records %s with its actual currency', async (input, amount, currency) => {
+    await handleBudgetCommand(fakeCtx(`/budget set Food ${input}`), fakeGroup());
+    expect(budgetManagerMock.set.mock.calls[0]?.[0]).toMatchObject({ amount, currency });
+    expect(logMock.warn).not.toHaveBeenCalled();
+    expect(logMock.error).not.toHaveBeenCalled();
+  });
+});

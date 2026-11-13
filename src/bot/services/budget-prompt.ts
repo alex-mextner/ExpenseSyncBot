@@ -232,6 +232,7 @@ export async function handleBudgetPromptText(input: PromptTextInput): Promise<bo
   }
 
   const { prompt } = target;
+  if (!parseBudgetInputAmount(input.text, prompt.currency)) return false;
   const result = await applyBudgetPrompt(prompt, parsed.amount, parsed.currency ?? prompt.currency);
   if (result === 'already_handled') {
     // The prompt was finished between the lookup and the apply (a racing button or reply).
