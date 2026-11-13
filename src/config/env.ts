@@ -121,7 +121,7 @@ interface EnvConfig {
   AI_TOOL_SCHEMA_USER_IDS: number[] | undefined;
 
   // OpenRouter (optional; named in a chain order to be used, skipped without key and model).
-  // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash`.
+  // One key fronts DeepSeek / GLM / Claude; the model id is the OpenRouter one, e.g. `deepseek/deepseek-v4.1-flash-1017`.
   OPENROUTER_API_KEY: string;
   OPENROUTER_BASE_URL: string;
   OPENROUTER_MODEL: string;
