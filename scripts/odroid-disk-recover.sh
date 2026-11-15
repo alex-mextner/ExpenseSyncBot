@@ -18,10 +18,14 @@
 # Per disk: wait up to WAIT_SEC for /dev/disk/by-uuid/<uuid>, let the boot transaction
 # finish, then check every listed unit. Active: fine. A job already on it (the chain's own
 # start, still queued or activating): wait for that job. Down with no job: the chain missed
-# it - start it, log a warning and report it. On a normal boot everything is active and the
-# run changes nothing, so it is safe to re-run any time (`systemctl start
-# odroid-disk-recover`). A disk that never appears, a unit that will not start, or an alert
-# that cannot be delivered: logged at err, exit 1 (the unit then shows in `systemctl --failed`).
+# it - start it, log a warning and report it. A start that fails while the unit has not
+# settled (its Restart= waiting to retry or cleaning up, or a new job on it) is not a failure
+# yet: the unit is polled, alongside the disk wait, for up to RESTART_WAIT_SEC after that
+# start, and counts as failed only if it does not come up (#254). On a normal boot
+# everything is active and the run changes nothing, so it is safe to re-run any time
+# (`systemctl start odroid-disk-recover`). A disk that never appears, a unit that will not
+# start, or an alert that cannot be delivered: logged at err, exit 1 (the unit then shows in
+# `systemctl --failed`).
 #
 # Usage: odroid-disk-recover [--dry-run | --test-alert]
 #   --dry-run     wait and check as usual, but start nothing and send nothing; print the
@@ -31,7 +35,10 @@
 # Env (tests and drills):
 #   WD500_UUID, STORAGE_UUID  filesystem UUIDs to wait for
 #   WAIT_SEC        how long to wait for a disk                (default: 900)
-#   POLL_SEC        seconds between checks for a missing disk  (default: 5)
+#   POLL_SEC        seconds between checks for a missing disk
+#                   or a unit coming up                        (default: 5)
+#   RESTART_WAIT_SEC  how long Restart= gets to bring up a unit whose
+#                   start failed                               (default: 600)
 #   SETTLE_SEC      max wait for the boot transaction to end   (default: 600)
 #   BY_UUID_DIR     where the UUID links appear                (default: /dev/disk/by-uuid)
 #   ALERT_ENV_FILE  env file with BOT_TOKEN and BOT_ADMIN_ID   (default: /opt/hypercal/.env)
@@ -43,6 +50,12 @@ WD500_UUID="${WD500_UUID:-83c5bd3c-2cfa-494e-b0a5-17d3c92d0925}"
 STORAGE_UUID="${STORAGE_UUID:-8da3f69e-6c2d-4028-8a0e-c344f0922fbb}"
 WAIT_SEC="${WAIT_SEC:-900}"
 POLL_SEC="${POLL_SEC:-5}"
+# ha-compose, the slowest unit, retries 30 s after a failure, the delay growing to at most
+# 5 min (the host-wide RestartMaxDelaySec drop-in), and each start may take its full 300 s
+# TimeoutStartSec: 600 s covers one retry at the longest delay plus a whole start. Longer
+# would only delay the alert for a unit that is really down. It counts polling time plus the
+# time other units' starts block in between, not the settle wait.
+RESTART_WAIT_SEC="${RESTART_WAIT_SEC:-600}"
 SETTLE_SEC="${SETTLE_SEC:-600}"
 BY_UUID_DIR="${BY_UUID_DIR:-/dev/disk/by-uuid}"
 # HyperCalendarBot's env: on the SD card, so readable when the WD500 is missing, and its
@@ -157,6 +170,7 @@ started=()   # units the boot left down and this run brought up
 failed=()    # units that would not start
 missing=()   # "<disk> (<uuid>)" that never appeared
 unstarted=() # units left down because their disk is missing
+retrying=()  # "<unit> <disk> <missed> <failed at> <state before>": start failed, Restart= at it
 
 declare -A uuid_of=([wd500]="$WD500_UUID" [storage]="$STORAGE_UUID")
 # units_of <disk> <array name>: fills the named array with the units that live on <disk>.
@@ -173,60 +187,147 @@ units_of() {
   esac
 }
 
+# reloading: the unit is up; `start` would not wait for the reload anyway.
+is_up() { [[ $1 == active || $1 == reloading ]]; }
+# unit_state <unit>: prints the unit's state and succeeds while the unit is still on its way
+# somewhere: activating (which includes the auto-restart wait of its Restart=), deactivating
+# (a failed retry's cleanup, Restart= may follow) or with a job on it. Jobs are read first,
+# so a job that runs and ends between the two reads shows up in the state.
+unit_state() {
+  local jobs state
+  jobs=$(systemctl list-jobs --no-legend --plain "$1")
+  state=$(systemctl is-active "$1")
+  echo "$state"
+  [[ -n $jobs || $state == activating || $state == deactivating ]]
+}
+
+# start_unit <unit>: `systemctl start`, adding the time it blocks to `blocked`, so another
+# unit's slow start counts against a retry's RESTART_WAIT_SEC too.
+start_unit() {
+  local t=$SECONDS rc=0
+  systemctl start "$1" || rc=$?
+  blocked=$((blocked + SECONDS - t))
+  return "$rc"
+}
+
+chain_missed() {
+  warn "started $1 ($2) — it was $3 with no job, the disk's unit chain missed it"
+  started+=("$1")
+}
+
 recover() {
-  local disk=$1 unit state
+  local disk=$1 unit state moving missed now
   local -a units
   units_of "$disk" units
   for unit in "${units[@]}"; do
-    state=$(systemctl is-active "$unit")
-    # reloading: the unit is up; `start` would not wait for the reload anyway.
-    [[ $state == active || $state == reloading ]] && continue
-    if [[ $state == activating || -n $(systemctl list-jobs --no-legend --plain "$unit") ]]; then
-      # The chain (or a Restart=) already has a job on it: `start` joins that job and
-      # returns its outcome. Success is the chain working; failure is reported below.
+    moving=false
+    state=$(unit_state "$unit") && moving=true
+    is_up "$state" && continue
+    missed=false
+    # A jobless `deactivating` at this first look is a unit stopping, maybe for good: only a
+    # failed start of ours earns it the benefit of a Restart= (retry_done).
+    if [[ $state == deactivating && -z $(systemctl list-jobs --no-legend --plain "$unit") ]]; then
+      moving=false
+    fi
+    if $moving; then
+      # The chain (or a Restart=) is already at it: `start` joins its job and returns its
+      # outcome. Success is the chain working.
       if $DRY_RUN; then
         info "[dry-run] $unit ($disk) has a job running — would wait for it"
         continue
       fi
-      systemctl start "$unit" && continue
+    elif $DRY_RUN; then
+      info "[dry-run] would start $unit ($disk; now $state)"
+      started+=("$unit")
+      continue
     else
-      if $DRY_RUN; then
-        info "[dry-run] would start $unit ($disk; now $state)"
-        started+=("$unit")
-        continue
-      fi
-      if systemctl start "$unit"; then
-        warn "started $unit ($disk) — it was $state with no job, the disk's unit chain missed it"
-        started+=("$unit")
-        continue
-      fi
+      missed=true
+    fi
+    if start_unit "$unit"; then
+      if $missed; then chain_missed "$unit" "$disk" "$state"; fi
+      continue
+    fi
+    # A failed job is not the unit's last word while its Restart= is still at it (#254: the
+    # boot's first ha-compose jobs failed, Restart= had it up 40 s later): retry_done judges
+    # it on the next polls, and the units after it start without waiting. A unit that is up
+    # again already goes there too, to be reported like any other retry.
+    if now=$(unit_state "$unit") || is_up "$now"; then
+      retrying+=("$unit $disk $missed $((waited + blocked)) $state")
+      continue
     fi
     err "could not start $unit ($disk), it was $state: journalctl -u '$unit'"
     failed+=("$unit")
   done
 }
 
-pending=(wd500 storage)
-waited=0 # seconds spent polling for a missing disk; the settle wait has its own SETTLE_SEC
-settled=false
-while :; do
-  still=()
+# retry_done <record>: one look at a `retrying` unit. Succeeds once its fate is known - up
+# (and, if the chain had missed it, reported as started), settled down, or still on its way
+# RESTART_WAIT_SEC after its start failed (both reported as failed); fails while its
+# Restart= still has time.
+retry_done() {
+  local unit disk missed since was now moving=false
+  read -r unit disk missed since was <<<"$1"
+  now=$(unit_state "$unit") && moving=true
+  if is_up "$now"; then
+    info "$unit ($disk) came up after a failed start: its Restart= retried"
+    if [[ $missed == true ]]; then chain_missed "$unit" "$disk" "$was"; fi
+    return 0
+  fi
+  if ! $moving; then
+    err "could not start $unit ($disk), it was $was and is now $now: journalctl -u '$unit'"
+  elif ((waited + blocked - since >= RESTART_WAIT_SEC)); then
+    err "could not start $unit ($disk), it was $was and is still $now after the" \
+      "${RESTART_WAIT_SEC}s Restart= wait: journalctl -u '$unit'"
+  else
+    return 1
+  fi
+  failed+=("$unit")
+}
+
+# check_disks: recovers every pending disk that has appeared; the rest stay in `pending`.
+check_disks() {
+  local disk
+  local -a still=()
   for disk in "${pending[@]}"; do
-    if [[ -e "$BY_UUID_DIR/${uuid_of[$disk]}" ]]; then
-      # At boot the chain's jobs may still be queued; wait for the boot transaction once
-      # so they are judged by their outcome. Later jobs are joined in recover().
-      if ! $settled; then
-        timeout "$SETTLE_SEC" systemctl is-system-running --wait >/dev/null
-        settled=true
-      fi
-      info "$disk is present (/dev/disk/by-uuid/${uuid_of[$disk]})"
-      recover "$disk"
-    else
+    if [[ ! -e "$BY_UUID_DIR/${uuid_of[$disk]}" ]]; then
       still+=("$disk")
+      continue
     fi
+    # At boot the chain's jobs may still be queued; wait for the boot transaction once
+    # so they are judged by their outcome. Later jobs are joined in recover().
+    if ! $settled; then
+      timeout "$SETTLE_SEC" systemctl is-system-running --wait >/dev/null
+      settled=true
+    fi
+    info "$disk is present (/dev/disk/by-uuid/${uuid_of[$disk]})"
+    recover "$disk"
   done
   pending=("${still[@]}")
-  ((${#pending[@]} == 0 || waited >= WAIT_SEC)) && break
+}
+
+# check_retries: one look at every `retrying` unit; keeps those whose Restart= still has time.
+check_retries() {
+  local rec
+  local -a left=()
+  for rec in "${retrying[@]}"; do
+    retry_done "$rec" || left+=("$rec")
+  done
+  retrying=("${left[@]}")
+}
+
+pending=(wd500 storage)
+# Seconds of polling, shared by the disk wait (WAIT_SEC) and the retry waits
+# (RESTART_WAIT_SEC, from each failed start, which also count `blocked`: seconds spent in
+# `systemctl start`); the settle wait has its own SETTLE_SEC. Missing disks are looked for
+# until the retries are over too: one that shows up meanwhile is recovered, not reported
+# missing.
+waited=0
+blocked=0
+settled=false
+while :; do
+  check_disks
+  check_retries
+  if ((${#retrying[@]} == 0)) && ((${#pending[@]} == 0 || waited >= WAIT_SEC)); then break; fi
   sleep "$POLL_SEC"
   waited=$((waited + POLL_SEC))
 done
