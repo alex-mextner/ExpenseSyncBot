@@ -160,6 +160,9 @@ describe('ExpenseBotAgent', () => {
     it('caps at exactly one re-run (validates once) and surfaces the retry on a reject', async () => {
       // Initial answer and the retry both call no tools; the validator rejects the initial.
       const original = makeTextResult('initial bad answer');
+      const originalAssistant = original.assistantMessage;
+      if (originalAssistant.role !== 'assistant')
+        throw new Error('Expected assistant message fixture');
       mockAiStreamRound.mockImplementationOnce(async (_opts, callbacks) => {
         callbacks.onTextDelta?.(original.text);
         return original;
@@ -179,7 +182,7 @@ describe('ExpenseBotAgent', () => {
       // Surfaced answer is the retry (the last attempt) rather than an error/abort.
       expect(result).toBe('retry bad answer');
       expect(getLastCallOpts().messages.find((message) => message.role === 'assistant')).toBe(
-        original.assistantMessage,
+        originalAssistant,
       );
       // A validation cap is a quality event, NOT a failure — it must not page the admin.
       expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
