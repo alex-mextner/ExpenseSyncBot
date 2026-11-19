@@ -133,7 +133,12 @@ test('the actual chain verification script checks all Claude models through cred
   expect(
     result.attempts
       .filter((attempt) => !attempt.claude)
-      .every((attempt) => attempt.apiKey === null),
+      .every(
+        (attempt) =>
+          attempt.apiKey === null &&
+          attempt.authorization !== 'Bearer primary-key' &&
+          attempt.authorization !== 'Bearer secondary-key',
+      ),
   ).toBe(true);
 });
 

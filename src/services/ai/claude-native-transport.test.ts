@@ -14,6 +14,7 @@ import { runMigrations } from '../../database/schema';
 import { sanitizeAssistantToolCalls } from './agent-helpers';
 import { cacheableSystemMessage } from './claude-cache-prefix';
 import { createClaudeClient } from './claude-client-pool';
+import { getClaudeCredentialAvailability } from './claude-credential-pool';
 import { nativeRequest } from './claude-native-request';
 import { classifyAttemptFailure } from './streaming/failure-policy';
 import { openChatStream } from './streaming/request-params';
@@ -29,18 +30,41 @@ function captureRequest(input: string | URL | Request, init?: RequestInit): Wire
     throw new Error('Expected SDK URL and RequestInit');
   return new Request(String(input), init);
 }
+const cacheControlSchema = z.looseObject({
+  type: z.literal('ephemeral'),
+  ttl: z.enum(['5m', '1h']).optional(),
+});
 const wireBodySchema = z.looseObject({
   stream: z.literal(true),
   model: z.string(),
   max_tokens: z.number(),
-  messages: z.array(z.looseObject({ role: z.string(), content: z.array(z.unknown()) })),
+  messages: z.array(
+    z.looseObject({ role: z.enum(['user', 'assistant', 'system']), content: z.array(z.json()) }),
+  ),
   system: z
-    .array(z.looseObject({ text: z.string(), cache_control: z.unknown().optional() }))
+    .array(z.looseObject({ text: z.string(), cache_control: cacheControlSchema.optional() }))
     .optional(),
-  tools: z.array(z.looseObject({ cache_control: z.unknown().optional() })).optional(),
-  cache_control: z.unknown().optional(),
-  thinking: z.unknown().optional(),
-  tool_choice: z.unknown().optional(),
+  tools: z.array(z.looseObject({ cache_control: cacheControlSchema.optional() })).optional(),
+  cache_control: cacheControlSchema.optional(),
+  thinking: z
+    .union([
+      z.looseObject({ type: z.enum(['adaptive', 'disabled']) }),
+      z.looseObject({ type: z.literal('enabled'), budget_tokens: z.number().int().positive() }),
+    ])
+    .optional(),
+  tool_choice: z
+    .union([
+      z.looseObject({
+        type: z.enum(['auto', 'any', 'none']),
+        disable_parallel_tool_use: z.boolean().optional(),
+      }),
+      z.looseObject({
+        type: z.literal('tool'),
+        name: z.string(),
+        disable_parallel_tool_use: z.boolean().optional(),
+      }),
+    ])
+    .optional(),
   temperature: z.number().optional(),
 });
 async function requestBody(request: WireRequest) {
@@ -773,14 +797,17 @@ test.each([
   });
 });
 
-test('diagnostic native streams remain bounded after response headers', async () => {
+test.each([
+  'native',
+  'openai',
+] as const)('diagnostic %s streams reject a cutoff after response headers', async (transport) => {
   let closeStream = () => {};
   let pending = true;
   const client = createClaudeClient({
     tokens: ['synthetic-probe'],
     baseURL: 'https://api.anthropic.com/v1',
     timeout: 20,
-    transport: 'native',
+    transport,
     fetch: async (input, init) => {
       const request = captureRequest(input, init);
       return new Response(
@@ -789,12 +816,19 @@ test('diagnostic native streams remain bounded after response headers', async ()
             closeStream = () => stream.close();
             stream.enqueue(
               new TextEncoder().encode(
-                'event: message_start\ndata: {"type":"message_start","message":{"id":"synthetic","model":"claude-synthetic","usage":{"input_tokens":7}}}\n\n',
+                transport === 'native'
+                  ? 'event: message_start\ndata: {"type":"message_start","message":{"id":"synthetic","model":"claude-synthetic","usage":{"input_tokens":7}}}\n\n'
+                  : 'data: {"id":"synthetic","model":"claude-synthetic","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
               ),
             );
-            request.signal.addEventListener('abort', () => stream.error(request.signal.reason), {
-              once: true,
-            });
+            // A Fetch body read can throw AbortError even when the signal's reason is TimeoutError.
+            request.signal.addEventListener(
+              'abort',
+              () => stream.error(new DOMException('Synthetic body cutoff', 'AbortError')),
+              {
+                once: true,
+              },
+            );
           },
         }),
         { headers: { 'content-type': 'text/event-stream' } },
@@ -824,4 +858,42 @@ test('diagnostic native streams remain bounded after response headers', async ()
     if (pending) closeStream();
     await outcome;
   }
+});
+
+test('diagnostic header deadlines preserve both credential cooldowns', async () => {
+  let calls = 0;
+  const client = createClaudeClient({
+    tokens: ['synthetic-probe-one', 'synthetic-probe-two'],
+    baseURL: 'https://api.anthropic.com/v1',
+    timeout: 1100,
+    transport: 'native',
+    fetch: async (input, init) => {
+      calls++;
+      const request = captureRequest(input, init);
+      return new Promise<Response>((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Synthetic header timeout', 'AbortError')),
+          { once: true },
+        );
+      });
+    },
+  });
+  const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
+    model: 'claude-synthetic',
+    max_tokens: 32,
+    messages: [{ role: 'user', content: 'Synthetic.' }],
+  };
+  const failure = await probeCompletion(client, params, true).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(calls).toBe(2);
+  expect(getClaudeCredentialAvailability(failure)).toMatchObject({ state: 'cooling' });
+  const nextFailure = await probeCompletion(client, params, true).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(nextFailure).toMatchObject({ name: 'CredentialsCoolingDownError' });
+  expect(calls).toBe(2);
 });

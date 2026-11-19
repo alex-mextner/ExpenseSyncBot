@@ -13,18 +13,38 @@ export async function probeCompletion(
   anthropic: boolean,
 ): Promise<ProbeCompletion> {
   if (!anthropic) return client.chat.completions.create(params);
-  // Bound stream consumption as well as credential admission and response headers.
+  // Keep the pool in charge of header deadlines and credential cooldowns.
   const timeoutMs = client.timeout * 2;
-  const signal = AbortSignal.timeout(timeoutMs);
-  const stream = await openChatStream(client, { ...params, stream: true }, signal, 'claude', params.model, { timeoutMs });
-  let text = '';
-  let finishReason: string | null = null;
-  let usage: OpenAI.CompletionUsage | undefined;
-  for await (const chunk of stream) {
-    const choice = chunk.choices[0];
-    text += choice?.delta.content ?? '';
-    if (choice?.finish_reason) finishReason = choice.finish_reason;
-    if (chunk.usage) usage = chunk.usage;
+  const controller = new AbortController();
+  const stream = await openChatStream(
+    client,
+    { ...params, stream: true },
+    controller.signal,
+    'claude',
+    params.model,
+    { timeoutMs },
+  );
+  // Body reads need a separate deadline after headers; the SDK header timer is now finished.
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('Claude diagnostic stream timed out', 'TimeoutError')),
+    timeoutMs,
+  );
+  try {
+    let text = '';
+    let finishReason: string | null = null;
+    let usage: OpenAI.CompletionUsage | undefined;
+    for await (const chunk of stream) {
+      const choice = chunk.choices[0];
+      text += choice?.delta.content ?? '';
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (chunk.usage) usage = chunk.usage;
+    }
+    controller.signal.throwIfAborted();
+    return {
+      choices: [{ message: { content: text }, finish_reason: finishReason }],
+      ...(usage ? { usage } : {}),
+    };
+  } finally {
+    clearTimeout(timer);
   }
-  return { choices: [{ message: { content: text }, finish_reason: finishReason }], ...(usage ? { usage } : {}) };
 }
