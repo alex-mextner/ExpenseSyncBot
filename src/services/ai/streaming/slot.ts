@@ -1,6 +1,6 @@
 /**
- * The provider slot: one OpenAI-compatible endpoint+model that can run a streaming round. Works
- * for any OpenAI-compat provider (z.ai, Claude, HF, OpenRouter) via the shared OpenAI SDK.
+ * One provider/model slot for a streaming round. Claude uses native Messages by default;
+ * compatible providers and the explicit Claude rollback use OpenAI chat completions.
  */
 
 import type OpenAI from 'openai';
@@ -65,8 +65,7 @@ function buildStreamParams(
 }
 
 /**
- * Standard OpenAI streaming adapter. Works for any OpenAI-compat provider
- * (z.ai, Claude, HF, OpenRouter) via the shared OpenAI SDK.
+ * Normalize native Claude and compatible-provider streams behind the same round contract.
  */
 export function streamingSlot(
   name: string,
@@ -84,14 +83,22 @@ export function streamingSlot(
       const params = buildStreamParams(key, model, opts, slotOptions);
       let requestStartedPerf = performance.now();
       const client = getClient();
-      const stream = await openChatStream(client, params, opts.signal, key, model, {
-        timeoutMs: opts.perProviderTimeoutMs ?? 45_000,
-        ...(opts.onCredentialRetry ? { onRetry: opts.onCredentialRetry } : {}),
-        onHttpAttempt: () => {
-          requestStartedPerf = performance.now();
-          opts.onCredentialAttempt?.();
+      const stream = await openChatStream(
+        client,
+        params,
+        opts.signal,
+        key,
+        model,
+        {
+          timeoutMs: opts.perProviderTimeoutMs ?? 45_000,
+          ...(opts.onCredentialRetry ? { onRetry: opts.onCredentialRetry } : {}),
+          onHttpAttempt: () => {
+            requestStartedPerf = performance.now();
+            opts.onCredentialAttempt?.();
+          },
         },
-      });
+        opts.onNativeUsage,
+      );
 
       const collector = new StreamCollector(cbs);
       try {

@@ -91,17 +91,31 @@ export interface ProviderVerdict {
   lastError: LastError | null;
 }
 
+export interface ClaudeAccountUsageStats extends ModelUsageStats {
+  credentialId: string | null;
+  freshInput: TokenTotals;
+  cacheWrite: TokenTotals;
+}
+
 export interface UsageReport {
   windowDays: number;
   since: number;
   until: number;
   models: ModelUsageStats[];
+  /** Native attempts by model and selected credential, with historical rows explicitly unknown. */
+  claudeAccounts?: ClaudeAccountUsageStats[];
   /** Empty unless some row in the window carries a role. */
   roles: RoleUsageStats[];
   verdicts: ProviderVerdict[];
 }
 
-type TokenField = 'promptTokens' | 'completionTokens' | 'reasoningTokens' | 'cachedTokens';
+type TokenField =
+  | 'promptTokens'
+  | 'completionTokens'
+  | 'reasoningTokens'
+  | 'cachedTokens'
+  | 'freshInputTokens'
+  | 'cacheWriteTokens';
 
 function tokenTotals(rows: readonly AiUsageEvent[], field: TokenField): TokenTotals {
   let sum = 0;
@@ -109,7 +123,7 @@ function tokenTotals(rows: readonly AiUsageEvent[], field: TokenField): TokenTot
   let rowsUnknown = 0;
   for (const row of rows) {
     const value = row[field];
-    if (value !== null) {
+    if (value != null) {
       sum += value;
       rowsWithValue++;
     } else if (row.outcome === 'ok') {
@@ -392,6 +406,32 @@ function modelStats(
   };
 }
 
+function claudeAccountStats(
+  events: readonly AiUsageEvent[],
+): ClaudeAccountUsageStats[] | undefined {
+  const rows = events.filter((row) => row.provider === 'claude');
+  if (!rows.some((row) => row.credentialId)) return undefined;
+  return [...groupBy(rows, (row) => `${row.model}\u0000${row.credentialId ?? ''}`).values()]
+    .flatMap((group) => {
+      const first = group[0];
+      return first
+        ? [
+            {
+              ...modelStats('claude', first.model, group),
+              credentialId: first.credentialId ?? null,
+              freshInput: tokenTotals(group, 'freshInputTokens'),
+              cacheWrite: tokenTotals(group, 'cacheWriteTokens'),
+            },
+          ]
+        : [];
+    })
+    .sort(
+      (a, b) =>
+        a.model.localeCompare(b.model) ||
+        (a.credentialId ?? '').localeCompare(b.credentialId ?? ''),
+    );
+}
+
 export function aggregateUsage(
   events: readonly AiUsageEvent[],
   opts: { now: number; days: number },
@@ -446,7 +486,16 @@ export function aggregateUsage(
     };
   });
 
-  return { windowDays: opts.days, since, until: opts.now, models, roles, verdicts };
+  const claudeAccounts = claudeAccountStats(inWindow);
+  return {
+    windowDays: opts.days,
+    since,
+    until: opts.now,
+    models,
+    roles,
+    verdicts,
+    ...(claudeAccounts ? { claudeAccounts } : {}),
+  };
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────

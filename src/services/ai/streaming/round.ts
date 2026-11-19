@@ -9,6 +9,7 @@ import {
   CredentialsCoolingDownError,
   getClaudeCredentialAvailability,
 } from '../claude-credential-pool';
+import { NativeRequestContractError } from '../claude-native-request';
 import { estimatePromptSize } from '../prompt-size';
 import {
   recordProviderConnectionFailure,
@@ -30,7 +31,7 @@ import {
   getRateLimitCooldownMs,
   pickRepresentativeError,
 } from './failure-policy';
-import { attemptUsage, UNKNOWN_TIMING } from './token-usage';
+import { attemptUsage, type TokenUsage, UNKNOWN_TIMING } from './token-usage';
 import type {
   ChainName,
   ProviderSlot,
@@ -76,7 +77,7 @@ function recordBreakerOutcome(
   thrown: unknown,
   failedAt: number,
 ): void {
-  if (isAbortLike(error)) return;
+  if (isAbortLike(error) || error instanceof NativeRequestContractError) return;
   const status = numericStatus(error);
   const availability = slot.key === 'claude' ? getClaudeCredentialAvailability(error) : undefined;
   if (availability?.state === 'ready' || availability?.state === 'probing') {
@@ -100,6 +101,7 @@ function recordBreakerOutcome(
 
 /** Timing of one provider attempt, as seen when it started. */
 interface AttemptClock {
+  nativeUsage?: TokenUsage | null;
   startedAt: number;
   startedPerf: number;
 }
@@ -176,7 +178,11 @@ class RoundRun {
           ...this.options,
           signal: combinedSignal,
           perProviderTimeoutMs: this.perProviderTimeoutMs,
+          onNativeUsage: (usage) => {
+            clock.nativeUsage = usage;
+          },
           onCredentialAttempt: () => {
+            clock.nativeUsage = null;
             clock.startedAt = Date.now();
             clock.startedPerf = performance.now();
           },
@@ -192,7 +198,7 @@ class RoundRun {
                 }),
                 durationMs: Math.round(durationMs),
                 ...UNKNOWN_TIMING,
-                ...attemptUsage(thrown),
+                ...(clock.nativeUsage ?? attemptUsage(thrown)),
               }),
             ]);
           },
@@ -287,7 +293,7 @@ class RoundRun {
         durationMs: Math.round(performance.now() - clock.startedPerf),
         ...UNKNOWN_TIMING,
         // The tag sits on the ORIGINAL thrown value, like the responded tag.
-        ...attemptUsage(thrown),
+        ...(clock.nativeUsage ?? attemptUsage(thrown)),
       }),
     ]);
     logger.error({ err: error }, `[AI_STREAM] ${slot.name} failed: ${error.message}`);

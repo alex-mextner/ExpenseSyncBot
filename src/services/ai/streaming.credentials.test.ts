@@ -3,7 +3,9 @@ import { createMockLogger } from '../../test-utils/mocks/logger';
 
 const log = createMockLogger();
 mock.module('../../utils/logger', () => ({ createLogger: () => log, logger: log }));
+// These fixtures exercise the explicit OpenAI compatibility rollback; native wire coverage is separate.
 const env = {
+  AI_CLAUDE_TRANSPORT: 'openai',
   ANTHROPIC_API_KEY: 'zai-key',
   AI_BASE_URL: 'https://zai.test/v1',
   AI_MODEL: 'zai-fixture',

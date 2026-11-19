@@ -7,6 +7,7 @@ import { bankIntegrationMigrations } from './bank-integration';
 import { budgetPromptMigrations } from './budget-prompts';
 import { coreTableMigrations } from './core-tables';
 import { groupMemberAndReceiptMigrations } from './group-members-and-receipts';
+import { nativeCacheUsageMigration } from './native-cache-usage';
 import { photoQueueAndReceiptItemMigrations } from './photo-queue-and-receipt-items';
 import { snapshotAndDataFixMigrations } from './snapshots-and-data-fixes';
 import type { Migration } from './types';
@@ -20,4 +21,5 @@ export const migrations: Migration[] = [
   ...groupMemberAndReceiptMigrations,
   ...aiTrajectoryAndUsageMigrations,
   ...budgetPromptMigrations,
+  nativeCacheUsageMigration,
 ];

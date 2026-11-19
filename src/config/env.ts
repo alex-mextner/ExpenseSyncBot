@@ -97,6 +97,7 @@ interface EnvConfig {
   CLAUDE_API_TOKEN: string;
   CLAUDE_API_TOKEN2: string;
   CLAUDE_BASE_URL: string;
+  AI_CLAUDE_TRANSPORT?: 'native' | 'openai';
   CLAUDE_MODEL: string;
   CLAUDE_FAST_MODEL: string;
   CLAUDE_VISION_MODEL: string;
@@ -147,6 +148,13 @@ function getEnvVariable(name: string, required = true): string {
   return value || '';
 }
 
+function claudeTransport(): 'native' | 'openai' {
+  const value = getEnvVariable('AI_CLAUDE_TRANSPORT', false) || 'native';
+  if (value !== 'native' && value !== 'openai')
+    throw new Error('AI_CLAUDE_TRANSPORT must be native or openai');
+  return value;
+}
+
 function validateEnv(): EnvConfig {
   return {
     BOT_TOKEN: getEnvVariable('BOT_TOKEN'),
@@ -168,6 +176,7 @@ function validateEnv(): EnvConfig {
     AI_SMART_CHAIN: parseChain('AI_SMART_CHAIN', DEFAULT_SMART_CHAIN),
     AI_FAST_CHAIN: parseChain('AI_FAST_CHAIN', DEFAULT_FAST_CHAIN),
 
+    AI_CLAUDE_TRANSPORT: claudeTransport(),
     CLAUDE_API_TOKEN: getEnvVariable('CLAUDE_API_TOKEN', false),
     CLAUDE_API_TOKEN2: getEnvVariable('CLAUDE_API_TOKEN2', false),
     CLAUDE_BASE_URL: getEnvVariable('CLAUDE_BASE_URL', false) || 'https://api.anthropic.com/v1/',

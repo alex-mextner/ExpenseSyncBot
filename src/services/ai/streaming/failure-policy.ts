@@ -26,7 +26,7 @@ const QUOTA_TEXT = /quota|credit|usage limit|limit exhausted|will reset/i;
 
 export interface AttemptFailure {
   errorClass: AiUsageErrorClass;
-  /** HTTP status when the provider answered with one. */
+  /** HTTP status reported by the SDK; null when unavailable, including native SSE errors. */
   httpStatus: number | null;
 }
 
@@ -36,6 +36,19 @@ const FIXED_STATUS_CLASSES: ReadonlyMap<number, AiUsageErrorClass> = new Map([
   [401, 'auth'],
   [403, 'auth'],
   [408, 'timeout'],
+]);
+
+// Native SSE errors have a semantic type but no SDK HTTP status. Category mapping does not
+// assign a synthetic status or alter retry/routing policy.
+const STREAM_ERROR_CATEGORIES: ReadonlyMap<string, number> = new Map([
+  ['invalid_request_error', 400],
+  ['authentication_error', 401],
+  ['permission_error', 403],
+  ['not_found_error', 404],
+  ['request_too_large', 400],
+  ['rate_limit_error', 429],
+  ['api_error', 500],
+  ['overloaded_error', 529],
 ]);
 
 /** Failure class of an answer that carried an HTTP status. */
@@ -62,7 +75,9 @@ function classifyStatuslessFailure(error: unknown): AiUsageErrorClass {
   }
   if (isAbortLike(error)) return 'aborted';
   if (isConnectionLike(error)) return 'server';
-  return 'other';
+  const category =
+    error instanceof OpenAI.APIError ? STREAM_ERROR_CATEGORIES.get(error.type ?? '') : undefined;
+  return category === undefined ? 'other' : classifyHttpStatus(category, error);
 }
 
 /**

@@ -98,7 +98,7 @@ describe('migration 053_create_ai_usage_events', () => {
     );
   });
 
-  it('creates the table with exactly the usage columns and no user-identifying column', () => {
+  it('creates exactly the usage columns, with no prompt text or raw credential column', () => {
     const columns = db
       .query<{ name: string }, []>(`SELECT name FROM pragma_table_info('ai_usage_events')`)
       .all()
@@ -130,6 +130,9 @@ describe('migration 053_create_ai_usage_events', () => {
       'user_tokens',
       'tool_count',
       'message_count',
+      'fresh_input_tokens',
+      'cache_write_tokens',
+      'credential_id',
     ]);
   });
 
