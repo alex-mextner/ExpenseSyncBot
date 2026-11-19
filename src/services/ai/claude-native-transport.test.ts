@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
+import { z } from 'zod';
 import { probeCompletion } from '../../../scripts/ai-probe-completion';
 import {
   type AiUsageEventInput,
@@ -21,7 +22,32 @@ import type { TokenUsage } from './streaming/token-usage';
 import { buildSystemPrompt, buildSystemPromptPrefix } from './system-prompt';
 import { aggregateUsage } from './usage-report';
 
-function requestAt(requests: readonly Request[], index: number): Request {
+// Bun's Request.clone() exposes the standard Fetch request shape, without Bun-only helpers.
+type WireRequest = ReturnType<Request['clone']>;
+function captureRequest(input: string | URL | Request, init?: RequestInit): WireRequest {
+  if (typeof input !== 'string' && !(input instanceof URL))
+    throw new Error('Expected SDK URL and RequestInit');
+  return new Request(String(input), init);
+}
+const wireBodySchema = z.looseObject({
+  stream: z.literal(true),
+  model: z.string(),
+  max_tokens: z.number(),
+  messages: z.array(z.looseObject({ role: z.string(), content: z.array(z.unknown()) })),
+  system: z
+    .array(z.looseObject({ text: z.string(), cache_control: z.unknown().optional() }))
+    .optional(),
+  tools: z.array(z.looseObject({ cache_control: z.unknown().optional() })).optional(),
+  cache_control: z.unknown().optional(),
+  thinking: z.unknown().optional(),
+  tool_choice: z.unknown().optional(),
+  temperature: z.number().optional(),
+});
+async function requestBody(request: WireRequest) {
+  return wireBodySchema.parse(await request.json());
+}
+
+function requestAt(requests: readonly WireRequest[], index: number): WireRequest {
   const request = requests[index];
   if (!request) throw new Error('Expected synthetic HTTP request');
   return request;
@@ -57,14 +83,14 @@ function nativeAnswer(): Response {
 }
 
 test('native finance requests preserve receipt images, cache boundaries and all token categories', async () => {
-  const requests: Request[] = [];
+  const requests: WireRequest[] = [];
   const client = createClaudeClient({
     tokens: ['synthetic-primary'],
     baseURL: 'https://api.anthropic.com/v1',
     timeout: 1000,
     transport: 'native',
     fetch: async (input, init) => {
-      const request = new Request(input, init);
+      const request = captureRequest(input, init);
       requests.push(request.clone());
       if (new URL(request.url).pathname.endsWith('/messages')) return nativeAnswer();
       return new Response(
@@ -96,10 +122,12 @@ test('native finance requests preserve receipt images, cache boundaries and all 
   expect(requests).toHaveLength(1);
   expect(new URL(requestAt(requests, 0).url).pathname).toBe('/v1/messages');
   expect(requestAt(requests, 0).headers.get('x-api-key')).toBe('synthetic-primary');
-  const body = await requestAt(requests, 0).json();
+  const body = await requestBody(requestAt(requests, 0));
+  expect(body.stream).toBe(true);
+  expect(body.system?.[0]).toMatchObject({ type: 'text' });
   expect(body.cache_control).toBeUndefined();
-  expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
-  expect(body.messages[0].content[1]).toEqual({
+  expect(body.system?.[0]?.cache_control).toEqual({ type: 'ephemeral' });
+  expect(body.messages[0]?.content[1]).toEqual({
     type: 'image',
     source: { type: 'base64', media_type: 'image/png', data: 'YQ==' },
   });
@@ -120,14 +148,14 @@ test('finance tool continuation retains signed content after sanitization and di
     { type: 'text', text: 'Checking.' },
     { type: 'tool_use', id: 'one', name: 'read_one', input: { day: 'synthetic' } },
   ];
-  const requests: Request[] = [];
+  const requests: WireRequest[] = [];
   const client = createClaudeClient({
     tokens: ['synthetic-primary'],
     baseURL: 'https://api.anthropic.com/v1',
     timeout: 1000,
     transport: 'native',
     fetch: async (input, init) => {
-      requests.push(new Request(input, init).clone());
+      requests.push(captureRequest(input, init).clone());
       if (requests.length > 1) return nativeAnswer();
       return sse([
         {
@@ -182,9 +210,9 @@ test('finance tool continuation retains signed content after sanitization and di
     },
     {},
   );
-  const before = await requestAt(requests, 0).json();
-  const after = await requestAt(requests, 1).json();
-  expect(after.messages[1].content).toEqual(content);
+  const before = await requestBody(requestAt(requests, 0));
+  const after = await requestBody(requestAt(requests, 1));
+  expect(after.messages[1]?.content).toEqual(content);
   expect(after.tools).toEqual(before.tools);
   expect(after.system).toEqual(before.system);
   expect(after.messages[3]).toMatchObject({
@@ -347,14 +375,14 @@ test('finance native failures retain the latest reported usage and never retry a
 });
 
 test('finance Haiku keeps its disabled-thinking budget and missing cache metrics stay unknown', async () => {
-  const requests: Request[] = [];
+  const requests: WireRequest[] = [];
   const client = createClaudeClient({
     tokens: ['synthetic-primary'],
     baseURL: 'https://api.anthropic.com/v1',
     timeout: 1000,
     transport: 'native',
     fetch: async (input, init) => {
-      requests.push(new Request(input, init).clone());
+      requests.push(captureRequest(input, init).clone());
       return sse([
         {
           type: 'message_start',
@@ -382,7 +410,7 @@ test('finance Haiku keeps its disabled-thinking budget and missing cache metrics
     { messages: [{ role: 'user', content: 'Synthetic.' }], maxTokens: 50, purpose: 'validator' },
     {},
   );
-  const body = await requestAt(requests, 0).json();
+  const body = await requestBody(requestAt(requests, 0));
   expect(body.thinking).toEqual({ type: 'disabled' });
   expect(body.max_tokens).toBe(50);
   expect(body.temperature).toBeUndefined();
@@ -399,14 +427,14 @@ test('finance Haiku keeps its disabled-thinking budget and missing cache metrics
 test('finance native credential timeout identifies the failed key and the successful backup', async () => {
   let observed: TokenUsage | null = null;
   const failedUsage: (TokenUsage | null)[] = [];
-  const requests: Request[] = [];
+  const requests: WireRequest[] = [];
   const client = createClaudeClient({
     tokens: ['synthetic-primary', 'synthetic-backup'],
     baseURL: 'https://api.anthropic.com/v1',
     timeout: 1000,
     transport: 'native',
     fetch: async (input, init) => {
-      const request = new Request(input, init);
+      const request = captureRequest(input, init);
       requests.push(request.clone());
       if (request.headers.get('x-api-key') === 'synthetic-primary')
         return new Promise<Response>((_resolve, reject) => {
@@ -572,7 +600,7 @@ test('native pending SDK reads preserve the exact cancellation reason and classi
     timeout: 1000,
     transport: 'native',
     fetch: async (input, init) => {
-      const request = new Request(input, init);
+      const request = captureRequest(input, init);
       return new Response(
         new ReadableStream({
           start(stream) {
@@ -633,7 +661,7 @@ test('Claude diagnostic probes use the runtime native adapter with SDK logging d
     timeout: 1000,
     transport: 'native',
     fetch: async (input, init) => {
-      paths.push(new URL(new Request(input, init).url).pathname);
+      paths.push(new URL(captureRequest(input, init).url).pathname);
       return nativeAnswer();
     },
   });
@@ -743,4 +771,57 @@ test.each([
     cachedTokens: 200,
     completionTokens: 1,
   });
+});
+
+test('diagnostic native streams remain bounded after response headers', async () => {
+  let closeStream = () => {};
+  let pending = true;
+  const client = createClaudeClient({
+    tokens: ['synthetic-probe'],
+    baseURL: 'https://api.anthropic.com/v1',
+    timeout: 20,
+    transport: 'native',
+    fetch: async (input, init) => {
+      const request = captureRequest(input, init);
+      return new Response(
+        new ReadableStream({
+          start(stream) {
+            closeStream = () => stream.close();
+            stream.enqueue(
+              new TextEncoder().encode(
+                'event: message_start\ndata: {"type":"message_start","message":{"id":"synthetic","model":"claude-synthetic","usage":{"input_tokens":7}}}\n\n',
+              ),
+            );
+            request.signal.addEventListener('abort', () => stream.error(request.signal.reason), {
+              once: true,
+            });
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    },
+  });
+  const outcome = probeCompletion(
+    client,
+    {
+      model: 'claude-synthetic',
+      max_tokens: 32,
+      messages: [{ role: 'user', content: 'Synthetic.' }],
+    },
+    true,
+  )
+    .then(
+      () => null,
+      (error: unknown) => error,
+    )
+    .finally(() => {
+      pending = false;
+    });
+  try {
+    const result = await Promise.race([outcome, Bun.sleep(150).then(() => 'still waiting')]);
+    expect(result).toMatchObject({ name: 'TimeoutError' });
+  } finally {
+    if (pending) closeStream();
+    await outcome;
+  }
 });

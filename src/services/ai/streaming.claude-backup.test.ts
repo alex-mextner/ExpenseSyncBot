@@ -18,7 +18,9 @@ const defaultOrder = () => ({
   fromEnv: false,
   fallback: ['claude', 'zai', 'hf'],
 });
+// These fixtures exercise the explicit OpenAI compatibility rollback; native wire coverage is separate.
 const env = {
+  AI_CLAUDE_TRANSPORT: 'openai',
   ANTHROPIC_API_KEY: 'zai-key',
   AI_BASE_URL: 'https://zai.test/v1',
   AI_MODEL: 'zai-smart',

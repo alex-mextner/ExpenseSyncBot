@@ -275,6 +275,8 @@ export async function openNativeClaudeStream(
   onUsage?: NativeUsageObserver,
 ) {
   const body = replay.request;
+  // This is a non-authenticating correlation ID of a random high-entropy API key, not password storage.
+  // codeql[js/insufficient-password-hash] recovering a random API key from this fingerprint is infeasible.
   const credentialId = createHash('sha256').update(client.apiKey).digest('hex').slice(0, 12);
   onUsage?.(nativeTokenUsage({}, credentialId));
   const stream = await client.post<Stream<unknown>>('/messages', {

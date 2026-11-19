@@ -13,7 +13,10 @@ export async function probeCompletion(
   anthropic: boolean,
 ): Promise<ProbeCompletion> {
   if (!anthropic) return client.chat.completions.create(params);
-  const stream = await openChatStream(client, { ...params, stream: true }, undefined, 'claude', params.model, { timeoutMs: client.timeout * 2 });
+  // Bound stream consumption as well as credential admission and response headers.
+  const timeoutMs = client.timeout * 2;
+  const signal = AbortSignal.timeout(timeoutMs);
+  const stream = await openChatStream(client, { ...params, stream: true }, signal, 'claude', params.model, { timeoutMs });
   let text = '';
   let finishReason: string | null = null;
   let usage: OpenAI.CompletionUsage | undefined;
