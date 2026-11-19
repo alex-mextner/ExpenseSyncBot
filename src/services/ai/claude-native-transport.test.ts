@@ -865,7 +865,8 @@ test('diagnostic header deadlines preserve both credential cooldowns', async () 
   const client = createClaudeClient({
     tokens: ['synthetic-probe-one', 'synthetic-probe-two'],
     baseURL: 'https://api.anthropic.com/v1',
-    timeout: 1100,
+    // Leave 600ms scheduler headroom above the pool's 1000ms useful-attempt floor.
+    timeout: 1600,
     transport: 'native',
     fetch: async (input, init) => {
       calls++;
