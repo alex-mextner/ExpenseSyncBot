@@ -243,3 +243,33 @@ describe('DevAgent.run — abort handling', () => {
     await expect(agent.run('sys', 'msg')).rejects.toBeInstanceOf(AgentAbortedError);
   });
 });
+
+test('dev agent preserves the provider assistant object and declares tools for a tool-free nudge', async () => {
+  const first = toolResult([
+    { id: 'one', name: 'file_exists', arguments: '{"path":"synthetic.ts"}' },
+  ]);
+  first.assistantMessage = {
+    role: 'assistant',
+    content: null,
+    tool_calls: [
+      {
+        id: 'one',
+        type: 'function',
+        function: { name: 'file_exists', arguments: '{"path":"synthetic.ts"}' },
+      },
+    ],
+  };
+  mockAiStreamRound.mockResolvedValueOnce(first);
+  mockAiStreamRound.mockResolvedValueOnce(textResult(''));
+  mockAiStreamRound.mockResolvedValueOnce(textResult('Done.'));
+  const agent = new DevAgent('/tmp/synthetic-worktree');
+  await agent.run('Fixed system rules.', 'Synthetic request.');
+  const initial = mockAiStreamRound.mock.calls[0]?.[0];
+  const continuation = mockAiStreamRound.mock.calls[1]?.[0];
+  const nudge = mockAiStreamRound.mock.calls[2]?.[0];
+  expect(continuation?.messages[2]).toBe(first.assistantMessage);
+  expect(nudge?.tools).toEqual(initial?.tools);
+  expect(nudge?.toolChoice).toBe('none');
+  expect(logMock.error).not.toHaveBeenCalled();
+  expect(logMock.warn).not.toHaveBeenCalled();
+});

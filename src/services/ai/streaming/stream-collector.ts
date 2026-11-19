@@ -6,6 +6,12 @@
  */
 
 import type OpenAI from 'openai';
+import {
+  type NativeReplay,
+  nativeChunkReplay,
+  rememberNativeAssistant,
+} from '../claude-native-content';
+import { nativeUsageDetails } from '../claude-native-usage';
 import { EmptyProviderResponseError, markProviderResponded } from './error-signals';
 import { normalizeUsage, type StreamTiming, tagAttemptUsage, UNKNOWN_TIMING } from './token-usage';
 import type { SlotOutput, StreamCallbacks, StreamToolCall } from './types';
@@ -17,6 +23,7 @@ interface PartialToolCall {
 }
 
 export class StreamCollector {
+  private nativeReplay: NativeReplay | undefined;
   private text = '';
   private readonly toolCalls = new Map<number, PartialToolCall>();
   private lastToolCallKey = -1;
@@ -28,6 +35,7 @@ export class StreamCollector {
   constructor(private readonly callbacks: StreamCallbacks) {}
 
   consume(chunk: OpenAI.ChatCompletionChunk): void {
+    this.nativeReplay = nativeChunkReplay(chunk) ?? this.nativeReplay;
     // The usage-only final chunk has no choices: capture it before the delta guard below.
     if (chunk.usage) this.usage = chunk.usage;
     const delta = chunk.choices[0]?.delta;
@@ -59,7 +67,8 @@ export class StreamCollector {
    */
   tagFailure(error: unknown): void {
     markProviderResponded(error, this.text.length > 0 || this.toolCalls.size > 0);
-    if (this.usage) tagAttemptUsage(error, normalizeUsage(this.usage));
+    if (this.usage && !nativeUsageDetails(this.usage))
+      tagAttemptUsage(error, normalizeUsage(this.usage));
   }
 
   /** The slot's output once the stream ended cleanly; an answer with no text and no tool call is a failure. */
@@ -86,7 +95,10 @@ export class StreamCollector {
         text: this.text,
         toolCalls,
         finishReason: this.finishReason,
-        assistantMessage: assistantMessageOf(this.text, toolCalls),
+        assistantMessage: rememberNativeAssistant(
+          assistantMessageOf(this.text, toolCalls),
+          this.nativeReplay,
+        ),
         providerUsed: slotName,
       },
       usage: tokenUsage,

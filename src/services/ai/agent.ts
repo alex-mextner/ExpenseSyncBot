@@ -25,6 +25,7 @@ import {
   sanitizeAssistantToolCalls,
   toolResultContent,
 } from './agent-helpers';
+import { cacheableSystemMessage } from './claude-cache-prefix';
 import { AiDebugLogger, type AiDebugRunContext } from './debug-logger';
 import { reportAiFailureToAdmin } from './error-reporter';
 import type { Role } from './model-presets';
@@ -50,7 +51,7 @@ import {
   type StreamCallbacks,
   type StreamRoundResult,
 } from './streaming';
-import { buildSystemPrompt } from './system-prompt';
+import { buildSystemPrompt, buildSystemPromptPrefix } from './system-prompt';
 import { isSkipSignal, NO_ANSWER_MESSAGE, TelegramStreamWriter } from './telegram-stream';
 import { executeTool } from './tool-executor';
 import { buildToolIndex, createToolExposure, type ToolExposure } from './tool-exposure';
@@ -142,10 +143,15 @@ interface RunIo {
   toolCallNames: string[];
 }
 
-/** The answer being shaped by the post-loop steps. */
-interface RunAnswer {
+/** The completed assistant retains private native replay metadata during corrective passes. */
+interface LoopAnswer {
   text: string;
   toolCount: number;
+  assistantMessage: OpenAI.ChatCompletionMessageParam | undefined;
+}
+
+/** The answer being shaped by the post-loop steps. */
+interface RunAnswer extends LoopAnswer {
   leakRerunDone: boolean;
 }
 
@@ -261,14 +267,10 @@ export class ExpenseBotAgent {
   }
 
   /** Leak re-run, validation, skip handling and trajectory record for a finished agent loop. */
-  private async completeRun(
-    io: RunIo,
-    result: { text: string; toolCount: number },
-  ): Promise<string> {
+  private async completeRun(io: RunIo, result: LoopAnswer): Promise<string> {
     const { userMessage, messages, writer, debugCtx, toolCallNames } = io;
     const answer: RunAnswer = {
-      text: result.text,
-      toolCount: result.toolCount,
+      ...result,
       leakRerunDone: false,
     };
 
@@ -288,10 +290,11 @@ export class ExpenseBotAgent {
         writer,
         debugCtx,
         toolCallNames,
-        initial: { text: answer.text, toolCount: answer.toolCount },
+        initial: answer,
       });
       answer.text = validated.text;
       answer.toolCount = validated.toolCount;
+      answer.assistantMessage = validated.assistantMessage;
       await this.handleReasoningLeak(io, answer);
     }
 
@@ -347,6 +350,7 @@ export class ExpenseBotAgent {
     }
     answer.text = retry.text;
     answer.toolCount += retry.toolCount;
+    answer.assistantMessage = retry.assistantMessage;
   }
 
   /** Report a failed run to the user (and the admin when genuine); always throws. */
@@ -423,7 +427,7 @@ export class ExpenseBotAgent {
     let result = '';
     const { text } = await aiStreamRound(
       {
-        messages: [this.buildSystemMessage(''), { role: 'user', content: userMessage }],
+        messages: [this.buildSystemMessage('', false), { role: 'user', content: userMessage }],
         maxTokens: 1500,
         chain: 'smart',
         purpose: 'agent_batch',
@@ -445,7 +449,7 @@ export class ExpenseBotAgent {
     writer: TelegramStreamWriter,
     debugCtx: AiDebugRunContext | null,
     toolCallNames: string[],
-  ): Promise<{ text: string; toolCount: number }> {
+  ): Promise<LoopAnswer> {
     // One overall deadline spanning all retries — a truly-stuck run is bounded
     // by RUN_DEADLINE_MS, not RUN_DEADLINE_MS × attempts. Once it fires, the
     // signal stays aborted, so any retry attempt aborts immediately.
@@ -501,8 +505,8 @@ export class ExpenseBotAgent {
     writer: TelegramStreamWriter;
     debugCtx: AiDebugRunContext | null;
     toolCallNames: string[];
-    initial: { text: string; toolCount: number };
-  }): Promise<{ text: string; toolCount: number }> {
+    initial: LoopAnswer;
+  }): Promise<LoopAnswer> {
     const { userMessage, messages, writer, debugCtx, toolCallNames, initial } = args;
 
     const validation = await validateResponse({
@@ -522,6 +526,7 @@ export class ExpenseBotAgent {
       debugCtx,
       toolCallNames,
       rejectedText: initial.text,
+      ...(initial.assistantMessage ? { rejectedAssistant: initial.assistantMessage } : {}),
       note: `[SYSTEM] Your previous response was rejected by the quality validator. Reason: ${validation.reason}. You MUST call the appropriate tools and re-answer the question properly. Do NOT repeat the same mistake.`,
       toolFree: false,
     });
@@ -557,10 +562,11 @@ export class ExpenseBotAgent {
     debugCtx: AiDebugRunContext | null;
     toolCallNames: string[];
     rejectedText: string | null;
+    rejectedAssistant?: OpenAI.ChatCompletionMessageParam;
     note: string;
     /** Answer from the results already gathered: no tool rounds (writes must not run twice). */
     toolFree: boolean;
-  }): Promise<{ text: string; toolCount: number }> {
+  }): Promise<LoopAnswer> {
     const { messages, writer, debugCtx, toolCallNames, rejectedText, note, toolFree } = args;
     // The re-run shares the run's deadline: it gets only the time left since the run started, so
     // the stall guard's time budget and this abort measure the same clock.
@@ -582,7 +588,8 @@ export class ExpenseBotAgent {
     ]);
     toolCallNames.length = 0;
 
-    if (rejectedText !== null) messages.push({ role: 'assistant', content: rejectedText });
+    if (rejectedText !== null)
+      messages.push(args.rejectedAssistant ?? { role: 'assistant', content: rejectedText });
     messages.push({ role: 'user', content: note });
 
     try {
@@ -618,8 +625,9 @@ export class ExpenseBotAgent {
     toolCallNames: string[],
     /** Skip the tool rounds: go straight to the forced, tool-free final round. */
     toolFree = false,
-  ): Promise<{ text: string; toolCount: number }> {
+  ): Promise<LoopAnswer> {
     let totalToolCalls = 0;
+    let assistantMessage: OpenAI.ChatCompletionMessageParam | undefined;
     // A tool-free re-run, or a run the stall guard already ended (a re-run after a forced answer),
     // goes straight to the forced final round: tools do not open again.
     let mustAnswer = toolFree || this.trajectory.finalizeReason !== null;
@@ -655,6 +663,7 @@ export class ExpenseBotAgent {
         mustAnswer = true;
         break;
       }
+      assistantMessage = result.assistantMessage;
       this.logRoundProvider(round, result, debugCtx);
 
       const executed = await this.executeRoundToolCalls(result, writer, debugCtx, toolCallNames);
@@ -672,7 +681,14 @@ export class ExpenseBotAgent {
     }
 
     if (mustAnswer) {
-      await this.runForcedFinalRound({ messages, writer, debugCtx, signal, toolFree, round });
+      assistantMessage = await this.runForcedFinalRound({
+        messages,
+        writer,
+        debugCtx,
+        signal,
+        toolFree,
+        round,
+      });
     }
 
     // Silence is a choice only for chatter the bot was not asked about. A run that changed data
@@ -689,7 +705,7 @@ export class ExpenseBotAgent {
       `[AGENT] Final response (${finalText.length} chars): "${finalText.substring(0, 200)}${finalText.length > 200 ? '...' : ''}"`,
     );
 
-    return { text: finalText, toolCount: totalToolCalls };
+    return { text: finalText, toolCount: totalToolCalls, assistantMessage };
   }
 
   /** One streamed tool round of the smart chain; null when only the tool-round time ran out. */
@@ -956,7 +972,7 @@ export class ExpenseBotAgent {
     signal: AbortSignal;
     toolFree: boolean;
     round: number;
-  }): Promise<void> {
+  }): Promise<OpenAI.ChatCompletionMessageParam | undefined> {
     const { messages, writer, debugCtx, signal, toolFree, round } = args;
     // A tool-free re-run already ends with its own note asking for the answer.
     if (!toolFree) messages.push({ role: 'user', content: FINAL_ANSWER_PROMPT });
@@ -979,6 +995,8 @@ export class ExpenseBotAgent {
       );
       this.logRoundProvider(round + 1, final, debugCtx);
       this.warnOnForcedAnswerAnomalies(final);
+      // Calls ignored after tool_choice none have no results; never replay that invalid turn.
+      return final.toolCalls.length === 0 ? final.assistantMessage : undefined;
     } catch (err) {
       if (signal.aborted) {
         // The run deadline fired: report the timeout whatever error the round ended with.
@@ -1153,8 +1171,12 @@ export class ExpenseBotAgent {
    * per-request block (date, user, forum state, custom instructions). One message, not two: HF chat templates may reject adjacent system messages.
    * No data dumps -- data comes from tools.
    */
-  private buildSystemMessage(toolIndex: string): SystemMessage {
-    return { role: 'system', content: buildSystemPrompt(this.ctx, new Date(), toolIndex) };
+  private buildSystemMessage(toolIndex: string, cacheHistory = true): SystemMessage {
+    return cacheableSystemMessage(
+      buildSystemPrompt(this.ctx, new Date(), toolIndex),
+      buildSystemPromptPrefix(toolIndex),
+      cacheHistory,
+    );
   }
 
   /**

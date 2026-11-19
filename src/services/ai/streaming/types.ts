@@ -86,6 +86,7 @@ export interface SlotOutput {
 }
 
 interface ProviderAttemptOptions extends StreamRoundOptions {
+  onNativeUsage?: (usage: TokenUsage) => void;
   /** Internal telemetry for a failed credential before the same Claude model tries another key. */
   onCredentialRetry?: (attempt: { error: unknown; startedAt: number; durationMs: number }) => void;
   onCredentialAttempt?: () => void;

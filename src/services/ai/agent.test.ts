@@ -1,13 +1,15 @@
 // src/services/ai/agent.test.ts
 // Tests for ExpenseBotAgent — construction, streaming basics, history and system prompt
 
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import type { Bot } from 'gramio';
 import {
   ExpenseBotAgent,
   getLastCallOpts,
   makeCtx,
   makeMockBot,
+  makeTextResult,
+  makeToolCallResult,
   mockAiStreamRound,
   mockExecuteTool,
   mockReportAiFailureToAdmin,
@@ -17,6 +19,8 @@ import {
   resetAgentMocks,
   systemText,
 } from './agent-test-harness';
+import { systemCachePrefix } from './claude-cache-prefix';
+import { nativeRequest } from './claude-native-request';
 import { buildStaticSystemPrompt } from './system-prompt';
 import type { AgentContext } from './types';
 
@@ -32,6 +36,47 @@ describe('ExpenseBotAgent', () => {
 
   afterEach(() => {
     mock.restore();
+  });
+
+  it('batch advice caches stable rules without marking its unique input for history caching', async () => {
+    mockStreamReturn(['Synthetic batch answer.']);
+    await agent.runBatch('Synthetic one-shot advice.');
+    const system = getLastCallOpts().messages.find((message) => message.role === 'system');
+    expect(system).toBeDefined();
+    expect(system && systemCachePrefix(system)).toBe(buildStaticSystemPrompt());
+    const body = nativeRequest({
+      model: 'claude-synthetic',
+      max_tokens: 128,
+      stream: true,
+      messages: getLastCallOpts().messages,
+    });
+    expect(body.cache_control).toBeUndefined();
+    expect(body.system?.[0]?.text).toBe(buildStaticSystemPrompt());
+    expect(body.system?.[0]?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.system?.[1]?.cache_control).toBeUndefined();
+  });
+
+  it('validation retry omits ignored forced-final tool calls from assistant history', async () => {
+    spyOn(agent as unknown as { now: () => number }, 'now')
+      .mockReturnValueOnce(1_000_000)
+      .mockReturnValue(1_200_000);
+    mockAiStreamRound.mockImplementationOnce(async (opts, callbacks) => {
+      expect(opts.toolChoice).toBe('none');
+      callbacks.onTextDelta?.('Forced answer.');
+      return { ...makeToolCallResult('add_expense'), text: 'Forced answer.' };
+    });
+    mockAiStreamRound.mockImplementationOnce(async (opts, callbacks) => {
+      expect(opts.toolChoice).toBe('none');
+      const previous = opts.messages.filter((message) => message.role === 'assistant');
+      expect(previous).toEqual([{ role: 'assistant', content: 'Forced answer.' }]);
+      callbacks.onTextDelta?.('Corrected answer.');
+      return makeTextResult('Corrected answer.');
+    });
+    mockValidateResponse.mockResolvedValueOnce({ approved: false, reason: 'Synthetic rejection.' });
+    const answer = await agent.run('Synthetic question.', [], mockBot as unknown as Bot);
+    expect(answer).toBe('Corrected answer.');
+    expect(mockAiStreamRound).toHaveBeenCalledTimes(2);
+    expect(mockExecuteTool).not.toHaveBeenCalled();
   });
 
   // -- Construction ----------------------------------------------------------
@@ -129,6 +174,10 @@ describe('ExpenseBotAgent', () => {
       expect(mockValidateResponse).toHaveBeenCalledTimes(1);
       // Surfaced answer is the retry (the last attempt) rather than an error/abort.
       expect(result).toBe('retry bad answer');
+      const original = await mockAiStreamRound.mock.results[0]?.value;
+      expect(getLastCallOpts().messages.find((message) => message.role === 'assistant')).toBe(
+        original?.assistantMessage,
+      );
       // A validation cap is a quality event, NOT a failure — it must not page the admin.
       expect(mockReportAiFailureToAdmin).not.toHaveBeenCalled();
     });

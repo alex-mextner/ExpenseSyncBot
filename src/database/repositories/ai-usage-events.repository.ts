@@ -52,6 +52,10 @@ export interface AiUsageEventInput {
   completionTokens: number | null;
   reasoningTokens: number | null;
   cachedTokens: number | null;
+  /** Native categories and selected credential SHA-256 prefix; absent on historical rows. */
+  freshInputTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  credentialId?: string | null;
   /**
    * Request start to the first content or tool-call delta of the attempt, ms. NULL = not measured
    * (failed, empty or skipped attempt, or a row from before migration 055).
@@ -100,6 +104,9 @@ interface AiUsageEventRow {
   completion_tokens: number | null;
   reasoning_tokens: number | null;
   cached_tokens: number | null;
+  fresh_input_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  credential_id?: string | null;
   request_id: string | null;
   role: string | null;
   preset: string | null;
@@ -149,15 +156,19 @@ export class AiUsageEventsRepository {
         number | null,
         number | null,
         number | null,
+        number | null,
+        number | null,
+        string | null,
       ]
     >(`
       INSERT INTO ai_usage_events (
         at, provider, model, chain, purpose, outcome, error_class, http_status, duration_ms,
         first_token_ms, generation_ms, prompt_tokens, completion_tokens, reasoning_tokens,
         cached_tokens, request_id, role, preset, cost_micro_usd, system_prompt_tokens,
-        tool_catalog_tokens, history_tokens, user_tokens, tool_count, message_count
+        tool_catalog_tokens, history_tokens, user_tokens, tool_count, message_count,
+        fresh_input_tokens, cache_write_tokens, credential_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.db.transaction(() => {
       for (const e of events) {
@@ -187,6 +198,9 @@ export class AiUsageEventsRepository {
           e.promptSize?.userTokens ?? null,
           e.promptSize?.toolCount ?? null,
           e.promptSize?.messageCount ?? null,
+          e.freshInputTokens ?? null,
+          e.cacheWriteTokens ?? null,
+          e.credentialId ?? null,
         );
       }
     })();
@@ -216,6 +230,13 @@ export class AiUsageEventsRepository {
         completionTokens: r.completion_tokens,
         reasoningTokens: r.reasoning_tokens,
         cachedTokens: r.cached_tokens,
+        ...(r.credential_id
+          ? {
+              freshInputTokens: r.fresh_input_tokens ?? null,
+              cacheWriteTokens: r.cache_write_tokens ?? null,
+              credentialId: r.credential_id,
+            }
+          : {}),
         requestId: r.request_id,
         role: r.role,
         preset: r.preset,

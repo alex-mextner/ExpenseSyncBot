@@ -5,6 +5,7 @@
  */
 
 import type OpenAI from 'openai';
+import { nativeUsageDetails } from '../claude-native-usage';
 
 /** Token counts of one attempt. NULL = the provider did not report it; a reported 0 stays 0. */
 export interface TokenUsage {
@@ -12,6 +13,9 @@ export interface TokenUsage {
   completionTokens: number | null;
   reasoningTokens: number | null;
   cachedTokens: number | null;
+  freshInputTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  credentialId?: string | null;
 }
 
 export const UNKNOWN_USAGE: TokenUsage = {
@@ -33,6 +37,7 @@ export function normalizeUsage(usage: OpenAI.CompletionUsage | null | undefined)
     completionTokens: reportedTokens(usage.completion_tokens),
     reasoningTokens: reportedTokens(usage.completion_tokens_details?.reasoning_tokens),
     cachedTokens: reportedTokens(usage.prompt_tokens_details?.cached_tokens),
+    ...nativeUsageDetails(usage),
   };
 }
 

@@ -10,6 +10,7 @@ import {
   normalizeCurrencyAlias,
   normalizeCurrencyText,
 } from '../currency/tokens';
+import { nativeMessageReplay } from './claude-native-content';
 import type { ToolResult } from './types';
 
 /** The amount side consumes one digit and bounded spacing, avoiding repeated long-number scans. */
@@ -74,6 +75,9 @@ export function toolResultContent(result: ToolResult): string {
 export function sanitizeAssistantToolCalls(
   message: OpenAI.ChatCompletionMessageParam,
 ): OpenAI.ChatCompletionMessageParam {
+  // Native arguments are validated before completion. Keep its signed blocks on the same
+  // private in-memory message through the next tool round.
+  if (nativeMessageReplay(message)) return message;
   const sanitized = { ...message };
   if ('tool_calls' in sanitized && Array.isArray(sanitized.tool_calls)) {
     sanitized.tool_calls = sanitized.tool_calls.map((tc) => {

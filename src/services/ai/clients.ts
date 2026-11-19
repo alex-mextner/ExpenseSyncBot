@@ -1,6 +1,6 @@
 /**
  * OpenAI SDK client factories for all AI providers (z.ai, Claude, HF, OpenRouter).
- * All providers share the same OpenAI SDK — only baseURL and apiKey differ.
+ * Claude uses native Messages through the SDK HTTP/SSE primitives; other routes use chat completions.
  * Base URLs and keys are loaded from env — no hardcoded values.
  */
 
@@ -39,6 +39,7 @@ export function claudeClient(): OpenAI {
   if (!_claude) {
     _claude = createClaudeClient({
       tokens: [env.CLAUDE_API_TOKEN, env.CLAUDE_API_TOKEN2],
+      transport: env.AI_CLAUDE_TRANSPORT ?? 'native',
       baseURL: env.CLAUDE_BASE_URL,
       timeout: DEFAULT_TIMEOUT_MS,
       fetch: makeFetchDelegate(),
