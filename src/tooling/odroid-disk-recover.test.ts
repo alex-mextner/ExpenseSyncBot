@@ -12,15 +12,28 @@ import { join } from 'node:path';
 const SCRIPT = join(import.meta.dir, '../../scripts/odroid-disk-recover.sh');
 const WD500 = 'wd500-uuid';
 const STORAGE = 'storage-uuid';
-const PM2 = 'pm2-www-data.service';
-const RUNNER = 'actions.runner.alex-mextner-ExpenseSyncBot.odroid.service';
+const CONTAINERD = 'containerd.service';
+const DOCKER = 'docker.service';
 const SWAP = 'mnt-storage-odroid\\x2drt-swapfile.swap';
 
+// Restart= timeline step shared by the stubs: `apply <unit> <line>` puts the unit into the
+// line's first word (default activating) and leaves a job queued on it when the second word
+// is "job".
+const APPLY_STEP = `apply() {
+  s=\${2%% *}; echo "\${s:-activating}" > "$FIX/units/$1"
+  if [ "\${2#* }" = job ]; then touch "$FIX/jobs/$1"; else rm -f "$FIX/jobs/$1"; fi
+}`;
+
 // Stand-in systemctl: `is-active` answers from $FIX/units/<unit> (missing = active),
-// `list-jobs <unit>` lists a job when $FIX/jobs/<unit> exists, `start` marks the unit
-// active (and its job done) unless $FIX/fail/<unit> exists. Every call is logged.
+// `list-jobs <unit>` lists a job when $FIX/jobs/<unit> exists, `start` takes $FIX/delay/<unit>
+// real seconds if that exists and marks the unit active (and its job done). A start fails
+// when $FIX/restart/<unit> or $FIX/fail/<unit> exists: with Restart= (restart/) the unit
+// takes the first step of that timeline, the sleep count at that moment goes to
+// $FIX/failed-at/<unit> and the stub sleep moves the unit along from there; without it
+// (fail/) the unit is left failed. Every call is logged.
 const SYSTEMCTL_STUB = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FIX/systemctl.log"
+${APPLY_STEP}
 case "$1" in
   is-system-running)
     # SETTLE_DELAY: how long the boot transaction takes to finish, in real seconds. command -p
@@ -35,18 +48,33 @@ case "$1" in
     u="\${@: -1}"
     if [ -f "$FIX/jobs/$u" ]; then echo "7 $u start waiting"; fi ;;
   start)
+    if [ -f "$FIX/delay/$2" ]; then command -p sleep "$(cat "$FIX/delay/$2")"; fi
     rm -f "$FIX/jobs/$2"
-    if [ -f "$FIX/fail/$2" ]; then echo "Job for $2 failed." >&2; exit 1; fi
+    if [ -f "$FIX/restart/$2" ]; then
+      apply "$2" "$(sed -n 1p "$FIX/restart/$2")"
+      echo "$(cat "$FIX/sleeps" 2>/dev/null || echo 0)" > "$FIX/failed-at/$2"
+      echo "Job for $2 failed." >&2; exit 1
+    fi
+    if [ -f "$FIX/fail/$2" ]; then echo failed > "$FIX/units/$2"; echo "Job for $2 failed." >&2; exit 1; fi
     echo active > "$FIX/units/$2" ;;
   *) exit 1 ;;
 esac
 `;
 
-// Stand-in sleep: counts calls; the APPEAR_AFTER-th call plugs in the APPEAR_UUID disk.
+// Stand-in sleep: counts calls; the APPEAR_AFTER-th call plugs in the APPEAR_UUID disk, and
+// the k-th call after a unit's failed start applies step k+1 of its $FIX/restart/<unit>
+// timeline (past its end the unit stays as it is): what its Restart= does meanwhile.
 const SLEEP_STUB = `#!/usr/bin/env bash
+${APPLY_STEP}
 n=$(( $(cat "$FIX/sleeps" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$FIX/sleeps"
 if [ -n "\${APPEAR_AFTER:-}" ] && [ "$n" -ge "$APPEAR_AFTER" ]; then touch "$BY_UUID_DIR/$APPEAR_UUID"; fi
+for f in "$FIX"/failed-at/*; do
+  [ -f "$f" ] || continue
+  u=\${f##*/}
+  s=$(sed -n "$((n - $(cat "$f") + 1))"p "$FIX/restart/$u")
+  if [ -n "$s" ]; then apply "$u" "$s"; fi
+done
 `;
 
 // Stand-in curl: records the Telegram message text, its argv and the config it reads from
@@ -73,8 +101,16 @@ interface Scenario {
   present: string[];
   /** Unit → state other than active. */
   units?: Record<string, string>;
-  /** Units whose `systemctl start` fails. */
+  /** Units whose `systemctl start` fails and that end up failed (no Restart=). */
   failing?: string[];
+  /**
+   * Units whose `systemctl start` fails while Restart= is at it: the step each takes right
+   * after the failed start, then after the 1st, 2nd, … sleep; past the end it stays put
+   * ([]: activating for good). A step is a state, or "<state> job" for one with a job queued.
+   */
+  restarting?: Record<string, string[]>;
+  /** Real seconds a unit's `systemctl start` blocks before it answers. */
+  startDelay?: Record<string, number>;
   /** Units with a start job already queued (the chain's own start). */
   queued?: string[];
   /** Disk plugged in by the n-th sleep. */
@@ -82,6 +118,7 @@ interface Scenario {
   args?: string[];
   waitSec?: number;
   pollSec?: number;
+  restartWaitSec?: number;
   /** Real seconds `systemctl is-system-running --wait` takes. */
   settleDelay?: number;
   telegramStatus?: string;
@@ -103,7 +140,10 @@ function buildSandbox(scenario: Scenario): Sandbox {
   const bin = join(dir, 'bin');
   const fix = join(dir, 'fixtures');
   const byUuid = join(dir, 'by-uuid');
-  for (const d of [bin, fix, byUuid, join(fix, 'units'), join(fix, 'fail'), join(fix, 'jobs')]) {
+  const fixtureDirs = ['units', 'fail', 'restart', 'failed-at', 'delay', 'jobs'].map((d) =>
+    join(fix, d),
+  );
+  for (const d of [bin, fix, byUuid, ...fixtureDirs]) {
     mkdirSync(d);
   }
   writeFileSync(join(bin, 'systemctl'), SYSTEMCTL_STUB, { mode: 0o755 });
@@ -114,6 +154,12 @@ function buildSandbox(scenario: Scenario): Sandbox {
     writeFileSync(join(fix, 'units', unit), `${state}\n`);
   }
   for (const unit of scenario.failing ?? []) writeFileSync(join(fix, 'fail', unit), '');
+  for (const [unit, states] of Object.entries(scenario.restarting ?? {})) {
+    writeFileSync(join(fix, 'restart', unit), states.map((s) => `${s}\n`).join(''));
+  }
+  for (const [unit, seconds] of Object.entries(scenario.startDelay ?? {})) {
+    writeFileSync(join(fix, 'delay', unit), String(seconds));
+  }
   for (const unit of scenario.queued ?? []) writeFileSync(join(fix, 'jobs', unit), '');
   const alertEnv = join(dir, 'alert.env');
   writeFileSync(alertEnv, scenario.alertEnv ?? 'BOT_TOKEN="test-token"\r\nBOT_ADMIN_ID=42\r\n');
@@ -130,6 +176,7 @@ function scenarioEnv(scenario: Scenario, sandbox: Sandbox): Record<string, strin
     STORAGE_UUID: STORAGE,
     WAIT_SEC: String(scenario.waitSec ?? 20),
     POLL_SEC: String(scenario.pollSec ?? 5),
+    RESTART_WAIT_SEC: String(scenario.restartWaitSec ?? 20),
     SETTLE_DELAY: scenario.settleDelay ? String(scenario.settleDelay) : '',
     ALERT_ENV_FILE: sandbox.alertEnv,
     TG_STATUS: scenario.telegramStatus ?? '200',
@@ -185,11 +232,11 @@ describe('odroid-disk-recover.sh', () => {
     const r = run({
       present: [STORAGE],
       late: { uuid: WD500, afterSleeps: 2 },
-      units: { 'mnt-wd500.mount': 'inactive', [PM2]: 'inactive', [RUNNER]: 'inactive' },
-      queued: ['mnt-wd500.mount', PM2, RUNNER],
+      units: { 'mnt-wd500.mount': 'inactive', [CONTAINERD]: 'inactive', [DOCKER]: 'inactive' },
+      queued: ['mnt-wd500.mount', CONTAINERD, DOCKER],
     });
     expect(r.status).toBe(0);
-    expect(r.startCalls).toEqual(['mnt-wd500.mount', PM2, RUNNER]);
+    expect(r.startCalls).toEqual(['mnt-wd500.mount', CONTAINERD, DOCKER]);
     expect(r.telegram).toEqual([]);
     expect(r.stderr).toBe('');
   });
@@ -197,30 +244,46 @@ describe('odroid-disk-recover.sh', () => {
   test('a unit down with no job: the chain missed it, start it and warn the admin', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { 'mnt-wd500.mount': 'failed', [PM2]: 'inactive', [RUNNER]: 'inactive' },
+      units: { 'mnt-wd500.mount': 'failed', [CONTAINERD]: 'inactive', [DOCKER]: 'inactive' },
     });
     expect(r.status).toBe(0);
-    expect(r.startCalls).toEqual(['mnt-wd500.mount', PM2, RUNNER]);
+    expect(r.startCalls).toEqual(['mnt-wd500.mount', CONTAINERD, DOCKER]);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toContain(
-      "the disk's unit chain missed these, started them: mnt-wd500.mount pm2-www-data.service",
+      "the disk's unit chain missed these, started them: mnt-wd500.mount containerd.service",
     );
-    expect(r.stderr).toContain(`WARNING: started ${PM2}`);
+    expect(r.stderr).toContain(`WARNING: started ${CONTAINERD}`);
+  });
+
+  // The bot runs on bananapi-m4 since 2026-11-20 (#287): starting these here would run a second copy.
+  test('the retired bot units are never checked or started, even when they are down', () => {
+    const retired = [
+      'caddy.service',
+      'pm2-www-data.service',
+      'actions.runner.alex-mextner-ExpenseSyncBot.odroid.service',
+    ];
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { ...Object.fromEntries(retired.map((u) => [u, 'inactive'])), [DOCKER]: 'inactive' },
+    });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual([DOCKER]);
+    for (const unit of retired) expect(r.calls.join('\n')).not.toContain(unit);
   });
 
   test('a queued chain job that fails: alert names the unit, fails', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'inactive' },
-      queued: [PM2],
-      failing: [PM2],
+      units: { [CONTAINERD]: 'inactive' },
+      queued: [CONTAINERD],
+      failing: [CONTAINERD],
     });
     expect(r.status).toBe(1);
-    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
+    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${CONTAINERD}`);
   });
 
   test('units are checked only after the boot transaction has finished', () => {
-    const r = run({ present: [WD500, STORAGE], units: { [PM2]: 'failed' } });
+    const r = run({ present: [WD500, STORAGE], units: { [CONTAINERD]: 'failed' } });
     const settle = r.calls.indexOf('is-system-running --wait');
     expect(settle).toBeGreaterThanOrEqual(0);
     expect(settle).toBeLessThan(r.calls.findIndex((c) => c.startsWith('is-active ')));
@@ -257,22 +320,243 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.telegram).toEqual([]);
   });
 
-  test('a unit still activating whose job then fails: alert names it, fails', () => {
+  test('a unit still activating whose job then fails for good: alert names it, fails', () => {
     const r = run({
       present: [WD500, STORAGE],
       units: { 'ha-compose.service': 'activating' },
       failing: ['ha-compose.service'],
     });
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain('ERROR: could not start ha-compose.service');
+    expect(r.stderr).toContain(
+      "ERROR: could not start ha-compose.service (wd500), it was activating: journalctl -u 'ha-compose.service'",
+    );
+    // Failed with no job and no Restart= pending: nothing to wait for.
+    expect(r.sleeps).toBe(0);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toContain('would not start after the disk appeared: ha-compose.service');
+  });
+
+  // #254: on the 2026-11-14 boot ha-compose's job failed twice, its own Restart= had it up
+  // 40 s later, and the guard, having judged it by the failed job, stayed failed.
+  test('a joined job fails but Restart= brings the unit up: not reported', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': ['activating', 'activating', 'active'] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual(['ha-compose.service']);
+    expect(r.sleeps).toBe(2);
+    expect(r.stdout).toContain('ha-compose.service (wd500) came up after a failed start');
+    expect(r.stderr).not.toContain('ERROR');
+    expect(r.telegram).toEqual([]);
+  });
+
+  test('a unit already up again when its failed start returns: not reported', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': ['active'] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.sleeps).toBe(0);
+    expect(r.stderr).not.toContain('ERROR');
+    expect(r.telegram).toEqual([]);
+  });
+
+  // A retry that starts and then fails runs its stop/cleanup as `deactivating` with no job,
+  // before Restart= tries again: not a settled unit.
+  test('a retry that fails and cleans up before the next one succeeds: not reported', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': ['activating', 'deactivating', 'activating', 'active'] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.sleeps).toBe(3);
+    expect(r.telegram).toEqual([]);
+  });
+
+  test('Restart= gives up after a few tries: alert names the unit, fails', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': ['activating', 'activating', 'failed'] },
+    });
+    expect(r.status).toBe(1);
+    expect(r.sleeps).toBe(2);
+    expect(r.stderr).toContain(
+      'ERROR: could not start ha-compose.service (wd500), it was activating and is now failed',
+    );
+    expect(r.telegram[0]).toContain('would not start after the disk appeared: ha-compose.service');
+  });
+
+  test('a unit Restart= never brings up within RESTART_WAIT_SEC: alert names it, fails', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': [] },
+      restartWaitSec: 20,
+    });
+    expect(r.status).toBe(1);
+    expect(r.sleeps).toBe(4);
+    expect(r.stderr).toContain(
+      'ERROR: could not start ha-compose.service (wd500), it was activating and is still activating after the 20s Restart= wait',
+    );
+    expect(r.telegram).toHaveLength(1);
+    expect(r.telegram[0]).toContain('would not start after the disk appeared: ha-compose.service');
+  });
+
+  test('units stuck in Restart= are waited for together: no unit holds up a later one', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: {
+        [CONTAINERD]: 'activating',
+        [DOCKER]: 'activating',
+        'ha-compose.service': 'inactive',
+      },
+      restarting: { [CONTAINERD]: [], [DOCKER]: [] },
+      restartWaitSec: 20,
+    });
+    expect(r.status).toBe(1);
+    expect(r.startCalls).toEqual([CONTAINERD, DOCKER, 'ha-compose.service']);
+    // ha-compose is started right after containerd's failed start was seen, not after its wait:
+    // containerd was only looked at by the first check and the one right after its start failed.
+    const haStart = r.calls.indexOf('start ha-compose.service');
+    expect(r.calls.slice(0, haStart).filter((c) => c === `is-active ${CONTAINERD}`)).toHaveLength(
+      2,
+    );
+    expect(r.sleeps).toBe(4);
+    expect(r.telegram[0]).toContain(
+      `would not start after the disk appeared: ${CONTAINERD} ${DOCKER}`,
+    );
+    expect(r.telegram[0]).toContain('started them: ha-compose.service');
+  });
+
+  test('a unit with no job whose start fails until Restart= brings it up: reported as started', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { [CONTAINERD]: 'failed' },
+      restarting: { [CONTAINERD]: ['activating', 'active'] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual([CONTAINERD]);
+    expect(r.stderr).toContain(`WARNING: started ${CONTAINERD}`);
+    expect(r.telegram).toHaveLength(1);
+    expect(r.telegram[0]).toContain(`started them: ${CONTAINERD}`);
+    expect(r.telegram[0]).not.toContain('would not start');
+  });
+
+  test('a failed start that leaves a restart job queued is waited for: not reported', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': ['inactive job', 'inactive job', 'active'] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.sleeps).toBe(2);
+    expect(r.telegram).toEqual([]);
+  });
+
+  test('a retry that cleans up and stops for good: alert names the unit, fails', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': ['activating', 'deactivating', 'inactive'] },
+    });
+    expect(r.status).toBe(1);
+    expect(r.sleeps).toBe(2);
+    expect(r.stderr).toContain('it was activating and is now inactive');
+  });
+
+  test('a unit deactivating with no job at the first check is started as one the chain missed', () => {
+    const r = run({ present: [WD500, STORAGE], units: { 'ha-compose.service': 'deactivating' } });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual(['ha-compose.service']);
+    expect(r.stderr).toContain('WARNING: started ha-compose.service');
+    expect(r.telegram[0]).toContain('started them: ha-compose.service');
+  });
+
+  test("another unit's slow start counts against a retry's RESTART_WAIT_SEC", () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { [CONTAINERD]: 'activating', 'ha-compose.service': 'inactive' },
+      restarting: { [CONTAINERD]: [] },
+      startDelay: { 'ha-compose.service': 2 },
+      restartWaitSec: 2,
+      pollSec: 1,
+    });
+    expect(r.status).toBe(1);
+    // ha-compose's start blocked for 2 real seconds: pm2's wait was over before any poll.
+    expect(r.sleeps).toBe(0);
+    expect(r.stderr).toContain(
+      `could not start ${CONTAINERD} (wd500), it was activating and is still activating after the 2s Restart= wait`,
+    );
+  });
+
+  test('a missed unit whose Restart= gives up: reported as failed only', () => {
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { [CONTAINERD]: 'failed' },
+      restarting: { [CONTAINERD]: ['activating', 'failed'] },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(
+      `ERROR: could not start ${CONTAINERD} (wd500), it was failed and is now failed`,
+    );
+    expect(r.stderr).not.toContain('WARNING: started');
+    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${CONTAINERD}`);
+    expect(r.telegram[0]).not.toContain('started them');
+  });
+
+  test('WD500 shows up late and a unit on it needs a Restart=: started, not reported failed', () => {
+    const r = run({
+      present: [STORAGE],
+      late: { uuid: WD500, afterSleeps: 2 },
+      units: { 'ha-compose.service': 'inactive' },
+      restarting: { 'ha-compose.service': ['activating', 'activating', 'active'] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual(['ha-compose.service']);
+    expect(r.sleeps).toBe(4);
+    expect(r.telegram).toHaveLength(1);
+    expect(r.telegram[0]).toContain('started them: ha-compose.service');
+    expect(r.telegram[0]).not.toContain('would not start');
+  });
+
+  test('a disk that shows up while a Restart= wait runs is recovered, not reported missing', () => {
+    const r = run({
+      present: [WD500],
+      late: { uuid: STORAGE, afterSleeps: 3 },
+      waitSec: 5,
+      units: { 'ha-compose.service': 'activating' },
+      restarting: {
+        'ha-compose.service': ['activating', 'activating', 'activating', 'activating', 'active'],
+      },
+    });
+    expect(r.stderr).not.toContain('never appeared');
+    expect(r.calls).toContain(`is-active ${SWAP}`);
+    expect(r.sleeps).toBe(4);
+    expect(r.telegram).toEqual([]);
+    expect(r.status).toBe(0);
+  });
+
+  test('--dry-run never starts a unit, so there is no Restart= wait', () => {
+    const r = run({
+      args: ['--dry-run'],
+      present: [WD500, STORAGE],
+      units: { 'ha-compose.service': 'activating' },
+      restarting: { 'ha-compose.service': [] },
+    });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual([]);
+    expect(r.sleeps).toBe(0);
   });
 
   test('WD500 never shows up: starts nothing on it, alerts and fails', () => {
     const r = run({
       present: [STORAGE],
-      units: { 'mnt-wd500.mount': 'failed', [PM2]: 'inactive' },
+      units: { 'mnt-wd500.mount': 'failed', [CONTAINERD]: 'inactive' },
       waitSec: 20,
     });
     expect(r.status).toBe(1);
@@ -285,7 +569,7 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.telegram[0]).toContain(
       `USB disk did not appear at boot (waited 20s): wd500 (${WD500})`,
     );
-    expect(r.telegram[0]).toContain(PM2);
+    expect(r.telegram[0]).toContain(CONTAINERD);
     expect(r.telegram[0]).not.toContain(SWAP);
     expect(r.telegram[0]).toContain('systemctl start odroid-disk-recover');
   });
@@ -296,22 +580,22 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.calls).toEqual([]);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toContain(`wd500 (${WD500}) storage (${STORAGE})`);
-    expect(r.telegram[0]).toContain(PM2);
+    expect(r.telegram[0]).toContain(CONTAINERD);
     expect(r.telegram[0]).toContain(SWAP);
   });
 
   test('a unit that will not start: the rest still start, alert names it, fails', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'failed', [RUNNER]: 'failed' },
-      failing: [PM2],
+      units: { [CONTAINERD]: 'failed', [DOCKER]: 'failed' },
+      failing: [CONTAINERD],
     });
     expect(r.status).toBe(1);
-    expect(r.startCalls).toEqual([PM2, RUNNER]);
-    expect(r.stderr).toContain(`ERROR: could not start ${PM2}`);
+    expect(r.startCalls).toEqual([CONTAINERD, DOCKER]);
+    expect(r.stderr).toContain(`ERROR: could not start ${CONTAINERD}`);
     expect(r.telegram).toHaveLength(1);
-    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
-    expect(r.telegram[0]).toContain(`started them: ${RUNNER}`);
+    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${CONTAINERD}`);
+    expect(r.telegram[0]).toContain(`started them: ${DOCKER}`);
     // #172: one hint for the whole alert, not one per section.
     expect(r.telegram[0]?.split('journalctl -b -u odroid-disk-recover')).toHaveLength(2);
   });
@@ -327,7 +611,7 @@ describe('odroid-disk-recover.sh', () => {
     const r = run({
       args: ['--dry-run'],
       present: [STORAGE],
-      units: { [SWAP]: 'inactive', [PM2]: 'failed' },
+      units: { [SWAP]: 'inactive', [CONTAINERD]: 'failed' },
     });
     expect(r.status).toBe(1);
     expect(r.startCalls).toEqual([]);
@@ -400,8 +684,12 @@ describe('odroid-disk-recover.sh', () => {
   });
 
   test('late recovery whose alert is lost fails the unit: nobody else would know', () => {
-    const r = run({ present: [WD500, STORAGE], units: { [PM2]: 'failed' }, telegramStatus: '000' });
-    expect(r.startCalls).toEqual([PM2]);
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { [CONTAINERD]: 'failed' },
+      telegramStatus: '000',
+    });
+    expect(r.startCalls).toEqual([CONTAINERD]);
     expect(r.status).toBe(1);
   });
 

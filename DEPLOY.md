@@ -228,10 +228,18 @@ boot doesn't wait for it) runs `/usr/local/sbin/odroid-disk-recover` once per bo
   On a normal boot the chain did everything and the run logs `… nothing to do`
   (`journalctl -u odroid-disk-recover -b`).
 - A unit it had to start: logged as a warning plus a Telegram note to the admin.
-- A disk missing after 15 min or a unit that won't start: logged at err (`journalctl -p err`), sent
-  to the admin over Telegram, and the unit ends `failed` (`systemctl --failed`). An alert that
-  isn't confirmed by Telegram (`"ok": true`; 3 tries, 30 s apart) is logged at err and fails the
-  unit as well.
+- A start that fails while the unit has not settled (its `Restart=` waiting to retry or cleaning
+  up, or a job on it) is not a failure yet: the run goes on with the remaining units and polls
+  that one, alongside the disk wait, for up to 10 min after its failed start (`RESTART_WAIT_SEC`:
+  one retry at ha-compose's longest restart delay plus a full start). One that comes up is
+  logged at info. Missing disks are still looked for while such a wait runs. On the 2026-11-14
+  boot ha-compose's first jobs failed and its `Restart=` had it up 40 s later (#254).
+- A disk missing after 15 min or a unit that won't start (it settled down, or is still
+  activating after that wait): logged at err (`journalctl -p err`), sent to the admin over
+  Telegram, and the unit ends `failed` (`systemctl --failed`). The run sends one alert at its
+  end, so a retry wait still running delays it, by 10 min at most. An alert that isn't
+  confirmed by Telegram (`"ok": true`; 3 tries, 30 s apart) is logged at err and fails the unit
+  as well.
 - The Telegram credentials come from `/opt/hypercal/.env` (`BOT_TOKEN`, `BOT_ADMIN_ID`; same admin
   chat as this bot's `BOT_ADMIN_CHAT_ID`): it sits on the SD card, so the alert still works when
   the WD500 — and with it this bot's `.env` and healthcheck — is missing.
@@ -572,7 +580,8 @@ the hostnames `finbot.mextner.com`, `finbot-app.mextner.com`, `finbot-stage.mext
    jobs), `systemctl disable --now odroid-disk-recover pm2-www-data`, and remove the `www-data` crontab
    (`crontab -r -u www-data`; the timers on the Banana replace it, two healthchecks would alert twice).
    Done on 2026-11-20, plus a local edit of the odroid's installed `/usr/local/sbin/odroid-disk-recover` that drops
-   caddy, `pm2-www-data` and the ESB runner from `WD500_UNITS` (the repo copy in `scripts/` still lists them).
+   caddy, `pm2-www-data` and the ESB runner from `WD500_UNITS` (the repo copy in `scripts/` has the same list now,
+   so installing it changes nothing there).
 3. Copy to the Banana, with the apps stopped so the SQLite database and its `-wal`/`-shm` files are consistent:
    `data/`, `logs/`, `.env`, `.env.stage` of `/var/www/ExpenseSyncBot`, and `/var/www/ExpenseSyncBot-stage`.
    Do not copy a PR worktree under `.claude/worktrees/`: its `.git` file points into the odroid clone's `.git`.
