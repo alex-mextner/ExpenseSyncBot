@@ -136,6 +136,40 @@ describe('isUrlSafe', () => {
     });
   });
 
+  describe('blocked: special and reserved address forms', () => {
+    it.each([
+      ['0.0.0.0 (Linux connects it to localhost)', 'http://0.0.0.0:3311/'],
+      ['the shorthand 0', 'http://0/'],
+      ['a decimal loopback', 'http://2130706433/'],
+      ['a hex loopback', 'http://0x7f.1/'],
+      ['100.64.0.0/10 (CGNAT, Tailscale)', 'http://100.100.100.100/'],
+      ['198.18.0.0/15 (benchmarking)', 'http://198.19.0.1/'],
+      ['192.0.0.0/24', 'http://192.0.0.8/'],
+      ['multicast', 'http://224.0.0.1/'],
+      ['broadcast', 'http://255.255.255.255/'],
+      ['the unspecified IPv6 address', 'http://[::]/'],
+      ['IPv4-mapped loopback', 'http://[::ffff:127.0.0.1]/'],
+      ['IPv4-mapped private (hex form)', 'http://[::ffff:c0a8:101]/'],
+      ['IPv4-mapped cloud metadata', 'http://[::ffff:a9fe:a9fe]/'],
+      ['IPv4-compatible loopback', 'http://[::127.0.0.1]/'],
+      ['NAT64 of a private address', 'http://[64:ff9b::10.0.0.1]/'],
+      ['link-local fe80::/10', 'http://[fe80::1]/'],
+      ['link-local fe80::/10 upper half', 'http://[febf::1]/'],
+      ['IPv6 multicast', 'http://[ff02::1]/'],
+    ])('blocks %s', async (_name, url) => {
+      expect(await isUrlSafe(url)).toBe(false);
+    });
+
+    it.each([
+      ['IPv4-mapped public', 'http://[::ffff:8.8.8.8]/'],
+      ['NAT64 of a public address', 'http://[64:ff9b::808:808]/'],
+      ['a global IPv6 address', 'http://[2001:4860:4860::8888]/'],
+      ['100.128.0.1 (just above CGNAT)', 'http://100.128.0.1/'],
+    ])('allows %s', async (_name, url) => {
+      expect(await isUrlSafe(url)).toBe(true);
+    });
+  });
+
   describe('blocked: invalid or malformed URLs', () => {
     it('blocks an empty string', async () => {
       const result = await isUrlSafe('');
@@ -159,6 +193,16 @@ describe('isUrlSafe', () => {
       mockDns([], ['fd00::1']);
       const result = await isUrlSafe('https://internal.corp/');
       expect(result).toBe(false);
+    });
+
+    it.each<[string, string[], string[]]>([
+      ['an IPv4-mapped loopback', [], ['::ffff:127.0.0.1']],
+      ['0.0.0.0', ['0.0.0.0'], []],
+      ['a link-local IPv6 address', [], ['fe80::1']],
+      ['a CGNAT address', ['100.64.0.1'], []],
+    ])('blocks a hostname that resolves to %s', async (_name, ipv4, ipv6) => {
+      mockDns(ipv4, ipv6);
+      expect(await isUrlSafe('https://rebind.example/')).toBe(false);
     });
 
     it('fails closed when DNS resolution fails', async () => {

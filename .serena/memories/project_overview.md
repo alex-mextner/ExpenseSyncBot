@@ -7,7 +7,7 @@ Telegram bot for tracking expenses and syncing them to Google Sheets, with AI-po
 - **Runtime**: Bun (Node.js compatible)
 - **Language**: TypeScript
 - **APIs**: Google Sheets, Telegram (via gramio), Anthropic Claude, HuggingFace, Octokit
-- **Key Libraries**: date-fns, big.js, currency.js, playwright, pino (logging)
+- **Key Libraries**: date-fns, big.js, currency.js, marked, pino (logging)
 - **Testing**: Bun test framework
 - **Linting/Formatting**: Biome
 - **Database**: Custom database abstraction (appears to be file/JSON-based)

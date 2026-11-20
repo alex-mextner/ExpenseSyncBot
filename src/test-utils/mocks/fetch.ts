@@ -1,7 +1,19 @@
 // Helpers for mocking globalThis.fetch in tests
-import { mock } from 'bun:test';
+import { mock, spyOn } from 'bun:test';
 
 type FetchMock = ReturnType<typeof mock>;
+
+type FetchHandler = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Spy on globalThis.fetch with a handler; `mock.restore()` puts the real fetch back.
+ * Bun's `typeof fetch` also carries `preconnect`, so the real one is kept on the stub.
+ */
+export function spyOnFetch(handler: FetchHandler) {
+  return spyOn(globalThis, 'fetch').mockImplementation(
+    Object.assign(handler, { preconnect: globalThis.fetch.preconnect }),
+  );
+}
 
 /**
  * Mock fetch to return a JSON response.

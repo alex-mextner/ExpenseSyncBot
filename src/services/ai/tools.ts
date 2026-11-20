@@ -493,7 +493,7 @@ export const TOOL_DEFINITIONS: OpenAI.ChatCompletionTool[] = fromAnthropicFormat
   },
   {
     name: 'render_table',
-    description: `Renders a Markdown table as a styled image and sends it to the chat.
+    description: `Sends a Markdown table to the chat as a native Telegram table.
 
 ALWAYS call this tool when you have tabular data (comparisons, category breakdowns, budgets, schedules, multi-column lists) — never skip it.
 Call IN PARALLEL with your text response. In the text, present the same data as a bullet list — never write raw Markdown table syntax there.`,
@@ -610,7 +610,7 @@ export const TOOL_LABELS: Record<string, string> = {
   get_recurring_patterns: 'Загружаю повторяющиеся платежи',
   manage_recurring_pattern: 'Управляю повторяющимся платежом',
   find_missing_expenses: 'Ищу пропущенные расходы',
-  render_table: 'Рендерю таблицу',
+  render_table: 'Отправляю таблицу',
   send_feedback: 'Отправляю фидбек',
   discover_tools: 'Подключаю инструменты',
 };

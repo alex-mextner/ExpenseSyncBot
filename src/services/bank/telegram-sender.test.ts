@@ -18,6 +18,7 @@ mock.module('../../utils/logger.ts', () => ({
 const {
   initSender,
   sendMessage,
+  sendRichMessage,
   editMessageText,
   deleteMessage,
   sendDirect,
@@ -551,5 +552,61 @@ describe('sendDocumentDirect', () => {
 
     await expect(sendDocumentDirect(1, new File([''], 'a.txt'))).resolves.toBeUndefined();
     expect(logMock.warn).toHaveBeenCalled();
+  });
+});
+
+// ── sendRichMessage ───────────────────────────────────────────────────────
+
+describe('sendRichMessage', () => {
+  const richMessage = { blocks: [{ type: 'paragraph' as const, text: 'hi' }] };
+
+  test('sends the rich message to the context chat', async () => {
+    const recorded: Array<Record<string, unknown>> = [];
+    initSender({
+      api: {
+        sendRichMessage: async (params: Record<string, unknown>) => {
+          recorded.push(params);
+          return { message_id: 7 } as TelegramMessage;
+        },
+      },
+    } as unknown as BotInstance);
+
+    const result = await withChatContext(-1003, null, () => sendRichMessage(richMessage));
+
+    expect(result?.message_id).toBe(7);
+    expect(recorded).toEqual([{ chat_id: -1003, rich_message: richMessage }]);
+  });
+
+  test('retries once on 429', async () => {
+    let calls = 0;
+    initSender({
+      api: {
+        sendRichMessage: async () => {
+          calls++;
+          if (calls === 1) throw make429();
+          return { message_id: 8 } as TelegramMessage;
+        },
+      },
+    } as unknown as BotInstance);
+
+    const result = await inContext(() => sendRichMessage(richMessage));
+
+    expect(result?.message_id).toBe(8);
+    expect(calls).toBe(2);
+  });
+
+  test('returns null and logs when Telegram rejects it', async () => {
+    initSender({
+      api: {
+        sendRichMessage: async () => {
+          throw new Error('Bad Request: can not parse rich message');
+        },
+      },
+    } as unknown as BotInstance);
+
+    const result = await inContext(() => sendRichMessage(richMessage));
+
+    expect(result).toBeNull();
+    expect(logMock.warn).toHaveBeenCalledWith(expect.anything(), 'sendRichMessage failed');
   });
 });

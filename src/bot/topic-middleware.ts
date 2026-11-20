@@ -32,6 +32,7 @@ const THREAD_AWARE_METHODS: Array<keyof APIMethods> = [
   'copyMessage',
   'forwardMessage',
   'sendChatAction',
+  'sendRichMessage',
 ];
 
 /**

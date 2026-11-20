@@ -96,10 +96,13 @@ mkdir -p data logs
 cp .env.example .env && nano .env   # GOOGLE_REDIRECT_URI=https://finbot.mextner.com/callback, MINIAPP_URL=https://finbot-app.mextner.com, OAUTH_SERVER_PORT=3311
 bun install
 bun install --cwd src/services/bank/ZenPlugins
-bunx playwright install chromium     # table renderer (as root: bunx playwright install-deps chromium)
 (cd miniapp && bun install --frozen-lockfile && bun run build)
 pm2 start ecosystem.config.cjs && pm2 save
 ```
+
+The bot runs no browser (#273): tables go out as Telegram rich messages and receipt pages are fetched over
+plain HTTP, so the host needs no Chromium. A browser cache left by an older install
+(`/var/www/.cache/ms-playwright`, about 900 MB) can be deleted.
 
 The Actions runners are registered by hand too, see [GitHub Actions Setup](#github-actions-setup).
 
