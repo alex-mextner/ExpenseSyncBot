@@ -580,7 +580,8 @@ the hostnames `finbot.mextner.com`, `finbot-app.mextner.com`, `finbot-stage.mext
    jobs), `systemctl disable --now odroid-disk-recover pm2-www-data`, and remove the `www-data` crontab
    (`crontab -r -u www-data`; the timers on the Banana replace it, two healthchecks would alert twice).
    Done on 2026-11-20, plus a local edit of the odroid's installed `/usr/local/sbin/odroid-disk-recover` that drops
-   caddy, `pm2-www-data` and the ESB runner from `WD500_UNITS` (the repo copy in `scripts/` still lists them).
+   caddy, `pm2-www-data` and the ESB runner from `WD500_UNITS` (the repo copy in `scripts/` has the same list now,
+   so installing it changes nothing there).
 3. Copy to the Banana, with the apps stopped so the SQLite database and its `-wal`/`-shm` files are consistent:
    `data/`, `logs/`, `.env`, `.env.stage` of `/var/www/ExpenseSyncBot`, and `/var/www/ExpenseSyncBot-stage`.
    Do not copy a PR worktree under `.claude/worktrees/`: its `.git` file points into the odroid clone's `.git`.

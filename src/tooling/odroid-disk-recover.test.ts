@@ -12,8 +12,8 @@ import { join } from 'node:path';
 const SCRIPT = join(import.meta.dir, '../../scripts/odroid-disk-recover.sh');
 const WD500 = 'wd500-uuid';
 const STORAGE = 'storage-uuid';
-const PM2 = 'pm2-www-data.service';
-const RUNNER = 'actions.runner.alex-mextner-ExpenseSyncBot.odroid.service';
+const CONTAINERD = 'containerd.service';
+const DOCKER = 'docker.service';
 const SWAP = 'mnt-storage-odroid\\x2drt-swapfile.swap';
 
 // Restart= timeline step shared by the stubs: `apply <unit> <line>` puts the unit into the
@@ -232,11 +232,11 @@ describe('odroid-disk-recover.sh', () => {
     const r = run({
       present: [STORAGE],
       late: { uuid: WD500, afterSleeps: 2 },
-      units: { 'mnt-wd500.mount': 'inactive', [PM2]: 'inactive', [RUNNER]: 'inactive' },
-      queued: ['mnt-wd500.mount', PM2, RUNNER],
+      units: { 'mnt-wd500.mount': 'inactive', [CONTAINERD]: 'inactive', [DOCKER]: 'inactive' },
+      queued: ['mnt-wd500.mount', CONTAINERD, DOCKER],
     });
     expect(r.status).toBe(0);
-    expect(r.startCalls).toEqual(['mnt-wd500.mount', PM2, RUNNER]);
+    expect(r.startCalls).toEqual(['mnt-wd500.mount', CONTAINERD, DOCKER]);
     expect(r.telegram).toEqual([]);
     expect(r.stderr).toBe('');
   });
@@ -244,30 +244,46 @@ describe('odroid-disk-recover.sh', () => {
   test('a unit down with no job: the chain missed it, start it and warn the admin', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { 'mnt-wd500.mount': 'failed', [PM2]: 'inactive', [RUNNER]: 'inactive' },
+      units: { 'mnt-wd500.mount': 'failed', [CONTAINERD]: 'inactive', [DOCKER]: 'inactive' },
     });
     expect(r.status).toBe(0);
-    expect(r.startCalls).toEqual(['mnt-wd500.mount', PM2, RUNNER]);
+    expect(r.startCalls).toEqual(['mnt-wd500.mount', CONTAINERD, DOCKER]);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toContain(
-      "the disk's unit chain missed these, started them: mnt-wd500.mount pm2-www-data.service",
+      "the disk's unit chain missed these, started them: mnt-wd500.mount containerd.service",
     );
-    expect(r.stderr).toContain(`WARNING: started ${PM2}`);
+    expect(r.stderr).toContain(`WARNING: started ${CONTAINERD}`);
+  });
+
+  // The bot runs on bananapi-m4 since 2026-11-20 (#287): starting these here would run a second copy.
+  test('the retired bot units are never checked or started, even when they are down', () => {
+    const retired = [
+      'caddy.service',
+      'pm2-www-data.service',
+      'actions.runner.alex-mextner-ExpenseSyncBot.odroid.service',
+    ];
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { ...Object.fromEntries(retired.map((u) => [u, 'inactive'])), [DOCKER]: 'inactive' },
+    });
+    expect(r.status).toBe(0);
+    expect(r.startCalls).toEqual([DOCKER]);
+    for (const unit of retired) expect(r.calls.join('\n')).not.toContain(unit);
   });
 
   test('a queued chain job that fails: alert names the unit, fails', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'inactive' },
-      queued: [PM2],
-      failing: [PM2],
+      units: { [CONTAINERD]: 'inactive' },
+      queued: [CONTAINERD],
+      failing: [CONTAINERD],
     });
     expect(r.status).toBe(1);
-    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
+    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${CONTAINERD}`);
   });
 
   test('units are checked only after the boot transaction has finished', () => {
-    const r = run({ present: [WD500, STORAGE], units: { [PM2]: 'failed' } });
+    const r = run({ present: [WD500, STORAGE], units: { [CONTAINERD]: 'failed' } });
     const settle = r.calls.indexOf('is-system-running --wait');
     expect(settle).toBeGreaterThanOrEqual(0);
     expect(settle).toBeLessThan(r.calls.findIndex((c) => c.startsWith('is-active ')));
@@ -394,32 +410,40 @@ describe('odroid-disk-recover.sh', () => {
   test('units stuck in Restart= are waited for together: no unit holds up a later one', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'activating', [RUNNER]: 'activating', 'ha-compose.service': 'inactive' },
-      restarting: { [PM2]: [], [RUNNER]: [] },
+      units: {
+        [CONTAINERD]: 'activating',
+        [DOCKER]: 'activating',
+        'ha-compose.service': 'inactive',
+      },
+      restarting: { [CONTAINERD]: [], [DOCKER]: [] },
       restartWaitSec: 20,
     });
     expect(r.status).toBe(1);
-    expect(r.startCalls).toEqual([PM2, RUNNER, 'ha-compose.service']);
-    // ha-compose is started right after pm2's failed start was seen, not after pm2's wait:
-    // pm2 was only looked at by the first check and the one right after its start failed.
+    expect(r.startCalls).toEqual([CONTAINERD, DOCKER, 'ha-compose.service']);
+    // ha-compose is started right after containerd's failed start was seen, not after its wait:
+    // containerd was only looked at by the first check and the one right after its start failed.
     const haStart = r.calls.indexOf('start ha-compose.service');
-    expect(r.calls.slice(0, haStart).filter((c) => c === `is-active ${PM2}`)).toHaveLength(2);
+    expect(r.calls.slice(0, haStart).filter((c) => c === `is-active ${CONTAINERD}`)).toHaveLength(
+      2,
+    );
     expect(r.sleeps).toBe(4);
-    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2} ${RUNNER}`);
+    expect(r.telegram[0]).toContain(
+      `would not start after the disk appeared: ${CONTAINERD} ${DOCKER}`,
+    );
     expect(r.telegram[0]).toContain('started them: ha-compose.service');
   });
 
   test('a unit with no job whose start fails until Restart= brings it up: reported as started', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'failed' },
-      restarting: { [PM2]: ['activating', 'active'] },
+      units: { [CONTAINERD]: 'failed' },
+      restarting: { [CONTAINERD]: ['activating', 'active'] },
     });
     expect(r.status).toBe(0);
-    expect(r.startCalls).toEqual([PM2]);
-    expect(r.stderr).toContain(`WARNING: started ${PM2}`);
+    expect(r.startCalls).toEqual([CONTAINERD]);
+    expect(r.stderr).toContain(`WARNING: started ${CONTAINERD}`);
     expect(r.telegram).toHaveLength(1);
-    expect(r.telegram[0]).toContain(`started them: ${PM2}`);
+    expect(r.telegram[0]).toContain(`started them: ${CONTAINERD}`);
     expect(r.telegram[0]).not.toContain('would not start');
   });
 
@@ -456,8 +480,8 @@ describe('odroid-disk-recover.sh', () => {
   test("another unit's slow start counts against a retry's RESTART_WAIT_SEC", () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'activating', 'ha-compose.service': 'inactive' },
-      restarting: { [PM2]: [] },
+      units: { [CONTAINERD]: 'activating', 'ha-compose.service': 'inactive' },
+      restarting: { [CONTAINERD]: [] },
       startDelay: { 'ha-compose.service': 2 },
       restartWaitSec: 2,
       pollSec: 1,
@@ -466,22 +490,22 @@ describe('odroid-disk-recover.sh', () => {
     // ha-compose's start blocked for 2 real seconds: pm2's wait was over before any poll.
     expect(r.sleeps).toBe(0);
     expect(r.stderr).toContain(
-      `could not start ${PM2} (wd500), it was activating and is still activating after the 2s Restart= wait`,
+      `could not start ${CONTAINERD} (wd500), it was activating and is still activating after the 2s Restart= wait`,
     );
   });
 
   test('a missed unit whose Restart= gives up: reported as failed only', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'failed' },
-      restarting: { [PM2]: ['activating', 'failed'] },
+      units: { [CONTAINERD]: 'failed' },
+      restarting: { [CONTAINERD]: ['activating', 'failed'] },
     });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain(
-      `ERROR: could not start ${PM2} (wd500), it was failed and is now failed`,
+      `ERROR: could not start ${CONTAINERD} (wd500), it was failed and is now failed`,
     );
     expect(r.stderr).not.toContain('WARNING: started');
-    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
+    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${CONTAINERD}`);
     expect(r.telegram[0]).not.toContain('started them');
   });
 
@@ -532,7 +556,7 @@ describe('odroid-disk-recover.sh', () => {
   test('WD500 never shows up: starts nothing on it, alerts and fails', () => {
     const r = run({
       present: [STORAGE],
-      units: { 'mnt-wd500.mount': 'failed', [PM2]: 'inactive' },
+      units: { 'mnt-wd500.mount': 'failed', [CONTAINERD]: 'inactive' },
       waitSec: 20,
     });
     expect(r.status).toBe(1);
@@ -545,7 +569,7 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.telegram[0]).toContain(
       `USB disk did not appear at boot (waited 20s): wd500 (${WD500})`,
     );
-    expect(r.telegram[0]).toContain(PM2);
+    expect(r.telegram[0]).toContain(CONTAINERD);
     expect(r.telegram[0]).not.toContain(SWAP);
     expect(r.telegram[0]).toContain('systemctl start odroid-disk-recover');
   });
@@ -556,22 +580,22 @@ describe('odroid-disk-recover.sh', () => {
     expect(r.calls).toEqual([]);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toContain(`wd500 (${WD500}) storage (${STORAGE})`);
-    expect(r.telegram[0]).toContain(PM2);
+    expect(r.telegram[0]).toContain(CONTAINERD);
     expect(r.telegram[0]).toContain(SWAP);
   });
 
   test('a unit that will not start: the rest still start, alert names it, fails', () => {
     const r = run({
       present: [WD500, STORAGE],
-      units: { [PM2]: 'failed', [RUNNER]: 'failed' },
-      failing: [PM2],
+      units: { [CONTAINERD]: 'failed', [DOCKER]: 'failed' },
+      failing: [CONTAINERD],
     });
     expect(r.status).toBe(1);
-    expect(r.startCalls).toEqual([PM2, RUNNER]);
-    expect(r.stderr).toContain(`ERROR: could not start ${PM2}`);
+    expect(r.startCalls).toEqual([CONTAINERD, DOCKER]);
+    expect(r.stderr).toContain(`ERROR: could not start ${CONTAINERD}`);
     expect(r.telegram).toHaveLength(1);
-    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${PM2}`);
-    expect(r.telegram[0]).toContain(`started them: ${RUNNER}`);
+    expect(r.telegram[0]).toContain(`would not start after the disk appeared: ${CONTAINERD}`);
+    expect(r.telegram[0]).toContain(`started them: ${DOCKER}`);
     // #172: one hint for the whole alert, not one per section.
     expect(r.telegram[0]?.split('journalctl -b -u odroid-disk-recover')).toHaveLength(2);
   });
@@ -587,7 +611,7 @@ describe('odroid-disk-recover.sh', () => {
     const r = run({
       args: ['--dry-run'],
       present: [STORAGE],
-      units: { [SWAP]: 'inactive', [PM2]: 'failed' },
+      units: { [SWAP]: 'inactive', [CONTAINERD]: 'failed' },
     });
     expect(r.status).toBe(1);
     expect(r.startCalls).toEqual([]);
@@ -660,8 +684,12 @@ describe('odroid-disk-recover.sh', () => {
   });
 
   test('late recovery whose alert is lost fails the unit: nobody else would know', () => {
-    const r = run({ present: [WD500, STORAGE], units: { [PM2]: 'failed' }, telegramStatus: '000' });
-    expect(r.startCalls).toEqual([PM2]);
+    const r = run({
+      present: [WD500, STORAGE],
+      units: { [CONTAINERD]: 'failed' },
+      telegramStatus: '000',
+    });
+    expect(r.startCalls).toEqual([CONTAINERD]);
     expect(r.status).toBe(1);
   });
 

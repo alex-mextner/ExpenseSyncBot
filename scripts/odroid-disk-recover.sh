@@ -64,8 +64,9 @@ ALERT_ENV_FILE="${ALERT_ENV_FILE:-/opt/hypercal/.env}"
 ALERT_ATTEMPTS=3
 ALERT_RETRY_SEC=30
 
-# Start order matters only for how soon each unit is back: mounts, then the prod bot's
-# path (caddy, pm2, its runner), then the docker stack, whose ha-compose can take minutes.
+# Start order matters only for how soon each unit is back: mounts, then the docker stack,
+# whose ha-compose can take minutes. ExpenseSyncBot (caddy, pm2, its runner) moved to
+# bananapi-m4 on 2026-11-20: starting it here would run a second copy of the bot.
 WD500_UNITS=(
   mnt-wd500.mount
   var-www-ExpenseSyncBot.mount
@@ -74,9 +75,6 @@ WD500_UNITS=(
   var-lib-containerd.mount
   var-lib-docker.mount
   home-ultra.mount
-  caddy.service
-  pm2-www-data.service
-  actions.runner.alex-mextner-ExpenseSyncBot.odroid.service
   containerd.service
   docker.service
   ha-compose.service
