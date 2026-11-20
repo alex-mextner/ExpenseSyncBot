@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Polls the bot health endpoint every run (called by cron every 2 minutes).
+# Polls the bot health endpoint every run (called by the esb-healthcheck timer every 2 minutes).
 # Sends Telegram alerts to the admin on failure and recovery.
 # State file: /tmp/expensesyncbot-down — present while bot is considered down.
 #
 # A failed probe is re-tried before alerting: a deploy's PM2 restart leaves /health
-# unreachable for ~10 s, and the 2-minute cron regularly lands inside that window,
+# unreachable for ~10 s, and the 2-minute timer regularly lands inside that window,
 # which used to fire a false "down" alert followed by a recovery 2 minutes later.
 # Worst case per run: (1 + RETRIES) * TIMEOUT + RETRIES * RETRY_DELAY = 85 s, plus
-# the 15 s Telegram call = 100 s, which ends before the next 2-minute cron tick.
+# the 15 s Telegram call = 100 s, which ends before the next 2-minute timer tick.
 #
 # All timestamps (log lines and Telegram messages) are UTC.
 # HEALTH_URL, ENV_FILE, STATE_FILE and RETRY_DELAY can be overridden from the
 # environment to exercise the script locally.
 #
-# Setup on server (one-time):
-#   chmod +x /var/www/ExpenseSyncBot/scripts/healthcheck-alert.sh
-#   crontab -e   # as www-data
-#   Add: */2 * * * * /var/www/ExpenseSyncBot/scripts/healthcheck-alert.sh >> /var/www/ExpenseSyncBot/logs/healthcheck.log 2>&1
+# Runs every 2 minutes as the www-data systemd timer esb-healthcheck (monorepo machines/bananapi-m4), i.e.:
+#   /var/www/ExpenseSyncBot/scripts/healthcheck-alert.sh >> /var/www/ExpenseSyncBot/logs/healthcheck.log 2>&1
 
 set -euo pipefail
 

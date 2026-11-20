@@ -1,5 +1,5 @@
 // .github/workflows/stage-qa.yml (`Stage QA`, workflow_run of `Stage Bot`) is the one workflow that lets a
-// pull request cause a job on the odroid's stage QA runner, so its shape is a security property: it always runs
+// pull request cause a job on the home server's stage QA runner, so its shape is a security property: it always runs
 // from main, checks nothing out, hands the root-installed driver a commit SHA and nothing else, and only its
 // hosted `report` job may write the `stage-qa` status. These tests read the YAML, evaluate the job guards with
 // GitHub's own expression engine, and run the three scripts of the workflow against stand-ins for `gh` and the driver.
@@ -174,18 +174,21 @@ describe('the shape of stage-qa.yml', () => {
     }
   });
 
-  test('every other job is GitHub-hosted or on the deploying odroid runner alone, and actionlint knows exactly the two labels', () => {
+  test('every other job is GitHub-hosted or on the deploying runner (label bananapi-m4) alone, and actionlint knows exactly the two labels', () => {
     // The runners carry the default labels self-hosted, Linux and ARM64 besides their own: a job that names
     // only those (or an expression, or a runner group) could land on the stage QA runner.
     for (const file of readdirSync(WORKFLOWS).filter((name) => name.endsWith('.yml'))) {
       if (file === 'stage-qa.yml') continue;
       for (const [, value] of jobs(load(file))) {
         const runsOn = field(value, 'runs-on');
-        if (runsOn !== 'ubuntu-latest') expect(runsOn).toEqual(['self-hosted', 'odroid']);
+        if (runsOn !== 'ubuntu-latest') expect(runsOn).toEqual(['self-hosted', 'bananapi-m4']);
       }
     }
     const config = Bun.YAML.parse(readFileSync(join(REPO, '.github/actionlint.yaml'), 'utf8'));
-    expect(field(field(config, 'self-hosted-runner'), 'labels')).toEqual(['odroid', 'stage-qa']);
+    expect(field(field(config, 'self-hosted-runner'), 'labels')).toEqual([
+      'bananapi-m4',
+      'stage-qa',
+    ]);
   });
 });
 

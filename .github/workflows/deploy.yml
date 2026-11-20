@@ -33,8 +33,8 @@ jobs:
 
   deploy:
     needs: [check]
-    # Self-hosted runner on the home server (odroid), running as www-data.
-    runs-on: [self-hosted, odroid]
+    # Self-hosted runner `bananapi-esb` on the home server (Banana Pi, bananapi-m4), running as www-data.
+    runs-on: [self-hosted, bananapi-m4]
     # The step may first WAIT up to 40 min for the other repository's deploy (host deploy lock,
     # DEPLOY.md "Deploy reliability"), then install, build, reload and watch the health verdict
     # for up to 15 min. GitHub's default job limit is 360 min; this one is explicit, because a
@@ -55,7 +55,7 @@ jobs:
             LOGS_DIR="$APP_DIR/logs"
             APPS=(--app expensesyncbot --app bank-sync)
             cd "$APP_DIR"
-            export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+            export PATH="/var/www/.bun/bin:$PATH"
 
             # Evidence and the health verdict are python3 scripts; fail before touching anything.
             command -v python3 >/dev/null || { echo "❌ python3 is required (deploy evidence and health verdict)"; exit 1; }
@@ -88,7 +88,7 @@ jobs:
             }
             trap on_exit EXIT
 
-            # One deploy at a time on the whole odroid, whichever repository it belongs to: a
+            # One deploy at a time on the whole host, whichever repository it belongs to: a
             # contender waits here (up to 40 min), then exits 75 and can simply be re-run. Taken
             # BEFORE the checkout is touched, so a deploy that waits cannot move the files the
             # deploy that holds the lock is installing and reloading from. The lock script comes
@@ -199,7 +199,7 @@ jobs:
               # 5 minutes, so the file is marked fresh BEFORE it is renamed: a sweep that lists the
               # renamed file between the two steps must already find it protected.
               if [ -s "logs/$f" ] && touch "logs/$f" && mv -n "logs/$f" "$target" && [ ! -e "logs/$f" ]; then
-                # healthcheck.log is appended to by the cron job, which may hold it open for minutes:
+                # healthcheck.log is appended to by the esb-healthcheck timer, which may hold it open for minutes:
                 # gzip would unlink it under that writer. It stays as is; log retention compresses it
                 # once it is old.
                 if [ "$f" != healthcheck.log ]; then ROTATED+=("$target"); fi
@@ -276,7 +276,7 @@ jobs:
           ADMIN_CHAT_ID: ${{ secrets.BOT_ADMIN_CHAT_ID }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          export PATH="/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:$PATH"
+          export PATH="/var/www/.bun/bin:$PATH"
           bash /var/www/ExpenseSyncBot/scripts/stage-follow-main.sh
 
   notify-failure:
@@ -304,7 +304,7 @@ jobs:
             TEXT+=$(printf '\nVerdict: <code>%s</code>' "$(escape_html "$FAILURE_NOTE")")
           fi
           if [ -n "$FAILED_EVIDENCE" ]; then
-            TEXT+=$(printf '\nFailed-release evidence on the odroid: <code>%s</code>' "$(escape_html "$FAILED_EVIDENCE")")
+            TEXT+=$(printf '\nFailed-release evidence on bananapi-m4: <code>%s</code>' "$(escape_html "$FAILED_EVIDENCE")")
           fi
           TEXT+=$(printf '\n\n<a href="%s">View run</a>' "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
