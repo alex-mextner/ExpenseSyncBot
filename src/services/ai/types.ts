@@ -1,6 +1,7 @@
 /**
  * Types for the Anthropic AI agent
  */
+import type { TableMessageInput } from '../render/table-message';
 
 export interface ToolResult {
   success: boolean;
@@ -44,8 +45,8 @@ export interface AgentContext {
   userFullName: string;
   customPrompt: string | null;
   telegramGroupId: number;
-  /** Send a PNG image buffer to the chat. Used by render_table tool. */
-  sendPhoto?: (imageBuffer: Buffer) => Promise<void>;
+  /** Send a markdown table to the chat (native rich-message table). Used by render_table tool. */
+  sendTable?: (table: TableMessageInput) => Promise<void>;
   /** True when the message was sent via explicit @mention — never skip in this case. */
   isMention?: boolean;
   /** True when the group is a forum and /topic has not been configured yet. */

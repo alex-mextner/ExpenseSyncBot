@@ -296,10 +296,12 @@ Financial analytics engine used by AI agent tools and `/stats`.
 
 #### 9. Render Service
 
-Server-side rendering of complex data as images (for Telegram messages where text formatting is insufficient).
+Tables the AI sends (`render_table`) go out as Bot API 10.1 rich messages with native tables; no browser runs on the host.
 
-- [src/services/render/md-table-html.ts](src/services/render/md-table-html.ts) - Generates styled HTML from markdown tables for screenshot rendering
-- [src/services/render/table-renderer.ts](src/services/render/table-renderer.ts) - Table rendering orchestration
+- [src/services/render/table-message.ts](src/services/render/table-message.ts) - Markdown table → rich message (`sendRichMessage`, up to 20 columns / 500 blocks / 32768 chars), monospace `<pre>` fallback past those limits or when Telegram rejects it
+- [src/bot/telegram-rich-message.ts](src/bot/telegram-rich-message.ts) - Rich message types; adds `sendRichMessage` to gramio's API map (gramio 0.4 predates Bot API 10.1)
+
+Receipt and QR links are fetched over plain HTTP ([receipt-fetcher.ts](src/services/receipt/receipt-fetcher.ts): manual redirects with an SSRF check per hop, text bodies only, 5 MB cap, charset from the header or a `<meta>` tag). The SSRF check ([url-validator.ts](src/services/receipt/url-validator.ts)) refuses private, reserved, loopback and link-local addresses, also in IPv4-mapped/NAT64 form; `fetch` resolves the name a second time, so DNS rebinding is still open ([#302](https://github.com/alex-mextner/ExpenseSyncBot/issues/302)). An HTML page counts by its visible text: a page that only renders in a browser fails the fetch, so a photo receipt falls back to OCR. The Serbian SUF portal (`suf.purs.gov.rs`) renders the receipt journal server-side, so no JavaScript is needed; a portal that only renders in the browser would need its JSON endpoint, never a headless browser.
 
 #### 10. Mini App
 
@@ -712,7 +714,7 @@ AI-статистика по провайдерам (read-only, дёшево): `
   - **DNS**: `spyOn(dns.promises, 'resolve4').mockResolvedValue([...])` — never call real DNS
   - **HTTP/fetch**: mock via `spyOn` or inject a fake, never hit real endpoints
   - **External APIs** (Telegram, Google, HuggingFace, Anthropic): always mock, never depend on API availability
-  - **Browser/Playwright**: use dependency injection (`getBrowserFn` pattern), pass fake browser in tests
+  - **Receipt pages**: stub `fetch` with `spyOn(globalThis, 'fetch')` and serve recorded pages from `tests/fixtures/receipts/`
   - If a test hangs or times out, the root cause is almost always a missing mock — fix the mock, not the timeout
 - **NEVER ignore test/system output** — logs and messages often contain CRITICAL information.
   Read test output, don't just check pass/fail. Warnings in logs point to real bugs.

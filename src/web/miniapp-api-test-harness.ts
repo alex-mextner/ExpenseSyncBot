@@ -18,7 +18,6 @@ import type {
 import * as expenseRecorderModule from '../services/expense-recorder.ts';
 import type { CategoryExample } from '../services/receipt/ai-extractor.ts';
 import * as ocrExtractorModule from '../services/receipt/ocr-extractor.ts';
-import type { BrowserLike } from '../services/receipt/receipt-fetcher.ts';
 import * as receiptFetcherModule from '../services/receipt/receipt-fetcher.ts';
 import type { ParseResult } from '../services/receipt/receipt-parser.ts';
 import * as receiptParserModule from '../services/receipt/receipt-parser.ts';
@@ -117,10 +116,7 @@ export const mockUsersUpdate = mock(
 export const mockGroupMembersIsMember = mock(
   (_telegramId: number, _groupId: number): boolean => false,
 );
-export const mockFetchReceiptData = mock(
-  (_qrData: string, _getBrowserFn?: () => Promise<BrowserLike>): Promise<string> =>
-    Promise.resolve(''),
-);
+export const mockFetchReceiptData = mock((_qrData: string): Promise<string> => Promise.resolve(''));
 /** Build a ParseResult stub — tests only care about items + currency, fill required fields */
 export function stubParseResult(overrides: Partial<ParseResult> = {}): ParseResult {
   return {

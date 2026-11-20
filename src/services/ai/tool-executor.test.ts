@@ -2,7 +2,7 @@
  * Routing, error handling and the small read/settings tools (categories, exchange rates, group settings, custom prompt, calculate, bank reads, recurring patterns).
  * Shared mocks live in tool-executor.test-support.ts.
  */
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Category } from '../../database/types';
 import { makeExpense } from '../../test-utils/fixtures';
 import {
@@ -663,5 +663,44 @@ describe('get_bank_balances array bank_name', () => {
     expect(result.success).toBe(true);
     expect(result.data).toEqual([]);
     expect(result.summary).toContain('tbc-ge');
+  });
+});
+
+describe('render_table', () => {
+  beforeEach(resetAllMocks);
+
+  const table = '| Категория | Сумма |\n|---|--:|\n| Еда | 5 000 RSD |';
+
+  test('hands title, markdown and caption to sendTable', async () => {
+    const sendTable = mock(() => Promise.resolve());
+    const result = await executeTool(
+      'render_table',
+      { title: 'Расходы', markdown: table, caption: 'за март' },
+      { ...ctx, sendTable },
+    );
+    expect(result).toEqual({ success: true, output: 'Таблица будет отправлена в чат.' });
+    expect(sendTable).toHaveBeenCalledWith({
+      title: 'Расходы',
+      markdown: table,
+      caption: 'за март',
+    });
+  });
+
+  test('rejects markdown without a table and sends nothing', async () => {
+    const sendTable = mock(() => Promise.resolve());
+    const result = await executeTool(
+      'render_table',
+      { title: 'Расходы', markdown: 'just text' },
+      { ...ctx, sendTable },
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid markdown table');
+    expect(sendTable).not.toHaveBeenCalled();
+  });
+
+  test('fails when the context cannot send tables', async () => {
+    const result = await executeTool('render_table', { title: 'Расходы', markdown: table }, ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not available');
   });
 });

@@ -4,72 +4,128 @@ import dns from 'node:dns';
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
-/**
- * Returns true if the first octet indicates a 127.x.x.x address (loopback).
- */
-function isLoopbackV4(parts: number[]): boolean {
-  return parts[0] === 127;
+/** Parse a dotted IPv4 address into its four octets, or null when it is not one. */
+function parseIPv4(ip: string): number[] | null {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return null;
+  const parts = ip.split('.').map(Number);
+  return parts.every((p) => p <= 255) ? parts : null;
 }
 
 /**
- * Returns true if the IPv4 address falls in a private or reserved range:
- * - 10.0.0.0/8
- * - 172.16.0.0/12  (172.16.x.x – 172.31.x.x)
- * - 192.168.0.0/16
+ * IPv4 ranges that are not public unicast, as [network, prefix length]:
+ * - 0.0.0.0/8      ("this network"; Linux connects 0.0.0.0 to localhost)
+ * - 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (private)
+ * - 100.64.0.0/10  (carrier-grade NAT, Tailscale)
  * - 127.0.0.0/8    (loopback)
  * - 169.254.0.0/16 (link-local / cloud metadata)
+ * - 192.0.0.0/24   (IETF protocol assignments)
+ * - 198.18.0.0/15  (benchmarking)
+ * - 224.0.0.0/3    (multicast, reserved, broadcast)
  */
-function isPrivateIPv4(ip: string): boolean {
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) {
-    return false;
+const NON_PUBLIC_IPV4_RANGES: ReadonlyArray<readonly [number[], number]> = [
+  [[0, 0, 0, 0], 8],
+  [[10, 0, 0, 0], 8],
+  [[100, 64, 0, 0], 10],
+  [[127, 0, 0, 0], 8],
+  [[169, 254, 0, 0], 16],
+  [[172, 16, 0, 0], 12],
+  [[192, 0, 0, 0], 24],
+  [[192, 168, 0, 0], 16],
+  [[198, 18, 0, 0], 15],
+  [[224, 0, 0, 0], 3],
+];
+
+function ipv4ToNumber([a = 0, b = 0, c = 0, d = 0]: number[]): number {
+  return ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
+}
+
+/** Returns true if the IPv4 address falls in one of NON_PUBLIC_IPV4_RANGES. */
+function isPrivateIPv4Parts(parts: number[]): boolean {
+  const address = ipv4ToNumber(parts);
+  return NON_PUBLIC_IPV4_RANGES.some(
+    ([network, prefixLength]) =>
+      address >>> (32 - prefixLength) === ipv4ToNumber(network) >>> (32 - prefixLength),
+  );
+}
+
+/**
+ * Expand an IPv6 address (with optional `::` and dotted IPv4 tail) into eight 16-bit groups,
+ * or null when it is not one.
+ */
+function parseIPv6(ip: string): number[] | null {
+  let text = ip.toLowerCase();
+  const tail = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text)?.[1];
+  if (tail) {
+    const v4 = parseIPv4(tail);
+    if (!v4) return null;
+    const [a = 0, b = 0, c = 0, d = 0] = v4;
+    text = `${text.slice(0, -tail.length)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
-  const a = parts[0];
-  const b = parts[1];
-  if (a === undefined || b === undefined) return false;
-  if (isLoopbackV4(parts)) return true; // 127.x.x.x
-  if (a === 10) return true; // 10.0.0.0/8
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16–31.x.x
-  if (a === 192 && b === 168) return true; // 192.168.x.x
-  if (a === 169 && b === 254) return true; // 169.254.x.x (link-local)
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const toGroups = (part: string | undefined): string[] => (part ? part.split(':') : []);
+  const head = toGroups(halves[0]);
+  const rest = toGroups(halves[1]);
+  const missing = 8 - head.length - rest.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+  const groups = [...head, ...Array<string>(halves.length === 1 ? 0 : missing).fill('0'), ...rest];
+  if (!groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.map((g) => Number.parseInt(g, 16));
+}
+
+/** The IPv4 address carried in the last 32 bits of an IPv6 address. */
+function embeddedIPv4(groups: number[]): number[] {
+  const [g6 = 0, g7 = 0] = groups.slice(6);
+  return [g6 >> 8, g6 & 0xff, g7 >> 8, g7 & 0xff];
+}
+
+/**
+ * Returns true if the IPv6 address is not a public unicast address: unspecified (::),
+ * loopback (::1), unique local (fc00::/7), link-local (fe80::/10), multicast (ff00::/8),
+ * or an IPv4 address in IPv6 form (IPv4-mapped ::ffff:0:0/96, IPv4-compatible ::/96,
+ * NAT64 64:ff9b::/96) whose IPv4 address is private. The URL parser writes
+ * `[::ffff:127.0.0.1]` as `[::ffff:7f00:1]`, so the groups are compared, not the text.
+ */
+function isPrivateIPv6Groups(groups: number[]): boolean {
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0] = groups;
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0) {
+    // ::/96 (incl. :: and ::1) and ::ffff:0:0/96
+    if (g5 === 0 || g5 === 0xffff) return isPrivateIPv4Parts(embeddedIPv4(groups));
+    return true;
+  }
+  if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
+    return isPrivateIPv4Parts(embeddedIPv4(groups));
+  }
+  if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7
+  if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10
+  if ((g0 & 0xff00) === 0xff00) return true; // ff00::/8
   return false;
 }
 
 /**
- * Returns true if the IPv6 address is loopback (::1) or falls in fc00::/7
- * (Unique Local Addresses: fc00:: and fd00::).
+ * Returns true if the address (IPv4 or IPv6, URL brackets allowed) must not be fetched;
+ * a string that is neither counts as private (fail closed).
  */
-function isPrivateIPv6(ip: string): boolean {
-  // Strip brackets if present (URLs contain [::1])
-  const bare = ip.replace(/^\[|\]$/g, '').toLowerCase();
-
-  if (bare === '::1') return true;
-
-  // fc00::/7 covers fc00:: through fdff:: (first 7 bits of the 128-bit address)
-  // The first two hex digits of the first group must be fc or fd.
-  const firstGroup = bare.split(':')[0] ?? '';
-  if (firstGroup.startsWith('fc') || firstGroup.startsWith('fd')) return true;
-
-  return false;
+function isPrivateAddress(address: string): boolean {
+  const bare = address.replace(/^\[|\]$/g, '');
+  const v4 = parseIPv4(bare);
+  if (v4) return isPrivateIPv4Parts(v4);
+  const v6 = parseIPv6(bare);
+  if (v6) return isPrivateIPv6Groups(v6);
+  return true;
 }
 
 /**
  * Check whether a hostname is an IP literal and block it directly without DNS.
  * Returns true when the address is private, false when it's a public IP literal,
  * and null when the hostname is not an IP literal (needs DNS lookup).
+ * The URL parser has already normalized `0`, `0x7f.1` or `2130706433` to dotted form.
  */
 function checkIPLiteral(hostname: string): boolean | null {
   // IPv6 literal in a URL comes wrapped in brackets: [::1]
-  if (hostname.startsWith('[')) {
-    const ipv6 = hostname.slice(1, -1);
-    return isPrivateIPv6(ipv6);
+  if (hostname.startsWith('[') || parseIPv4(hostname) !== null) {
+    return isPrivateAddress(hostname);
   }
-
-  // Check if it looks like an IPv4 literal (four dot-separated octets)
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) {
-    return isPrivateIPv4(hostname);
-  }
-
   return null; // not an IP literal
 }
 
@@ -112,7 +168,7 @@ async function resolveAndCheckAddresses(hostname: string): Promise<boolean | nul
   for (const result of results) {
     if (result.status === 'rejected') continue;
     for (const addr of result.value) {
-      if (isPrivateIPv4(addr) || isPrivateIPv6(addr)) {
+      if (isPrivateAddress(addr)) {
         return true;
       }
     }
@@ -123,7 +179,9 @@ async function resolveAndCheckAddresses(hostname: string): Promise<boolean | nul
 
 /**
  * Returns true if the URL is safe to fetch (public, allowed protocol, non-private IP).
- * Blocks private IPv4/IPv6 ranges, loopback, link-local, and non-HTTP(S) schemes.
+ * Blocks private, reserved, loopback, link-local and IPv4-in-IPv6 forms of them, and
+ * non-HTTP(S) schemes. `fetch` resolves the name again on its own, so a DNS answer that
+ * changes between the check and the connect (rebinding) is not covered here.
  */
 export async function isUrlSafe(url: string): Promise<boolean> {
   let parsed: URL;

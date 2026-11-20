@@ -20,8 +20,9 @@ import {
 } from '../../services/analytics/formatters';
 import { spendingAnalytics } from '../../services/analytics/spending-analytics';
 import type { AdviceTier, FinancialSnapshot, TriggerResult } from '../../services/analytics/types';
-import { sendMessage } from '../../services/bank/telegram-sender';
+import { sendMessage, withChatContext } from '../../services/bank/telegram-sender';
 import { StatusWriter } from '../../services/receipt/status-writer';
+import { sendTableMessage } from '../../services/render/table-message';
 import { sanitizeHtmlForTelegram, stripAllHtml } from '../../utils/html';
 import { createLogger } from '../../utils/logger.ts';
 import type { Ctx } from '../types';
@@ -188,16 +189,12 @@ async function handleAskWithAnthropic(
     userFullName,
     customPrompt: group.custom_prompt,
     telegramGroupId: group.telegram_group_id,
-    sendPhoto: async (imageBuffer) => {
-      // Runs outside topic middleware's AsyncLocalStorage scope — must pass message_thread_id explicitly.
-      const threadId = ctx.update?.message?.message_thread_id;
-      const file = new File([imageBuffer], 'table.png', { type: 'image/png' });
-      await bot.api.sendPhoto({
-        chat_id: chatId,
-        photo: file,
-        ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
-      });
-    },
+    // The table is sent after the tool call returned, possibly outside the topic middleware's
+    // AsyncLocalStorage scope — so the chat and thread are bound explicitly.
+    sendTable: (table) =>
+      withChatContext(chatId, ctx.update?.message?.message_thread_id ?? null, () =>
+        sendTableMessage(table),
+      ),
     isMention,
     isForumWithoutTopic: ctx.chat?.isForum === true && group.active_topic_id == null,
   };
