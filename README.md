@@ -337,7 +337,7 @@ Edit [src/config/constants.ts](src/config/constants.ts):
 
 ## Production Deployment
 
-The bot runs on a home server (Odroid N2) under PM2, deployed by GitHub Actions on a self-hosted runner. See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
+The bot runs on a home server (Banana Pi BPI-M4, `bananapi-m4`) under PM2, deployed by GitHub Actions on a self-hosted runner. See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 
 **Key features:**
 

@@ -1,5 +1,5 @@
 # Per-PR stage QA (DEPLOY.md "Stage QA"): after `Stage Bot` has deployed a pull request head to the shared
-# stage slot on the odroid, drive @ExpenseSyncStageBot with real Telegram messages through qa-cli and post
+# stage slot on the home server (bananapi-m4), drive @ExpenseSyncStageBot with real Telegram messages through qa-cli and post
 # the required `stage-qa` commit status for that head.
 #
 # Trust boundary. A `workflow_run` workflow always runs the copy of this file on the default branch, so a
@@ -8,12 +8,12 @@
 # /usr/local/lib/esb-stage-qa/stage-qa-driver.py (installed by hand from a reviewed checkout of main). The
 # driver first opens the connection to the browser host (the server, over an ssh key limited to one forced
 # command) and waits until the browser half holds the shared browser lock; only then does it ask the read-only
-# report script on the odroid (sudo, one file) which commit the stage slot runs, wait until it is the head and
+# report script on the home server (sudo, one file) which commit the stage slot runs, wait until it is the head and
 # hand the report to the browser half, where qa-cli (Telegram Web in a headless Chromium) sends the messages
-# and reads the replies; it asks the odroid again afterwards: if the slot moved to another pull request in the
+# and reads the replies; it asks the home server again afterwards: if the slot moved to another pull request in the
 # meantime the result is void and no status is posted.
-# The job runs on its own runner (label stage-qa, its own user and service) on the odroid, not on the runner
-# that deploys; no browser runs on the odroid.
+# The job runs on its own runner (label stage-qa, its own user and service) on the home server, not on the runner
+# that deploys; no browser runs on the home server.
 name: Stage QA
 
 on:

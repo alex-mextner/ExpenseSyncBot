@@ -51,8 +51,8 @@ EXIT_NOT_PROVISIONED = 3
 
 DEFAULT_MAIN_DIR = "/var/www/ExpenseSyncBot"
 DEFAULT_PM2 = "/var/www/.bun/bin/pm2"
-# pm2 is a node script; stage-bot.yml puts the same two directories first on PATH.
-PM2_PATH = "/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+# pm2 is a node script run by the system node (/usr/bin/node); stage-bot.yml puts the bun directory first on PATH.
+PM2_PATH = "/var/www/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 SERVICE_USER = "www-data"
 STAGE_PROCESS = "expensesyncbot-stage"
 STAGE_USERNAME = "ExpenseSyncStageBot"

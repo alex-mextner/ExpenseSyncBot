@@ -9,8 +9,8 @@
 #   ./scripts/backup-db.sh                  # uses default paths
 #   DB_PATH=/path/to/db ./scripts/backup-db.sh  # custom DB path
 #
-# Cron (runs at 03:00 daily):
-#   0 3 * * * cd /var/www/ExpenseSyncBot && PATH=/var/www/.bun/bin:$PATH ./scripts/backup-db.sh >> logs/backup.log 2>&1
+# Runs at 03:00 daily as the www-data systemd timer esb-backup-db (monorepo machines/bananapi-m4), i.e.:
+#   cd /var/www/ExpenseSyncBot && PATH=/var/www/.bun/bin:$PATH ./scripts/backup-db.sh >> logs/backup.log 2>&1
 
 set -euo pipefail
 

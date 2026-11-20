@@ -1,4 +1,4 @@
-// Structural checks of the two workflows that deploy on the odroid (deploy.yml, stage-bot.yml):
+// Structural checks of the two workflows that deploy on the home server (deploy.yml, stage-bot.yml):
 // both must take the host-wide deploy lock (shared with HyperCalendarBot) before their
 // install/build phase, and their job time limits must outlast that lock's 40 minute wait.
 // The behaviour behind these facts is exercised by deploy-step.test.ts and
@@ -127,7 +127,7 @@ describe('deploy.yml failure evidence reaches the alert', () => {
       expression('needs.deploy.outputs.failure_note'),
     );
     const script = runScript(alert);
-    expect(script).toContain('Failed-release evidence on the odroid');
+    expect(script).toContain('Failed-release evidence on bananapi-m4');
     expect(script).toContain('Verdict:');
     // The alert is HTML: both values are escaped before they go in.
     expect(script).toMatch(/escape_html "\$FAILED_EVIDENCE"/);
@@ -182,7 +182,7 @@ describe('deploy.yml failure evidence reaches the alert', () => {
         FAILURE_NOTE: 'RESULT verdict=dead reason=2 fatal (level>=60) log lines & more',
       });
       expect(text).toContain(
-        'Failed-release evidence on the odroid: <code>/var/www/ExpenseSyncBot/logs/failed-abcdef012345-2026-10-25_12-00-00</code>',
+        'Failed-release evidence on bananapi-m4: <code>/var/www/ExpenseSyncBot/logs/failed-abcdef012345-2026-10-25_12-00-00</code>',
       );
       expect(text).toContain(
         'Verdict: <code>RESULT verdict=dead reason=2 fatal (level&gt;=60) log lines &amp; more</code>',

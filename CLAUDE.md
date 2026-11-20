@@ -38,7 +38,7 @@ desktop; a full suite here starves all of them (it froze the machine twice on 20
 **Rule: locally, a single test file at most; the full suite, coverage, whole-repo typecheck and
 docker go to the owner's server** via the shared `server-offload` skill
 (script `~/.agents/skills/server-offload/server-run`, on PATH as `server-run`). Never the
-odroid for heavy work.
+production host (bananapi-m4) for heavy work.
 
 Heavy here: `bun run test` (the isolated runner over every test file), `bun run
 test:coverage`.
@@ -61,7 +61,7 @@ stale checkouts do not pile up on the server.
 
 ### Deployment
 
-**Auto-deploy via GitHub Actions** on every push to `main`. The pipeline runs typecheck → lint → tests → deploy on the self-hosted runner on the home server (odroid) → PM2 reload. If tests fail, deploy is blocked.
+**Auto-deploy via GitHub Actions** on every push to `main`. The pipeline runs typecheck → lint → tests → deploy on the self-hosted runner on the home server (`bananapi-esb` on bananapi-m4) → PM2 reload. If tests fail, deploy is blocked.
 
 **NEVER manually `git pull` and restart on the server.** Use `git push` and let CI handle it. Manual deploys bypass test gates and can conflict with the CI pipeline.
 
@@ -77,7 +77,7 @@ gh run view <run-id> --log-failed
 
 **Stage is one shared slot** (`stage-bot.yml`): every same-repo human PR event (open, push, reopen) redeploys it with that PR's head commit. Bot-authored PRs never touch stage; on a human PR, bot-triggered events other than `closed` are skipped: after a Renovate/Dependabot push, stage keeps your previous commit until the next human event, which then deploys the current head, bot commits included. Closing or merging *any* eligible PR — by a human or a bot — switches stage back to `main` without checking who owns it; a prod deploy restarts stage on the new `main` only when stage already ran `main`. Runs are serialized only per PR, so the last deploy to *finish* owns stage — opening, pushing or closing a PR takes stage from whoever was QA-ing. Push a branch without a PR when you don't want stage. Stacked PRs (base = another PR branch) deploy their head, which carries the whole stack — use that to QA two changes together.
 
-**Stage QA gates `gh ship`.** After `Stage Bot` deploys a PR head, `Stage QA` (`workflow_run`) drives `@ExpenseSyncStageBot` with real Telegram messages through qa-cli and posts the commit status `stage-qa`; `gh ship` (`.claude/scripts/pr-ship.sh`) refuses unless it is green for the exact head. The job runs on the odroid's own `stage-qa` runner (`odroid-esb-qa`) and the browser (Telegram Web) runs on the server 65.21.40.51 over a forced-command ssh key, because the odroid has no memory to spare for Chromium. Because stage is one shared slot, another PR taking it voids a run in progress: re-run the `Stage Bot` workflow of your PR. The PR's own cases live in `scripts/stage-smoke-cases.json` (floor: 5 cases and fixed names; direct-chat answers only). Design, trust boundary, install and operations: DEPLOY.md "Stage QA (per pull request)".
+**Stage QA gates `gh ship`.** After `Stage Bot` deploys a PR head, `Stage QA` (`workflow_run`) drives `@ExpenseSyncStageBot` with real Telegram messages through qa-cli and posts the commit status `stage-qa`; `gh ship` (`.claude/scripts/pr-ship.sh`) refuses unless it is green for the exact head. The job runs on the home server's own `stage-qa` runner (`bananapi-esb-qa`) and the browser (Telegram Web) runs on the server 65.21.40.51 over a forced-command ssh key, because the home server has no memory to spare for Chromium. Because stage is one shared slot, another PR taking it voids a run in progress: re-run the `Stage Bot` workflow of your PR. The PR's own cases live in `scripts/stage-smoke-cases.json` (floor: 5 cases and fixed names; direct-chat answers only). Design, trust boundary, install and operations: DEPLOY.md "Stage QA (per pull request)".
 
 ### Database
 
@@ -573,13 +573,13 @@ Required in `.env` (see [.env.example](.env.example)):
 
 ## Production Deployment
 
-- **Server:** home server odroidn2 (Odroid N2, Armbian, aarch64), user `www-data`. SSH: `root@odroidn2` (Tailscale; LAN address is dynamic DHCP)
-- **Ingress:** Cloudflare Tunnel `odroid-home` (cloudflared on odroid) → origin Caddy for `finbot.mextner.com`, `finbot-app.mextner.com`, `finbot-stage.mextner.com`, `finbot-stage-app.mextner.com`.
+- **Server:** home server bananapi-m4 (Banana Pi BPI-M4, Armbian/Debian 13, aarch64, 2 GB RAM, microSD only), user `www-data`; declared in the monorepo `machines/bananapi-m4`. SSH: `root@bananapi-m4` (Tailscale; LAN 192.168.0.42). Until 2026-11-20 production ran on the odroid `odroidn2` (DEPLOY.md, "Move of 2026-11-20 to the Banana Pi"); `odroid` in script and lock names is historic.
+- **Ingress:** Cloudflare Tunnel `bananapi-m4` (cloudflared on the Banana) → origin Caddy for `finbot.mextner.com`, `finbot-app.mextner.com`, `finbot-stage.mextner.com`, `finbot-stage-app.mextner.com`.
 - **Process Manager:** PM2 (`expensesyncbot`, `bank-sync`, `expensesyncbot-stage`), `TZ=UTC`
-- **Reverse Proxy:** Caddy on odroid, plain HTTP origin; config is the repo `Caddyfile` (symlinked to `/etc/caddy/Caddyfile`)
-- **Auto-deploy:** GitHub Actions on push to main; `deploy` job runs on the self-hosted runner `odroid`. Never bypass with manual deploys.
+- **Reverse Proxy:** Caddy on the Banana, plain HTTP origin; config is the repo `Caddyfile` (symlinked to `/etc/caddy/Caddyfile`)
+- **Auto-deploy:** GitHub Actions on push to main; `deploy` job runs on the self-hosted runner `bananapi-esb` (label `bananapi-m4`). Never bypass with manual deploys.
 - **Logs:** PM2 logs at `/var/www/ExpenseSyncBot/logs/`. A deploy never deletes logs: it saves the outgoing release's logs (`logs/release-*`), a failed release's redacted evidence (`logs/failed-*`, path in the failure alert) and only `scripts/run-log-retention.sh` deletes, by size and free space.
-- **Deploy lock and verdict:** every deploy on the odroid, this repo's and HyperCalendarBot's, holds `/run/lock/odroid-deploy.lock` (`scripts/odroid-deploy-lock.sh`, byte-identical in both repos); after `pm2 reload` the job waits for a health verdict (`scripts/deploy-health.py`: slow start ≠ failure, dead/crash-looping = failed job, no auto-rollback).
+- **Deploy lock and verdict:** every deploy on the home server, this repo's and HyperCalendarBot's, holds `/run/lock/odroid-deploy.lock` (`scripts/odroid-deploy-lock.sh`, byte-identical in both repos); after `pm2 reload` the job waits for a health verdict (`scripts/deploy-health.py`: slow start ≠ failure, dead/crash-looping = failed job, no auto-rollback).
 - Details, thresholds and how to read the evidence: [DEPLOY.md "Deploy reliability"](DEPLOY.md#deploy-reliability).
 
 See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
@@ -590,18 +590,18 @@ See [DEPLOY.md](DEPLOY.md) for complete deployment guide.
 
 ```bash
 # Последние 100 строк (out + error вместе):
-ssh root@odroidn2 'su - www-data -c "pm2 logs expensesyncbot --lines 100 --nostream"'
+ssh root@bananapi-m4 'su - www-data -c "pm2 logs expensesyncbot --lines 100 --nostream"'
 
 # Только ошибки:
-ssh root@odroidn2 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
+ssh root@bananapi-m4 'tail -100 /var/www/ExpenseSyncBot/logs/error.log'
 
 # Состояние процессов:
-ssh root@odroidn2 'su - www-data -c "pm2 list"'
+ssh root@bananapi-m4 'su - www-data -c "pm2 list"'
 ```
 
-AI-статистика по провайдерам (read-only, дёшево): `ssh root@odroidn2 'su - www-data -c "cd /var/www/ExpenseSyncBot && bun scripts/report-ai-usage.ts --days 7"'` (`DATABASE_PATH` берётся из окружения, иначе `./data/expenses.db`; на проде БД лежит в `/var/www/ExpenseSyncBot/data/expenses.db`).
+AI-статистика по провайдерам (read-only, дёшево): `ssh root@bananapi-m4 'su - www-data -c "cd /var/www/ExpenseSyncBot && bun scripts/report-ai-usage.ts --days 7"'` (`DATABASE_PATH` берётся из окружения, иначе `./data/expenses.db`; на проде БД лежит в `/var/www/ExpenseSyncBot/data/expenses.db`).
 
-**Никаких тяжёлых проверок на odroid.** У odroidn2 ~1 GB свободной RAM, а 2 GB swap уже заняты: 2026-10-12 агент запустил там бенчмарк ONNX-эмбеддингов (модель 118 MB) — нехватка памяти и перезагрузка сервера с прод-ботом. Не загружай модели, не гоняй бенчмарки и браузерные проверки на odroid — тяжёлую работу гоняй на сервере владельца (`server-run`, § Heavy work runs on the server). Любая проверка на самом устройстве — только в окне, согласованном с владельцем.
+**Никаких тяжёлых проверок на проде.** У bananapi-m4 всего 2 GB RAM (1.7 GB доступно) и zram-swap. На прежнем хосте (odroidn2) 2026-10-12 агент запустил бенчмарк ONNX-эмбеддингов (модель 118 MB) — нехватка памяти и перезагрузка сервера с прод-ботом. Не загружай модели, не гоняй бенчмарки и браузерные проверки на проде — тяжёлую работу гоняй на сервере владельца (`server-run`, § Heavy work runs on the server). Любая проверка на самом устройстве — только в окне, согласованном с владельцем.
 
 ### AI chat logs
 
@@ -623,9 +623,9 @@ AI-статистика по провайдерам (read-only, дёшево): `
 11. **`.claude/settings.local.json` is tracked in git** - this is intentional. The file contains project-specific permission rules shared across all contributors. Do not add it to `.gitignore`.
 12. **Never use `ctx.send()`** — in CallbackQueryContext it sends to private chat, not group. Always use `sendMessage()` from `src/services/bank/telegram-sender.ts`. See "Sending Messages" section above.
 13. **Never manually deploy** — `git push` triggers auto-deploy via GitHub Actions. Manual `git pull && pm2 restart` on the server bypasses test gates and can conflict with CI. If CI tests fail, fix the tests instead of bypassing.
-14. **Several agent sessions may work on the servers at once** (odroid, the DO droplet). Before treating a missing config or a stopped/started process as a bug, ask, or read only the one session transcript that touched that host (`~/.omp/agent/sessions/`; don't trawl unrelated sessions — they can hold secrets) — e.g. the DO Caddy block for ExpenseSyncBot was removed on purpose during the move to Cloudflare Tunnel. Never restore it blindly.
-15. **Odroid logs used to live in RAM** (armbian-ramlog on zram) and vanished on a hard hang. It is now disabled and journald is `Storage=persistent`; keep it that way so `journalctl -b -1` works after a crash. Bot data lives on the WD500 HDD, not the SD card (DEPLOY.md, "Storage").
-16. **After an odroid reboot pm2 resurrects its saved dump** — a stale dump once left stage crash-looping (6934 restarts). #159 (on `main`) makes stage starts run `pm2 save` and `--exp-backoff-restart-delay`; branches cut before it lack both — rebase before touching `stage-bot.yml`, and keep both.
+14. **Several agent sessions may work on the servers at once** (bananapi-m4, the odroid, the DO droplet). Before treating a missing config or a stopped/started process as a bug, ask, or read only the one session transcript that touched that host (`~/.omp/agent/sessions/`; don't trawl unrelated sessions — they can hold secrets) — e.g. the DO Caddy block for ExpenseSyncBot was removed on purpose during the move to Cloudflare Tunnel. Never restore it blindly.
+15. **Odroid logs used to live in RAM** (armbian-ramlog on zram) and vanished on a hard hang; there it was disabled and journald set to `Storage=persistent` so `journalctl -b -1` works after a crash. Keep journald persistent on any production host. The odroid kept bot data on the WD500 HDD; the Banana has only its SD card (DEPLOY.md, "Storage").
+16. **After a reboot pm2 resurrects its saved dump** — a stale dump once left stage crash-looping on the odroid (6934 restarts). #159 (on `main`) makes stage starts run `pm2 save` and `--exp-backoff-restart-delay`; branches cut before it lack both — rebase before touching `stage-bot.yml`, and keep both.
 
 ## When Modifying Code
 
