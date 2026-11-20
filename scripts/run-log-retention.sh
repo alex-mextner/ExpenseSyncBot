@@ -2,7 +2,7 @@
 # Log retention for this checkout's logs/ directory: the only thing that ever deletes logs.
 #
 # Accessed via: the end of a successful deploy (.github/workflows/deploy.yml) and the hourly
-# www-data cron entry (DEPLOY.md, "Deploy reliability"). Extra arguments go to log-retention.py
+# www-data timer esb-log-retention (DEPLOY.md, "Deploy reliability"). Extra arguments go to log-retention.py
 # (e.g. --dry-run, --max-dir-mb 512); its exit status is returned (0 criteria hold, 2 violated
 # with only protected entries left, 3 root refused).
 #

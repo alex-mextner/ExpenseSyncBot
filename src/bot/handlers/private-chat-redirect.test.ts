@@ -22,6 +22,7 @@ mock.module('../../services/bank/telegram-sender', () => ({
   sendDirect: mock(),
   sendDocumentDirect: mock(),
   sendChatAction: mock(),
+  sendRichMessage: mock(),
 }));
 
 const findGroupsByTelegramIdMock = mock();

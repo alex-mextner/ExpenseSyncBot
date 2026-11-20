@@ -31,7 +31,7 @@ import {
   type CategoryExample,
   repairTruncatedJson,
 } from './ai-extractor';
-import { extractTextFromHTML } from './receipt-fetcher';
+import { extractTextFromHTML, isHTMLDocument } from './receipt-fetcher';
 
 const logger = createLogger('receipt-parser');
 
@@ -498,7 +498,7 @@ export async function parseReceipt(
   onProgress?: ParseProgress,
 ): Promise<ParseResult> {
   // Extract text from HTML once
-  const isHTML = receiptData.includes('<html') || receiptData.includes('<!DOCTYPE');
+  const isHTML = isHTMLDocument(receiptData);
   const text = isHTML ? extractTextFromHTML(receiptData) : receiptData;
 
   if (isHTML) {

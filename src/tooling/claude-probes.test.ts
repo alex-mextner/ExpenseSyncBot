@@ -8,6 +8,8 @@ const PIXEL =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8ioAAAAASUVORK5CYII=';
 interface Attempt {
   authorization: string | null;
+  apiKey: string | null;
+  path: string;
   claude: boolean;
   body: string;
 }
@@ -59,13 +61,30 @@ const { chatRequestParams, hfRequestParams } = await import(${JSON.stringify(joi
 mock.module(${JSON.stringify(join(ROOT, 'src/services/ai/streaming'))}, () => ({ chatRequestParams, hfRequestParams }));
 const attempts = [];
 globalThis.fetch = async (url, init) => {
-  const authorization = new Headers(init?.headers).get('authorization');
+  const headers = new Headers(init?.headers);
+  const authorization = headers.get('authorization');
+  const apiKey = headers.get('x-api-key');
+  const path = new URL(String(url)).pathname;
   const claude = new URL(String(url)).host === 'claude.test';
-  attempts.push({ authorization, claude, body: init?.body });
+  attempts.push({ authorization, apiKey, path, claude, body: init?.body });
   originalFs.writeFileSync(${JSON.stringify(attemptsPath)}, JSON.stringify(attempts));
   const hf = new URL(String(url)).host === 'hf.test';
   if (!claude && !(hf && ${JSON.stringify(options.hfRoutes ?? false)})) return Response.json({ error: { message: 'synthetic unavailable credit' } }, { status: 402 });
-  if (authorization === 'Bearer primary-key') return Response.json({ error: { message: 'synthetic unauthorized' } }, { status: 401 });
+  if (claude && apiKey === 'primary-key') return Response.json({ error: { message: 'synthetic unauthorized' } }, { status: 401 });
+  if (claude) {
+    const events = [
+      { type: 'message_start', message: { id: 'synthetic', model: JSON.parse(init.body).model,
+        usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '{"status":"ok","test":true}' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 8 } },
+      { type: 'message_stop' },
+    ];
+    const nl = String.fromCharCode(10);
+    return new Response(events.map((event) => 'event: ' + event.type + nl + 'data: ' + JSON.stringify(event) + nl + nl).join(''),
+      { headers: { 'content-type': 'text/event-stream' } });
+  }
   return Response.json({ id: 'synthetic', object: 'chat.completion', created: 0, model: JSON.parse(init.body).model,
     choices: [{ index: 0, message: { role: 'assistant', content: '{"status":"ok","test":true}' }, finish_reason: 'stop' }],
     usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
@@ -101,17 +120,25 @@ test('the actual chain verification script checks all Claude models through cred
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   expect(result.stdout).toContain('Total: 3/8 slots OK');
   const claude = result.attempts.filter((attempt) => attempt.claude);
-  expect(claude.map((attempt) => attempt.authorization)).toEqual([
-    'Bearer primary-key',
-    'Bearer secondary-key',
-    'Bearer secondary-key',
-    'Bearer secondary-key',
+  expect(claude.map((attempt) => attempt.apiKey)).toEqual([
+    'primary-key',
+    'secondary-key',
+    'secondary-key',
+    'secondary-key',
   ]);
   expect(claude[1]?.body).toBe(claude[0]?.body);
   expect(
+    claude.every((attempt) => attempt.path === '/v1/messages' && attempt.authorization === null),
+  ).toBe(true);
+  expect(
     result.attempts
       .filter((attempt) => !attempt.claude)
-      .every((attempt) => attempt.authorization !== 'Bearer secondary-key'),
+      .every(
+        (attempt) =>
+          attempt.apiKey === null &&
+          attempt.authorization !== 'Bearer primary-key' &&
+          attempt.authorization !== 'Bearer secondary-key',
+      ),
   ).toBe(true);
 });
 
@@ -120,17 +147,17 @@ test('the chain verification script still checks every Claude model with only th
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   expect(result.stdout).toContain('Total: 3/8 slots OK');
   expect(
-    result.attempts.filter((attempt) => attempt.claude).map((attempt) => attempt.authorization),
-  ).toEqual(['Bearer secondary-key', 'Bearer secondary-key', 'Bearer secondary-key']);
+    result.attempts.filter((attempt) => attempt.claude).map((attempt) => attempt.apiKey),
+  ).toEqual(['secondary-key', 'secondary-key', 'secondary-key']);
 });
 
 test('the actual vision probe preserves its request while using the working Claude credential', () => {
   const result = runProbe('scripts/test-vision.ts', true);
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   expect(result.stdout).toContain('claude vision OK');
-  expect(result.attempts.map((attempt) => attempt.authorization)).toEqual([
-    'Bearer primary-key',
-    'Bearer secondary-key',
+  expect(result.attempts.map((attempt) => attempt.apiKey)).toEqual([
+    'primary-key',
+    'secondary-key',
   ]);
   expect(result.attempts[1]?.body).toBe(result.attempts[0]?.body);
 });
@@ -138,7 +165,7 @@ test('the actual vision probe preserves its request while using the working Clau
 test('a secondary-only vision probe works before rotation is needed', () => {
   const result = runProbe('scripts/test-vision.ts', true, true);
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
-  expect(result.attempts.map((attempt) => attempt.authorization)).toEqual(['Bearer secondary-key']);
+  expect(result.attempts.map((attempt) => attempt.apiKey)).toEqual(['secondary-key']);
 });
 
 interface ProbeRequest {

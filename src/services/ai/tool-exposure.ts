@@ -50,7 +50,7 @@ export const TOOL_INDEX_LINES: Record<string, string> = {
   add_expense: 'record one or several expenses',
   delete_expense: 'delete expenses by id',
   calculate: 'any arithmetic or currency conversion',
-  render_table: 'send a Markdown table as an image',
+  render_table: 'send a Markdown table to the chat as a native table',
   set_custom_prompt: 'remember a note or rule for the group (the only memory)',
   get_bank_balances: 'balances of connected bank accounts',
   get_categories: 'list expense categories',

@@ -269,7 +269,7 @@ else
   printf 'kept the existing %s\n' "$CONFIG_PATH"
 fi
 printf '\n(1) add this line to ~/.ssh/authorized_keys of this account (by hand; back the file up first), with the public key\n'
-printf 'of /var/lib/hcb-qa-runner/.ssh/esb-stage-browser_ed25519 on the odroid (sudo -u hcb-qa ssh-keygen -y -f that file):\n'
+printf 'of /var/lib/hcb-qa-runner/.ssh/esb-stage-browser_ed25519 on the home server (sudo -u hcb-qa ssh-keygen -y -f that file):\n'
 printf 'restrict,command="%s" ssh-ed25519 AAAA... %s\n' "$ENTRY_PATH" "$KEY_COMMENT"
 ROLLBACK_COMMAND=""
 for part in "${ROLLBACK[@]}"; do ROLLBACK_COMMAND+="${ROLLBACK_COMMAND:+ && }$part"; done

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { ChatMessage, Group, User } from '../../database/types';
 import { AgentError } from '../../errors';
+import type { AgentContext } from '../../services/ai/types';
+import type { TableMessageInput } from '../../services/render/table-message';
 import { createMockLogger } from '../../test-utils/mocks/logger';
 import type { Ctx } from '../types';
 
@@ -69,7 +71,11 @@ const agentRunMock = mock(async (_question: string, history: ChatMessage[]): Pro
   capturedHistories.push(history);
   return 'ok';
 });
+const capturedAgentContexts: AgentContext[] = [];
 class FakeAgent {
+  constructor(_apiKey: string, agentCtx: AgentContext) {
+    capturedAgentContexts.push(agentCtx);
+  }
   run(question: string, history: ChatMessage[]): Promise<string> {
     return agentRunMock(question, history);
   }
@@ -120,14 +126,20 @@ const sendMessageMock = mock(
     message_id: 1,
   }),
 );
+const withChatContextMock = mock(
+  async <T>(_chatId: number, _threadId: number | null, fn: () => Promise<T>) => fn(),
+);
 mock.module('../../services/bank/telegram-sender', () => ({
   sendMessage: sendMessageMock,
   sendDirect: mock(async () => null),
   editMessageText: mock(async () => undefined),
   deleteMessage: mock(async () => undefined),
   sendChatAction: mock(async () => undefined),
-  withChatContext: async <T>(_chatId: number, _threadId: number | null, fn: () => Promise<T>) =>
-    fn(),
+  withChatContext: withChatContextMock,
+}));
+const sendTableMessageMock = mock(async (_table: TableMessageInput) => undefined);
+mock.module('../../services/render/table-message', () => ({
+  sendTableMessage: sendTableMessageMock,
 }));
 
 // Loaded after the mocks above: a static import is hoisted and would load these modules
@@ -147,7 +159,6 @@ function fakeBot() {
   return {
     api: {
       sendChatAction: mock(async () => undefined),
-      sendPhoto: mock(async () => undefined),
     },
   } as never;
 }
@@ -167,6 +178,7 @@ function historyRow(id: number, content: string, threadId: number | null): ChatM
 beforeEach(() => {
   activeGroup = makeGroup(null);
   nextHistoryId = 100;
+  capturedAgentContexts.length = 0;
   capturedHistories.length = 0;
   agentRunMock.mockReset().mockImplementation(async (_question, history) => {
     capturedHistories.push(history);
@@ -423,5 +435,18 @@ describe('handleAskQuestion — recent history scoping', () => {
     expect(createHistoryMock.mock.calls.at(-1)?.[0]?.['content']).toBe(NO_ANSWER_MESSAGE);
     // Like the error paths: no advice after a turn the bot failed to answer.
     expect(checkSmartTriggersMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('handleAskQuestion — render_table delivery', () => {
+  test('sends the table to the asking chat and topic', async () => {
+    activeGroup = makeGroup(42);
+    await handleAskQuestion(fakeCtx(true, 42), 'таблица', fakeBot(), true);
+
+    const table = { title: 'Расходы', markdown: '| a |\n|---|\n| 1 |' };
+    await capturedAgentContexts[0]?.sendTable?.(table);
+
+    expect(withChatContextMock).toHaveBeenLastCalledWith(-100, 42, expect.any(Function));
+    expect(sendTableMessageMock).toHaveBeenCalledWith(table);
   });
 });

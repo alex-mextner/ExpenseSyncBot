@@ -6,8 +6,11 @@
 
 import type OpenAI from 'openai';
 import { createLogger } from '../../../utils/logger';
-import { withClaudeCredentials } from '../claude-client-pool';
+import { usesNativeClaude, withClaudeCredentials } from '../claude-client-pool';
 import type { ClaudeCredentialRequestOptions } from '../claude-credential-pool';
+import { prepareNativeRequest } from '../claude-native-request';
+import { openNativeClaudeStream } from '../claude-native-stream';
+import type { NativeUsageObserver } from '../claude-native-usage';
 import { errorText, numericStatus } from './error-signals';
 
 const logger = createLogger('ai-streaming');
@@ -22,21 +25,18 @@ const logger = createLogger('ai-streaming');
  */
 export const CLAUDE_THINKING_RESERVE_TOKENS = 8192;
 
-/** Anthropic-only request fields accepted by its OpenAI-compat endpoint; the SDK forwards them as-is. */
+/** Anthropic-only budget fields shared by the native transport and compatibility rollback. */
 export interface ClaudeParams {
   max_tokens: number;
   thinking?: { type: 'disabled' };
 }
 
 /**
- * Thinking settings for a Claude model (measured against the live API, 2026-10). Sonnet/Opus/Fable
- * (and any unlisted model) think at the model's own level — the OpenAI-compat endpoint ignores
- * `reasoning_effort`, `output_config.effort` and `thinking.budget_tokens`, so none is sent (#146) —
- * with CLAUDE_THINKING_RESERVE_TOKENS on top, so the caller's whole budget stays available for the
- * visible answer. Haiku serves the latency-sensitive fast chain (validators, prefill) and runs with
- * thinking disabled: with thinking on it spent the entire small budget (validators 256, prefill 200)
- * and streamed zero text. The endpoint rejects explicit adaptive thinking and handles tool rounds
- * without thinking blocks in the history.
+ * Preserve the established per-model budget policy across transports. Sonnet/Opus retain their
+ * default thinking and the visible-answer reserve; Haiku supports disabled thinking for small,
+ * latency-sensitive validator/prefill budgets. No temperature is sent for Claude 5.x.
+ * Native tool turns preserve signed assistant blocks privately; compatibility remains an explicit
+ * transport rollback and cannot use prompt caching.
  */
 export function claudeRequestParams(model: string, maxTokens: number): ClaudeParams {
   if (model.startsWith('claude-haiku')) {
@@ -105,7 +105,8 @@ function rejectsUsageStreamOption(error: unknown): boolean {
 }
 
 /**
- * Opens the chat stream, asking for the final usage chunk. A provider that rejects the option is
+ * Opens native Claude Messages when configured, preserving disjoint usage and private replay.
+ * Compatible transports ask for a final usage chunk. A provider that rejects that option is
  * remembered and retried at once without it (same attempt, one usage row — its tokens stay unknown).
  * For Claude the retry stays inside the credential that rejected the option: restarting rotation
  * would re-ask a credential that was already denied and split the budget again.
@@ -117,7 +118,9 @@ export async function openChatStream(
   providerKey: string,
   model: string,
   credentialOptions: Omit<ClaudeCredentialRequestOptions, 'signal'> = { timeoutMs: 45_000 },
+  onNativeUsage?: NativeUsageObserver,
 ): Promise<AsyncIterable<OpenAI.ChatCompletionChunk>> {
+  const native = usesNativeClaude(client) ? prepareNativeRequest(params) : null;
   const usageOptionKey = `${providerKey}:${model}`;
   const create = (
     attemptClient: OpenAI,
@@ -135,6 +138,7 @@ export async function openChatStream(
     attemptSignal: AbortSignal | undefined,
     onRetryHttp?: () => void,
   ) => {
+    if (native) return openNativeClaudeStream(attemptClient, native, attemptSignal, onNativeUsage);
     if (providersWithoutStreamingUsage.has(usageOptionKey))
       return create(attemptClient, attemptSignal, false);
     try {

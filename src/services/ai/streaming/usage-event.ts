@@ -33,6 +33,9 @@ export type AttemptResult = Pick<
   | 'completionTokens'
   | 'reasoningTokens'
   | 'cachedTokens'
+  | 'freshInputTokens'
+  | 'cacheWriteTokens'
+  | 'credentialId'
 >;
 
 /** A slot the round never requested (excluded by an agent handoff). */

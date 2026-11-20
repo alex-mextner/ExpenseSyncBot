@@ -1,5 +1,5 @@
-# Origin config for the home server (odroid). Plain HTTP: TLS terminates at Cloudflare,
-# whose tunnel (cloudflared on odroid) forwards finbot*.mextner.com here with the original
+# Origin config for the home server (Banana Pi, bananapi-m4). Plain HTTP: TLS terminates at Cloudflare,
+# whose tunnel `bananapi-m4` (cloudflared on the Banana) forwards finbot*.mextner.com here with the original
 # Host header (see DEPLOY.md).
 http://finbot.mextner.com {
 	# Static pages: homepage, privacy policy, terms of service

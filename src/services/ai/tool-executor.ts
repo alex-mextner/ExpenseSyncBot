@@ -21,7 +21,6 @@ import { getBudgetManager } from '../budget-manager';
 import { evaluateCurrencyExpression } from '../currency/calculator';
 import { formatAmount, formatExchangeRatesForAI } from '../currency/converter';
 import { googleConn } from '../google/sheets';
-import { renderTableToPng } from '../render/table-renderer.ts';
 import {
   applyGroupSetting,
   GROUP_SETTINGS,
@@ -905,8 +904,8 @@ function executeManageRecurringPatternSingle(
 // === Render tools ===
 
 function executeRenderTable(input: Record<string, unknown>, ctx: AgentContext): ToolResult {
-  if (!ctx.sendPhoto) {
-    return { success: false, error: 'Image rendering not available in this context.' };
+  if (!ctx.sendTable) {
+    return { success: false, error: 'Table sending not available in this context.' };
   }
 
   const title = input['title'] as string;
@@ -927,13 +926,11 @@ function executeRenderTable(input: Record<string, unknown>, ctx: AgentContext): 
     };
   }
 
-  const sendPhoto = ctx.sendPhoto;
+  ctx
+    .sendTable({ title, markdown, caption })
+    .catch((err: Error) => logger.error({ err }, 'render_table: failed to send'));
 
-  renderTableToPng({ title, markdown, caption })
-    .then((buffer: Buffer) => sendPhoto(buffer))
-    .catch((err: Error) => logger.error({ err }, 'render_table: failed to render or send'));
-
-  return { success: true, output: 'Таблица отрисовывается и будет отправлена в чат.' };
+  return { success: true, output: 'Таблица будет отправлена в чат.' };
 }
 
 // === Feedback tool ===

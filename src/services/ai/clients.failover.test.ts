@@ -4,7 +4,9 @@ import { createClaudeClient, withClaudeCredentials } from './claude-client-pool'
 
 const logMock = createMockLogger();
 mock.module('../../utils/logger', () => ({ createLogger: () => logMock, logger: logMock }));
+// These fixtures exercise the explicit OpenAI compatibility rollback; native wire coverage is separate.
 const mockEnv = {
+  AI_CLAUDE_TRANSPORT: 'openai',
   ANTHROPIC_API_KEY: 'zai-key',
   AI_BASE_URL: 'https://zai.test/v1',
   CLAUDE_API_TOKEN: 'primary-key',

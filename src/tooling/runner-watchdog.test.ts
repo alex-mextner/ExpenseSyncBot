@@ -51,11 +51,11 @@ const jobs = (...list: Job[]) => JSON.stringify({ jobs: list });
 const runs = (...ids: number[]) => JSON.stringify({ workflow_runs: ids.map((id) => ({ id })) });
 const watch: Job = { name: 'watch', status: 'in_progress', runner_name: 'GitHub Actions 1' };
 const pingQueued: Job = { name: 'ping', status: 'queued', runner_name: null };
-const pingTaken: Job = { name: 'ping', status: 'in_progress', runner_name: 'odroid' };
+const pingTaken: Job = { name: 'ping', status: 'in_progress', runner_name: 'bananapi-esb' };
 const deployRunning = (startedMinutesAgo: number): Job => ({
   name: 'deploy',
   status: 'in_progress',
-  runner_name: 'odroid',
+  runner_name: 'bananapi-esb',
   // GitHub's format: whole seconds, e.g. 2026-10-11T08:46:24Z
   started_at: new Date(Date.now() - startedMinutesAgo * 60_000)
     .toISOString()
@@ -95,7 +95,7 @@ function runWatchdog(scenario: Scenario) {
       PATH: `${bin}:${process.env['PATH']}`,
       FIX: fix,
       GH_REPO: REPO,
-      WATCHED_RUNNER: 'odroid',
+      WATCHED_RUNNER: 'bananapi-esb',
       RUN_ID: String(RUN_ID),
       BOT_TOKEN: 'test-token',
       ADMIN_CHAT_ID: '42',
@@ -143,7 +143,7 @@ describe('runner-watchdog.sh', () => {
       pickupTimeout: 60,
     });
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain('Runner odroid picked up the ping');
+    expect(r.stdout).toContain('Runner bananapi-esb picked up the ping');
     expect(r.telegram).toEqual([]);
   });
 
@@ -154,7 +154,7 @@ describe('runner-watchdog.sh', () => {
     expect(r.status).toBe(0);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toStartWith(
-      '🔴 <b>Self-hosted runner <code>odroid</code> is offline</b>',
+      '🔴 <b>Self-hosted runner <code>bananapi-esb</code> is offline</b>',
     );
     expect(r.announced).toBe('offline');
     expect(r.outputs).toEqual(['offline=true', 'state_changed=true']);
@@ -178,7 +178,7 @@ describe('runner-watchdog.sh', () => {
     expect(r.status).toBe(0);
     expect(r.telegram).toHaveLength(1);
     expect(r.telegram[0]).toStartWith(
-      '✅ <b>Self-hosted runner <code>odroid</code> is back online</b>',
+      '✅ <b>Self-hosted runner <code>bananapi-esb</code> is back online</b>',
     );
     expect(r.announced).toBe('online');
     expect(r.outputs).toEqual(['offline=false', 'state_changed=true']);

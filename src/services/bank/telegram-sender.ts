@@ -2,6 +2,7 @@
 // Reads chatId from chatStorage; message_thread_id is injected by GramIO preRequest hook.
 // Handlers: middleware sets context automatically. Workers: use withChatContext() first.
 import type { TelegramMessage, TelegramParams } from '@gramio/types';
+import type { InputRichMessage } from '../../bot/telegram-rich-message';
 import type { BotInstance } from '../../bot/types';
 import { chatStorage, withChatContext } from '../../utils/chat-context';
 import { createLogger } from '../../utils/logger.ts';
@@ -30,30 +31,52 @@ function getContext() {
 
 type SendOptions = Omit<TelegramParams.SendMessageParams, 'chat_id' | 'text'>;
 
+/**
+ * Run a send call; on 429 retry once (rateLimitOnResponseError already set the global
+ * backoff and rateLimitPreRequest waits it out on the retry). Failures are logged, never thrown.
+ */
+async function sendWithRetry(
+  method: string,
+  call: () => Promise<TelegramMessage>,
+): Promise<TelegramMessage | null> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 429) {
+      try {
+        return await call();
+      } catch (retryError) {
+        logger.warn({ err: retryError }, `${method} retry failed`);
+        return null;
+      }
+    }
+    logger.warn({ err: error }, `${method} failed`);
+    return null;
+  }
+}
+
 /** Send a message to the current chat. Reads chatId from context; threadId injected by preRequest hook. */
 export async function sendMessage(
   text: string,
   options?: SendOptions,
 ): Promise<TelegramMessage | null> {
   const { chatId } = getContext();
-  const call = () =>
-    getBot().api.sendMessage({ chat_id: chatId, text, parse_mode: 'HTML', ...options });
-  try {
-    return await call();
-  } catch (error) {
-    if ((error as { code?: number }).code === 429) {
-      // rateLimitOnResponseError hook already set the global backoff;
-      // rateLimitPreRequest on the retry call will wait it out.
-      try {
-        return await call();
-      } catch (retryError) {
-        logger.warn({ err: retryError }, 'sendMessage retry failed');
-        return null;
-      }
-    }
-    logger.warn({ err: error }, 'sendMessage failed');
-    return null;
-  }
+  return sendWithRetry('sendMessage', () =>
+    getBot().api.sendMessage({ chat_id: chatId, text, parse_mode: 'HTML', ...options }),
+  );
+}
+
+/**
+ * Send a Bot API 10.1 rich message (native tables, headings) to the current chat.
+ * Same context and thread rules as sendMessage; null when Telegram rejected it.
+ */
+export async function sendRichMessage(
+  richMessage: InputRichMessage,
+): Promise<TelegramMessage | null> {
+  const { chatId } = getContext();
+  return sendWithRetry('sendRichMessage', () =>
+    getBot().api.sendRichMessage({ chat_id: chatId, rich_message: richMessage }),
+  );
 }
 
 /**

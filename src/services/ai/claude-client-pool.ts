@@ -1,3 +1,4 @@
+// Select Claude credentials while preserving request-only retry and native attempt attribution.
 import OpenAI from 'openai';
 import {
   type ClaudeCredentialRequestOptions,
@@ -14,6 +15,7 @@ const MODERATION_REJECTION =
   /content policy|safety (?:policy|filter)|requires moderation|input was flagged/i;
 
 interface ClaudeClientConfig {
+  transport?: 'native' | 'openai';
   tokens: readonly (string | undefined)[];
   baseURL: string;
   timeout: number;
@@ -30,6 +32,10 @@ interface RegisteredPool {
 const registeredPools = new WeakMap<OpenAI, RegisteredPool>();
 // Older Bun releases include an invalid Authorization value in the SDK's header error.
 const headerInvalidClients = new WeakSet<OpenAI>();
+const nativeClients = new WeakSet<OpenAI>();
+export function usesNativeClaude(client: OpenAI): boolean {
+  return nativeClients.has(client);
+}
 
 /**
  * The SDK builds `Authorization: Bearer <key>` through Headers, which rejects CR/LF/NUL and non-Latin-1
@@ -61,8 +67,10 @@ export function createClaudeClient(config: ClaudeClientConfig): OpenAI {
         baseURL: config.baseURL,
         timeout: config.timeout,
         maxRetries: 0,
+        ...(config.transport === 'native' ? { logLevel: 'off' } : {}),
         fetch: config.fetch,
       });
+      if (config.transport === 'native') nativeClients.add(client);
       clients.set(token, client);
     }
     return client;

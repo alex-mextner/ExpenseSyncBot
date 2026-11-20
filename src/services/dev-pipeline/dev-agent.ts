@@ -162,7 +162,7 @@ export class DevAgent {
           break;
         }
 
-        await this.recordToolRound(messages, result.text, toolCalls);
+        await this.recordToolRound(messages, result);
       }
 
       // Nudge for final answer if no text produced
@@ -208,24 +208,10 @@ export class DevAgent {
   }
 
   /** Append the assistant tool-call message, then execute every call and append its result. */
-  private async recordToolRound(
-    messages: ChatMessage[],
-    text: string | undefined,
-    toolCalls: ToolCallRequest[],
-  ): Promise<void> {
-    // Build assistant message with tool calls for history
-    messages.push({
-      role: 'assistant',
-      content: text || null,
-      tool_calls: toolCalls.map((tc) => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: { name: tc.name, arguments: tc.arguments },
-      })),
-    });
-
-    // Execute tools and add results
-    for (const call of toolCalls) {
+  private async recordToolRound(messages: ChatMessage[], result: StreamRoundResult): Promise<void> {
+    // Preserve private native thinking/signature metadata attached to the provider's exact message.
+    messages.push(result.assistantMessage);
+    for (const call of result.toolCalls) {
       messages.push(await this.runToolCall(call));
     }
   }
@@ -247,12 +233,14 @@ export class DevAgent {
     return { role: 'tool', tool_call_id: call.id, content: toolResult };
   }
 
-  /** Ask the model (no tools) for a final text answer after a run that produced none. */
+  /** Keep the tool prefix intact, but forbid new calls when requesting the final answer. */
   private async requestFinalAnswer(messages: ChatMessage[], textSoFar: string): Promise<string> {
     logger.info('[DEV-AGENT] No text produced — sending nudge for final answer');
     messages.push({ role: 'user', content: 'Please now write your final answer as text.' });
     const nudge = await aiStreamRound({
       messages,
+      tools: DEV_TOOLS,
+      toolChoice: 'none',
       maxTokens: 8192,
       chain: 'smart',
       purpose: 'dev_agent',

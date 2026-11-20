@@ -3,9 +3,9 @@
 #
 # Add a label here only when a registered runner actually carries it
 # (`gh api repos/alex-mextner/ExpenseSyncBot/actions/runners`):
-#   odroid     the runner named `odroid` (Linux ARM64), the home ODROID-N2+ — deploy.yml, stage-bot.yml, runner-watchdog.yml
-#   stage-qa   the Stage QA runner `odroid-esb-qa` (Linux ARM64), registered by hand (DEPLOY.md "Stage QA") — stage-qa.yml only
+#   bananapi-m4  the runner named `bananapi-esb` (Linux ARM64), the home Banana Pi BPI-M4 — deploy.yml, stage-bot.yml, runner-watchdog.yml
+#   stage-qa     the Stage QA runner `bananapi-esb-qa` (Linux ARM64), registered by hand (DEPLOY.md "Stage QA") — stage-qa.yml only
 self-hosted-runner:
   labels:
-    - odroid
+    - bananapi-m4
     - stage-qa

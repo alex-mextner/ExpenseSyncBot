@@ -17,7 +17,7 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { env } from '../src/config/env';
 import { claudeClient, hfClient, openrouterClient, zaiClient } from '../src/services/ai/clients';
-import { withClaudeCredentials } from '../src/services/ai/claude-client-pool';
+import { probeCompletion } from './ai-probe-completion';
 import { chatRequestParams, hfRequestParams } from '../src/services/ai/streaming';
 
 interface SlotSpec {
@@ -189,14 +189,7 @@ const TEXT_PROMPT =
   'Reply with a JSON object: {"status": "ok", "test": true}. Use exactly that format.';
 
 async function createCompletion(spec: SlotSpec, params: OpenAI.ChatCompletionCreateParamsNonStreaming) {
-  const client = spec.client();
-  if (!spec.anthropic) return client.chat.completions.create(params);
-  return withClaudeCredentials(
-    client,
-    (attemptClient, signal) => Promise.resolve(attemptClient.chat.completions.create(params, signal ? { signal } : undefined)),
-    // Non-streaming: the budget covers the whole completion, so each of the two keys gets the full SDK timeout.
-    { timeoutMs: client.timeout * 2 },
-  );
+  return probeCompletion(spec.client(), params, spec.anthropic ?? false);
 }
 
 async function testTextSlot(spec: SlotSpec): Promise<SlotResult> {

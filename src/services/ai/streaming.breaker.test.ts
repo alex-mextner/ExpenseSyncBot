@@ -4,6 +4,8 @@
 
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import OpenAI from 'openai';
+import { createClaudeClient } from './claude-client-pool';
+import { recordProviderConnectionFailure } from './provider-breaker';
 import {
   aiStreamRound,
   isProviderDemoted,
@@ -610,4 +612,48 @@ describe('aiStreamRound fallback chain', () => {
     // The aggregate is a plain Error, but isRetryableError reads status structurally → still retried.
     expect(isRetryableError(thrown)).toBe(true);
   });
+});
+
+it('native local contract rejection preserves the existing connection-failure streak', async () => {
+  resetFallbackEnv();
+  const clientsMod = await import('./clients');
+  const fetch = mock(async () => {
+    throw new Error('Local preflight must not reach HTTP');
+  });
+  const client = createClaudeClient({
+    tokens: ['synthetic-primary'],
+    baseURL: 'https://api.anthropic.com/v1',
+    timeout: 1000,
+    transport: 'native',
+    fetch,
+  });
+  spyOn(clientsMod, 'claudeClient').mockReturnValue(client);
+  const compatible = {
+    chat: {
+      completions: {
+        create: async () => ({
+          [Symbol.asyncIterator]: async function* () {
+            yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+          },
+        }),
+      },
+    },
+  } as unknown as OpenAI;
+  spyOn(clientsMod, 'zaiClient').mockReturnValue(compatible);
+  spyOn(clientsMod, 'hfClient').mockReturnValue(compatible);
+  recordProviderConnectionFailure('claude', Date.now());
+  recordProviderConnectionFailure('claude', Date.now());
+  await aiStreamRound({
+    messages: [
+      {
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: 'file://synthetic-local-image' } }],
+      },
+    ],
+    maxTokens: 50,
+    chain: 'smart',
+  });
+  expect(fetch).not.toHaveBeenCalled();
+  recordProviderConnectionFailure('claude', Date.now());
+  expect(isProviderDemoted('claude', Date.now())).toBe(true);
 });
