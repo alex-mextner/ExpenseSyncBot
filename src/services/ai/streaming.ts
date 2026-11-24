@@ -2,9 +2,9 @@
  * Unified AI streaming round with automatic provider fallback.
  *
  * Three chains, selected via options.chain:
- *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → Gemini ${GEMINI_MODEL} → HF ${HF_MODEL}
- *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → Gemini ${GEMINI_FAST_MODEL} → HF ${HF_FAST_MODEL}
- *   OCR:   Gemini ${GEMINI_VISION_MODEL} → HF ${HF_VISION_MODEL}     (vision-only)
+ *   SMART: Groq ${GROQ_MODEL} → z.ai ${AI_MODEL} → Claude ${CLAUDE_MODEL} → HF ${HF_MODEL}
+ *   FAST:  Groq ${GROQ_FAST_MODEL} → z.ai ${AI_FAST_MODEL} → Claude ${CLAUDE_FAST_MODEL} → HF ${HF_FAST_MODEL}
+ *   OCR:   HF ${HF_VISION_MODEL}     (vision-only)
  *
  * Callers that need live updates pass `onTextDelta` / `onToolCallStart` callbacks.
  * Callers that just want the final text (validator, prefill, merchant-agent) omit callbacks.
@@ -22,7 +22,7 @@
 import OpenAI from 'openai';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
-import { claudeClient, geminiClient, groqClient, hfClient, zaiClient } from './clients';
+import { claudeClient, groqClient, hfClient, zaiClient } from './clients';
 import {
   orderByHealth,
   recordProviderConnectionFailure,
@@ -395,10 +395,7 @@ function buildSmartChain(): ProviderSlot[] {
       }),
     );
   }
-  chain.push(
-    streamingSlot(`Gemini (${env.GEMINI_MODEL})`, 'gemini', geminiClient, env.GEMINI_MODEL),
-    streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL),
-  );
+  chain.push(streamingSlot(`HF (${env.HF_MODEL})`, 'hf', hfClient, env.HF_MODEL));
   return chain;
 }
 
@@ -421,28 +418,12 @@ function buildFastChain(): ProviderSlot[] {
       ),
     );
   }
-  chain.push(
-    streamingSlot(
-      `Gemini (${env.GEMINI_FAST_MODEL})`,
-      'gemini',
-      geminiClient,
-      env.GEMINI_FAST_MODEL,
-    ),
-    streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL),
-  );
+  chain.push(streamingSlot(`HF (${env.HF_FAST_MODEL})`, 'hf', hfClient, env.HF_FAST_MODEL));
   return chain;
 }
 
 function buildOcrChain(): ProviderSlot[] {
-  return [
-    streamingSlot(
-      `Gemini (${env.GEMINI_VISION_MODEL})`,
-      'gemini',
-      geminiClient,
-      env.GEMINI_VISION_MODEL,
-    ),
-    streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL),
-  ];
+  return [streamingSlot(`HF (${env.HF_VISION_MODEL})`, 'hf', hfClient, env.HF_VISION_MODEL)];
 }
 
 function buildChain(chain: ChainName): ProviderSlot[] {

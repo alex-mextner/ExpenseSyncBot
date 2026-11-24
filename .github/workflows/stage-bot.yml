@@ -47,8 +47,8 @@ jobs:
 
   stage-bot:
     # Runs on the home server (odroid) self-hosted runner. Fork PRs are excluded:
-    # this repo is public and the runner executes on production hardware.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # this repo is public and the runner executes on production hardware. Drafts must not deploy stage.
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: [self-hosted, odroid]
 
     permissions:

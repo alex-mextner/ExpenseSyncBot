@@ -198,11 +198,13 @@ const mockGroups = {
 const mockReceiptItems = {
   create: mock((data: { photo_queue_id: number; name_ru: string; suggested_category: string }) => {
     const row = {
+      ...data,
       id: receiptItemsStore.length + 1,
       photo_queue_id: data.photo_queue_id,
       name_ru: data.name_ru,
       suggested_category: data.suggested_category,
       status: 'pending',
+      possible_categories: [],
     };
     receiptItemsStore.push(row);
     return row;
@@ -269,7 +271,9 @@ afterEach(() => {
 });
 
 // ── Now import the module under test ─────────────────────────────────────
-const { saveExtractedItems, showReceiptConfirmationOptions } = await import('./photo-processor');
+const { saveExtractedItems, showReceiptConfirmationOptions, startPhotoProcessor } = await import(
+  './photo-processor'
+);
 
 // Re-import internal helpers via re-execution of the queue path.
 // We don't import processQueue directly (it's not exported). Instead we call
@@ -285,7 +289,6 @@ const { saveExtractedItems, showReceiptConfirmationOptions } = await import('./p
 // the module's internals via the existing `processPhotoQueueItem` route by
 // calling `startPhotoProcessor` with a stub bot and then capturing the
 // interval callback.
-import { startPhotoProcessor } from './photo-processor';
 
 // Mock Bot
 function makeBot() {
@@ -343,6 +346,8 @@ function seedQueueItem(overrides: Partial<PhotoQueueItem> = {}): PhotoQueueItem 
 }
 
 function resetAll(): void {
+  logMock.error.mockClear();
+  logMock.warn.mockClear();
   photoQueueStore.clear();
   receiptItemsStore.length = 0;
   receiptsStore.length = 0;
@@ -483,7 +488,24 @@ describe('photo-processor: QR fallback to OCR', () => {
 });
 
 describe('photo-processor: all extraction methods fail', () => {
-  it('no QR + OCR throws → queue marked done + 🤷 reaction, no user message', async () => {
+  it('keeps a failed OCR photo as an error and tells the user how to retry', async () => {
+    seedQueueItem({ id: 40, message_thread_id: 42 });
+    mockScanQRFromImage.mockImplementation(async () => null);
+    mockExtractTextFromImage.mockImplementation(async () => {
+      throw new Error('synthetic vision provider unavailable');
+    });
+    await runOneQueuePass(makeBot());
+    const updates = mockPhotoQueue.update.mock.calls.map((call) => call[1]);
+    expect(updates.some((update) => update.status === 'error')).toBe(true);
+    expect(updates.some((update) => update.status === 'done')).toBe(false);
+    expect(photoQueueStore.get(40)?.file_id).toBe('file-abc');
+    expect(mockSendMessage.mock.calls.some((call) => call[0].includes('ещё раз'))).toBe(true);
+    expect(logMock.error).toHaveBeenCalled();
+    expect(mockWithChatContext.mock.calls.some((call) => call[1] === 42)).toBe(true);
+    expect(mockParseReceipt).not.toHaveBeenCalled();
+  });
+
+  it('no QR + OCR throws → queue marked error + 🤷 reaction and retry message', async () => {
     seedQueueItem({ id: 4 });
     mockScanQRFromImage.mockImplementation(async () => null);
     mockExtractTextFromImage.mockImplementation(async () => {
@@ -499,9 +521,9 @@ describe('photo-processor: all extraction methods fail', () => {
     // Item created nothing
     expect(mockReceiptItems.create).not.toHaveBeenCalled();
 
-    // Marked done (both QR & OCR failed path)
+    // Both QR and OCR failure preserves an error state.
     const updates = mockPhotoQueue.update.mock.calls.map((c) => c[1]);
-    expect(updates.some((u) => u.status === 'done')).toBe(true);
+    expect(updates.some((u) => u.status === 'error')).toBe(true);
 
     // 🤷 reaction set as the second reaction call (first is 👀)
     const reactions = bot.api.setMessageReaction.mock.calls.map(
@@ -509,8 +531,8 @@ describe('photo-processor: all extraction methods fail', () => {
     );
     expect(reactions).toContain('👀');
     expect(reactions.some((e: string | undefined) => e?.includes('🤷'))).toBe(true);
-    // Logger assertion omitted: 🤷 reaction + queue done status already prove
-    // the OCR failure path executed.
+    expect(logMock.error).toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalled();
   });
 
   it('parser returns empty items array → status=error + notify user', async () => {
@@ -598,7 +620,7 @@ describe('photo-processor: error resilience across items', () => {
     seedQueueItem({ id: 10 });
     seedQueueItem({ id: 11, file_id: 'file-second' });
 
-    // First item: OCR throws → marked done/error path
+    // First item: OCR throws → error with retry notification
     // Second item: happy path via OCR
     let call = 0;
     mockScanQRFromImage.mockImplementation(async () => null);

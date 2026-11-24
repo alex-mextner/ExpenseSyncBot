@@ -171,8 +171,11 @@ async function processPhotoQueueItem(bot: Bot, queueItemId: number): Promise<voi
       } catch (ocrError) {
         logger.error({ err: ocrError }, '[PHOTO_PROCESSOR] OCR also failed');
 
-        // Both QR and OCR failed - mark as done and set reaction
-        database.photoQueue.update(queueItemId, { status: 'done' });
+        // Keep the photo in an error state so an unavailable OCR provider does not complete it.
+        const retryMessage =
+          '❌ Не удалось распознать чек. Отправьте фото ещё раз, чтобы повторить обработку.';
+        database.photoQueue.update(queueItemId, { status: 'error', error_message: retryMessage });
+        await notifyUser(queueItem.group_id, retryMessage, queueItem.message_thread_id);
 
         // Get telegram group ID and set reaction
         const group = database.groups.findById(queueItem.group_id);

@@ -39,7 +39,7 @@ interface EnvConfig {
   HF_FAST_MODEL: string;
   HF_VISION_MODEL: string;
 
-  // Google Gemini (fallback + vision primary)
+  // Legacy Gemini settings retained for compatibility; never used by runtime chains.
   GEMINI_API_KEY: string;
   GEMINI_BASE_URL: string;
   GEMINI_MODEL: string;
@@ -100,11 +100,11 @@ function validateEnv(): EnvConfig {
     HF_FAST_MODEL: getEnvVariable('HF_FAST_MODEL'),
     HF_VISION_MODEL: getEnvVariable('HF_VISION_MODEL'),
 
-    GEMINI_API_KEY: getEnvVariable('GEMINI_API_KEY'),
-    GEMINI_BASE_URL: getEnvVariable('GEMINI_BASE_URL'),
-    GEMINI_MODEL: getEnvVariable('GEMINI_MODEL'),
-    GEMINI_FAST_MODEL: getEnvVariable('GEMINI_FAST_MODEL'),
-    GEMINI_VISION_MODEL: getEnvVariable('GEMINI_VISION_MODEL'),
+    GEMINI_API_KEY: getEnvVariable('GEMINI_API_KEY', false),
+    GEMINI_BASE_URL: getEnvVariable('GEMINI_BASE_URL', false),
+    GEMINI_MODEL: getEnvVariable('GEMINI_MODEL', false),
+    GEMINI_FAST_MODEL: getEnvVariable('GEMINI_FAST_MODEL', false),
+    GEMINI_VISION_MODEL: getEnvVariable('GEMINI_VISION_MODEL', false),
 
     GITHUB_TOKEN: getEnvVariable('GITHUB_TOKEN', false),
     BOT_ADMIN_CHAT_ID: process.env['BOT_ADMIN_CHAT_ID']
